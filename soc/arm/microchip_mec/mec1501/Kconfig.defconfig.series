@@ -16,7 +16,12 @@ config NUM_IRQS
 	# must be >= the highest interrupt number used
 	# - include the UART interrupts
 	# All NVIC external sources.
-	default 174
+	# All aggregated, no direct: 18 + (18*32) = 594
+	# All aggregated, with direct support: 174 + (18*32) = 750
+	# Only GIRQ's 8-12,19,24-26 aggregated rest direct: 174 + (9*32) = 462.
+	#   Sparse can only work of we define mapping of 8-12,19,24-26 onto
+	#   2ND_LVL_INTR_00_OFFSET through 2ND_LVL_INTR_08_OFFSET
+	default 750
 
 source "soc/arm/microchip_mec/mec1501/Kconfig.defconfig.mec1501*"
 endif # SOC_SERIES_MEC1501X

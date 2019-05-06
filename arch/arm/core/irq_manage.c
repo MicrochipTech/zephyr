@@ -31,6 +31,18 @@ extern void __reserved(void);
 #define REG_FROM_IRQ(irq) (irq / NUM_IRQS_PER_REG)
 #define BIT_FROM_IRQ(irq) (irq % NUM_IRQS_PER_REG)
 
+#if __CORTEX_M == 33
+#define CM_MAX_NVIC_INPUTS	496ul
+#elif __CORTEX_M == 23
+#define CM_MAX_NVIC_INPUTS	124ul
+#elif __CORTEX_M == 3 || __CORTEX_M == 4 || __CORTEX_M == 7
+#define CM_MAX_NVIC_INPUTS	240ul
+#elif __CORTEX_M == 0
+#define CM_MAX_NVIC_INPUTS	8ul
+#else
+#define CM_MAX_NVIC_INPUTS	0
+#endif
+
 /**
  *
  * @brief Enable an interrupt line
@@ -112,7 +124,14 @@ void z_irq_priority_set(unsigned int irq, unsigned int prio, u32_t flags)
 		 "invalid priority %d! values must be less than %lu\n",
 		 prio - _IRQ_PRIO_OFFSET,
 		 BIT(DT_NUM_IRQ_PRIO_BITS) - (_IRQ_PRIO_OFFSET));
-	NVIC_SetPriority((IRQn_Type)irq, prio);
+
+	__ASSERT(irq < CM_MAX_NVIC_INPUTS,
+		"invalid nvic irq %d! values must be less than %lu\n",
+		irq, CM_MAX_NVIC_INPUTS);
+
+	if (irq < CM_MAX_NVIC_INPUTS) {
+		NVIC_SetPriority((IRQn_Type)irq, prio);
+	}
 }
 
 /**

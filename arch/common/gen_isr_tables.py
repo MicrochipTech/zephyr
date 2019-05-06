@@ -200,9 +200,11 @@ def main():
         syms = get_symbols(kernel)
 
     if "CONFIG_MULTI_LEVEL_INTERRUPTS" in syms:
+        debug('CONFIG_MULTI_LEVEL_INTERRUPTS is set')
         max_irq_per = syms["CONFIG_MAX_IRQ_PER_AGGREGATOR"]
 
         if "CONFIG_2ND_LEVEL_INTERRUPTS" in syms:
+            debug('CONFIG_2ND_LEVEL_INTERRUPTS is set')
             num_aggregators = syms["CONFIG_NUM_2ND_LEVEL_AGGREGATORS"]
             irq2_baseoffset = syms["CONFIG_2ND_LVL_ISR_TBL_OFFSET"]
             list_2nd_lvl_offsets = [syms['CONFIG_2ND_LVL_INTR_{}_OFFSET'.
@@ -277,7 +279,10 @@ def main():
                     debug('IRQ_level = 3')
                     debug('IRQ_Indx = ' + str(irq3))
                     debug('IRQ_Pos  = ' + str(irq3_pos))
+                    debug('offset = ' + str(offset))
+                    debug('list_index = ' + str(list_index))
                     table_index = irq3_pos - offset
+                    debug('table_index = ' + str(table_index))
 
                 # Figure out second level interrupt position
                 elif irq2:
@@ -287,14 +292,19 @@ def main():
                     debug('IRQ_level = 2')
                     debug('IRQ_Indx = ' + str(irq2))
                     debug('IRQ_Pos  = ' + str(irq2_pos))
+                    debug('list_index = ' + str(list_index))
+                    debug('offset = ' + str(offset))
                     table_index = irq2_pos - offset
+                    debug('table_index = ' + str(table_index))
 
                 # Figure out first level interrupt position
                 else:
                     debug('IRQ_level = 1')
                     debug('IRQ_Indx = ' + str(irq1))
                     debug('IRQ_Pos  = ' + str(irq1))
+                    debug('offset = ' + str(offset))
                     table_index = irq1 - offset
+                    debug('table_index = ' + str(table_index))
 
             if swt[table_index] != (0, spurious_handler):
                 error("multiple registrations at table_index %d for irq %d (0x%x)" % (table_index, irq, irq))

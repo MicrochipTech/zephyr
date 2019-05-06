@@ -38,6 +38,9 @@ void z_IntLibInit(void)
 	int irq = 0;
 
 	for (; irq < CONFIG_NUM_IRQS; irq++) {
-		NVIC_SetPriority((IRQn_Type)irq, _IRQ_PRIO_OFFSET);
+		/* MCHP guard. Won't work for all Cortex-M family!!! */
+		if (irq < 240) {
+			NVIC_SetPriority((IRQn_Type)irq, _IRQ_PRIO_OFFSET);
+		}
 	}
 }
