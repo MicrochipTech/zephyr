@@ -136,6 +136,11 @@ static int soc_init(struct device *dev)
 	isave = __get_PRIMASK();
 	__disable_irq();
 
+	/* Hack: disable Cortex-M Serial Wire Viewer, only use
+	 * the two SWD pin (TMS & TCLK)
+	 */
+	ECS_REGS->DEBUG_CTRL = 0x05;
+
 	soc_pcr_init();
 
 	soc_clk32_init();
