@@ -18,6 +18,9 @@ int test_frequency(void)
 	k_sleep(1000);
 	end = k_cycle_get_32();
 
+	/* MCHP */
+	printk("start = %u  end = %u\n", start, end);
+
 	delta = end - start;
 	pct = (u64_t)delta * 100U / sys_clock_hw_cycles_per_sec();
 
@@ -80,8 +83,16 @@ void test_timer(void)
 	zassert_false(test_frequency(), "test frequency failed");
 }
 
+/* MCHP */
+extern int gpio_test(void);
+
 void test_main(void)
 {
 	ztest_test_suite(timer_fn, ztest_unit_test(test_timer));
 	ztest_run_test_suite(timer_fn);
+#if 1
+	TC_START("gpio_test");
+	gpio_test();
+	TC_PRINT("gpio_test done\n");
+#endif
 }

@@ -18,8 +18,48 @@ config NUM_IRQS
 	# All NVIC external sources.
 	default 174
 
+if SYS_CLOCK_EXISTS
+# If the kernel has timer support, enable both clock control and timer
+config CLOCK_CONTROL
+	default y
+
+config MCHP_XEC_RTOS_TIMER
+	default y
+
+config MCHP_XEC_CC_TIMER
+	default n
+
+endif # SYS_CLOCK_EXISTS
+
+if MCHP_XEC_RTOS_TIMER
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	int
+	default 32768
+
+config SYS_CLOCK_TICKS_PER_SEC
+	int
+	default 32768
+
 config ARCH_HAS_CUSTOM_BUSY_WAIT
 	default y
+
+endif # MCHP_XEC_RTOS_TIMER
+
+if MCHP_XEC_CC_TIMER
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	int
+	default 48000000
+
+config SYS_CLOCK_TICKS_PER_SEC
+	int
+	default 10000
+
+config ARCH_HAS_CUSTOM_BUSY_WAIT
+	default y
+
+endif # MCHP_XEC_CC_TIMER
 
 source "soc/arm/microchip_mec/mec1501/Kconfig.defconfig.mec1501*"
 endif # SOC_SERIES_MEC1501X

@@ -30,6 +30,14 @@
 	};
 
 	soc {
+		cctimer: timer@40001000 {
+			compatible = "microchip,xec-cc-timer";
+			reg = <0x40001000 0x34>;
+			interrupts = <146 0>, <147 0>, <148 0>,
+				     <149 0>, <150 0>, <151 0>,
+				     <152 0>, <153 0>, <154 0>;
+			label = "CCTIMER";
+		};
 		rtimer: timer@40007400 {
 			compatible = "microchip,xec-rtos-timer";
 			reg = <0x40007400 0x10>;

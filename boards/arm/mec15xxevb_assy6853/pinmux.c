@@ -48,6 +48,18 @@ static int board_pinmux_init(struct device *dev)
 				MCHP_ECS_DCTRL_MODE_SWD);
 
 	/* See table 2-4 from the data sheet for pin multiplexing*/
+#ifdef CONFIG_UART_NS16550_PORT_0
+	/* Set muxing, for UART 0 TX/RX and power up */
+	mchp_pcr_periph_slp_ctrl(PCR_UART0, MCHP_PCR_SLEEP_DIS);
+
+	UART0_REGS->CFG_SEL = (MCHP_UART_LD_CFG_INTCLK +
+		MCHP_UART_LD_CFG_RESET_SYS + MCHP_UART_LD_CFG_NO_INVERT);
+	UART0_REGS->ACTV = MCHP_UART_LD_ACTIVATE;
+
+	pinmux_pin_set(portc, MCHP_GPIO_104, MCHP_GPIO_CTRL_MUX_F1);
+	pinmux_pin_set(portc, MCHP_GPIO_105, MCHP_GPIO_CTRL_MUX_F1);
+#endif
+
 #ifdef CONFIG_UART_NS16550_PORT_2
 	/* Set muxing, for UART 2 TX/RX and power up */
 	mchp_pcr_periph_slp_ctrl(PCR_UART2, MCHP_PCR_SLEEP_DIS);
@@ -93,6 +105,10 @@ static int board_pinmux_init(struct device *dev)
 	pinmux_pin_set(portb, MCHP_GPIO_071, MCHP_GPIO_CTRL_MUX_F1);
 	pinmux_pin_set(portb, MCHP_GPIO_072, MCHP_GPIO_CTRL_MUX_F1);
 	pinmux_pin_set(portb, MCHP_GPIO_073, MCHP_GPIO_CTRL_MUX_F1);
+#endif
+	/* DEBUG */
+#if 1
+	GPIO_CTRL_REGS->CTRL_0015 = 0x10240UL;
 #endif
 	return 0;
 }

@@ -47,12 +47,22 @@ BUILD_ASSERT_MSG(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC == 32768,
 #define CYCLES_PER_TICK \
 	(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / CONFIG_SYS_CLOCK_TICKS_PER_SEC)
 
-#define MOD31_MASK	0x7FFFFFFFUL
+#if 0
+/* Working */
+#define MOD_MASK	0x0000FFFFUL
 
-/* RTOS timer is 32 bit */
-#define TIMER_MAX	0xFFFFFFFFU
+/* Hibernation timer is 16 bit */
+#define TIMER_MAX	0x0000FFFFUL
 
-#define TIMER_COUNT_MASK	0x7FFFFFFFUL
+#define TIMER_COUNT_MASK	0x0000FFFFUL
+#else
+#define MOD_MASK	0x0FFFFFFFUL
+
+/* Hibernation timer is 16 bit */
+#define TIMER_MAX	0x0FFFFFFFUL
+
+#define TIMER_COUNT_MASK	0x0FFFFFFFUL
+#endif
 
 /* max number of ticks we can load into the timer in one shot */
 #define MAX_TICKS (TIMER_MAX / CYCLES_PER_TICK)
@@ -70,55 +80,11 @@ static struct k_spinlock lock;
 static u32_t total_cycles;
 static u32_t cached_icr = CYCLES_PER_TICK;
 
-/*
- * read the timer count register and mask value to strip bit[31].
- */
-static INLINE u32_t tcount(void)
+static void timer_restart(u32_t countdown)
 {
-	return RTMR_REGS->CNT & TIMER_COUNT_MASK;
-}
-
-/*
- * Kernel converts some u32_t return values to s32_t.
- * Implement modular addition (a + b) mod 0x80000000 to
- * insure sum does not have bit[31] set.
- * Modulus is a power of 2 allowing us to use masking.
- */
-static u32_t mod_add(u32_t a, u32_t b)
-{
-	return (a + b) & MOD31_MASK;
-}
-
-static u32_t mod_sub(u32_t a, u32_t b)
-{
-	return ((a & MOD31_MASK) - (b & MOD31_MASK)) & MOD31_MASK;
-}
-
-/*
- * Restart RTOS timer handling the case where the timer is currently running.
- * This sequence has been vetted by the RTOS timer HW designer.
- * 1. Write 0 to CONTROL register which asynchronously stops the timer and
- *    clears all its registers.
- * 2. Set CONTROL block enable bit to ungate clocks to the block.
- * 3. Write new count down value to PRELOAD register.
- * 4. Write CONTROL to start timer in one-shot mode.
- * We added a check after the timer is stopped for active interrupt status.
- * If interrupt status is active we clear it in the aggregator and NVIC.
- * This handles the scenario in z_clock_set_timeout where the timer expires
- * while inside the spin lock. We don't want a spurious interrupt. We can't
- * use the method the local APIC driver uses because this timer takes 1 32KHz
- * clock period to load the new count value into its COUNT register.
- * The pending interrupt would fire and the ISR would observed COUNT==0.
- */
-static void timer_restart(u32_t val)
-{
-	RTMR_REGS->CTRL = 0;
+	RTMR_REGS->CTRL = 0U;
 	RTMR_REGS->CTRL = MCHP_RTMR_CTRL_BLK_EN;
-	if (GIRQ23_REGS->SRC & MCHP_RTMR_GIRQ_VAL) {
-		GIRQ23_REGS->SRC = MCHP_RTMR_GIRQ_VAL;
-		NVIC_ClearPendingIRQ(RTMR_IRQn);
-	}
-	RTMR_REGS->PRLD = val;
+	RTMR_REGS->PRLD = countdown;
 	RTMR_REGS->CTRL = TIMER_START_VAL;
 }
 
@@ -157,24 +123,25 @@ void z_clock_set_timeout(s32_t n, bool idle)
 
 	full_cycles = full_ticks * CYCLES_PER_TICK;
 
-	/*
-	 * There's a wee race condition here. The timer may expire while
-	 * we're busy reprogramming it; an interrupt will be queued at the
-	 * NVIC and the ISR will be called too early, roughly right
-	 * after we unlock, and not because the count we just programmed has
-	 * counted down. We can detect this situation only by using one-shot
-	 * mode. The counter will be 0 for a "real" interrupt and non-zero
-	 * if we have restarted the timer here.
-	 */
-
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	ccr = tcount();
-	temp = mod_sub(cached_icr, ccr);
-	total_cycles = mod_add(total_cycles, temp);
+	ccr = RTMR_REGS->CNT;
+	if ((ccr == 0) && !(GIRQ23_REGS->SRC & MCHP_RTMR_GIRQ_VAL)) {
+		ccr = cached_icr;
+	}
+
+	RTMR_REGS->CTRL = 0U;
+	GIRQ23_REGS->SRC = MCHP_RTMR_GIRQ_VAL;
+	NVIC_ClearPendingIRQ(RTMR_IRQn);
+
+	total_cycles += (cached_icr - ccr);
 	partial_cycles = CYCLES_PER_TICK - (total_cycles % CYCLES_PER_TICK);
 	cached_icr = full_cycles + partial_cycles;
-	timer_restart(cached_icr);
+	temp = cached_icr;
+	if (temp > 4) {
+		temp -= 2;
+	}
+	timer_restart(temp);
 
 	k_spin_unlock(&lock, key);
 }
@@ -182,19 +149,30 @@ void z_clock_set_timeout(s32_t n, bool idle)
 /*
  * Return the number of Zephyr ticks elapsed from last call to
  * z_clock_announce in the ISR.
+ * What happens if this routine is called within 1 32KHz cycle after
+ * RTMR is restarted?
+ * Count register could still be 0.
  */
 u32_t z_clock_elapsed(void)
 {
-	u32_t ccr, temp;
+	u32_t ccr;
 	u32_t ticks;
+	s32_t elapsed;
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
-	ccr = tcount();
-	ticks = mod_sub(total_cycles, last_announcement);
-	temp = mod_sub(cached_icr, ccr);
-	ticks = mod_add(ticks, temp);
-	k_spin_unlock(&lock, key);
+	ccr = RTMR_REGS->CNT;
+	if ((ccr == 0) && !(GIRQ23_REGS->SRC & MCHP_RTMR_GIRQ_VAL)) {
+		ccr = cached_icr;
+	}
+
+	elapsed = (s32_t)total_cycles - (s32_t)last_announcement;
+	if (elapsed < 0) {
+		elapsed = -1 * elapsed;
+	}
+	ticks = (u32_t)elapsed;
+	ticks += cached_icr - ccr;
 	ticks /= CYCLES_PER_TICK;
+	k_spin_unlock(&lock, key);
 
 	return ticks;
 }
@@ -209,17 +187,24 @@ static void xec_rtos_timer_isr(void *arg)
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
 	GIRQ23_REGS->SRC = MCHP_RTMR_GIRQ_VAL;
-
 	/* Restart the timer as early as possible to minimize drift... */
 	timer_restart(MAX_TICKS * CYCLES_PER_TICK);
 
 	cycles = cached_icr;
 	cached_icr = MAX_TICKS * CYCLES_PER_TICK;
 
-	total_cycles = mod_add(total_cycles, cycles);
-	ticks = mod_sub(total_cycles, last_announcement);
+	total_cycles += cycles;
+	total_cycles &= 0x7FFFFFFFUL;
+
+	/* handle wrap by using absolute value */
+	ticks = (s32_t)total_cycles - (s32_t)last_announcement;
+	if (ticks < 0) {
+		ticks = -1 * ticks;
+	}
 	ticks /= CYCLES_PER_TICK;
+
 	last_announcement = total_cycles;
+
 	k_spin_unlock(&lock, key);
 	z_clock_announce(ticks);
 	GPIO_CTRL_REGS->CTRL_0015 = 0x10240ul;
@@ -236,8 +221,10 @@ static void xec_rtos_timer_isr(void *arg)
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
 	GIRQ23_REGS->SRC = MCHP_RTMR_GIRQ_VAL;
-	total_cycles = mod_add(total_cycles, CYCLES_PER_TICK);
+	/* Restart the timer as early as possible to minimize drift... */
 	timer_restart(cached_icr);
+
+	total_cycles += CYCLES_PER_TICK;
 	k_spin_unlock(&lock, key);
 
 	z_clock_announce(1);
@@ -255,13 +242,17 @@ u32_t z_clock_elapsed(void)
  */
 u32_t z_timer_cycle_get_32(void)
 {
-	u32_t ret, temp;
+	u32_t ret;
 	u32_t ccr;
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
-	ccr = tcount();
-	temp = mod_sub(cached_icr, ccr);
-	ret = mod_add(total_cycles, temp);
+	ccr = RTMR_REGS->CNT;
+	if ((ccr == 0) && !(GIRQ23_REGS->SRC & MCHP_RTMR_GIRQ_VAL)) {
+		ccr = cached_icr;
+	}
+
+	ret = (total_cycles + (cached_icr - ccr));
+
 	k_spin_unlock(&lock, key);
 
 	return ret;
@@ -273,16 +264,66 @@ int z_clock_driver_init(struct device *device)
 
 	mchp_pcr_periph_slp_ctrl(PCR_RTMR, MCHP_PCR_SLEEP_DIS);
 
+#ifdef CONFIG_TICKLESS_KERNEL
+	cached_icr = MAX_TICKS;
+#endif
+
 	RTMR_REGS->CTRL = 0U;
 	GIRQ23_REGS->SRC = MCHP_RTMR_GIRQ_VAL;
 	NVIC_ClearPendingIRQ(RTMR_IRQn);
 
-	/* load timer and start */
-	cached_icr = MAX_TICKS;
-	timer_restart(MAX_TICKS);
-
 	IRQ_CONNECT(RTMR_IRQn, 0, xec_rtos_timer_isr, 0, 0);
 	GIRQ23_REGS->EN_SET = MCHP_RTMR_GIRQ_VAL;
 	irq_enable(RTMR_IRQn);
+
+#ifdef CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT
+	u32_t btmr_ctrl = B32TMR0_REGS->CTRL = (MCHP_BTMR_CTRL_ENABLE
+			  | MCHP_BTMR_CTRL_AUTO_RESTART
+			  | (0UL << MCHP_BTMR_CTRL_PRESCALE_POS));
+	B32TMR0_REGS->CTRL = MCHP_BTMR_CTRL_SOFT_RESET;
+	B32TMR0_REGS->CTRL = btmr_ctrl;
+	B32TMR0_REGS->PRLD = 0xFFFFFFFFUL;
+	btmr_ctrl |= MCHP_BTMR_CTRL_START;
+
+	timer_restart(cached_icr);
+	/* wait for Hibernation timer to load count register from preload */
+	while (RTMR_REGS->CNT == 0);
+	B32TMR0_REGS->CTRL = btmr_ctrl;
+#else
+	timer_restart(cached_icr);
+#endif
+
 	return 0;
 }
+
+#ifdef CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT
+
+#define DELAY_CALL_OVERHEAD_US 0
+
+/*
+ * 32-bit basic timer 0 has been configured for 48MHz auto-reload
+ * count up, no-interrupt mode. Basic timer implements a down counter.
+ */
+void z_arch_busy_wait(u32_t usec_to_wait)
+{
+	if (usec_to_wait < DELAY_CALL_OVERHEAD_US) {
+		return;
+	}
+
+	usec_to_wait -= DELAY_CALL_OVERHEAD_US;
+	/* use 64-bit math to prevent overflow when multiplying */
+	u32_t cycles_to_wait = (u32_t)(
+		(u64_t)usec_to_wait * 48U
+	);
+	u32_t start_cycles = B32TMR0_REGS->CNT & 0x7FFFFFFFUL;
+
+	for (;;) {
+		u32_t current_cycles = B32TMR0_REGS->CNT & 0x7FFFFFFFUL;
+		/* handle the rollover on an unsigned 32-bit value */
+		if (((start_cycles - current_cycles) & 0x7FFFFFFFUL)
+				>= cycles_to_wait) {
+			break;
+		}
+	}
+}
+#endif

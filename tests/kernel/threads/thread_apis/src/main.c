@@ -272,6 +272,8 @@ void test_user_mode(void)
 
 extern const k_tid_t _main_thread;
 
+extern int gpio_test(void); /* MCHP */
+
 void test_main(void)
 {
 	k_thread_access_grant(k_current_get(), &tdata, tstack);
@@ -312,4 +314,7 @@ void test_main(void)
 			 );
 
 	ztest_run_test_suite(threads_lifecycle);
+	
+	printk("Run gpio_tests\n"); /* MCHP */
+	gpio_test();
 }
