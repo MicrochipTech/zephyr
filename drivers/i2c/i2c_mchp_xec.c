@@ -283,6 +283,7 @@ static int i2c_xec_poll_write(struct device *dev, struct i2c_msg msg,
 			}
 		}
 	}
+
 	return 0;
 }
 
@@ -297,15 +298,17 @@ static int i2c_xec_poll_read(struct device *dev, struct i2c_msg msg,
 	u8_t byte, ctrl;
 	int ret;
 
-	/* Check clock and data lines */
-	if (check_lines(ba)) {
-		return -EBUSY;
-	}
+	if (!(msg.flags & I2C_MSG_RESTART)) {
+		/* Check clock and data lines */
+		if (check_lines(ba)) {
+			return -EBUSY;
+		}
 
-	/* Wait until bus is free */
-	ret = wait_bus_free(ba);
-	if (ret) {
-		return ret;
+		/* Wait until bus is free */
+		ret = wait_bus_free(ba);
+		if (ret) {
+			return ret;
+		}
 	}
 
 	/* Send slave address */
@@ -354,10 +357,6 @@ static int i2c_xec_poll_read(struct device *dev, struct i2c_msg msg,
 		msg.buf[i] = MCHP_I2C_SMB_DATA(ba);
 	}
 
-	/* Check clock and data lines */
-	if (check_lines(ba)) {
-		return -EBUSY;
-	}
 
 	return 0;
 }
