@@ -101,11 +101,12 @@ enum power_states _sys_suspend(s32_t ticks)
 	post_ops_done = 0;
 	sys_pm_notify_power_state_entry(pm_state);
 
+	K_DEBUG("deep_sleep %d\n", deep_sleep);
 	if (deep_sleep) {
 #if CONFIG_DEVICE_POWER_MANAGEMENT
 		/* Suspend peripherals. */
 		if (sys_pm_suspend_devices()) {
-			LOG_ERR("System level device suspend failed!");
+			K_DEBUG("System level device suspend failed!");
 			sys_pm_notify_power_state_exit(pm_state);
 			pm_state = SYS_POWER_STATE_ACTIVE;
 			return pm_state;
@@ -120,6 +121,7 @@ enum power_states _sys_suspend(s32_t ticks)
 
 	/* Enter power state */
 	sys_pm_debug_start_timer();
+	K_DEBUG("thread %p pm_state %d", k_current_get(), pm_state);
 	sys_set_power_state(pm_state);
 	sys_pm_debug_stop_timer();
 

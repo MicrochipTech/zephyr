@@ -70,6 +70,8 @@ static void set_kernel_idle_time_in_ticks(s32_t ticks)
 #endif
 }
 
+static bool idle_thread_name_printed;
+
 static void sys_power_save_idle(void)
 {
 	s32_t ticks = z_get_next_timeout_expiry();
@@ -103,6 +105,13 @@ static void sys_power_save_idle(void)
 	 * idle processing re-enables interrupts which is essential for
 	 * the kernel's scheduling logic.
 	 */
+	struct k_thread *thread = k_current_get();
+
+	if (!idle_thread_name_printed) {
+		K_DEBUG("Idle thread: %p\n", thread);
+		idle_thread_name_printed = true;
+	}
+
 	if (_sys_suspend(ticks) == SYS_POWER_STATE_ACTIVE) {
 		sys_pm_idle_exit_notify = 0U;
 		k_cpu_idle();
