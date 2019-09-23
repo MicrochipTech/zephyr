@@ -94,6 +94,14 @@ static int board_pinmux_init(struct device *dev)
 	pinmux_pin_set(portb, MCHP_GPIO_072, MCHP_GPIO_CTRL_MUX_F1);
 	pinmux_pin_set(portb, MCHP_GPIO_073, MCHP_GPIO_CTRL_MUX_F1);
 #endif
+
+#ifdef CONFIG_SYS_PM_DEBUG
+	/*
+	 * Deep sleep testing: Enable TEST_CLK_OUT on GPIO_060 function 2.
+	 * TEST_CLK_OUT is the PLL 48MHz conditioned output.
+	 */
+	pinmux_pin_set(portb, MCHP_GPIO_060, MCHP_GPIO_CTRL_MUX_F2);
+#endif
 	return 0;
 }
 
