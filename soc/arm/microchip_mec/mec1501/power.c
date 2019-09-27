@@ -12,6 +12,9 @@
 #include <soc.h>
 #include "device_power.h"
 
+/* Use this only when need to track sleep state handlers */
+#define DEBUG_SLEEP_ENTRY
+
 #if defined(CONFIG_SYS_POWER_DEEP_SLEEP_STATES)
 
 /*
@@ -35,6 +38,10 @@ static void z_power_soc_deep_sleep(void)
 {
 	u32_t base_pri;
 
+	K_DEBUG("SOC DP SLP entry\n");
+#ifdef DEBUG_SLEEP_ENTRY
+	GPIO_CTRL_REGS->CTRL_0013 = 0x0240ul;
+#endif
 	/* Mask all exceptions and interrupts except NMI and HardFault */
 	__set_PRIMASK(1);
 
@@ -67,6 +74,10 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_deep_sleep_periph_restore();
 
+#ifdef DEBUG_SLEEP_ENTRY
+	GPIO_CTRL_REGS->CTRL_0013 = 0x10240ul;
+#endif
+	K_DEBUG("SOC DP SLP exit\n");
 }
 
 #endif
@@ -80,6 +91,10 @@ static void z_power_soc_deep_sleep(void)
  */
 static void z_power_soc_sleep(void)
 {
+	K_DEBUG("SOC SLP entry\n");
+#ifdef DEBUG_SLEEP_ENTRY
+	GPIO_CTRL_REGS->CTRL_0022 = 0x0240ul;
+#endif
 	__set_PRIMASK(1);
 
 	soc_lite_sleep_enable();
@@ -89,6 +104,10 @@ static void z_power_soc_sleep(void)
 	__WFI();	/* triggers sleep hardware */
 	__NOP();
 	__NOP();
+#ifdef DEBUG_SLEEP_ENTRY
+	GPIO_CTRL_REGS->CTRL_0022 = 0x10240ul;
+#endif
+	K_DEBUG("SOC SLP exit\n");
 }
 
 /*
