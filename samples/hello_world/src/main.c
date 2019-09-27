@@ -6,8 +6,35 @@
 
 #include <zephyr.h>
 #include <sys/printk.h>
+#include <soc.h>
 
+volatile u32_t vg1;
 void main(void)
 {
+	GPIO_CTRL_REGS->CTRL_0013 = 0x10240UL;
+	GPIO_CTRL_REGS->CTRL_0156 = 0x10240UL;
+
 	printk("Hello World! %s\n", CONFIG_BOARD);
+
+	vg1 = 0U;
+
+	while (1) {
+		GPIO_CTRL_REGS->CTRL_0156 = 0x00240UL;
+
+		/* Trigger Deep Sleep 1 state. 48MHz PLL off */
+		k_sleep(3000);
+
+		GPIO_CTRL_REGS->CTRL_0156 = 0x10240UL;
+
+		k_busy_wait(3000);
+
+		printk("Wake from Deep Sleep\n");
+
+		/* Trigger Light Sleep 1 state. 48MHz PLL stays on */
+		k_sleep(1500);
+
+		printk("Wake from Light Sleep\n");
+		k_busy_wait(100);
+
+	}
 }
