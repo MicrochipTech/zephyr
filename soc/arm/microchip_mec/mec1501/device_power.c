@@ -34,7 +34,7 @@
 #define DEEP_SLEEP_PERIPH_SAVE_RESTORE
 
 #define CONFIG_BLOCKS_POWER_OPTIMIZATION
-/* #define CONFIG_DEEP_SLEEP_ADC */
+#define CONFIG_DEEP_SLEEP_ADC
 #define CONFIG_DEEP_SLEEP_PECI
 #define CONFIG_DEEP_SLEEP_COMP
 #define CONFIG_DEEP_SLEEP_VCI
@@ -286,6 +286,8 @@ static void deep_sleep_save_blocks(void)
 
 #ifdef CONFIG_DEEP_SLEEP_PECI
 	/* Disable PECI */
+	PECI_REGS->CONTROL = 0x08;
+	PECI_REGS->CONTROL = 0x09;
 	peci_info = ECS_REGS->PECI_DIS;
 	ECS_REGS->PECI_DIS = 0x01;
 #endif
