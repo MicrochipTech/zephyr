@@ -8,6 +8,11 @@
 #include <sys/printk.h>
 #include <soc.h>
 
+#include <logging/log.h>
+#define CONFIG_LOG_LEVEL 3
+LOG_MODULE_REGISTER(helloworld, CONFIG_LOG_LEVEL);
+
+
 volatile u32_t vg1;
 void main(void)
 {
@@ -28,12 +33,12 @@ void main(void)
 
 		k_busy_wait(3000);
 
-		printk("Wake from Deep Sleep\n");
+		LOG_INF("Wake from Deep Sleep\n");
 
 		/* Trigger Light Sleep 1 state. 48MHz PLL stays on */
 		k_sleep(1500);
 
-		printk("Wake from Light Sleep\n");
+		LOG_INF("Wake from Light Sleep\n");
 		k_busy_wait(100);
 
 	}
