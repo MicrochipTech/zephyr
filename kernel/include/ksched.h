@@ -246,7 +246,10 @@ static inline bool _is_valid_prio(int prio, void *entry_point)
 
 static ALWAYS_INLINE void z_ready_thread(struct k_thread *thread)
 {
-	if (z_is_thread_ready(thread)) {
+	bool x = z_is_thread_ready(thread);
+
+	printk("%s ready %d %p\n", __func__, x, thread);
+	if (x) {
 		z_add_thread_to_ready_q(thread);
 	}
 

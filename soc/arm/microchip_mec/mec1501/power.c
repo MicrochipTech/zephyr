@@ -40,7 +40,7 @@ static void z_power_soc_deep_sleep(void)
 
 	K_DEBUG("SOC DP SLP entry\n");
 #ifdef DEBUG_SLEEP_ENTRY
-	GPIO_CTRL_REGS->CTRL_0013 = 0x0240ul;
+	GPIO_CTRL_REGS->CTRL_0023 = 0x0240ul;
 #endif
 	/* Mask all exceptions and interrupts except NMI and HardFault */
 	__set_PRIMASK(1);
@@ -75,7 +75,7 @@ static void z_power_soc_deep_sleep(void)
 	soc_deep_sleep_periph_restore();
 
 #ifdef DEBUG_SLEEP_ENTRY
-	GPIO_CTRL_REGS->CTRL_0013 = 0x10240ul;
+	GPIO_CTRL_REGS->CTRL_0023 = 0x10240ul;
 #endif
 	K_DEBUG("SOC DP SLP exit\n");
 }

@@ -101,7 +101,7 @@ enum power_states _sys_suspend(s32_t ticks)
 	post_ops_done = 0;
 	sys_pm_notify_power_state_entry(pm_state);
 
-	K_DEBUG("deep_sleep %d\n", deep_sleep);
+	printk("deep_sleep %d\n", deep_sleep);
 	if (deep_sleep) {
 #if CONFIG_DEVICE_POWER_MANAGEMENT
 		/* Suspend peripherals. */

@@ -654,6 +654,11 @@ k_tid_t z_vrfy_k_thread_create(struct k_thread *new_thread,
 
 void z_thread_single_suspend(struct k_thread *thread)
 {
+	if (thread == 0x00118014 || thread == 0x001180b4 ||
+	    thread == 0x00118154) {
+		GPIO_CTRL_REGS->CTRL_0024 = 0x0240ul;
+	}
+
 	if (z_is_thread_ready(thread)) {
 		z_remove_thread_from_ready_q(thread);
 	}
@@ -687,6 +692,7 @@ static inline void z_vrfy_k_thread_suspend(struct k_thread *thread)
 
 void z_thread_single_resume(struct k_thread *thread)
 {
+	printk("%s %p\n", __func__, thread);
 	z_mark_thread_as_not_suspended(thread);
 	z_ready_thread(thread);
 }

@@ -14,6 +14,7 @@
 #include <drivers/timer/system_timer.h>
 #include <stdbool.h>
 #include <kernel_internal.h>
+#include <soc.h>
 
 #if defined(CONFIG_SCHED_DUMB)
 #define _priq_run_add		z_priq_dumb_add
@@ -326,6 +327,10 @@ void z_add_thread_to_ready_q(struct k_thread *thread)
 {
 	LOCKED(&sched_spinlock) {
 		_priq_run_add(&_kernel.ready_q.runq, thread);
+		if (thread == 0x00118014 || thread == 0x001180b4 ||
+		    thread == 0x00118154) {
+			GPIO_CTRL_REGS->CTRL_0024 = 0x10240ul;
+		}
 		z_mark_thread_as_queued(thread);
 		update_cache(0);
 #if defined(CONFIG_SMP) &&  defined(CONFIG_SCHED_IPI_SUPPORTED)
@@ -339,8 +344,10 @@ void z_move_thread_to_end_of_prio_q(struct k_thread *thread)
 	LOCKED(&sched_spinlock) {
 		if (z_is_thread_queued(thread)) {
 			_priq_run_remove(&_kernel.ready_q.runq, thread);
+			printk("%s remove %p\n", __func__, thread);
 		}
 		_priq_run_add(&_kernel.ready_q.runq, thread);
+		printk("%s add %p\n", __func__, thread);
 		z_mark_thread_as_queued(thread);
 		update_cache(thread == _current);
 	}
@@ -351,6 +358,7 @@ void z_remove_thread_from_ready_q(struct k_thread *thread)
 	LOCKED(&sched_spinlock) {
 		if (z_is_thread_queued(thread)) {
 			_priq_run_remove(&_kernel.ready_q.runq, thread);
+			printk("%s remove %p\n", __func__, thread);
 			z_mark_thread_as_not_queued(thread);
 		}
 		update_cache(thread == _current);
@@ -433,6 +441,7 @@ void z_thread_timeout(struct _timeout *to)
 	}
 	z_mark_thread_as_started(th);
 	z_mark_thread_as_not_suspended(th);
+	printk("%s %p\n", __func__, th);
 	z_ready_thread(th);
 }
 #endif
@@ -499,6 +508,7 @@ bool z_set_prio(struct k_thread *thread, int prio)
 				_priq_run_remove(&_kernel.ready_q.runq, thread);
 				thread->base.prio = prio;
 				_priq_run_add(&_kernel.ready_q.runq, thread);
+				printk("%s add %p\n", __func__, thread);
 			} else {
 				thread->base.prio = prio;
 			}
@@ -803,6 +813,7 @@ int z_unpend_all(_wait_q_t *wait_q)
 	while ((th = z_waitq_head(wait_q)) != NULL) {
 		z_unpend_thread(th);
 		z_ready_thread(th);
+		printk("%s %p\n", __func__, th);
 		need_sched = 1;
 	}
 
@@ -918,6 +929,7 @@ void z_impl_k_yield(void)
 			    z_is_thread_queued(_current)) {
 				_priq_run_remove(&_kernel.ready_q.runq,
 						 _current);
+				printk("%s add %p\n", __func__, _current);
 			}
 			_priq_run_add(&_kernel.ready_q.runq, _current);
 			z_mark_thread_as_queued(_current);
@@ -942,7 +954,7 @@ static s32_t z_tick_sleep(s32_t ticks)
 
 	__ASSERT(!arch_is_in_isr(), "");
 
-	K_DEBUG("thread %p for %d ticks\n", _current, ticks);
+	/* K_DEBUG("thread %p for %d ticks\n", _current, ticks); */
 
 	/* wait of 0 ms is treated as a 'yield' */
 	if (ticks == 0) {
@@ -963,6 +975,7 @@ static s32_t z_tick_sleep(s32_t ticks)
 #if defined(CONFIG_TIMESLICING) && defined(CONFIG_SWAP_NONATOMIC)
 	pending_current = _current;
 #endif
+
 	z_remove_thread_from_ready_q(_current);
 	z_add_thread_timeout(_current, ticks);
 	z_mark_thread_as_suspended(_current);
@@ -1033,6 +1046,7 @@ void z_impl_k_wakeup(k_tid_t thread)
 	}
 
 	z_mark_thread_as_not_suspended(thread);
+	printk("%s %p\n", __func__, thread);
 	z_ready_thread(thread);
 
 	if (!arch_is_in_isr()) {

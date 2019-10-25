@@ -65,6 +65,8 @@ enum power_states sys_pm_policy_next_state(s32_t ticks)
 			K_DEBUG("Selected power state %d "
 					"(ticks: %d, min_residency: %u)",
 					i, ticks, pm_min_residency[i]);
+			printk("Min res state 0 %d\n", pm_min_residency[0]);
+			printk("Min res state 1 %d\n", pm_min_residency[1]);
 			return (enum power_states)(i);
 		}
 	}
