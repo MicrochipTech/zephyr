@@ -17,6 +17,7 @@ supported:
   - adc
   - counter
   - espi
+  - espi_saf
   - gpio
   - i2c
   - pinmux
