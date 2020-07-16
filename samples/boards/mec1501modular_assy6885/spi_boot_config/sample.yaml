@@ -1,0 +1,6 @@
+sample:
+  name: MEC15xx modular board sample saf demo
+tests:
+  sample.board.mec1501modular_assy6885:
+    platform_whitelist: mec1501modular_assy6885
+    tags: board
