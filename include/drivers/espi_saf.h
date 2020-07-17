@@ -123,7 +123,7 @@ struct espi_saf_packet {
  */
 typedef int (*espi_saf_api_config)(struct device *dev,
 				   struct espi_saf_cfg *cfg);
-
+typedef int (*espi_saf_api_activate)(struct device *dev);
 typedef bool (*espi_saf_api_get_channel_status)(struct device *dev);
 
 typedef int (*espi_saf_api_flash_read)(struct device *dev,
@@ -139,6 +139,7 @@ typedef int (*espi_saf_api_manage_callback)(struct device *dev,
 
 __subsystem struct espi_saf_driver_api {
 	espi_saf_api_config config;
+	espi_saf_api_activate activate;
 	espi_saf_api_get_channel_status get_channel_status;
 	espi_saf_api_flash_read flash_read;
 	espi_saf_api_flash_write flash_write;
@@ -205,6 +206,16 @@ static inline int z_impl_espi_saf_config(struct device *dev,
 		(const struct espi_saf_driver_api *)dev->driver_api;
 
 	return api->config(dev, cfg);
+}
+
+__syscall int espi_saf_activate(struct device *dev);
+
+static inline int z_impl_espi_saf_activate(struct device *dev)
+{
+	const struct espi_saf_driver_api *api =
+		(const struct espi_saf_driver_api *)dev->driver_api;
+
+	return api->activate(dev);
 }
 
 /**
