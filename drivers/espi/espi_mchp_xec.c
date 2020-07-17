@@ -209,7 +209,10 @@ static int espi_xec_configure(struct device *dev, struct espi_cfg *cfg)
 	uint8_t cap0 = ESPI_CAP_REGS->GLB_CAP0;
 	uint8_t cap1 = ESPI_CAP_REGS->GLB_CAP1;
 	uint8_t cur_iomode = (cap1 & MCHP_ESPI_GBL_CAP1_IO_MODE_MASK) >>
-			   MCHP_ESPI_GBL_CAP1_IO_MODE_POS;
+			      MCHP_ESPI_GBL_CAP1_IO_MODE_POS;
+
+	LOG_DBG("cap0 %x", cap0);
+	LOG_DBG("cap1 %x", cap1);
 
 	/* Set frequency */
 	cap1 &= ~MCHP_ESPI_GBL_CAP1_MAX_FREQ_MASK;
@@ -289,6 +292,8 @@ static int espi_xec_configure(struct device *dev, struct espi_cfg *cfg)
 	 * de-assertion and after pinmux
 	 */
 	ESPI_EIO_BAR_REGS->IO_ACTV = 1;
+	LOG_DBG("After cap0 %x", cap0);
+	LOG_DBG("After cap1 %x", cap1);
 	LOG_DBG("eSPI block activated successfully");
 
 	return 0;
@@ -922,6 +927,7 @@ static void espi_oob_up_isr(struct device *dev)
 }
 #endif
 
+
 #ifdef CONFIG_ESPI_FLASH_CHANNEL
 static void espi_flash_isr(struct device *dev)
 {
@@ -968,6 +974,11 @@ static void espi_flash_isr(struct device *dev)
 	}
 }
 #endif
+
+static void espi_saf_error_isr(struct device *dev)
+{
+	LOG_DBG("%s", __func__);
+}
 
 static void vw_pltrst_isr(struct device *dev)
 {
@@ -1160,6 +1171,7 @@ const struct espi_isr espi_bus_isr[] = {
 #endif
 	{MCHP_ESPI_ESPI_RST_GIRQ_VAL, espi_rst_isr},
 	{MCHP_ESPI_VW_EN_GIRQ_VAL, espi_vwire_chanel_isr},
+	{BIT(9), espi_saf_error_isr},
 };
 
 uint8_t vw_wires_int_en[] = {
@@ -1351,7 +1363,7 @@ static int espi_xec_init(struct device *dev)
 
 	/* Enable interrupts for each logical channel enable assertion */
 	MCHP_GIRQ_ENSET(config->bus_girq_id) = MCHP_ESPI_ESPI_RST_GIRQ_VAL |
-		MCHP_ESPI_VW_EN_GIRQ_VAL | MCHP_ESPI_PC_GIRQ_VAL;
+		MCHP_ESPI_VW_EN_GIRQ_VAL | MCHP_ESPI_PC_GIRQ_VAL | BIT(9);
 
 	/* Enable aggregated block interrupts for VWires */
 	MCHP_GIRQ_ENSET(config->vw_girq_id) = MEC_ESPI_MSVW00_SRC0_VAL |
