@@ -95,12 +95,23 @@
  * Six QMSPI descriptors describe SPI flash opcode protocols.
  * W25Q128 device.
  */
-#define CS0_DESCR0 0x00081406
-#define CS0_DESCR1 0x00042402
-#define CS0_DESCR2 0x000137C2
-#define CS0_DESCR3 0x00024404
-#define CS0_DESCR4 0x00085406
-#define CS0_DESCR5 0x00076602
+#define W25Q128_CS0_DESCR0 0x00081406
+#define W25Q128_CS0_DESCR1 0x00042402
+#define W25Q128_CS0_DESCR2 0x000137C2
+#define W25Q128_CS0_DESCR3 0x00024404
+#define W25Q128_CS0_DESCR4 0x00085406
+#define W25Q128_CS0_DESCR5 0x00076602
+/*
+ * Six QMSPI descriptors describe SPI flash opcode protocols.
+ * W25Q256 device.
+ */
+#define CS0_DESCR0 0x000A0406
+#define CS0_DESCR1 0x00040402 /* hardcoding as in TGL */
+#define CS0_DESCR2 0x000107C2
+#define CS0_DESCR3 0x00020404
+#define CS0_DESCR4 0x000A0406
+#define CS0_DESCR5 0x00070602
+
 
 #define CS0_OPA SAF_OPCODE_REG_VAL(0x06,0x75,0x7a,0x05)
 #define CS0_OPB SAF_OPCODE_REG_VAL(0x20,0x52,0xd8,0x02)
@@ -355,10 +366,10 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
 
 	regs->CSTM = SAF_QMSPI_CS_TIMING;
 
-	regs->DESCR[12] = SAF_QMSPI_DESCR12;
-	regs->DESCR[13] = SAF_QMSPI_DESCR13;
-	regs->DESCR[14] = SAF_QMSPI_DESCR14;
-	regs->DESCR[15] = SAF_QMSPI_DESCR15;
+	regs->DESCR[12] = SAF_QMSPI_DESCR12 | (13 << 12);
+	regs->DESCR[13] = SAF_QMSPI_DESCR13 | (12 << 12);
+	regs->DESCR[14] = SAF_QMSPI_DESCR14 | (15 << 12);
+	regs->DESCR[15] = SAF_QMSPI_DESCR15 | (14 << 12);
 
 	regs->IEN = MCHP_QMSPI_IEN_XFR_DONE;
 
@@ -520,7 +531,8 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 	}
 
 	for (size_t i = 0; i < SAF_QMSPI_NUM_FLASH_DESCR; i++) {
-		qregs->DESCR[did++] = pf->descr[i];
+		qregs->DESCR[did] = pf->descr[i] | ((did + 1) << 12);
+		did++;
 	}
 
 	return pf->flashsz;
@@ -604,6 +616,21 @@ static int espi_saf_xec_configuration(struct device *dev,
 
 	/* enable prefetch */
 	MCHP_SAF_COMM_MODE_REG |= MCHP_SAF_COMM_MODE_PF_EN;
+
+	return 0;
+}
+
+int espi_saf_xec_activate(struct device *dev)
+{
+	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
+	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
+	QMSPI_Type *qregs = (QMSPI_Type *)xcfg->qmspi_base_addr;
+
+	qregs->MODE |= 0x00020405;
+
+	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
+	regs->SAF_FL_CFG_MISC |= (1 << 12);
+	LOG_DBG("%s Aft SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 
 	return 0;
 }
@@ -797,6 +824,7 @@ static int espi_saf_xec_init(struct device *dev);
 
 static const struct espi_saf_driver_api espi_saf_xec_driver_api = {
 	.config = espi_saf_xec_configuration,
+	.activate = espi_saf_xec_activate,
 	.get_channel_status = espi_saf_xec_channel_ready,
 	.flash_read = saf_xec_flash_read,
 	.flash_write = saf_xec_flash_write,
