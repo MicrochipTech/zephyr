@@ -24,53 +24,7 @@
 /* 17 protection regions */
 #define MCHP_ESPI_SAF_PR_MAX 17
 
-struct mchp_espi_saf_op {
-	volatile uint32_t OPA;
-	volatile uint32_t OPB;
-	volatile uint32_t OPC;
-	volatile uint32_t OP_DESCR;
-};
 
-struct mchp_espi_saf_pr {
-	volatile uint32_t START; /* start address in 4KB units */
-	volatile uint32_t LIMIT; /* limit address in 4KB units */
-	volatile uint32_t WEBM; /* Write/erase master access bit map */
-	volatile uint32_t RDBM; /* read master access bit map */
-};
-
-struct mchp_espi_saf {
-		 uint32_t RSVD1[6];
-	volatile uint32_t SAF_ECP_CMD;		/* 0x18 */
-	volatile uint32_t SAF_ECP_FLAR;		/* 0x1c */
-	volatile uint32_t SAF_ECP_START;	/* 0x20 */
-	volatile uint32_t SAF_ECP_BFAR;		/* 0x24 */
-	volatile uint32_t SAF_ECP_STATUS;	/* 0x28 */
-	volatile uint32_t SAF_ECP_INTEN;	/* 0x2c */
-	volatile uint32_t SAF_FL_CFG_SIZE_LIM;	/* 0x30 */
-	volatile uint32_t SAF_FL_CFG_THRH;	/* 0x34 */
-	volatile uint32_t SAF_FL_CFG_MISC;	/* 0x38 */
-	volatile uint32_t SAF_ESPI_MON_STATUS;	/* 0x3c */
-	volatile uint32_t SAF_ESPI_MON_INTEN;	/* 0x40 */
-	volatile uint32_t SAF_ECP_BUSY;		/* 0x44 */
-		 uint32_t RSVD2[1];
-	struct mchp_espi_saf_op SAF_CS_OP[MCHP_ESPI_SAF_CS_MAX]; /* 0x4c */
-	volatile uint32_t SAF_FL_CFG_GEN_DESCR;	/* 0x6c */
-	volatile uint32_t SAF_PROT_LOCK;	/* 0x70 */
-	volatile uint32_t SAF_PROT_DIRTY;	/* 0x74 */
-	volatile uint32_t SAF_TAG_MAP[MCHP_ESPI_SAF_TAGMAP_MAX]; /* 0x78 */
-	struct mchp_espi_saf_pr SAF_PROT_RG[MCHP_ESPI_SAF_PR_MAX]; /* 0x84 */
-	volatile uint32_t SAF_POLL_TMOUT;	/* 0x194 */
-	volatile uint32_t SAF_POLL_INTRVL;	/* 0x198 */
-	volatile uint32_t SAF_SUS_RSM_INTRVL;	/* 0x19c */
-	volatile uint32_t SAF_CONSEC_RD_TMOUT;	/* 0x1a0 */
-	volatile uint16_t SAF_CS0_CFG_P2M;	/* 0x1a4 */
-	volatile uint16_t SAF_CS1_CFG_P2M;	/* 0x1a6 */
-	volatile uint32_t SAF_FL_CFG_SPM;	/* 0x1a8 */
-	volatile uint32_t SAF_SUS_CHK_DLY;	/* 0x1ac */
-	volatile uint16_t SAF_CS0_CM_PRF;	/* 0x1b0 */
-	volatile uint16_t SAF_CS1_CM_PRF;	/* 0x1b2 */
-	volatile uint32_t SAF_DNX_PROT_BYP;	/* 0x1b4 */
-};
 typedef struct mchp_espi_saf MCHP_SAF_HW_REGS;
 
 #define MCHP_SAF_FL_CM_PRF_CS0_OFS	0x1b0
