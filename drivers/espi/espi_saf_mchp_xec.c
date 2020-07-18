@@ -14,6 +14,7 @@
 #include <logging/log.h>
 #include "espi_saf_mchp_xec.h"
 #include "espi_utils.h"
+LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 
 #define SAF_MAX_FLASH_DEVICES 2
 
@@ -169,7 +170,6 @@
 /* 1 second maximum for flash operations */
 #define MAX_SAF_FLASH_TIMEOUT 1000ul
 
-LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 
 struct espi_isr {
 	uint32_t girq_bit;
@@ -331,11 +331,17 @@ static uint8_t saf_pr_cnt =
  */
 static void saf_protection_regions_init(MCHP_SAF_HW_REGS *regs)
 {
+	LOG_DBG("%s", __func__);
 	for (size_t n = 0; n < (size_t)saf_pr_cnt; n++) {
 		regs->SAF_PROT_RG[n].START = prot_regs[n].START;
 		regs->SAF_PROT_RG[n].LIMIT = prot_regs[n].LIMIT;
 		regs->SAF_PROT_RG[n].WEBM = prot_regs[n].WEBM;
 		regs->SAF_PROT_RG[n].RDBM = prot_regs[n].RDBM;
+
+		LOG_DBG("PROT[%d] START %x", n, regs->SAF_PROT_RG[n].START);
+		LOG_DBG("PROT[%d] LIMIT %x", n, regs->SAF_PROT_RG[n].LIMIT);
+		LOG_DBG("PROT[%d] WEBM %x", n, regs->SAF_PROT_RG[n].WEBM);
+		LOG_DBG("PROT[%d] RDBM %x", n, regs->SAF_PROT_RG[n].RDBM);
 	}
 }
 
@@ -351,6 +357,7 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
 	uint32_t qmode;
 	QMSPI_Type *regs = (QMSPI_Type *)cfg->qmspi_base_addr;
 
+	LOG_DBG("%s QMSPI mode: %x", __func__, regs->MODE);
 	regs->MODE = MCHP_QMSPI_M_SRST;
 	if (regs->MODE & MCHP_QMSPI_M_SRST) {
 		regs->MODE = 0;
@@ -359,24 +366,35 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
 	MCHP_GIRQ_ENCLR(MCHP_QMSPI_GIRQ_NUM) = MCHP_QMSPI_GIRQ_VAL;
 	MCHP_GIRQ_SRC(MCHP_QMSPI_GIRQ_NUM) = MCHP_QMSPI_GIRQ_VAL;
 
+	LOG_DBG("QMSPI IFCTRL befo %x", regs->IFCTRL);
 	regs->IFCTRL = (MCHP_QMSPI_IFC_WP_OUT_HI
 			| MCHP_QMSPI_IFC_WP_OUT_EN
 			| MCHP_QMSPI_IFC_HOLD_OUT_HI
 			| MCHP_QMSPI_IFC_HOLD_OUT_EN);
 
 	regs->CSTM = SAF_QMSPI_CS_TIMING;
+	LOG_DBG("CSTM %x", regs->CSTM);
 
 	regs->DESCR[12] = SAF_QMSPI_DESCR12 | (13 << 12);
 	regs->DESCR[13] = SAF_QMSPI_DESCR13 | (12 << 12);
 	regs->DESCR[14] = SAF_QMSPI_DESCR14 | (15 << 12);
 	regs->DESCR[15] = SAF_QMSPI_DESCR15 | (14 << 12);
 
-	regs->IEN = MCHP_QMSPI_IEN_XFR_DONE;
+	LOG_DBG("QMSPI DESC 12 %x", regs->DESCR[12]);
+	LOG_DBG("QMSPI DESC 13 %x", regs->DESCR[13]);
+	LOG_DBG("QMSPI DESC 14 %x", regs->DESCR[14]);
+	LOG_DBG("QMSPI DESC 15 %x", regs->DESCR[15]);
 
+	LOG_DBG("QMSPI IFCTRL after %x", regs->IFCTRL);
+
+	LOG_DBG("%s Before MODE reg: %x", __func__, regs->MODE);
 	qmode = ((uint32_t)(SAF_QMSPI_CLK_DIV) << MCHP_QMSPI_M_FDIV_POS)
 		& MCHP_QMSPI_M_FDIV_MASK;
+	LOG_DBG("%s qmode val mode: %x", __func__, qmode);
+
 	qmode |= (MCHP_QMSPI_M_SAF_DMA_MODE_EN | MCHP_QMSPI_M_SIG_MODE0_VAL
 		  | MCHP_QMSPI_M_CS0 | MCHP_QMSPI_M_ACTIVATE);
+	LOG_DBG("%s qmode val mode: %x", __func__, qmode);
 
 	regs->MODE = qmode;
 }
@@ -396,11 +414,17 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
  */
 static void saf_flash_timing_init(MCHP_SAF_HW_REGS *regs)
 {
+	LOG_DBG("%s\n", __func__);
 	regs->SAF_POLL_TMOUT = SAF_FLASH_POLL_TIMEOUT;
 	regs->SAF_POLL_INTRVL = SAF_FLASH_POLL_INTERVAL;
 	regs->SAF_SUS_RSM_INTRVL = SAF_FLASH_SUS_RSM_INTERVAL;
 	regs->SAF_CONSEC_RD_TMOUT = SAF_FLASH_CONSEC_READ_TIMEOUT;
 	regs->SAF_SUS_CHK_DLY = SAF_FLASH_SUS_CHK_DELAY;
+	LOG_DBG("SAF_POLL_TMOUT %x\n", regs->SAF_POLL_TMOUT);
+	LOG_DBG("SAF_POLL_INTRVL %x\n", regs->SAF_POLL_INTRVL);
+	LOG_DBG("SAF_SUS_RSM_INTRVL %x\n", regs->SAF_SUS_RSM_INTRVL);
+	LOG_DBG("SAF_CONSEC_RD_TMOUT %x\n", regs->SAF_CONSEC_RD_TMOUT);
+	LOG_DBG("SAF_SUS_CHK_DLY %x\n", regs->SAF_SUS_CHK_DLY);
 }
 
 /*
@@ -423,6 +447,7 @@ static int saf_init_erase_block_size(const struct espi_saf_xec_config *cfg)
 {
 	uint32_t opb = flash_dev_cfg[0].opb;
 
+	LOG_DBG("%s\n", __func__);
 #if SAF_FLASH_CS1_SIZE != 0
 	opb &= flash_dev_cfg[1].opb;
 #endif
@@ -464,6 +489,11 @@ static void saf_flash_misc_cfg(MCHP_SAF_HW_REGS *regs, uint8_t cs,
 {
 	uint32_t d, v;
 
+	LOG_DBG("%s", __func__);
+	LOG_DBG("cs %d", cs);
+	LOG_DBG("pf->cont_prefix %d", pf->cont_prefix);
+	LOG_DBG("pf->flags %d", pf->flags);
+
 	d = regs->SAF_FL_CFG_MISC;
 
 	v = MCHP_SAF_FL_CFG_MISC_CS0_CPE;
@@ -490,7 +520,9 @@ static void saf_flash_misc_cfg(MCHP_SAF_HW_REGS *regs, uint8_t cs,
 		d &= ~v;
 	}
 
+	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	regs->SAF_FL_CFG_MISC = d;
+	LOG_DBG("%s Aft SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 }
 
 /*
@@ -513,6 +545,7 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
 	QMSPI_Type *qregs = (QMSPI_Type *)xcfg->qmspi_base_addr;
 
+	LOG_DBG("%s", __func__);
 	cs = (cs < SAF_MAX_FLASH_DEVICES) ? cs : SAF_MAX_FLASH_DEVICES-1;
 	pf = &flash_dev_cfg[cs];
 
@@ -525,6 +558,15 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 	regs->SAF_CS_OP[cs].OPC = pf->opc;
 	regs->SAF_CS_OP[cs].OP_DESCR = (uint32_t)pf->cs_cfg_descr_ids;
 
+	LOG_DBG("OPA WRITE %p %x", &regs->SAF_CS_OP[cs].OPA,
+		regs->SAF_CS_OP[cs].OPA);
+	LOG_DBG("OPB ERASE %p %x", &regs->SAF_CS_OP[cs].OPB,
+		regs->SAF_CS_OP[cs].OPB);
+	LOG_DBG("OPC READ  %p %x", &regs->SAF_CS_OP[cs].OPC,
+		regs->SAF_CS_OP[cs].OPC);
+	LOG_DBG("CFG_CSX_DESCR exp 2003 %x", regs->SAF_CS_OP[cs].OP_DESCR);
+
+	/* Windbond specific */
 	did = SAF_QMSPI_CS0_START_DESCR;
 	if (cs != 0) {
 		did = SAF_QMSPI_CS1_START_DESCR;
@@ -532,8 +574,12 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 
 	for (size_t i = 0; i < SAF_QMSPI_NUM_FLASH_DESCR; i++) {
 		qregs->DESCR[did] = pf->descr[i] | ((did + 1) << 12);
+		LOG_DBG("QMSPI SPI specific DESCR[%x]=%x ", did,
+			qregs->DESCR[did]);
 		did++;
 	}
+
+	LOG_DBG("%s flashsz: %x\n", __func__, pf->flashsz);
 
 	return pf->flashsz;
 }
@@ -543,6 +589,10 @@ static void saf_tagmap_init(MCHP_SAF_HW_REGS *regs)
 	regs->SAF_TAG_MAP[0] = SAF_TAG_MAP0;
 	regs->SAF_TAG_MAP[1] = SAF_TAG_MAP1;
 	regs->SAF_TAG_MAP[2] = SAF_TAG_MAP2;
+
+	LOG_DBG("SAF TAG0 %x", regs->SAF_TAG_MAP[0]);
+	LOG_DBG("SAF TAG1 %x", regs->SAF_TAG_MAP[1]);
+	LOG_DBG("SAF TAG2 %x", regs->SAF_TAG_MAP[2]);
 }
 
 /*
@@ -552,6 +602,11 @@ static void saf_tagmap_init(MCHP_SAF_HW_REGS *regs)
  * activated only when eSPI master sends Flash Channel enable
  * message with MAF/SAF select flag.
  */
+static uint32_t cap0_i;
+static uint32_t cap0_f;
+static uint32_t capfc_i;
+static uint32_t capfc_f;
+
 static int espi_saf_xec_configuration(struct device *dev,
 				      struct espi_saf_cfg *cfg)
 {
@@ -559,6 +614,12 @@ static int espi_saf_xec_configuration(struct device *dev,
 	uint32_t totalsz;
 	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
+
+	LOG_DBG("%s", __func__);
+	LOG_DBG("Saved value. Before saf_init cap0 %x", cap0_i);
+	LOG_DBG("Saved value. After saf_init cap0 %x", cap0_f);
+	LOG_DBG("Saved value. Before saf_init capfc %x", capfc_i);
+	LOG_DBG("Saved value. After saf_init capfc %x", capfc_f);
 
 	if ((saf_flash_cnt == 0) ||
 	    (saf_flash_cnt > SAF_MAX_FLASH_DEVICES)) {
@@ -569,16 +630,22 @@ static int espi_saf_xec_configuration(struct device *dev,
 		return -EINVAL;
 	}
 
+	LOG_DBG("%s Curr SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
 		/* can't configure after SAF is activated! */
+		LOG_ERR("%s %x configure after activation\n", __func__,
+		       regs->SAF_FL_CFG_MISC);
 		return -EAGAIN;
 	}
 
 	saf_qmspi_init(xcfg);
 
+	LOG_DBG("SAF_CS0_CFG_P2M before %x", regs->SAF_CS0_CFG_P2M);
 	regs->SAF_CS0_CFG_P2M = 0;
 	regs->SAF_CS1_CFG_P2M = 0;
+	LOG_DBG("SAF_CS0_CFG_P2M zeroed %x", regs->SAF_CS0_CFG_P2M);
 	regs->SAF_FL_CFG_GEN_DESCR = MCHP_SAF_FL_CFG_GEN_DESCR_STD;
+	LOG_DBG("SAF_FL_CFG_GEN_DESCR %x", regs->SAF_FL_CFG_GEN_DESCR);
 
 	/* flash device connected to CS0 required */
 	totalsz = saf_flash_cfg(dev, cfg, 0);
@@ -592,6 +659,7 @@ static int espi_saf_xec_configuration(struct device *dev,
 		return -EAGAIN;
 	}
 
+	LOG_DBG("SAF_CS0_CFG_P2M %x", regs->SAF_CS0_CFG_P2M);
 	regs->SAF_FL_CFG_SIZE_LIM = totalsz - 1;
 
 	saf_tagmap_init(regs); /* done */
@@ -610,12 +678,18 @@ static int espi_saf_xec_configuration(struct device *dev,
 	}
 
 	/* Set pre-fetch mode */
+	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	regs->SAF_FL_CFG_MISC =
 		(regs->SAF_FL_CFG_MISC & ~(MCHP_SAF_FL_CFG_MISC_PFOE_MASK))
 		 | SAF_PREFETCH_MODE;
+	LOG_DBG("%s Aft SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 
 	/* enable prefetch */
+	LOG_DBG("%s Bef MCHP_SAF_COMM_MODE_REG: %x", __func__,
+		MCHP_SAF_COMM_MODE_REG);
 	MCHP_SAF_COMM_MODE_REG |= MCHP_SAF_COMM_MODE_PF_EN;
+	LOG_DBG("%s Aft MCHP_SAF_COMM_MODE_REG: %x", __func__,
+		MCHP_SAF_COMM_MODE_REG);
 
 	return 0;
 }
@@ -626,7 +700,13 @@ int espi_saf_xec_activate(struct device *dev)
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
 	QMSPI_Type *qregs = (QMSPI_Type *)xcfg->qmspi_base_addr;
 
+	LOG_DBG("QMSPI MODE before %x", regs->MODE);
 	qregs->MODE |= 0x00020405;
+	LOG_DBG("QMSPI MODE after %x", regs->MODE);
+
+	LOG_DBG("QMSPI IEN before %x", regs->IEN);
+	regs->IEN = MCHP_QMSPI_IEN_XFR_DONE;
+	LOG_DBG("QMSPI IEN after %x", regs->IEN);
 
 	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	regs->SAF_FL_CFG_MISC |= (1 << 12);
@@ -640,6 +720,7 @@ static bool espi_saf_xec_channel_ready(struct device *dev)
 	const struct espi_saf_xec_config *cfg = DEV_CFG(dev);
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
 
+	LOG_DBG("%s SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
 		return true;
 	}
@@ -678,6 +759,7 @@ static uint32_t get_erase_size_encoding(uint32_t erase_size)
 {
 	uint8_t supsz = ESPI_CAP_REGS->FC_SERBZ;
 
+	LOG_DBG("%s\n", __func__);
 	for (int i = 0; i < SAF_ERASE_ENCODING_MAX_ENTRY; i++) {
 		uint32_t sz = MCHP_ESPI_SERASE_SZ(ersz_enc[i].hwbitpos);
 		if ((sz == erase_size) &&
@@ -855,9 +937,13 @@ static int espi_saf_xec_init(struct device *dev)
 	mchp_pcr_periph_slp_ctrl(PCR_ESPI_SAF, MCHP_PCR_SLEEP_DIS);
 
 	/* Configure the channels and its capabilities based on build config */
+	cap0_i = ESPI_CAP_REGS->GLB_CAP0;
+	capfc_i = ESPI_CAP_REGS->FC_CAP;
 	ESPI_CAP_REGS->GLB_CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
 	ESPI_CAP_REGS->FC_CAP &= ~(MCHP_ESPI_FC_CAP_SHARE_MASK);
 	ESPI_CAP_REGS->FC_CAP |= MCHP_ESPI_FC_CAP_SHARE_MAF_SAF;
+	cap0_f = ESPI_CAP_REGS->GLB_CAP0;
+	capfc_f = ESPI_CAP_REGS->FC_CAP;
 
 	k_sem_init(&data->ecp_lock, 0, 1);
 
