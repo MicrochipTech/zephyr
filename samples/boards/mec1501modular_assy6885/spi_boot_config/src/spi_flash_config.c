@@ -166,7 +166,7 @@ void qspi_exit_continuous_mode(uint8_t slave_index)
 
 int qspi_reset_spi_flash_device(uint8_t slave_index)
 {
-	int ret;
+	/* int ret; */
 	uint8_t cmds[] = {
 		ENABLE_RESET_OPCODE,
 		RESET_OPCODE,
@@ -202,7 +202,6 @@ int qspi_reset_spi_flash_device(uint8_t slave_index)
 		qspi_send(cmds[i]);
 	}
 */
-
 
 	qspi_send(&cmds[0], 1);
 	qspi_send(&cmds[1], 1);

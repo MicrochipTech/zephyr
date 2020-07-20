@@ -365,7 +365,7 @@ int read_test_block(uint8_t *buf, uint32_t start_flash_adr, uint16_t block_len)
 		pckt.flash_addr = flash_addr;
 		pckt.len = MAX_FLASH_REQUEST;
 #ifdef CONFIG_ESPI_SAF
-		ret = 0; /* saf_read_flash(espi_dev, &pckt); */
+		ret = espi_saf_read_flash(espi_dev, &pckt);
 #else
 		ret = espi_read_flash(espi_dev, &pckt);
 #endif
@@ -397,7 +397,7 @@ int write_test_block(uint8_t *buf, uint32_t start_flash_adr, uint16_t block_len)
 		pckt.len = MAX_FLASH_REQUEST;
 
 #ifdef CONFIG_ESPI_SAF
-		ret = 0; /* saf_write_flash(espi_dev, &pckt); */
+		ret =  0; /* saf_write_flash(espi_dev, &pckt); */
 #else
 		ret = espi_write_flash(espi_dev, &pckt);
 #endif
@@ -587,7 +587,6 @@ int saf_demo(void)
 	qspi_clear_status();
 	qspi_exit_continuous_mode(0);
 	qspi_exit_continuous_mode(0);
-
 	ret = qspi_reset_spi_flash_device(0);
 	if (ret) {
 		LOG_ERR("Fail to reset SPI flash device: %d", ret);
@@ -653,6 +652,8 @@ int saf_demo(void)
 	} else {
 		LOG_DBG("SAF channel success");
 	}
+
+	read_test_block(flash_read_buf, 0x10, 0x64);
 #endif
 
 	k_sleep(K_SECONDS(1));
