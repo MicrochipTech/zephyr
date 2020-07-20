@@ -13,6 +13,9 @@
 int qspi_init(void);
 int qspi_reset_spi_flash_device(uint8_t slave_index);
 
+void qspi_send(uint8_t *data, uint8_t l);
+void qspi_rcv(uint8_t *data, uint8_t len);
+
 void qspi_clear_status(void);
 void qspi_exit_continuous_mode(uint8_t slave_index);
 

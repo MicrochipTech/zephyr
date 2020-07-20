@@ -90,7 +90,9 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 #define FLASH_FLAG_ADDR32 BIT(0)
 
 /* SPI flash device connected to QMSPI chip select 0 */
-#define SAF_FLASH_CS0_SIZE (16 * 1024 * 1024)
+#define SAF_FLASH_WINBOND_25Q128_CS0_SIZE (16 * 1024 * 1024)
+/* Windbond 25Q256 */
+#define SAF_FLASH_CS0_SIZE (32 * 1024 * 1024)
 
 /*
  * Six QMSPI descriptors describe SPI flash opcode protocols.
@@ -549,7 +551,6 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 	cs = (cs < SAF_MAX_FLASH_DEVICES) ? cs : SAF_MAX_FLASH_DEVICES-1;
 	pf = &flash_dev_cfg[cs];
 
-	mchp_saf_poll2_mask_wr(regs, cs, pf->poll2_mask);
 	mchp_saf_cm_prefix_wr(regs, cs, pf->cont_prefix);
 	saf_flash_misc_cfg(regs, cs, pf);
 
@@ -578,6 +579,8 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 			qregs->DESCR[did]);
 		did++;
 	}
+
+	mchp_saf_poll2_mask_wr(regs, cs, pf->poll2_mask);
 
 	LOG_DBG("%s flashsz: %x\n", __func__, pf->flashsz);
 
@@ -700,13 +703,13 @@ int espi_saf_xec_activate(struct device *dev)
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
 	QMSPI_Type *qregs = (QMSPI_Type *)xcfg->qmspi_base_addr;
 
-	LOG_DBG("QMSPI MODE before %x", regs->MODE);
+	LOG_DBG("QMSPI MODE before %x", qregs->MODE);
 	qregs->MODE |= 0x00020405;
-	LOG_DBG("QMSPI MODE after %x", regs->MODE);
+	LOG_DBG("QMSPI MODE after %x", qregs->MODE);
 
-	LOG_DBG("QMSPI IEN before %x", regs->IEN);
-	regs->IEN = MCHP_QMSPI_IEN_XFR_DONE;
-	LOG_DBG("QMSPI IEN after %x", regs->IEN);
+	LOG_DBG("QMSPI IEN before %x", qregs->IEN);
+	qregs->IEN = MCHP_QMSPI_IEN_XFR_DONE;
+	LOG_DBG("QMSPI IEN after %x", qregs->IEN);
 
 	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	regs->SAF_FL_CFG_MISC |= (1 << 12);
