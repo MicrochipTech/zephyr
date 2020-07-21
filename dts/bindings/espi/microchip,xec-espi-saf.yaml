@@ -1,0 +1,23 @@
+# Copyright (c) 2019 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip ESPI SAF controller
+
+compatible: "microchip,xec-espi-saf"
+
+include: espi-controller.yaml
+
+properties:
+    reg:
+      description: mmio register space
+      required: true
+
+    prmap:
+      type: array
+      description: protection region mapping
+      required: false
+
+    io_girq:
+      type: int
+      description: soc group irq index for eSPI I/O
+      required: false
