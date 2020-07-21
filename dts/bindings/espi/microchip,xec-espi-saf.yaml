@@ -12,6 +12,11 @@ properties:
       description: mmio register space
       required: true
 
+    prmap:
+      type: array
+      description: protection region mapping
+      required: false
+
     io_girq:
       type: int
       description: soc group irq index for eSPI I/O

@@ -124,6 +124,8 @@ struct espi_saf_packet {
 typedef int (*espi_saf_api_config)(struct device *dev,
 				   struct espi_saf_cfg *cfg);
 
+typedef int (*espi_saf_api_activate)(struct device *dev);
+
 typedef bool (*espi_saf_api_get_channel_status)(struct device *dev);
 
 typedef int (*espi_saf_api_flash_read)(struct device *dev,
@@ -139,6 +141,7 @@ typedef int (*espi_saf_api_manage_callback)(struct device *dev,
 
 __subsystem struct espi_saf_driver_api {
 	espi_saf_api_config config;
+	espi_saf_api_activate activate;
 	espi_saf_api_get_channel_status get_channel_status;
 	espi_saf_api_flash_read flash_read;
 	espi_saf_api_flash_write flash_write;
@@ -208,6 +211,28 @@ static inline int z_impl_espi_saf_config(struct device *dev,
 }
 
 /**
+ * @brief Activate SAF block
+ *
+ * This routine activates the SAF block and should only be
+ * called after SAF has been configured and the eSPI Master
+ * has enabled the Flash Channel.
+ *
+ * @param dev Pointer to the device structure for the driver instance.
+ *
+ * @retval 0 If successful
+ * @retval -EINVAL if failed to activate SAF.
+ */
+__syscall int espi_saf_activate(struct device *dev);
+
+static inline int z_impl_espi_saf_activate(struct device *dev)
+{
+	const struct espi_saf_driver_api *api =
+		(const struct espi_saf_driver_api *)dev->driver_api;
+
+	return api->activate(dev);
+}
+
+/**
  * @brief Query to see if it a channel is ready.
  *
  * This routine allows to check if logical channel is ready before use.
@@ -230,7 +255,7 @@ static inline bool z_impl_espi_saf_get_channel_status(struct device *dev)
 }
 
 /**
- * @brief Sends a read request packet for slave attachec flash.
+ * @brief Sends a read request packet for slave attached flash.
  *
  * This routines provides an interface to send a request to read the flash
  * component shared between the eSPI master and eSPI slaves.
@@ -242,10 +267,10 @@ static inline bool z_impl_espi_saf_get_channel_status(struct device *dev)
  * @retval -EBUSY eSPI flash channel is not ready or disabled by master.
  * @retval -EIO General input / output error, failed request to master.
  */
-__syscall int espi_saf_read(struct device *dev,
-			    struct espi_saf_packet *pckt);
+__syscall int espi_saf_flash_read(struct device *dev,
+				  struct espi_saf_packet *pckt);
 
-static inline int z_impl_espi_saf_read_flash(struct device *dev,
+static inline int z_impl_espi_saf_flash_read(struct device *dev,
 					     struct espi_saf_packet *pckt)
 {
 	const struct espi_saf_driver_api *api =
@@ -271,10 +296,10 @@ static inline int z_impl_espi_saf_read_flash(struct device *dev,
  * @retval -EBUSY eSPI flash channel is not ready or disabled by master.
  * @retval -EIO General input / output error, failed request to master.
  */
-__syscall int espi_saf_write(struct device *dev,
-			     struct espi_saf_packet *pckt);
+__syscall int espi_saf_flash_write(struct device *dev,
+				   struct espi_saf_packet *pckt);
 
-static inline int z_impl_espi_saf_write_flash(struct device *dev,
+static inline int z_impl_espi_saf_flash_write(struct device *dev,
 					      struct espi_saf_packet *pckt)
 {
 	const struct espi_saf_driver_api *api =
@@ -300,8 +325,8 @@ static inline int z_impl_espi_saf_write_flash(struct device *dev,
  * @retval -EBUSY eSPI flash channel is not ready or disabled by master.
  * @retval -EIO General input / output error, failed request to master.
  */
-__syscall int espi_saf_erase(struct device *dev,
-			     struct espi_saf_packet *pckt);
+__syscall int espi_saf_flash_erase(struct device *dev,
+				   struct espi_saf_packet *pckt);
 
 static inline int z_impl_espi_saf_flash_erase(struct device *dev,
 					      struct espi_saf_packet *pckt)

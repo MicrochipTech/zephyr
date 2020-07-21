@@ -10,6 +10,7 @@
 #include <soc.h>
 #include <drivers/gpio.h>
 #include <drivers/espi.h>
+#include <drivers/espi_saf.h>
 #include <logging/log_ctrl.h>
 #include <logging/log.h>
 LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
@@ -43,6 +44,11 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 #define EVENT_TYPE(x)         (x & EVENT_MASK)
 #define EVENT_DETAILS(x)      ((x & EVENT_DETAILS_MASK) >> EVENT_DETAILS_POS)
 
+/* SAF local flash frequency */
+#define ESPI_SAF_FLASH_FREQ_48M 1
+#define ESPI_SAF_FLASH_FREQ_24M 2
+#define ESPI_SAF_FLASH_FREQ_16M 3
+
 struct oob_header {
 	uint8_t dest_slave_addr;
 	uint8_t oob_cmd_code;
@@ -67,6 +73,53 @@ static uint8_t espi_rst_sts;
 #ifdef CONFIG_ESPI_FLASH_CHANNEL
 static uint8_t flash_write_buf[MAX_TEST_BUF_SIZE];
 static uint8_t flash_read_buf[MAX_TEST_BUF_SIZE];
+#endif
+
+#ifdef CONFIG_ESPI_SAF
+struct saf_addr_info {
+	uintptr_t saf_struct_addr;
+	uintptr_t saf_exp_addr;
+};
+static struct device *espi_saf_dev;
+static uint32_t safbuf[64];
+
+static struct saf_addr_info saf_addr_check[] = {
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_CMD, 		0x40008018 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_FLAR, 		0x4000801C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_START, 		0x40008020 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_BFAR, 		0x40008024 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_STATUS, 		0x40008028 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_INTEN, 		0x4000802C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_FL_CFG_SIZE_LIM, 	0x40008030 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_FL_CFG_THRH, 		0x40008034 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_FL_CFG_MISC, 		0x40008038 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ESPI_MON_STATUS, 	0x4000803C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ESPI_MON_INTEN, 	0x40008040 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_BUSY, 		0x40008044 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS_OP[0], 		0x4000804C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS_OP[MCHP_ESPI_SAF_CS_MAX-1], 0x4000805C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS_OP[MCHP_ESPI_SAF_CS_MAX-1].OP_DESCR, 0x40008068 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_FL_CFG_GEN_DESCR, 	0x4000806C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_PROT_LOCK, 		0x40008070 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_PROT_DIRTY, 		0x40008074 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_TAG_MAP[0], 		0x40008078 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_TAG_MAP[MCHP_ESPI_SAF_TAGMAP_MAX-1], 0x40008080 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_PROT_RG[0], 		0x40008084 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_PROT_RG[MCHP_ESPI_SAF_PR_MAX-1], 0x40008184 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_PROT_RG[MCHP_ESPI_SAF_PR_MAX-1].RDBM, 0x40008190 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_POLL_TMOUT, 		0x40008194 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_POLL_INTRVL, 		0x40008198 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_SUS_RSM_INTRVL,	0x4000819C },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CONSEC_RD_TMOUT, 	0x400081A0 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS0_CFG_P2M, 		0x400081A4 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS1_CFG_P2M, 		0x400081A6 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_FL_CFG_SPM, 		0x400081A8 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_SUS_CHK_DLY, 		0x400081AC },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS0_CM_PRF, 		0x400081B0 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_CS1_CM_PRF, 		0x400081B2 },
+	{ (uintptr_t)&MCHP_SAF_REGS->SAF_DNX_PROT_BYP, 		0x400081B4 },
+};
+#define DEBUG_NUM_SAF_REG_ADDR (sizeof(saf_addr_check) / sizeof(struct saf_addr_info))
 #endif
 
 static void host_warn_handler(uint32_t signal, uint32_t status)
@@ -220,6 +273,77 @@ int espi_init(void)
 	LOG_INF("complete");
 
 	return ret;
+}
+
+int espi_saf_init(void)
+{
+	int ret;
+	struct espi_saf_cfg cfg;
+
+	cfg.spi_freq = ESPI_SAF_FLASH_FREQ_24M;
+
+	ret = espi_saf_config(espi_saf_dev, &cfg);
+	if (ret) {
+		LOG_ERR("Failed to configure eSPI SAF SPI freq:%x err: %d",
+			cfg.spi_freq, ret);
+		return ret;
+	} else {
+		LOG_INF("eSPI SAF configured successfully!");
+	}
+
+#if 0
+	LOG_INF("eSPI test - callbacks initialization... ");
+	espi_init_callback(&espi_bus_cb, espi_reset_handler, ESPI_BUS_RESET);
+	espi_init_callback(&vw_rdy_cb, espi_ch_handler,
+			   ESPI_BUS_EVENT_CHANNEL_READY);
+	espi_init_callback(&vw_cb, vwire_handler,
+			   ESPI_BUS_EVENT_VWIRE_RECEIVED);
+	espi_init_callback(&p80_cb, periph_handler,
+			   ESPI_BUS_PERIPHERAL_NOTIFICATION);
+	LOG_INF("complete");
+
+	LOG_INF("eSPI test - callbacks registration... ");
+	espi_add_callback(espi_dev, &espi_bus_cb);
+	espi_add_callback(espi_dev, &vw_rdy_cb);
+	espi_add_callback(espi_dev, &vw_cb);
+	espi_add_callback(espi_dev, &p80_cb);
+	LOG_INF("complete");
+#endif
+
+	return ret;
+}
+
+int espi_saf_test1(void)
+{
+	int rc;
+	struct espi_saf_packet saf_rw_pkt = { 0 };
+
+	rc = espi_saf_activate(espi_saf_dev);
+	LOG_INF("espi_saf_test1: activate = %d\n", rc);
+
+	memset(safbuf, 0x55, sizeof(safbuf));
+
+	saf_rw_pkt.flash_addr = 0;
+	saf_rw_pkt.buf = (uint8_t *)safbuf;
+	saf_rw_pkt.len = 4;
+
+	rc = espi_saf_flash_read(espi_saf_dev, &saf_rw_pkt);
+	LOG_INF("espi_saf_test1: read = %d\n", rc);
+
+	printk("Read 4-byte value = 0x%08X\n", safbuf[0]);
+
+	saf_rw_pkt.flash_addr = (safbuf[0] & 0x00fffffful) * 256;
+	saf_rw_pkt.buf = (uint8_t *)safbuf;
+	saf_rw_pkt.len = 64;
+
+	rc = espi_saf_flash_read(espi_saf_dev, &saf_rw_pkt);
+	LOG_INF("espi_saf_test1: read 64 bytes = %d\n", rc);
+
+	for (int i = 0; i < 64/4; i++) {
+		printk("Word[%d] = 0x%08X\n", i, safbuf[i]);
+	}
+
+	return 0;
 }
 
 static int wait_for_pin(struct device *dev, uint8_t pin, uint16_t timeout,
@@ -536,6 +660,14 @@ int espi_test(void)
 		return -1;
 	}
 
+#ifdef CONFIG_ESPI_SAF
+	espi_saf_dev = device_get_binding(CONFIG_ESPI_SAF_DEV);
+	if (!espi_saf_dev) {
+		LOG_WRN("Fail to find %s", CONFIG_ESPI_SAF_DEV);
+		return -1;
+	}
+#endif
+
 	LOG_INF("Hello eSPI test %s", CONFIG_BOARD);
 
 #ifdef CONFIG_ESPI_GPIO_DEV_NEEDED
@@ -561,6 +693,12 @@ int espi_test(void)
 #endif
 
 	espi_init();
+
+#ifdef CONFIG_ESPI_SAF
+	espi_saf_init();
+
+	espi_saf_test1();
+#endif
 
 #ifdef CONFIG_ESPI_GPIO_DEV_NEEDED
 	ret = wait_for_pin(gpio_dev0, CONFIG_PWRGD_PIN, PWR_SEQ_TIMEOUT, 1);
@@ -634,7 +772,30 @@ int espi_test(void)
 	return ret;
 }
 
+bool check_espi_saf_struct(void)
+{
+	size_t n;
+	bool pass = true;
+	struct saf_addr_info *p = &saf_addr_check[0];
+
+	for (n = 0; n < DEBUG_NUM_SAF_REG_ADDR; n++) {
+		if (p->saf_struct_addr != p->saf_exp_addr) {
+			pass = false;
+			printk("SAF register struct check index %d failed!\n", n);
+		}
+		p++;
+	}
+
+	return pass;
+}
+
 void main(void)
 {
+	if (check_espi_saf_struct()) {
+		LOG_INF("eSPI SAF reg check PASS");
+	} else {
+		LOG_INF("eSPI SAF reg check FAIL");
+	}
+
 	espi_test();
 }

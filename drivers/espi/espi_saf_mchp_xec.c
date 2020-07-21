@@ -12,43 +12,71 @@
 #include <drivers/espi.h>
 #include <drivers/espi_saf.h>
 #include <logging/log.h>
-#include "espi_saf_mchp_xec.h"
+#include "espi_saf_mchp_xec_priv.h"
 #include "espi_utils.h"
 
-#define SAF_MAX_FLASH_DEVICES 2
+#define SAF_MAX_FLASH_DEVICES 2U
 
-/* SAF HW engine timings */
-#define SAF_FLASH_POLL_TIMEOUT 0x28000 /* 0x194 number of 32KHz clock periods */
-#define SAF_FLASH_POLL_INTERVAL 0 /* 0x198 number of AHB clock periods */
-#define SAF_FLASH_SUS_RSM_INTERVAL 8 /* 0x19c number of 32KHz clock periods */
-#define SAF_FLASH_CONSEC_READ_TIMEOUT 2 /* 0x1a0 number of AHB clock periods */
-#define SAF_FLASH_SUS_CHK_DELAY 0 /* 0x1ac number of AHB clock periods */
+/*
+ * SAF hardware state machine timings
+ * poll timeout is in 32KHz clock periods
+ * poll interval is in AHB clock(48MHz) units.
+ * suspend resume interval is in 32KHz clock periods.
+ * consecutive read timeout is in AHB clock periods.
+ * suspend check delay is in AHB clock(48MHz) periods.
+ */
+#define SAF_FLASH_POLL_TIMEOUT 0x28000U
+#define SAF_FLASH_POLL_INTERVAL 0U
+#define SAF_FLASH_SUS_RSM_INTERVAL 8U
+#define SAF_FLASH_CONSEC_READ_TIMEOUT 2U
+#define SAF_FLASH_SUS_CHK_DELAY 0U
 
 /* SAF Pre-fetch optimization mode */
 #define SAF_PREFETCH_MODE MCHP_SAF_FL_CFG_MISC_PFOE_DFLT
 
-#define SAF_CFG_MISC_PREFETCH_EXPEDITED 0x03
-
-/* SAF Map of eSPI TAG numbers to master numbers */
-#define SAF_TAG_MAP0 0x23221100
-#define SAF_TAG_MAP1 0x77677767
-#define SAF_TAG_MAP2 0x00000005
+#define SAF_CFG_MISC_PREFETCH_EXPEDITED 0x03U
 
 /* SAF QMSPI programming */
-#define SAF_QMSPI_CLK_DIV 2 /* 24 MHz */
 
-#define SAF_QMSPI_CS_TIMING 0x03000101
-
-#define SAF_QMSPI_NUM_FLASH_DESCR 6
-#define SAF_QMSPI_CS0_START_DESCR 0
+#define SAF_QMSPI_NUM_FLASH_DESCR 6U
+#define SAF_QMSPI_CS0_START_DESCR 0U
 #define SAF_QMSPI_CS1_START_DESCR \
 	(SAF_QMSPI_CS0_START_DESCR + SAF_QMSPI_NUM_FLASH_DESCR)
 
 /* QMSPI descriptors 12-15 for all SPI flash devices */
-#define SAF_QMSPI_DESCR12 0x0002D40E
-#define SAF_QMSPI_DESCR13 0x00130642
-#define SAF_QMSPI_DESCR14 0x0002F404
-#define SAF_QMSPI_DESCR15 0x00050640
+/* #define SAF_QMSPI_DESCR12 0x0002D40E */
+#define SAF_QMSPI_DESCR12 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_ONES | \
+			   MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+			   MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+			   MCHP_QMSPI_C_XFR_UNITS_1 | \
+			   MCHP_QMSPI_C_NEXT_DESCR(13) | \
+			   MCHP_QMSPI_C_XFR_NUNITS(1))
+
+/* #define SAF_QMSPI_DESCR13 0x00130642 */
+#define SAF_QMSPI_DESCR13 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+			   MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_EN | \
+			   MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_CLOSE | \
+			   MCHP_QMSPI_C_XFR_UNITS_1 | \
+			   MCHP_QMSPI_C_NEXT_DESCR(0) | \
+			   MCHP_QMSPI_C_XFR_NUNITS(9) | \
+			   MCHP_QMSPI_C_DESCR_LAST)
+
+/* #define SAF_QMSPI_DESCR14 0x0002F404 */
+#define SAF_QMSPI_DESCR14 (MCHP_QMSPI_C_IFM_1X | MCHP_QMSPI_C_TX_DATA | \
+			   MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+			   MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+			   MCHP_QMSPI_C_XFR_UNITS_1 | \
+			   MCHP_QMSPI_C_NEXT_DESCR(15) | \
+			   MCHP_QMSPI_C_XFR_NUNITS(1))
+
+/* #define SAF_QMSPI_DESCR15 0x00050640 */
+#define SAF_QMSPI_DESCR15 (MCHP_QMSPI_C_IFM_1X | MCHP_QMSPI_C_TX_DIS | \
+			   MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_EN | \
+			   MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_CLOSE | \
+			   MCHP_QMSPI_C_XFR_UNITS_1 | \
+			   MCHP_QMSPI_C_NEXT_DESCR(0) | \
+			   MCHP_QMSPI_C_XFR_NUNITS(2) | \
+			   MCHP_QMSPI_C_DESCR_LAST)
 
 /*
  * SAF Opcode 32-bit register value.
@@ -72,8 +100,8 @@
  *	op3 = SPI flash read STATUS2 opcode
  */
 #define SAF_OPCODE_REG_VAL(op0,op1,op2,op3) \
-	(((uint32_t)(op0)&0xff) | (((uint32_t)(op1)&0xff) << 8) | \
-	 (((uint32_t)(op2)&0xff) << 16) | (((uint32_t)(op3)&0xff) << 24))
+	(((uint32_t)(op0)&0xffU) | (((uint32_t)(op1)&0xffU) << 8) | \
+	 (((uint32_t)(op2)&0xffU) << 16) | (((uint32_t)(op3)&0xffU) << 24))
 
 /*
  * SAF Flash Config CS0/CS1 QMSPI descriptor indices register value
@@ -82,31 +110,66 @@
  * s = Index of QMSPI descriptor in continuous mode read chain that
  *     contains the data length field.
  */
-#define SAF_CS_CFG_DESCR_IDX_REG_VAL(e,r,s) (((uint32_t)(e)&0xf) | \
-	(((uint32_t)(r)&0xf) << 8) | (((uint32_t)(s)&0xf) << 12))
+#define SAF_CS_CFG_DESCR_IDX_REG_VAL(e,r,s) (((uint32_t)(e)&0xfU) | \
+	(((uint32_t)(r)&0xfU) << 8) | (((uint32_t)(s)&0xfU) << 12))
 
 /* Flags */
 #define FLASH_FLAG_ADDR32 BIT(0)
 
 /* SPI flash device connected to QMSPI chip select 0 */
-#define SAF_FLASH_CS0_SIZE (16 * 1024 * 1024)
+#define SAF_FLASH_CS0_SIZE (16U * 1024U * 1024U)
 
 /*
  * Six QMSPI descriptors describe SPI flash opcode protocols.
  * W25Q128 device.
  */
-#define CS0_DESCR0 0x00081406
-#define CS0_DESCR1 0x00042402
-#define CS0_DESCR2 0x000137C2
-#define CS0_DESCR3 0x00024404
-#define CS0_DESCR4 0x00085406
-#define CS0_DESCR5 0x00076602
+/* #define CS0_DESCR0 0x00081406U */
+#define CS0_DESCR0 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DATA | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(1) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(4))
 
-#define CS0_OPA SAF_OPCODE_REG_VAL(0x06,0x75,0x7a,0x05)
-#define CS0_OPB SAF_OPCODE_REG_VAL(0x20,0x52,0xd8,0x02)
-#define CS0_OPC SAF_OPCODE_REG_VAL(0xeb,0xff,0xa5,0x35)
+/* #define CS0_DESCR1 0x00042402U */
+#define CS0_DESCR1 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1  | MCHP_QMSPI_C_NEXT_DESCR(2) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(2))
 
-#define CS0_POLL2_MASK 0xff7f
+/* #define CS0_DESCR2 0x000137C2U */
+#define CS0_DESCR2 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_EN | \
+		    MCHP_QMSPI_C_RX_DMA_4B | MCHP_QMSPI_C_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(3) | \
+		    MCHP_QMSPI_C_DESCR_LAST | MCHP_QMSPI_C_XFR_NUNITS(0))
+
+/* #define CS0_DESCR3 0x00024404U */
+#define CS0_DESCR3 (MCHP_QMSPI_C_IFM_1X | MCHP_QMSPI_C_TX_DATA | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(4) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(1))
+
+/* #define CS0_DESCR4 0x00085406U */
+#define CS0_DESCR4 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DATA | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(5) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(4))
+
+/* #define CS0_DESCR5 0x00076602U */
+#define CS0_DESCR5 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(6) | \
+		    MCHP_QMSPI_C_DESCR_LAST | MCHP_QMSPI_C_XFR_NUNITS(3))
+
+#define CS0_OPA SAF_OPCODE_REG_VAL(0x06U,0x75U,0x7aU,0x05U)
+#define CS0_OPB SAF_OPCODE_REG_VAL(0x20U,0x52U,0xd8U,0x02U)
+#define CS0_OPC SAF_OPCODE_REG_VAL(0xebU,0xffU,0xa5U,0x35U)
+
+#define CS0_POLL2_MASK 0xff7fU
 
 /*
  * SAF Flash Continous Mode Prefix register value
@@ -117,39 +180,77 @@
  * A zero value means the SPI flash does not require a prefix
  * command.
  */
-#define CS0_CONT_MODE_PREFIX_VAL 0
+#define CS0_CONT_MODE_PREFIX_VAL 0U
 
 /* SAF Flash Config CS0 QMSPI descriptor indices */
-#define CS0_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(3,0,2)
+#define CS0_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(3U,0U,2U)
 
-#define CS0_FLAGS 0
+#define CS0_FLAGS 0U
 
 /* SPI flash device connected to QMSPI chip select 1 */
-#define SAF_FLASH_CS1_SIZE 0
+#define SAF_FLASH_CS1_SIZE 0U
 
 /*
  * Six QMSPI descriptors describe SPI flash opcode protocols.
  * W25Q128 device.
  */
-#define CS1_DESCR6 0x00087406
-#define CS1_DESCR7 0x00048402
-#define CS1_DESCR8 0x000197C2
-#define CS1_DESCR9 0x0002a404
-#define CS1_DESCR10 0x0008b406
-#define CS1_DESCR11 0x0007c602
+/* #define CS1_DESCR6 0x00087406U */
+#define CS1_DESCR6 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DATA | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(7) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(4))
 
-#define CS1_OPA SAF_OPCODE_REG_VAL(0x06,0x75,0x7a,0x05)
-#define CS1_OPB SAF_OPCODE_REG_VAL(0x20,0x52,0xd8,0x02)
-#define CS1_OPC SAF_OPCODE_REG_VAL(0xeb,0xff,0xa5,0x35)
+/* #define CS1_DESCR7 0x00048402U */
+#define CS1_DESCR7 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(8) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(2))
 
-#define CS1_POLL2_MASK 0xff7f
+/* #define CS1_DESCR8 0x000197C2U */
+#define CS1_DESCR8 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_EN | \
+		    MCHP_QMSPI_C_RX_DMA_4B | MCHP_QMSPI_C_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_NEXT_DESCR(9) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(0) | MCHP_QMSPI_C_DESCR_LAST)
 
-#define CS1_CONT_MODE_PREFIX_VAL 0
+/* #define CS1_DESCR9 0x0002a404U */
+#define CS1_DESCR9 (MCHP_QMSPI_C_IFM_1X | MCHP_QMSPI_C_TX_DATA | \
+		    MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		    MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		    MCHP_QMSPI_C_XFR_UNITS_1 | \
+		    MCHP_QMSPI_C_NEXT_DESCR(10) | \
+		    MCHP_QMSPI_C_XFR_NUNITS(1))
+
+/* #define CS1_DESCR10 0x0008b406U */
+#define CS1_DESCR10 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DATA | \
+		     MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		     MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+		     MCHP_QMSPI_C_XFR_UNITS_1 | \
+		     MCHP_QMSPI_C_NEXT_DESCR(11) | \
+		     MCHP_QMSPI_C_XFR_NUNITS(4)) \
+
+/* #define CS1_DESCR11 0x0007c602U */
+#define CS1_DESCR11 (MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+		     MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+		     MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_CLOSE | \
+		     MCHP_QMSPI_C_XFR_UNITS_1 | \
+		     MCHP_QMSPI_C_NEXT_DESCR(12) | \
+		     MCHP_QMSPI_C_XFR_NUNITS(3) | MCHP_QMSPI_C_DESCR_LAST)
+
+#define CS1_OPA SAF_OPCODE_REG_VAL(0x06U,0x75U,0x7aU,0x05U)
+#define CS1_OPB SAF_OPCODE_REG_VAL(0x20U,0x52U,0xd8U,0x02U)
+#define CS1_OPC SAF_OPCODE_REG_VAL(0xebU,0xffU,0xa5U,0x35U)
+
+#define CS1_POLL2_MASK 0xff7fU
+
+#define CS1_CONT_MODE_PREFIX_VAL 0U
 
 /* SAF Flash Config CS1 QMSPI descriptor indices */
-#define CS1_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(9,6,8)
+#define CS1_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(9U,6U,8U)
 
-#define CS1_FLAGS 0
+#define CS1_FLAGS 0U
 
 
 /* SAF EC Portal read/write flash access limited to 1-64 bytes */
@@ -165,11 +266,22 @@ struct espi_isr {
 	void (*the_isr)(struct device *dev);
 };
 
-/* Device Tree information */
+/*
+ * SAF configuration from Device Tree
+ * SAF controller register block base address
+ * QMSPI controller register block base address
+ * SAF communications register block base address
+ * SAF Protection regions 0-7 mapping to eSPI master ID's.
+ * SAF Protection regions 8-15 mapping to eSPI master ID's.
+ * SAF Protection regions 16 mapping to eSPI masterID's.
+ */
 struct espi_saf_xec_config {
 	uintptr_t saf_base_addr;
 	uintptr_t qmspi_base_addr;
 	uintptr_t saf_comm_base_addr;
+	uint32_t prmap0;
+	uint32_t prmap1;
+	uint32_t prmap2;
 };
 
 struct espi_saf_xec_data {
@@ -177,24 +289,30 @@ struct espi_saf_xec_data {
 	struct k_sem ecp_lock;
 };
 
+/*
+ * SAF local flash configuration.
+ * SPI flash device size in bytes
+ * SPI opcodes for SAF Opcode A register
+ * SPI opcodes for SAF Opcode B register
+ * SPI opcodes for SAF Opcode C register
+ * QMSPI descriptors describing SPI opcode transmit and
+ * data read.
+ * SAF controller Poll2 Mast value specific for this flash device
+ * SAF continuous mode prefix register value for those flashes requireing
+ * a prefix byte transmitted before the enter continuous mode command.
+ * Start QMSPI descriptor numbers.
+ * miscellaneous flags.
+ */
 struct saf_spi_flash_cfg
 {
-	uint32_t flashsz; /* Size of SPI flash device in bytes */
-
+	uint32_t flashsz;
 	uint32_t opa;
 	uint32_t opb;
 	uint32_t opc;
-
-	/* inform QMSPI of opcodes protocols */
 	uint32_t descr[SAF_QMSPI_NUM_FLASH_DESCR];
-
-	uint16_t poll2_mask; /* SAF Poll2 Mask register value */
-	/* Some flash devices require prefix opcode for continuous mode */
+	uint16_t poll2_mask;
 	uint16_t cont_prefix;
-
-	/* start descriptor numbers for continuous mode QMSPI chains */
 	uint16_t cs_cfg_descr_ids;
-
 	uint16_t flags;
 };
 
@@ -227,22 +345,22 @@ const struct saf_spi_flash_cfg flash_dev_cfg[] = {
 		.cs_cfg_descr_ids = CS0_CFG_DESCR_IDX_REG_VAL,
 		.flags = CS0_FLAGS,
 	},
-#if SAF_FLASH_CS1_SIZE != 0
+/* #if SAF_FLASH_CS1_SIZE != 0 */
 	{ /* Winbond 25Q128 connected to SPI CS1 */
 		.flashsz = SAF_FLASH_CS1_SIZE,
 		.opa = CS1_OPA,
 		.opb = CS1_OPB,
 		.opc = CS1_OPC,
 		.descr = {
-			CS0_DESCR6, CS0_DESCR7, CS0_DESCR8,
-			CS0_DESCR9, CS0_DESCR10, CS0_DESCR11
+			CS1_DESCR6, CS1_DESCR7, CS1_DESCR8,
+			CS1_DESCR9, CS1_DESCR10, CS1_DESCR11
 		},
 		.poll2_mask = CS1_POLL2_MASK,
 		.cont_prefix = CS1_CONT_MODE_PREFIX_VAL,
 		.cs_cfg_descr_ids = CS1_CFG_DESCR_IDX_REG_VAL,
 		.flags = CS1_FLAGS,
 	},
-#endif
+/* #endif */
 };
 
 static uint8_t saf_flash_cnt =
@@ -286,7 +404,8 @@ static inline void mchp_saf_cm_prefix_wr(MCHP_SAF_HW_REGS *regs,
 const struct mchp_espi_saf_pr prot_regs[] = {
 	{
 		.START = 0,
-		.LIMIT = ((SAF_FLASH_CS0_SIZE + SAF_FLASH_CS1_SIZE) / 4096),
+		.LIMIT = (((SAF_FLASH_CS0_SIZE + \
+			    SAF_FLASH_CS1_SIZE) / 4096) - 1U),
 		.WEBM = MCHP_SAF_MSTR_ALL,
 		.RDBM = MCHP_SAF_MSTR_ALL
 	},
@@ -296,7 +415,7 @@ static uint8_t saf_pr_cnt =
 	sizeof(prot_regs) / sizeof(struct mchp_espi_saf_pr);
 
 /*
- * TODO - Intialize SAF flash protection regions.
+ * Intialize SAF flash protection regions.
  * SAF HW implements 16 protection regions.
  * At least one protection region must be enable to allow
  * EC access to the local flash through the EC Portal.
@@ -341,9 +460,7 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
 	QMSPI_Type *regs = (QMSPI_Type *)cfg->qmspi_base_addr;
 
 	regs->MODE = MCHP_QMSPI_M_SRST;
-	if (regs->MODE & MCHP_QMSPI_M_SRST) {
-		regs->MODE = 0;
-	}
+	regs->MODE = 0;
 
 	MCHP_GIRQ_ENCLR(MCHP_QMSPI_GIRQ_NUM) = MCHP_QMSPI_GIRQ_VAL;
 	MCHP_GIRQ_SRC(MCHP_QMSPI_GIRQ_NUM) = MCHP_QMSPI_GIRQ_VAL;
@@ -402,7 +519,7 @@ static void saf_dnx_bypass_init(MCHP_SAF_HW_REGS *regs)
 }
 
 /*
- * TODO bitmap of flash erase size from 1KB up to 128KB.
+ * Bitmap of flash erase size from 1KB up to 128KB.
  * eSPI SAF specification requires 4KB erase support.
  * MCHP SAF supports 4KB, 32KB, and 64KB.
  * Only report 32KB and 64KB to Host if supported by both
@@ -432,7 +549,7 @@ static int saf_init_erase_block_size(const struct espi_saf_xec_config *cfg)
 	}
 
 	/*
-	 * TODO how to we pass address of eSPI capabilities registers
+	 * TODO how to pass address of eSPI capabilities registers
 	 * to SAF driver?
 	 */
 	ESPI_CAP_REGS->FC_SERBZ = erase_bitmap;
@@ -526,11 +643,12 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 	return pf->flashsz;
 }
 
-static void saf_tagmap_init(MCHP_SAF_HW_REGS *regs)
+static void saf_tagmap_init(MCHP_SAF_HW_REGS *regs,
+			    const struct espi_saf_xec_config *xcfg)
 {
-	regs->SAF_TAG_MAP[0] = SAF_TAG_MAP0;
-	regs->SAF_TAG_MAP[1] = SAF_TAG_MAP1;
-	regs->SAF_TAG_MAP[2] = SAF_TAG_MAP2;
+	regs->SAF_TAG_MAP[0] = xcfg->prmap0;
+	regs->SAF_TAG_MAP[1] = xcfg->prmap1;
+	regs->SAF_TAG_MAP[2] = xcfg->prmap2;
 }
 
 /*
@@ -548,7 +666,7 @@ static int espi_saf_xec_configuration(struct device *dev,
 	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
 
-	if ((saf_flash_cnt == 0) ||
+	if ((saf_flash_cnt == 0U) ||
 	    (saf_flash_cnt > SAF_MAX_FLASH_DEVICES)) {
 		return -EINVAL;
 	}
@@ -572,24 +690,21 @@ static int espi_saf_xec_configuration(struct device *dev,
 	totalsz = saf_flash_cfg(dev, cfg, 0);
 	regs->SAF_FL_CFG_THRH = totalsz;
 
-#if SAF_FLASH_CS1_SIZE != 0
 	/* optional second flash device connected to CS1 */
-	totalsz += saf_flash_cfg(dev, cfg, 0);
-#endif
+	totalsz += saf_flash_cfg(dev, cfg, 1);
 	if (totalsz == 0) {
 		return -EAGAIN;
 	}
 
 	regs->SAF_FL_CFG_SIZE_LIM = totalsz - 1;
 
-	saf_tagmap_init(regs); /* done */
+	saf_tagmap_init(regs, xcfg);
 
-	/* protection regions */
-	saf_protection_regions_init(regs); /* done */
+	saf_protection_regions_init(regs);
 
-	saf_dnx_bypass_init(regs); /* done */
+	saf_dnx_bypass_init(regs);
 
-	saf_flash_timing_init(regs); /* done */
+	saf_flash_timing_init(regs);
 
 	ret = saf_init_erase_block_size(xcfg);
 	if (ret != 0) {
@@ -619,7 +734,6 @@ static bool espi_saf_xec_channel_ready(struct device *dev)
 
 	return false;
 }
-
 
 /*
  * MCHP SAF hardware supports a range of flash block erase
@@ -659,7 +773,7 @@ static uint32_t get_erase_size_encoding(uint32_t erase_size)
 		}
 	}
 
-	return 0xffffffff;
+	return 0xffffffffU;
 }
 
 /*
@@ -672,17 +786,15 @@ static int saf_ecp_access(struct device *dev,
 			  struct espi_saf_packet *pckt,
 			  uint8_t cmd)
 {
-	int ret;
 	uint32_t err_mask, n;
 	const struct espi_saf_xec_config *cfg = DEV_CFG(dev);
-	struct espi_saf_xec_data *data = DEV_DATA(dev);
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
 
 	err_mask = MCHP_SAF_ECP_STS_ERR_MASK;
 
 	LOG_DBG("%s", __func__);
 
-	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
+	if (!(regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN)) {
 		LOG_ERR("SAF is disabled");
 		return -EIO;
 	}
@@ -724,7 +836,6 @@ static int saf_ecp_access(struct device *dev,
 	regs->SAF_ECP_FLAR = pckt->flash_addr;
 	regs->SAF_ECP_BFAR = (uint32_t)&slave_mem[0];
 
-	if (cmd == MCHP_SAF_ECP_CMD_CTYPE_ERASE0)
 	regs->SAF_ECP_CMD = MCHP_SAF_ECP_CMD_PUT_FLASH_NP |
 			    ((uint32_t)cmd << MCHP_SAF_ECP_CMD_CTYPE_POS) |
 			    ((n << MCHP_SAF_ECP_CMD_LEN_POS) &
@@ -738,24 +849,9 @@ static int saf_ecp_access(struct device *dev,
 	 * ISR is in eSPI driver. Use polling until eSPI driver has been
 	 * modified to provide callback for GIRQ19 SAF ECP Done.
 	 */
-	ret = k_sem_take(&data->ecp_lock, K_FOREVER);
-	if (ret == -EBUSY) {
-		LOG_ERR("SAF EC Portal access unable to take semaphore");
-		return -EBUSY;
-	}
-
 	while (regs->SAF_ECP_BUSY & MCHP_SAF_ECP_BUSY) {
-		;
+		k_sleep(K_MSEC(1));
 	}
-
-	if (regs->SAF_ECP_STATUS & err_mask) {
-		LOG_ERR("%s err: %x", __func__, err_mask);
-		regs->SAF_ECP_STATUS = err_mask;
-		k_sem_give(&data->ecp_lock);
-		return -EIO;
-	}
-
-	k_sem_give(&data->ecp_lock);
 
 	memcpy(pckt->buf, slave_mem, pckt->len);
 
@@ -793,10 +889,28 @@ static int espi_saf_xec_manage_callback(struct device *dev,
 	return espi_manage_callback(&data->callbacks, callback, set);
 }
 
+static int espi_saf_xec_activate(struct device *dev)
+{
+	const struct espi_saf_xec_config *cfg;
+	MCHP_SAF_HW_REGS *regs;
+
+	if (dev == NULL) {
+		return -EINVAL;
+	}
+
+	cfg = DEV_CFG(dev);
+	regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
+
+	regs->SAF_FL_CFG_MISC |= MCHP_SAF_FL_CFG_MISC_SAF_EN;
+
+	return 0;
+}
+
 static int espi_saf_xec_init(struct device *dev);
 
 static const struct espi_saf_driver_api espi_saf_xec_driver_api = {
 	.config = espi_saf_xec_configuration,
+	.activate = espi_saf_xec_activate,
 	.get_channel_status = espi_saf_xec_channel_ready,
 	.flash_read = saf_xec_flash_read,
 	.flash_write = saf_xec_flash_write,
@@ -806,11 +920,19 @@ static const struct espi_saf_driver_api espi_saf_xec_driver_api = {
 
 static struct espi_saf_xec_data espi_saf_xec_data;
 
-/* TODO */
 static const struct espi_saf_xec_config espi_saf_xec_config = {
 	.saf_base_addr = DT_INST_REG_ADDR_BY_IDX(0, 0),
 	.qmspi_base_addr = DT_INST_REG_ADDR_BY_IDX(0, 1),
 	.saf_comm_base_addr = DT_INST_REG_ADDR_BY_IDX(0, 2),
+#if DT_INST_NODE_HAS_PROP(0, prmap)
+	.prmap0 = DT_INST_PROP_BY_IDX(0, prmap, 0),
+	.prmap1 = DT_INST_PROP_BY_IDX(0, prmap, 1),
+	.prmap2 = DT_INST_PROP_BY_IDX(0, prmap, 2),
+#else
+	.prmap0 = SAF_TAG_MAP0,
+	.prmap1 = SAF_TAG_MAP1,
+	.prmap2 = SAF_TAG_MAP2,
+#endif
 };
 
 DEVICE_AND_API_INIT(espi_saf_xec_0, DT_INST_LABEL(0),
