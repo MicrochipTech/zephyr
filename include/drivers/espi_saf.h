@@ -253,10 +253,10 @@ static inline bool z_impl_espi_saf_get_channel_status(struct device *dev)
  * @retval -EBUSY eSPI flash channel is not ready or disabled by master.
  * @retval -EIO General input / output error, failed request to master.
  */
-__syscall int espi_saf_read_flash(struct device *dev,
+__syscall int espi_saf_flash_read(struct device *dev,
 			    struct espi_saf_packet *pckt);
 
-static inline int z_impl_espi_saf_read_flash(struct device *dev,
+static inline int z_impl_espi_saf_flash_read(struct device *dev,
 					     struct espi_saf_packet *pckt)
 {
 	const struct espi_saf_driver_api *api =

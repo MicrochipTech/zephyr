@@ -108,12 +108,12 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
  * Six QMSPI descriptors describe SPI flash opcode protocols.
  * W25Q256 device.
  */
-#define CS0_DESCR0 0x000A0406
-#define CS0_DESCR1 0x00040402 /* hardcoding as in TGL */
-#define CS0_DESCR2 0x000107C2
-#define CS0_DESCR3 0x00020404
-#define CS0_DESCR4 0x000A0406
-#define CS0_DESCR5 0x00070602
+#define CS0_DESCR0 0x000A1406
+#define CS0_DESCR1 0x00042402 /* hardcoding as in TGL */
+#define CS0_DESCR2 0x000137C2
+#define CS0_DESCR3 0x00024404
+#define CS0_DESCR4 0x000A5406
+#define CS0_DESCR5 0x00076602
 
 
 #define CS0_OPA SAF_OPCODE_REG_VAL(0x06,0x75,0x7a,0x05)
@@ -139,18 +139,19 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 #define CS0_FLAGS 0
 
 /* SPI flash device connected to QMSPI chip select 1 */
-#define SAF_FLASH_CS1_SIZE 0
+/* TODO: Remove. WA SPI opcodes configuration for both devices as in MEC14xx */
+#define SAF_FLASH_CS1_SIZE 1
 
 /*
  * Six QMSPI descriptors describe SPI flash opcode protocols.
  * W25Q128 device.
  */
-#define CS1_DESCR6 0x00087406
+#define CS1_DESCR6 0x000A7406
 #define CS1_DESCR7 0x00048402
 #define CS1_DESCR8 0x000197C2
-#define CS1_DESCR9 0x0002a404
-#define CS1_DESCR10 0x0008b406
-#define CS1_DESCR11 0x0007c602
+#define CS1_DESCR9 0x0002A404
+#define CS1_DESCR10 0x000AB406
+#define CS1_DESCR11 0x0007C602
 
 #define CS1_OPA SAF_OPCODE_REG_VAL(0x06,0x75,0x7a,0x05)
 #define CS1_OPB SAF_OPCODE_REG_VAL(0x20,0x52,0xd8,0x02)
@@ -161,7 +162,7 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 #define CS1_CONT_MODE_PREFIX_VAL 0
 
 /* SAF Flash Config CS1 QMSPI descriptor indices */
-#define CS1_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(9,6,8)
+#define CS1_CFG_DESCR_IDX_REG_VAL SAF_CS_CFG_DESCR_IDX_REG_VAL(3, 0, 2)
 
 #define CS1_FLAGS 0
 
@@ -226,7 +227,7 @@ static uint32_t slave_mem[MAX_SAF_ECP_BUFFER_SIZE];
  */
 
 const struct saf_spi_flash_cfg flash_dev_cfg[] = {
-	{ /* Winbond 25Q128 connected to SPI CS0 */
+	{ /* Winbond 25Q256 connected to SPI CS0 */
 		.flashsz = SAF_FLASH_CS0_SIZE,
 		.opa = CS0_OPA,
 		.opb = CS0_OPB,
@@ -247,8 +248,8 @@ const struct saf_spi_flash_cfg flash_dev_cfg[] = {
 		.opb = CS1_OPB,
 		.opc = CS1_OPC,
 		.descr = {
-			CS0_DESCR6, CS0_DESCR7, CS0_DESCR8,
-			CS0_DESCR9, CS0_DESCR10, CS0_DESCR11
+			CS1_DESCR6, CS1_DESCR7, CS1_DESCR8,
+			CS1_DESCR9, CS1_DESCR10, CS1_DESCR11
 		},
 		.poll2_mask = CS1_POLL2_MASK,
 		.cont_prefix = CS1_CONT_MODE_PREFIX_VAL,
@@ -272,6 +273,7 @@ static inline void mchp_saf_cs_descr_wr(MCHP_SAF_HW_REGS *regs,
 static inline void mchp_saf_poll2_mask_wr(MCHP_SAF_HW_REGS *regs,
 					  uint8_t cs, uint16_t val)
 {
+	LOG_DBG("%s cs: %d mask %x", __func__, cs, val);
 	if (cs == 0) {
 		regs->SAF_CS0_CFG_P2M = val;
 	} else {
@@ -377,10 +379,10 @@ static void saf_qmspi_init(const struct espi_saf_xec_config *cfg)
 	regs->CSTM = SAF_QMSPI_CS_TIMING;
 	LOG_DBG("CSTM %x", regs->CSTM);
 
-	regs->DESCR[12] = SAF_QMSPI_DESCR12 | (13 << 12);
-	regs->DESCR[13] = SAF_QMSPI_DESCR13 | (12 << 12);
-	regs->DESCR[14] = SAF_QMSPI_DESCR14 | (15 << 12);
-	regs->DESCR[15] = SAF_QMSPI_DESCR15 | (14 << 12);
+	regs->DESCR[12] = SAF_QMSPI_DESCR12;
+	regs->DESCR[13] = SAF_QMSPI_DESCR13;
+	regs->DESCR[14] = SAF_QMSPI_DESCR14;
+	regs->DESCR[15] = SAF_QMSPI_DESCR15;
 
 	LOG_DBG("QMSPI DESC 12 %x", regs->DESCR[12]);
 	LOG_DBG("QMSPI DESC 13 %x", regs->DESCR[13]);
@@ -565,7 +567,6 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 		regs->SAF_CS_OP[cs].OPB);
 	LOG_DBG("OPC READ  %p %x", &regs->SAF_CS_OP[cs].OPC,
 		regs->SAF_CS_OP[cs].OPC);
-	LOG_DBG("CFG_CSX_DESCR exp 2003 %x", regs->SAF_CS_OP[cs].OP_DESCR);
 
 	/* Windbond specific */
 	did = SAF_QMSPI_CS0_START_DESCR;
@@ -573,6 +574,7 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 		did = SAF_QMSPI_CS1_START_DESCR;
 	}
 
+	LOG_DBG("CS start address cs: %d did: %d", cs, did);
 	for (size_t i = 0; i < SAF_QMSPI_NUM_FLASH_DESCR; i++) {
 		qregs->DESCR[did] = pf->descr[i] | ((did + 1) << 12);
 		LOG_DBG("QMSPI SPI specific DESCR[%x]=%x ", did,
@@ -580,9 +582,16 @@ uint32_t saf_flash_cfg(struct device *dev, struct espi_saf_cfg *cfg,
 		did++;
 	}
 
+	LOG_DBG("CFG_CSX_DESCR[%d]=%x", cs, regs->SAF_CS_OP[cs].OP_DESCR);
+	regs->SAF_CS_OP[cs].OP_DESCR = 0x2003;
+	LOG_DBG("CFG_CSX_DESCR[%d]=%x", cs, regs->SAF_CS_OP[cs].OP_DESCR);
 	mchp_saf_poll2_mask_wr(regs, cs, pf->poll2_mask);
 
 	LOG_DBG("%s flashsz: %x\n", __func__, pf->flashsz);
+
+	if (cs == 1) {
+		return 0;
+	}
 
 	return pf->flashsz;
 }
@@ -644,11 +653,11 @@ static int espi_saf_xec_configuration(struct device *dev,
 	saf_qmspi_init(xcfg);
 
 	LOG_DBG("SAF_CS0_CFG_P2M before %x", regs->SAF_CS0_CFG_P2M);
+	LOG_DBG("SAF_CS1_CFG_P2M before %x", regs->SAF_CS1_CFG_P2M);
 	regs->SAF_CS0_CFG_P2M = 0;
 	regs->SAF_CS1_CFG_P2M = 0;
-	LOG_DBG("SAF_CS0_CFG_P2M zeroed %x", regs->SAF_CS0_CFG_P2M);
-	regs->SAF_FL_CFG_GEN_DESCR = MCHP_SAF_FL_CFG_GEN_DESCR_STD;
-	LOG_DBG("SAF_FL_CFG_GEN_DESCR %x", regs->SAF_FL_CFG_GEN_DESCR);
+	LOG_DBG("SAF_CS0_CFG_P2M after %x", regs->SAF_CS0_CFG_P2M);
+	LOG_DBG("SAF_CS1_CFG_P2M after %x", regs->SAF_CS1_CFG_P2M);
 
 	/* flash device connected to CS0 required */
 	totalsz = saf_flash_cfg(dev, cfg, 0);
@@ -656,14 +665,22 @@ static int espi_saf_xec_configuration(struct device *dev,
 
 #if SAF_FLASH_CS1_SIZE != 0
 	/* optional second flash device connected to CS1 */
-	totalsz += saf_flash_cfg(dev, cfg, 0);
+	totalsz += saf_flash_cfg(dev, cfg, 1);
 #endif
 	if (totalsz == 0) {
 		return -EAGAIN;
 	}
 
 	LOG_DBG("SAF_CS0_CFG_P2M %x", regs->SAF_CS0_CFG_P2M);
+	LOG_DBG("SAF_CS1_CFG_P2M %x", regs->SAF_CS1_CFG_P2M);
 	regs->SAF_FL_CFG_SIZE_LIM = totalsz - 1;
+
+	LOG_DBG("SAF_FL_CFG_GEN_DESCR before %x", regs->SAF_FL_CFG_GEN_DESCR);
+	regs->SAF_FL_CFG_GEN_DESCR = MCHP_SAF_FL_CFG_GEN_DESCR_STD;
+	LOG_DBG("SAF_FL_CFG_GEN_DESCR after %x", regs->SAF_FL_CFG_GEN_DESCR);
+
+	regs->SAF_FL_CFG_THRH = totalsz;
+	LOG_DBG("SAF_FL_CFG_THRH after %x", regs->SAF_FL_CFG_THRH);
 
 	saf_tagmap_init(regs); /* done */
 
@@ -674,11 +691,13 @@ static int espi_saf_xec_configuration(struct device *dev,
 
 	saf_flash_timing_init(regs); /* done */
 
+	/*
 	ret = saf_init_erase_block_size(xcfg);
 	if (ret != 0) {
 		LOG_ERR("SAF Config bad flash erase config");
 		return ret;
 	}
+	*/
 
 	/* Set pre-fetch mode */
 	LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
@@ -690,9 +709,11 @@ static int espi_saf_xec_configuration(struct device *dev,
 	/* enable prefetch */
 	LOG_DBG("%s Bef MCHP_SAF_COMM_MODE_REG: %x", __func__,
 		MCHP_SAF_COMM_MODE_REG);
+#ifdef CONFIG_SAF_PREFETCH
 	MCHP_SAF_COMM_MODE_REG |= MCHP_SAF_COMM_MODE_PF_EN;
 	LOG_DBG("%s Aft MCHP_SAF_COMM_MODE_REG: %x", __func__,
 		MCHP_SAF_COMM_MODE_REG);
+#endif
 
 	return 0;
 }
@@ -723,7 +744,6 @@ static bool espi_saf_xec_channel_ready(struct device *dev)
 	const struct espi_saf_xec_config *cfg = DEV_CFG(dev);
 	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
 
-	LOG_DBG("%s SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
 	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
 		return true;
 	}
@@ -794,8 +814,7 @@ static int saf_ecp_access(struct device *dev,
 
 	LOG_DBG("%s", __func__);
 
-	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
-		LOG_ERR("SAF is disabled");
+	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN == 0) {
 		return -EIO;
 	}
 
@@ -824,6 +843,7 @@ static int saf_ecp_access(struct device *dev,
 		n = pckt->len;
 	}
 
+	LOG_DBG("%s params val done", __func__);
 	regs->SAF_ECP_INTEN = 0;
 	regs->SAF_ECP_STATUS = 0xffffffff;
 	/* TODO
@@ -841,7 +861,7 @@ static int saf_ecp_access(struct device *dev,
 			    ((uint32_t)cmd << MCHP_SAF_ECP_CMD_CTYPE_POS) |
 			    ((n << MCHP_SAF_ECP_CMD_LEN_POS) &
 			    MCHP_SAF_ECP_CMD_LEN_MASK);
-
+	LOG_DBG("%x regs->SAF_ECP_CMD", regs->SAF_ECP_CMD);
 	/* TODO when interrupts are available enable here */
 
 	regs->SAF_ECP_START = MCHP_SAF_ECP_START;
@@ -850,18 +870,21 @@ static int saf_ecp_access(struct device *dev,
 	 * ISR is in eSPI driver. Use polling until eSPI driver has been
 	 * modified to provide callback for GIRQ19 SAF ECP Done.
 	 */
-	ret = k_sem_take(&data->ecp_lock, K_FOREVER);
+	ret = k_sem_take(&data->ecp_lock, K_MSEC(500));
 	if (ret == -EBUSY) {
 		LOG_ERR("SAF EC Portal access unable to take semaphore");
 		return -EBUSY;
 	}
 
+	LOG_DBG("SAF ECP busy %x", regs->SAF_ECP_BUSY);
 	while (regs->SAF_ECP_BUSY & MCHP_SAF_ECP_BUSY) {
 		;
 	}
 
-	if (regs->SAF_ECP_STATUS & err_mask) {
-		LOG_ERR("%s err: %x", __func__, err_mask);
+	uint32_t sts = regs->SAF_ECP_STATUS;
+
+	if (sts & err_mask) {
+		LOG_ERR("%s err: %x", __func__, sts);
 		regs->SAF_ECP_STATUS = err_mask;
 		k_sem_give(&data->ecp_lock);
 		return -EIO;
@@ -878,6 +901,7 @@ static int saf_ecp_access(struct device *dev,
 static int saf_xec_flash_read(struct device *dev,
 			      struct espi_saf_packet *pckt)
 {
+	LOG_DBG("%s", __func__);
 	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_CTYPE_READ0);
 }
 
