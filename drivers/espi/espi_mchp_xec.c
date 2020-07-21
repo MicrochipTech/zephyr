@@ -951,7 +951,13 @@ static void espi_flash_isr(struct device *dev)
 
 		espi_init_flash(dev);
 
-#ifdef CONFIG_SAF
+#ifdef CONFIG_ESPI_SAF_WA
+		/* Experiment: Perform SAF activation after eSPI master enables
+		 * flash channels and before eSPI slave indicates flash channel
+		 * ready.
+		 * This to debug why SAF performs SPI quad read as soon as
+		 * module is activated in MEC15xx.
+		 */
 		MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)0x40008000;
 		LOG_DBG("%s Bef SAF_FL_CFG_MISC: %x", __func__,
 			regs->SAF_FL_CFG_MISC);
