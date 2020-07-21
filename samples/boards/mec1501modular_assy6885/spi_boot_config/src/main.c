@@ -365,7 +365,7 @@ int read_test_block(uint8_t *buf, uint32_t start_flash_adr, uint16_t block_len)
 		pckt.flash_addr = flash_addr;
 		pckt.len = MAX_FLASH_REQUEST;
 #ifdef CONFIG_ESPI_SAF
-		ret = espi_saf_read_flash(espi_dev, &pckt);
+		ret = espi_saf_flash_read(saf_dev, &pckt);
 #else
 		ret = espi_read_flash(espi_dev, &pckt);
 #endif
@@ -399,7 +399,7 @@ int write_test_block(uint8_t *buf, uint32_t start_flash_adr, uint16_t block_len)
 #ifdef CONFIG_ESPI_SAF
 		ret =  0; /* saf_write_flash(espi_dev, &pckt); */
 #else
-		ret = espi_write_flash(espi_dev, &pckt);
+		ret = espi_write_flash(saf_dev, &pckt);
 #endif
 		if (ret) {
 			LOG_ERR("espi_write_flash failed: %d", ret);
@@ -553,6 +553,8 @@ int saf_demo(void)
 	/* TODO: On new driver version
 	 * need to set tags, descriptors, opcode, etc
 	 */
+	bool saf_ready;
+
 	struct espi_saf_cfg cfg = {
 		.spi_freq = WIN_SPI_FREQ,
 	};
@@ -606,6 +608,18 @@ int saf_demo(void)
 
 #ifdef CONFIG_ESPI_SAF
 	espi_saf_activate(saf_dev);
+	LOG_DBG("Check if SAF channel is getting disabled");
+	for (int i = 0; i < 10; i++) {
+		k_msleep(100);
+		saf_ready = espi_saf_get_channel_status(saf_dev);
+		if (!saf_ready) {
+			LOG_ERR("SAF channel not ready");
+		} else {
+			LOG_DBG("SAF channel ready");
+		}
+	}
+
+	read_test_block(flash_read_buf, 0x10, 0x64);
 #endif
 
 #if DT_NODE_HAS_STATUS(SAF_CFG_NODE, okay)
@@ -645,12 +659,15 @@ int saf_demo(void)
 #endif
 
 #ifdef CONFIG_ESPI_SAF
-	bool saf_ready = espi_saf_get_channel_status(saf_dev);
-
-	if (!saf_ready) {
-		LOG_ERR("SAF channel not ready");
-	} else {
-		LOG_DBG("SAF channel success");
+	LOG_DBG("Check if SAF channel is getting disabled");
+	for (int i = 0; i < 10; i++) {
+		k_msleep(100);
+		saf_ready = espi_saf_get_channel_status(saf_dev);
+		if (!saf_ready) {
+			LOG_ERR("SAF channel not ready");
+		} else {
+			LOG_DBG("SAF channel ready");
+		}
 	}
 
 	read_test_block(flash_read_buf, 0x10, 0x64);
