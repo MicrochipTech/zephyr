@@ -11,6 +11,12 @@ config ESPI_DEV
 	help
 	  Name of the eSPI device used for send an receive.
 
+config ESPI_SAF_DEV
+	string "Name of the eSPI SAF device"
+	default "ESPI_SAF_0"
+	help
+	  Name of the eSPI SAF device used for slave attached flash access.
+
 config ESPI_VIRTUAL_WIRE_TIMEOUT
 	int "Timeout for virtual wires"
 	default 5000
