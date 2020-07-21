@@ -69,6 +69,7 @@ static void qmspi_set_frequency(QMSPI_Type *regs, uint32_t freq_hz)
 {
 	uint32_t div, qmode;
 
+	LOG_DBG("%s Req freq: %d", __func__, freq_hz);
 	if (freq_hz == 0) {
 		div = 0; /* max divider = 256 */
 	} else {
@@ -80,9 +81,13 @@ static void qmspi_set_frequency(QMSPI_Type *regs, uint32_t freq_hz)
 		}
 	}
 
+	LOG_DBG("%s div: %x", __func__, div);
+	LOG_DBG("%s mode before freq update: %x", __func__, regs->MODE);
+
 	qmode = regs->MODE & ~(MCHP_QMSPI_M_FDIV_MASK);
 	qmode |= (div << MCHP_QMSPI_M_FDIV_POS) & MCHP_QMSPI_M_FDIV_MASK;
 	regs->MODE = qmode;
+	LOG_DBG("%s mode after freq update: %x", __func__, regs->MODE);
 }
 
 /*
@@ -130,6 +135,8 @@ static void qmspi_set_signalling_mode(QMSPI_Type *regs, uint32_t smode)
 	m = (uint32_t)ptbl[smode & 0x03];
 	regs->MODE = (regs->MODE & ~(MCHP_QMSPI_M_SIG_MASK))
 		     | (m << MCHP_QMSPI_M_SIG_POS);
+
+	LOG_DBG("%s mode: %x", __func__, regs->MODE);
 }
 
 /*
@@ -139,6 +146,11 @@ static void qmspi_set_signalling_mode(QMSPI_Type *regs, uint32_t smode)
 static uint32_t qmspi_config_get_lines(const struct spi_config *config)
 {
 	uint32_t qlines;
+
+	LOG_DBG("%s Requested lines %x", __func__,
+		config->operation & SPI_LINES_MASK);
+	LOG_DBG("%s DTS lines %x", __func__,
+		DT_INST_PROP(0, lines));
 
 	switch (config->operation & SPI_LINES_MASK) {
 	case SPI_LINES_SINGLE:
@@ -155,9 +167,11 @@ static uint32_t qmspi_config_get_lines(const struct spi_config *config)
 		break;
 #endif
 	default:
+		LOG_WRN("%s default", __func__);
 		qlines = 0xffu;
 	}
 
+	LOG_DBG("%s lines: %x", __func__, qlines);
 	return qlines;
 }
 
@@ -174,20 +188,24 @@ static int qmspi_configure(struct device *dev,
 	uint32_t smode;
 
 	if (spi_context_configured(&data->ctx, config)) {
+		LOG_WRN("%s already configred", __func__);
 		return 0;
 	}
 
 	if (config->operation & (SPI_TRANSFER_LSB | SPI_OP_MODE_SLAVE
 				 | SPI_MODE_LOOP)) {
+		LOG_ERR("%s operation not supported", __func__);
 		return -ENOTSUP;
 	}
 
 	smode = qmspi_config_get_lines(config);
 	if (smode == 0xff) {
+		LOG_ERR("%s lines not supported", __func__);
 		return -ENOTSUP;
 	}
 
 	regs->CTRL = smode;
+	LOG_DBG("%s CTRL %x", __func__, regs->CTRL);
 
 	/* Use the requested or next highest possible frequency */
 	qmspi_set_frequency(regs, config->frequency);
@@ -204,6 +222,7 @@ static int qmspi_configure(struct device *dev,
 	qmspi_set_signalling_mode(regs, smode);
 
 	if (SPI_WORD_SIZE_GET(config->operation) != 8) {
+		LOG_DBG("%s word size not supported", __func__);
 		return -ENOTSUP;
 	}
 
@@ -215,6 +234,7 @@ static int qmspi_configure(struct device *dev,
 	smode |= MCHP_QMSPI_M_CS1;
 #endif
 	regs->MODE = smode;
+	LOG_DBG("%s mode: %x", __func__, regs->MODE);
 
 	/* chip select timing */
 	regs->CSTM = cfg->cs_timing;
@@ -225,6 +245,7 @@ static int qmspi_configure(struct device *dev,
 	spi_context_cs_configure(&data->ctx);
 
 	regs->MODE |= MCHP_QMSPI_M_ACTIVATE;
+	LOG_DBG("%s activate mode: %x", __func__, regs->MODE);
 
 	return 0;
 }
@@ -250,6 +271,8 @@ static int qmspi_tx_dummy_clocks(QMSPI_Type *regs, uint32_t nclocks)
 	} else if (ifm & 0x02) {
 		nclocks <<= 2;
 	}
+
+	LOG_DBG("%s dummy clocks: %x", __func__, nclocks);
 	descr |= (nclocks << MCHP_QMSPI_C_XFR_NUNITS_POS);
 
 	descr_wr(regs, 0, descr);
@@ -384,14 +407,17 @@ static int qmspi_tx(QMSPI_Type *regs, const struct spi_buf *tx_buf,
 
 	/* Buffer pointer is NULL and number of bytes != 0 ? */
 	if (p == NULL) {
+		LOG_WRN("dummy clocks");
 		return qmspi_tx_dummy_clocks(regs, tlen);
 	}
 
 	didx = qmspi_descr_alloc(regs, tx_buf, 0, true);
 	if (didx < 0) {
+		LOG_ERR("%s didx: %x", __func__, didx);
 		return didx;
 	}
 
+	LOG_DBG("%s didx: %x", __func__, didx);
 	/* didx points to last allocated descriptor + 1 */
 	__ASSERT(didx > 0, "QMSPI descriptor index=%d expected > 0\n", didx);
 	didx--;
@@ -410,6 +436,7 @@ static int qmspi_tx(QMSPI_Type *regs, const struct spi_buf *tx_buf,
 	/* preload TX_FIFO */
 	while (tlen) {
 		tlen--;
+		LOG_DBG("Pre Tx %x", *p);
 		txb_wr8(regs, *p);
 		p++;
 
@@ -421,6 +448,7 @@ static int qmspi_tx(QMSPI_Type *regs, const struct spi_buf *tx_buf,
 	regs->EXE = MCHP_QMSPI_EXE_START;
 
 	if (regs->STS & MCHP_QMSPI_STS_PROG_ERR) {
+		LOG_ERR("%s TX fail", __func__);
 		return -EIO;
 	}
 
@@ -429,6 +457,7 @@ static int qmspi_tx(QMSPI_Type *regs, const struct spi_buf *tx_buf,
 		while (regs->STS & MCHP_QMSPI_STS_TXBF_RO) {
 		}
 
+		LOG_DBG("Tx %x", *p);
 		txb_wr8(regs, *p);
 		p++;
 		tlen--;
@@ -487,6 +516,7 @@ static int qmspi_rx(QMSPI_Type *regs, const struct spi_buf *rx_buf,
 	 */
 	regs->EXE = MCHP_QMSPI_EXE_START;
 	if (regs->STS & MCHP_QMSPI_STS_PROG_ERR) {
+		LOG_ERR("%s RX fail", __func__);
 		return -EIO;
 	}
 
@@ -521,6 +551,7 @@ static int qmspi_transceive(struct device *dev,
 
 	err = qmspi_configure(dev, config);
 	if (err != 0) {
+		LOG_ERR("%s cfg fail: %d", __func__, err);
 		goto done;
 	}
 
