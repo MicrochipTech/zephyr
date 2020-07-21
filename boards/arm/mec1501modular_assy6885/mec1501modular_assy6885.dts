@@ -57,6 +57,10 @@
 	pc_girq = <15>;
 };
 
+&espi_saf0 {
+	status = "okay";
+};
+
 &ps2_0 {
 	status = "okay";
 };
