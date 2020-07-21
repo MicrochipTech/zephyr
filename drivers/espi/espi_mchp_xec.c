@@ -702,9 +702,6 @@ static void espi_init_flash(struct device *dev)
 
 	LOG_DBG("%s", __func__);
 
-	/* Indicate slave flash channel is ready */
-	ESPI_CAP_REGS->FC_RDY |= MCHP_ESPI_FC_READY;
-
 	/* Enable interrupts */
 	MCHP_GIRQ_ENSET(config->bus_girq_id) = BIT(MCHP_ESPI_FC_GIRQ_POS);
 	ESPI_FC_REGS->IEN |= MCHP_ESPI_FC_IEN_CHG_EN;
@@ -945,7 +942,11 @@ static void espi_flash_isr(struct device *dev)
 	if (status & MCHP_ESPI_FC_STS_CHAN_EN_CHG) {
 		/* Ensure to clear only relevant bit */
 		ESPI_FC_REGS->STS = MCHP_ESPI_FC_STS_CHAN_EN_CHG;
+
 		espi_init_flash(dev);
+
+		/* Indicate slave flash channel is ready */
+		ESPI_CAP_REGS->FC_RDY |= MCHP_ESPI_FC_READY;
 
 		evt.evt_details = ESPI_CHANNEL_FLASH;
 		if (status & MCHP_ESPI_FC_STS_CHAN_EN) {
