@@ -61,6 +61,13 @@
 	status = "okay";
 };
 
+&spi0 {
+	status = "okay";
+	port_sel = <0>;
+	chip_select = <0>;
+	lines = <4>;
+};
+
 &ps2_0 {
 	status = "okay";
 };
