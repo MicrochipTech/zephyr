@@ -856,11 +856,11 @@ static int saf_ecp_access(struct device *dev,
 	regs->SAF_ECP_FLAR = pckt->flash_addr;
 	regs->SAF_ECP_BFAR = (uint32_t)&slave_mem[0];
 
-	if (cmd == MCHP_SAF_ECP_CMD_CTYPE_ERASE0)
 	regs->SAF_ECP_CMD = MCHP_SAF_ECP_CMD_PUT_FLASH_NP |
 			    ((uint32_t)cmd << MCHP_SAF_ECP_CMD_CTYPE_POS) |
 			    ((n << MCHP_SAF_ECP_CMD_LEN_POS) &
 			    MCHP_SAF_ECP_CMD_LEN_MASK);
+
 	LOG_DBG("%x regs->SAF_ECP_CMD", regs->SAF_ECP_CMD);
 	/* TODO when interrupts are available enable here */
 
