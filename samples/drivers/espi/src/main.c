@@ -76,12 +76,21 @@ static uint8_t flash_read_buf[MAX_TEST_BUF_SIZE];
 #endif
 
 #ifdef CONFIG_ESPI_SAF
+enum saf_erase_size {
+	SAF_ERASE_4K = 0,
+	SAF_ERASE_32K = 1,
+	SAF_ERASE_64K = 2,
+	SAF_ERASE_MAX
+};
+
+#define SAF_TEST_BUF_SIZE 4096U
 struct saf_addr_info {
 	uintptr_t saf_struct_addr;
 	uintptr_t saf_exp_addr;
 };
 static struct device *espi_saf_dev;
-static uint32_t safbuf[64];
+static uint32_t safbuf[SAF_TEST_BUF_SIZE/4U];
+static uint32_t safbuf2[SAF_TEST_BUF_SIZE/4U];
 
 static struct saf_addr_info saf_addr_check[] = {
 	{ (uintptr_t)&MCHP_SAF_REGS->SAF_ECP_CMD, 		0x40008018 },
@@ -275,6 +284,8 @@ int espi_init(void)
 	return ret;
 }
 
+#ifdef CONFIG_ESPI_SAF
+
 int espi_saf_init(void)
 {
 	int ret;
@@ -313,38 +324,233 @@ int espi_saf_init(void)
 	return ret;
 }
 
-int espi_saf_test1(void)
+/*
+ * SAF hardware limited to 1 to 64 byte read requests.
+ */
+static int saf_read(uint32_t spi_addr, uint8_t *dest, int len)
+{
+	int rc, chunk_len, n;
+	struct espi_saf_packet saf_pkt = { 0 };
+
+	if ((dest == NULL) || (len < 0)) {
+		return -EINVAL;
+	}
+
+	saf_pkt.flash_addr = spi_addr;
+	saf_pkt.buf = dest;
+
+	n = len;
+	while (n) {
+		chunk_len = 64;
+		if (n < 64) {
+			chunk_len = n;
+		}
+
+		saf_pkt.len = chunk_len;
+
+		rc = espi_saf_flash_read(espi_saf_dev, &saf_pkt);
+		if (rc != 0) {
+			LOG_INF("saf_read: error = %d: chunk_len=%d spi_addr=%x",
+				rc, chunk_len, spi_addr);
+			return rc;
+		}
+
+		saf_pkt.flash_addr += chunk_len;
+		saf_pkt.buf += chunk_len;
+		n -= chunk_len;
+	}
+
+	return len;
+}
+
+/*
+ * SAF hardware limited to 4KB(mandatory), 32KB, and 64KB erase sizes.
+ * eSPI configuration has flags the Host can read specifying supported
+ * erase sizes.
+ */
+static int saf_erase_block(uint32_t spi_addr, enum saf_erase_size ersz)
 {
 	int rc;
-	struct espi_saf_packet saf_rw_pkt = { 0 };
+	struct espi_saf_packet saf_pkt = { 0 };
 
-	rc = espi_saf_activate(espi_saf_dev);
-	LOG_INF("espi_saf_test1: activate = %d\n", rc);
+	switch (ersz) {
+	case SAF_ERASE_4K:
+		saf_pkt.len = 4096U;
+		spi_addr &= ~(4096U);
+		break;
+	case SAF_ERASE_32K:
+		saf_pkt.len = (32U * 1024U);
+		spi_addr &= ~(32U * 1024U);
+		break;
+	case SAF_ERASE_64K:
+		saf_pkt.len = (64U * 1024U);
+		spi_addr &= ~(64U * 1024U);
+		break;
+	default:
+		return -EINVAL;
+	}
 
-	memset(safbuf, 0x55, sizeof(safbuf));
+	saf_pkt.flash_addr = spi_addr;
 
-	saf_rw_pkt.flash_addr = 0;
-	saf_rw_pkt.buf = (uint8_t *)safbuf;
-	saf_rw_pkt.len = 4;
-
-	rc = espi_saf_flash_read(espi_saf_dev, &saf_rw_pkt);
-	LOG_INF("espi_saf_test1: read = %d\n", rc);
-
-	printk("Read 4-byte value = 0x%08X\n", safbuf[0]);
-
-	saf_rw_pkt.flash_addr = (safbuf[0] & 0x00fffffful) * 256;
-	saf_rw_pkt.buf = (uint8_t *)safbuf;
-	saf_rw_pkt.len = 64;
-
-	rc = espi_saf_flash_read(espi_saf_dev, &saf_rw_pkt);
-	LOG_INF("espi_saf_test1: read 64 bytes = %d\n", rc);
-
-	for (int i = 0; i < 64/4; i++) {
-		printk("Word[%d] = 0x%08X\n", i, safbuf[i]);
+	rc = espi_saf_flash_erase(espi_saf_dev, &saf_pkt);
+	if (rc != 0) {
+		LOG_INF("espi_saf_test1: erase fail = %d", rc);
+		return rc;
 	}
 
 	return 0;
 }
+
+/*
+ * SAF hardware limited to 1 to 64 byte programming within a 256 byte page.
+ */
+static int saf_page_prog(uint32_t spi_addr, const uint8_t *src, int progsz)
+{
+	int rc, chunk_len, n;
+	struct espi_saf_packet saf_pkt = { 0 };
+
+	if ((src == NULL) || (progsz < 0) || (progsz > 256)) {
+		return -EINVAL;
+	}
+
+	if (progsz == 0) {
+		return 0;
+	}
+
+	saf_pkt.flash_addr = spi_addr;
+	saf_pkt.buf = (uint8_t *)src;
+
+	n = progsz;
+	while (n) {
+		chunk_len = 64;
+		if (n < 64) {
+			chunk_len = n;
+		}
+
+		saf_pkt.len = (uint32_t)chunk_len;
+
+		rc = espi_saf_flash_write(espi_saf_dev, &saf_pkt);
+		if (rc != 0) {
+			LOG_INF("saf_page_prog: error=%d: erase fail spi_addr=0x%X",
+				rc, spi_addr);
+			return rc;
+		}
+
+		saf_pkt.flash_addr += chunk_len;
+		saf_pkt.buf += chunk_len;
+		n -= chunk_len;
+	}
+
+	return progsz;
+}
+
+
+int espi_saf_test1(void)
+{
+	int rc;
+	uint32_t n, spi_addr, progsz, chunksz;
+
+	/*
+	 * Activating SAF triggers the SAF engine into sending enter
+	 * continuous mode sequences to both chip selects.
+	 * Continuous mode entry sequence is 24 SPI clocks plus
+	 * chip select de-assertion time. At 24MHz SPI clock each
+	 * command sequence is about 1.12 us. The engine also has
+	 * a delay between each chip select. The scope shows about
+	 * 2.82 us overall.
+	 * Application must delay about 3 us after SAF activate
+	 * before it calls any API for SAF flash access.
+	 */
+	rc = espi_saf_activate(espi_saf_dev);
+	k_busy_wait(3);
+	LOG_INF("espi_saf_test1: activate = %d", rc);
+
+	memset(safbuf, 0x55, sizeof(safbuf));
+	memset(safbuf2, 0, sizeof(safbuf2));
+
+	while (true) {
+		/* read 4KB sector at 0 */
+		spi_addr = 0U;
+		rc = saf_read(spi_addr, (uint8_t *)safbuf, 4096);
+		if (rc != 4096) {
+			LOG_INF("espi_saf_test1: error=%d Read 4K sector at 0x%X failed", rc, spi_addr);
+			return rc;
+		}
+
+		rc = 0;
+		for (n = 0; n < 4096U/4U; n++) {
+			if (safbuf[n] != 0xffffffffUL) {
+				rc = -1;
+				break;
+			}
+		}
+
+		if (rc == 0) {
+			LOG_INF("4KB sector at 0x%x is in erased state. Continue tests", spi_addr);
+			break;
+		} else {
+			LOG_INF("4KB sector at 0x%x not in erased state. Send 4K erase.", spi_addr);
+			rc = saf_erase_block(spi_addr, SAF_ERASE_4K);
+			if (rc != 0) {
+				LOG_INF("SAF erase block at 0x%x returned error %d", spi_addr, rc);
+				return rc;
+			}
+		}
+	}
+
+	/*
+	 * Program 4KB page using SAF Write limited by SAF protocol to
+	 * 64 bytes chunks.
+	 */
+	for (n = 0; n < 4096U/4U; n++) {
+		uint32_t m = (n * 4U) % 256U;
+		uint8_t *p8 = (uint8_t *)&safbuf[n];
+		*p8++ = (uint8_t)m;
+		*p8++ = (uint8_t)(m + 1);
+		*p8++ = (uint8_t)(m + 2);
+		*p8++ = (uint8_t)(m + 3);
+	}
+
+
+	progsz = 4096U;
+	chunksz = 256U;
+	spi_addr = 0U;
+	n = 0;
+	const uint8_t *src = (const uint8_t *)safbuf;
+
+	LOG_INF("espi_saf_test1: Program 4KB sector at 0x%X", spi_addr);
+
+	while (n < progsz) {
+		rc = saf_page_prog(spi_addr, (const uint8_t *)src, (int)chunksz);
+		if (rc != chunksz) {
+			LOG_INF("saf_page_prog error=%d at 0x%X", rc, spi_addr);
+			break;
+		}
+		spi_addr += chunksz;
+		n += chunksz;
+		src += chunksz;
+	}
+
+	/* read back and check */
+	spi_addr = 0U;
+	LOG_INF("espi_saf_test1: Read back 4K sector at 0x%X", spi_addr);
+
+	rc = saf_read(spi_addr, (uint8_t *)safbuf2, progsz);
+	if (rc == progsz) {
+		rc = memcmp(safbuf, safbuf2, progsz);
+		if (rc == 0) {
+			LOG_INF("espi_saf_test1: Read back match: PASS");
+		} else {
+			LOG_INF("espi_saf_test1: Read back mismatch: FAIL");
+		}
+	} else {
+		LOG_INF("espi_saf_test1: Read back 4K error=%d", rc);
+		return rc;
+	}
+
+	return rc;
+}
+#endif
 
 static int wait_for_pin(struct device *dev, uint8_t pin, uint16_t timeout,
 			int exp_level)
@@ -772,6 +978,7 @@ int espi_test(void)
 	return ret;
 }
 
+#ifdef CONFIG_ESPI_SAF
 bool check_espi_saf_struct(void)
 {
 	size_t n;
@@ -788,14 +995,17 @@ bool check_espi_saf_struct(void)
 
 	return pass;
 }
+#endif
 
 void main(void)
 {
+#ifdef CONFIG_ESPI_SAF
 	if (check_espi_saf_struct()) {
 		LOG_INF("eSPI SAF reg check PASS");
 	} else {
 		LOG_INF("eSPI SAF reg check FAIL");
 	}
+#endif
 
 	espi_test();
 }

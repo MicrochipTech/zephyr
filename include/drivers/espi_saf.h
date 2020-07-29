@@ -105,7 +105,7 @@ struct espi_saf_cfg { /* TODO */
 struct espi_saf_packet {
 	uint32_t flash_addr;
 	uint8_t *buf;
-	uint16_t len;
+	uint32_t len;
 };
 
 /*
@@ -131,9 +131,9 @@ typedef bool (*espi_saf_api_get_channel_status)(struct device *dev);
 typedef int (*espi_saf_api_flash_read)(struct device *dev,
 				       struct espi_saf_packet *pckt);
 typedef int (*espi_saf_api_flash_write)(struct device *dev,
-				        struct espi_saf_packet *pckt);
+					struct espi_saf_packet *pckt);
 typedef int (*espi_saf_api_flash_erase)(struct device *dev,
-				        struct espi_saf_packet *pckt);
+					struct espi_saf_packet *pckt);
 /* Callbacks and traffic intercept */
 typedef int (*espi_saf_api_manage_callback)(struct device *dev,
 					    struct espi_callback *callback,
