@@ -62,14 +62,14 @@ enum power_states sys_pm_policy_next_state(int32_t ticks)
 #endif
 		if ((ticks == K_TICKS_FOREVER) ||
 		    (ticks >= pm_min_residency[i])) {
-			LOG_DBG("Selected power state %d "
+			LOG_WRN("Selected power state %d "
 					"(ticks: %d, min_residency: %u)",
 					i, ticks, pm_min_residency[i]);
 			return (enum power_states)(i);
 		}
 	}
 
-	LOG_DBG("No suitable power state found!");
+	LOG_WRN("No suitable power state found!");
 	return SYS_POWER_STATE_ACTIVE;
 }
 

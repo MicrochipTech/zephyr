@@ -110,6 +110,7 @@ enum power_states _sys_suspend(int32_t ticks)
 	post_ops_done = 0;
 	sys_pm_notify_power_state_entry(pm_state);
 
+	LOG_WRN("deep_sleep %d", deep_sleep);
 	if (deep_sleep) {
 #if CONFIG_DEVICE_POWER_MANAGEMENT
 		/* Suspend peripherals. */
