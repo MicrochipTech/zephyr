@@ -38,59 +38,91 @@ static void i2c_pinmux(struct pinmux_ports_t *p, uint8_t port_sel)
 	switch (port_sel) {
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_000_036), okay)
 	case 0:
-		pinmux_pin_set(p->porta, MCHP_GPIO_003, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->porta, MCHP_GPIO_004, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->porta, MCHP_GPIO_003,
+					 MCHP_GPIO_CTRL_MUX_F1 |
+					 MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->porta, MCHP_GPIO_004,
+					 MCHP_GPIO_CTRL_MUX_F1 |
+					 MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_100_136), okay)
 	case 1:
-		pinmux_pin_set(p->portc, MCHP_GPIO_130, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->portc, MCHP_GPIO_131, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->portc, MCHP_GPIO_130,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->portc, MCHP_GPIO_131,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_140_176), okay)
 	case 2:
-		pinmux_pin_set(p->portd, MCHP_GPIO_154, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->portd, MCHP_GPIO_155, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->portd, MCHP_GPIO_154,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->portd, MCHP_GPIO_155,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_000_036), okay)
 	case 3:
-		pinmux_pin_set(p->porta, MCHP_GPIO_007, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->porta, MCHP_GPIO_010, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->porta, MCHP_GPIO_007,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->porta, MCHP_GPIO_010,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_140_176), okay)
 	case 4:
-		pinmux_pin_set(p->portd, MCHP_GPIO_143, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->portd, MCHP_GPIO_144, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->portd, MCHP_GPIO_143,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->portd, MCHP_GPIO_144,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_140_176), okay)
 	case 5:
-		pinmux_pin_set(p->portd, MCHP_GPIO_141, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->portd, MCHP_GPIO_142, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->portd, MCHP_GPIO_141,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->portd, MCHP_GPIO_142,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_100_136), okay)
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_140_176), okay)
 	case 6:
-		pinmux_pin_set(p->portc, MCHP_GPIO_132, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->portd, MCHP_GPIO_140, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->portc, MCHP_GPIO_132,
+					 MCHP_GPIO_CTRL_MUX_F1
+					 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->portd, MCHP_GPIO_140,
+					 MCHP_GPIO_CTRL_MUX_F1
+					  | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 #endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(pinmux_000_036), okay)
 	case 7:
-		pinmux_pin_set(p->porta, MCHP_GPIO_012, MCHP_GPIO_CTRL_MUX_F1);
-		pinmux_pin_set(p->porta, MCHP_GPIO_013, MCHP_GPIO_CTRL_MUX_F1);
+		pinmux_pin_set(p->porta, MCHP_GPIO_012,
+					 MCHP_GPIO_CTRL_MUX_F1
+					  | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
+		pinmux_pin_set(p->porta, MCHP_GPIO_013,
+					 MCHP_GPIO_CTRL_MUX_F1
+					  | MCHP_GPIO_CTRL_BUFT_OPENDRAIN);
 		break;
 #endif
 
