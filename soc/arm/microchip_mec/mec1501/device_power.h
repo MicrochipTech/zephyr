@@ -18,6 +18,8 @@ void soc_deep_sleep_periph_restore(void);
 void soc_deep_sleep_wait_clk_idle(void);
 void soc_deep_sleep_non_wake_en(void);
 void soc_deep_sleep_non_wake_dis(void);
+void soc_deep_sleep_wake_en(void);
+void soc_deep_sleep_wake_dis(void);
 
 #endif
 

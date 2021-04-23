@@ -32,7 +32,6 @@
  */
 #define DEEP_SLEEP_PERIPH_SAVE_RESTORE
 
-
 /*
  * Light sleep: PLL remains on. Fastest wake latency.
  */
@@ -98,6 +97,41 @@ void soc_deep_sleep_non_wake_dis(void)
 	GIRQ22_REGS->SRC = 0xfffffffful;
 #endif
 }
+
+/* When MEC15xx drivers are power-aware this should be move there */
+void soc_deep_sleep_wake_en(void)
+{
+#ifdef CONFIG_KSCAN
+	/* Enable PLL wake via KSCAN  */
+	GIRQ21_REGS->SRC = (1ul << 19);
+	GIRQ21_REGS->EN_SET = (1ul << 19);
+#endif
+#ifdef CONFIG_PS2_XEC_0
+	/* Enable PS2_0B_WK */
+	GIRQ21_REGS->SRC = (1ul << 19);
+	GIRQ21_REGS->EN_SET = (1ul << 19);
+#endif
+#ifdef CONFIG_PS2_XEC_1
+	/* Enable PS2_1B_WK */
+	GIRQ21_REGS->SRC = (1ul << 21);
+	GIRQ21_REGS->EN_SET = (1ul << 21);
+#endif
+}
+
+void soc_deep_sleep_wake_dis(void)
+{
+#ifdef CONFIG_PS2_XEC_0
+	/* Enable PS2_0B_WK */
+	GIRQ21_REGS->EN_CLR = (1ul << 19);
+	GIRQ21_REGS->SRC = (1ul << 19);
+#endif
+#ifdef CONFIG_PS2_XEC_1
+	/* Enable PS2_1B_WK */
+	GIRQ21_REGS->EN_CLR = (1ul << 21);
+	GIRQ21_REGS->SRC = (1ul << 21);
+#endif
+}
+
 
 /* Variables used to save various HW state */
 #ifdef DEEP_SLEEP_PERIPH_SAVE_RESTORE

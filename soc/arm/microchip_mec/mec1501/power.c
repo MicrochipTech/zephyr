@@ -47,6 +47,7 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_deep_sleep_wait_clk_idle();
 	soc_deep_sleep_non_wake_en();
+	soc_deep_sleep_wake_en();
 
 	/*
 	 * Unmask all interrupts in BASEPRI. PRIMASK is used above to
@@ -60,6 +61,7 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_deep_sleep_disable();
 
+	soc_deep_sleep_wake_dis();
 	soc_deep_sleep_non_wake_dis();
 
 	/* Wait for PLL to lock */
