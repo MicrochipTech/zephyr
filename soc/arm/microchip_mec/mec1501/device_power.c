@@ -208,8 +208,110 @@ static void deep_sleep_restore_timers(void)
 	}
 }
 
+#ifdef DEEP_SLEEP_PERIPH_SAVE_RESTORE_EXTENDED
+
+/* No HAL macros available for the following yet */
+#define ADC_CONTROL_POWER_SAV       BIT(3)
+#define ADC_CONTROL_ACTIVATE        BIT(0)
+
+static void deep_sleep_save_blocks(void)
+{
+#ifdef CONFIG_ADC
+	/* ADC deactivate  */
+	ADC_REGS->CONTROL |= ADC_CONTROL_POWER_SAV;
+	ADC_REGS->CONTROL &= ADC_CONTROL_ACTIVATE;
+#endif
+
+#ifdef CONFIG_PECI
+	ds_ctx.peci_info.peci_ctrl = PECI_REGS->CONTROL;
+	ds_ctx.peci_info.peci_dis = ECS_REGS->PECI_DIS;
+	ECS_REGS->PECI_DIS |= BIT(0);
+#endif
+
+#ifdef CONFIG_I2C
+	/* SMBUS */
+	ds_ctx.smb_info[0] = SMB0_REGS->CTRLSTS;
+	ds_ctx.smb_info[1] = SMB1_REGS->CTRLSTS;
+	ds_ctx.smb_info[2] = SMB2_REGS->CTRLSTS;
+	ds_ctx.smb_info[3] = SMB3_REGS->CTRLSTS;
+	ds_ctx.smb_info[4] = SMB4_REGS->CTRLSTS;
+#endif
+
+	/* Disable comparator if enabled */
+	if (ECS_REGS->CMP_CTRL & BIT(0)) {
+		ds_ctx.comp_en = 1;
+		ECS_REGS->CMP_CTRL &= ~BIT(0);
+	}
+
+#if defined(CONFIG_TACH_XEC) || defined(CONFIG_PWM_XEC)
+	/* This low-speed clock derived from the 48MHz clock domain is used as
+	 * a time base for PWMs and TACHs
+	 * Set SLOW_CLOCK_DIVIDE = CLKOFF to save additional power
+	 */
+	ds_ctx.slwclk_info = PCR_REGS->SLOW_CLK_CTRL;
+	PCR_REGS->SLOW_CLK_CTRL &= (~MCHP_PCR_SLOW_CLK_CTRL_100KHZ &
+				    MCHP_PCR_SLOW_CLK_CTRL_MASK);
+#endif
+
+	/* TFDP HW block is not expose to any Zephyr subsystem */
+	if (TFDP_REGS->CTRL & MCHP_TFDP_CTRL_EN) {
+		ds_ctx.tfdp_en = 1;
+		TFDP_REGS->CTRL &= ~MCHP_TFDP_CTRL_EN;
+	}
+
+	/* Port 80 */
+	ds_ctx.port80_info[0] = PORT80_CAP0_REGS->ACTV;
+	ds_ctx.port80_info[1] = PORT80_CAP1_REGS->ACTV;
+	PORT80_CAP0_REGS->ACTV = 0;
+	PORT80_CAP1_REGS->ACTV = 0;
+}
+
+static void deep_sleep_restore_blocks(void)
+{
+#ifdef CONFIG_ADC
+	ADC_REGS->CONTROL &= ~ADC_CONTROL_POWER_SAV;
+	ADC_REGS->CONTROL |= ADC_CONTROL_ACTIVATE;
+#endif
+
+#ifdef CONFIG_PECI
+	ECS_REGS->PECI_DIS = ds_ctx.peci_info.peci_dis;
+	PECI_REGS->CONTROL = ds_ctx.peci_info.peci_ctrl;
+#endif
+
+#ifdef CONFIG_I2C
+	SMB0_REGS->CTRLSTS = ds_ctx.smb_info[0];
+	SMB1_REGS->CTRLSTS = ds_ctx.smb_info[1];
+	SMB2_REGS->CTRLSTS = ds_ctx.smb_info[2];
+	SMB3_REGS->CTRLSTS = ds_ctx.smb_info[3];
+	SMB4_REGS->CTRLSTS = ds_ctx.smb_info[4];
+#endif
+
+	/* Restore comparator control values */
+	if (ds_ctx.comp_en) {
+		ECS_REGS->CMP_CTRL |= BIT(0);
+	}
+
+#if defined(CONFIG_TACH_XEC) || defined(CONFIG_PWM_XEC)
+	/* Restore slow clock control */
+	PCR_REGS->SLOW_CLK_CTRL = ds_ctx.slwclk_info;
+#endif
+
+	/* TFDP HW block is not expose to any Zephyr subsystem */
+	if (ds_ctx.tfdp_en) {
+		TFDP_REGS->CTRL |= MCHP_TFDP_CTRL_EN;
+	}
+
+	/* Port 80 */
+	PORT80_CAP0_REGS->ACTV = ds_ctx.port80_info[0];
+	PORT80_CAP1_REGS->ACTV = ds_ctx.port80_info[1];
+}
+#endif /* DEEP_SLEEP_PERIPH_SAVE_RESTORE_EXTENDED */
+
 void soc_deep_sleep_periph_save(void)
 {
+#ifdef DEEP_SLEEP_PERIPH_SAVE_RESTORE_EXTENDED
+	deep_sleep_save_blocks();
+#endif
 	deep_sleep_save_ecs();
 	deep_sleep_save_timers();
 	deep_sleep_save_uarts();
@@ -220,6 +322,9 @@ void soc_deep_sleep_periph_restore(void)
 	deep_sleep_restore_ecs();
 	deep_sleep_restore_uarts();
 	deep_sleep_restore_timers();
+#ifdef DEEP_SLEEP_PERIPH_SAVE_RESTORE_EXTENDED
+	deep_sleep_restore_blocks();
+#endif
 }
 
 #else
