@@ -11,6 +11,7 @@
 #include <power/power.h>
 #include <soc.h>
 #include "device_power.h"
+#include "soc_power_debug.h
 
 /*
  * Deep Sleep
@@ -38,13 +39,13 @@
  */
 static void z_power_soc_deep_sleep(void)
 {
+	PM_DP_ENTER();
+
 	/* Mask all exceptions and interrupts except NMI and HardFault */
 	__set_PRIMASK(1);
 
 	soc_deep_sleep_periph_save();
-
 	soc_deep_sleep_enable();
-
 	soc_deep_sleep_wait_clk_idle();
 	soc_deep_sleep_non_wake_en();
 	soc_deep_sleep_wake_en();
@@ -60,13 +61,14 @@ static void z_power_soc_deep_sleep(void)
 	__NOP();
 
 	soc_deep_sleep_disable();
-
 	soc_deep_sleep_wake_dis();
 	soc_deep_sleep_non_wake_dis();
 
 	/* Wait for PLL to lock */
 	while ((PCR_REGS->OSC_ID & MCHP_PCR_OSC_ID_PLL_LOCK) == 0) {
 	}
+
+	PM_DP_EXIT();
 
 	soc_deep_sleep_periph_restore();
 
