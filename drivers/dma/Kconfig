@@ -38,4 +38,6 @@ source "drivers/dma/Kconfig.dma_pl330"
 
 source "drivers/dma/Kconfig.iproc_pax"
 
+source "drivers/dma/Kconfig.xec"
+
 endif # DMA
