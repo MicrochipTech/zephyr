@@ -89,6 +89,11 @@ void test_gpio_pin_interrupt_edge(unsigned int cfg_flags,
 	}
 	zassert_equal(ret, 0, "Failed to configure pin interrupt");
 
+#if 1
+	cb_count = 0;
+	cb_count_expected = 0;
+#endif
+
 	for (int i = 0; i < 6; i++) {
 		pin_set_and_verify(port, TEST_PIN, 1, i);
 		if (int_flags & GPIO_INT_HIGH_1) {
