@@ -98,6 +98,18 @@ static const struct xec_speed_cfg xec_cfg_params[] = {
 	},
 };
 
+/*
+ * AHB = 48 MHz. I2C BAUD clock is 16 MHz. Per AHB specification minimum
+ * access is 3 AHB clocks.
+ */
+static void xec_i2c_baud_clk_delay(uint32_t ba, uint32_t nbc)
+{
+	while (nbc--) {
+		REG8(ba + MCHP_I2C_SMB_BLOCK_REV_OFS) =
+			REG8(ba + MCHP_I2C_SMB_BLOCK_ID_OFS);
+	}
+}
+
 static void i2c_xec_reset_config(const struct device *dev)
 {
 	const struct i2c_xec_config *config =
@@ -273,7 +285,7 @@ static int wait_completion(const struct device *dev)
  * Call GPIO driver to read state of pins.
  * Return boolean true if both lines HIGH else return boolean false
  */
-static bool check_lines(const struct device *dev)
+static uint32_t get_lines(const struct device *dev)
 {
 	const struct i2c_xec_config *config =
 		(const struct i2c_xec_config *const)(dev->config);
@@ -302,7 +314,7 @@ static bool check_lines(const struct device *dev)
 		i2c_lines |= I2C_LINES_SCL_HI;
 	}
 
-	return (i2c_lines == I2C_LINES_BOTH_HI) ? true : false;
+	return i2c_lines;
 }
 
 static int i2c_xec_configure(const struct device *dev,
@@ -338,6 +350,98 @@ static int i2c_xec_configure(const struct device *dev,
 	return 0;
 }
 
+/*
+ * Attempt to recover the I2C bus.
+ * If SCL is driven low by an external device all we can do
+ * is poll a few time and hope the external device will release SCL.
+ * If SDA is driven low by an external device we will generate 9
+ * clocks and attempt to generate a STOP. Sometimes this can trigger
+ * the stuck device to release SDA.
+ *
+ * We can make use of the controller's bit-bang mode because we aren't
+ * performing a real I2C transaction.
+ * Switch to big-bang undriven mode: output drivers tri-stated.
+ * Get SDA and SCL pin states.
+ * If SCL is low
+ *   Retry SCL every 5 us up to I2C_RECOVER_SCL_LOW_RETRIES times.
+ *   If SCL remains low reset controller and return -EBUSY
+ * If SDA is low
+ *  Retry driving 9 clocks at ~100 KHz and generate a STOP up
+ *  to I2C_RECOVER_SDA_LOW_RETRIES
+ *  If SDA remains low reset controller and return -EBUSY
+ * reset controller
+ * return success
+ */
+static int i2c_xec_recover_bus(const struct device *dev)
+{
+	const struct i2c_xec_config *config =
+		(const struct i2c_xec_config *const) (dev->config);
+	struct i2c_xec_data *data =
+		(struct i2c_xec_data *const) (dev->data);
+
+	uint32_t ba = config->base_addr;
+	uint32_t cfg;
+	int count;
+
+	data->pending_stop = 0;
+	data->slave_read = 0;
+
+	/* Make sure our controller is idle before attempting bus recovery */
+	cfg = MCHP_I2C_SMB_CFG(ba);
+	MCHP_I2C_SMB_CFG(ba) = MCHP_I2C_SMB_CFG_RESET;
+	xec_i2c_baud_clk_delay(ba, 16);
+	MCHP_I2C_SMB_CFG(ba) =
+		(config->port_sel & MCHP_I2C_SMB_CFG_PORT_SEL_MASK);
+	MCHP_I2C_SMB_CFG(ba) |= MCHP_I2C_SMB_CFG_FEN;
+	MCHP_I2C_SMB_CFG(ba) |= MCHP_I2C_SMB_CFG_ENAB;
+
+	/* Enable bit-bang mode pins as inputs */
+	MCHP_I2C_SMB_BB_CTRL(ba) = BIT(0);
+
+	count = I2C_RECOVER_SCL_LOW_RETRIES;
+	while (!(MCHP_I2C_SMB_BB_CTRL(ba) & BIT(5))) {
+		/* SCL is low. All we can do is wait for it to go high */
+		if (count-- == 0) {
+			/* reset controller which disables bit-bang mode */
+			i2c_xec_reset_config(dev);
+			return -EBUSY;
+		}
+		k_busy_wait(RESET_WAIT_US);
+	}
+
+	/* SCL is high. Check SDA */
+	count = I2C_RECOVER_SDA_LOW_RETRIES;
+	while (!(MCHP_I2C_SMB_BB_CTRL(ba) & BIT(6))) {
+		/* SDA is low. Drive clocks until SDA is released */
+		if (count-- == 0) {
+			i2c_xec_reset_config(dev);
+			return -EBUSY;
+		}
+
+		for (int i = 0; i < 9; i++) {
+			/* drive SCL low */
+			MCHP_I2C_SMB_BB_CTRL(ba) = BIT(0) | BIT(1);
+			k_busy_wait(5);
+			MCHP_I2C_SMB_BB_CTRL(ba) = BIT(0); /* release SCL */
+			k_busy_wait(5);
+		}
+
+		/* try to generate STOP: SCL=High then SDA rising edge */
+		MCHP_I2C_SMB_BB_CTRL(ba) = BIT(0) | BIT(2); /* SDA low */
+		k_busy_wait(5);
+		MCHP_I2C_SMB_BB_CTRL(ba) = BIT(0); /* release SDA */
+		k_busy_wait(5);
+	}
+
+	/* Disable bit-bang mode */
+	MCHP_I2C_SMB_BB_CTRL(ba) = 0U;
+
+	/* reset controller */
+	i2c_xec_reset_config(dev);
+
+	return 0;
+}
+
 static int i2c_xec_poll_write(const struct device *dev, struct i2c_msg msg,
 			      uint16_t addr)
 {
@@ -350,8 +454,11 @@ static int i2c_xec_poll_write(const struct device *dev, struct i2c_msg msg,
 
 	if (data->pending_stop == 0) {
 		/* Check clock and data lines */
-		if (!check_lines(dev)) {
-			return -EBUSY;
+		if (get_lines(dev) != I2C_LINES_BOTH_HI) {
+			ret = i2c_xec_recover_bus(dev);
+			if (ret) {
+				return ret;
+			}
 		}
 
 		/* Wait until bus is free */
@@ -414,8 +521,11 @@ static int i2c_xec_poll_read(const struct device *dev, struct i2c_msg msg,
 
 	if (!(msg.flags & I2C_MSG_RESTART)) {
 		/* Check clock and data lines */
-		if (!check_lines(dev)) {
-			return -EBUSY;
+		if (get_lines(dev) != I2C_LINES_BOTH_HI) {
+			ret = i2c_xec_recover_bus(dev);
+			if (ret) {
+				return ret;
+			}
 		}
 
 		/* Wait until bus is free */
