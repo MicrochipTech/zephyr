@@ -112,22 +112,27 @@ static void i2c_xec_reset_config(const struct device *dev)
 
 	k_busy_wait(RESET_WAIT_US);
 
-	/* Bus reset */
+	/* Clear Bus reset */
 	MCHP_I2C_SMB_CFG(ba) = 0;
 
-	/* Write 0x80. i.e Assert PIN bit, ESO = 0 and Interrupts
-	 * disabled (ENI)
-	 */
-	MCHP_I2C_SMB_CTRL_WO(ba) = MCHP_I2C_SMB_CTRL_PIN;
+	data->pending_stop = 0;
+	data->slave_read = 0;
 
-	/* Enable controller and I2C filters */
+	/* MCHP recommendation: Set configuration features before enable. */
 	MCHP_I2C_SMB_CFG(ba) = MCHP_I2C_SMB_CFG_GC_EN |
-				MCHP_I2C_SMB_CFG_ENAB |
 				MCHP_I2C_SMB_CFG_FEN |
 				(config->port_sel &
 				 MCHP_I2C_SMB_CFG_PORT_SEL_MASK);
 
-	/* Configure bus clock register, Data Timing register,
+	/*
+	 * Write 0x80 PIN->1 clears all status except NBB.
+	 * ESO=0 disable output driver
+	 * ACK=0 do not ACK on address match or data.
+	 */
+	MCHP_I2C_SMB_CTRL_WO(ba) = MCHP_I2C_SMB_CTRL_PIN;
+
+	/*
+	 * Configure bus clock register, Data Timing register,
 	 * Repeated Start Hold Time register,
 	 * and Timeout Scaling register
 	 */
@@ -137,10 +142,15 @@ static void i2c_xec_reset_config(const struct device *dev)
 		xec_cfg_params[data->speed_id].start_hold_time;
 	MCHP_I2C_SMB_TMTSC(ba) = xec_cfg_params[data->speed_id].timeout_scale;
 
+	/* Clear status, enable serial output, arm ACK generation */
 	MCHP_I2C_SMB_CTRL_WO(ba) = MCHP_I2C_SMB_CTRL_PIN |
 				   MCHP_I2C_SMB_CTRL_ESO |
 				   MCHP_I2C_SMB_CTRL_ACK;
 
+	/* Enable controller after all configuration set */
+	MCHP_I2C_SMB_CFG(ba) |= MCHP_I2C_SMB_CFG_ENAB;
+
+	/* Wait for controller to sync to pin states */
 	k_busy_wait(RESET_WAIT_US);
 }
 
