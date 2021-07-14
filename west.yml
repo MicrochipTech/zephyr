@@ -59,7 +59,8 @@ manifest:
       revision: f1fa8241f8786198ba41155413243de36ed878a5
       path: modules/hal/infineon
     - name: hal_microchip
-      revision: b280eec5d3b1296b231117c1999bcd0269b6ecc4
+      url: https://github.com/MicrochipTech/hal_microchip
+      revision: devel_mec172x_hal_001
       path: modules/hal/microchip
     - name: hal_nordic
       revision: 74b3b21f60aa3dc9a4364ffc28dbb47ad8b699a9
