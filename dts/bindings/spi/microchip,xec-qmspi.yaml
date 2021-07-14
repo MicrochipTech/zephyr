@@ -55,3 +55,16 @@ properties:
       type: int
       required: true
       description: Delay in system clocks from CS# de-assertion to CS# assertion
+
+    girqs:
+      type: array
+      required: true
+      description: array of GIRQ numbers and GIRQ bit position
+
+    "#girq-cells":
+      type: int
+      const: 2
+
+girq-cells:
+    - girq_id
+    - girq_bit
