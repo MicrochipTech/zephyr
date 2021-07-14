@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020 Intel Corporation
- *
+ * Copyright (c) 2021 Microchip Inc.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -26,11 +26,11 @@ struct tach_xec_data {
 #define COUNT_100KHZ_SEC	100000U
 #define SEC_TO_MINUTE		60U
 #define PIN_STS_TIMEOUT		20U
-#define TACH_CTRL_EDGES	        (CONFIG_TACH_XEC_EDGES << \
-				MCHP_TACH_CTRL_NUM_EDGES_POS)
+#define TACH_CTRL_EDGES		\
+	(CONFIG_TACH_XEC_EDGES << MCHP_TACH_CTRL_NUM_EDGES_POS)
 
 #define TACH_XEC_REG_BASE(_dev)				\
-	((TACH_Type *)					\
+	((struct tach_regs *)				\
 	 ((const struct tach_xec_config * const)	\
 	  _dev->config)->base_address)
 
@@ -46,7 +46,7 @@ int tach_xec_sample_fetch(const struct device *dev, enum sensor_channel chan)
 {
 	ARG_UNUSED(chan);
 
-	TACH_Type *tach = TACH_XEC_REG_BASE(dev);
+	struct tach_regs *tach = TACH_XEC_REG_BASE(dev);
 	struct tach_xec_data *data = TACH_XEC_DATA(dev);
 	uint8_t poll_count = 0;
 
@@ -101,7 +101,7 @@ static int tach_xec_channel_get(const struct device *dev,
 
 static int tach_xec_init(const struct device *dev)
 {
-	TACH_Type *tach = TACH_XEC_REG_BASE(dev);
+	struct tach_regs *tach = TACH_XEC_REG_BASE(dev);
 
 	tach->CONTROL = MCHP_TACH_CTRL_READ_MODE_100K_CLOCK	|
 			TACH_CTRL_EDGES	                        |
