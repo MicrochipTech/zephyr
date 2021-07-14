@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019 Intel Corporation
- * Copyright (c) 2019 Microchip Technology Incorporated
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -50,7 +50,10 @@ BUILD_ASSERT(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC == 32768,
 	(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / CONFIG_SYS_CLOCK_TICKS_PER_SEC)
 
 #define TIMER_REGS	\
-	((RTMR_Type *) DT_INST_REG_ADDR(0))
+	((struct rtmr_regs *) DT_INST_REG_ADDR(0))
+
+#define TIMER_GIRQ		(DT_INST_PROP(0, girq))
+#define TIMER_GIRQ_BITPOS	(DT_INST_PROP(0, girq_bit))
 
 /* Mask off bits[31:28] of 32-bit count */
 #define TIMER_MAX	0x0FFFFFFFUL
@@ -161,8 +164,7 @@ void sys_clock_set_timeout(int32_t n, bool idle)
 
 	/* turn off to clear any pending interrupt status */
 	TIMER_REGS->CTRL = 0U;
-	MCHP_GIRQ_SRC(DT_INST_PROP(0, girq)) =
-		BIT(DT_INST_PROP(0, girq_bit));
+	mchp_soc_ecia_girq_src_clr(TIMER_GIRQ, TIMER_GIRQ_BITPOS);
 	NVIC_ClearPendingIRQ(RTMR_IRQn);
 
 	temp = total_cycles;
@@ -222,8 +224,7 @@ static void xec_rtos_timer_isr(const void *arg)
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	MCHP_GIRQ_SRC(DT_INST_PROP(0, girq)) =
-		BIT(DT_INST_PROP(0, girq_bit));
+	mchp_soc_ecia_girq_src_clr(TIMER_GIRQ, TIMER_GIRQ_BITPOS);
 
 	/* Restart the timer as early as possible to minimize drift... */
 	timer_restart(MAX_TICKS * CYCLES_PER_TICK);
@@ -255,8 +256,7 @@ static void xec_rtos_timer_isr(const void *arg)
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	MCHP_GIRQ_SRC(DT_INST_PROP(0, girq)) =
-		BIT(DT_INST_PROP(0, girq_bit));
+	mchp_soc_ecia_girq_src_clr(TIMER_GIRQ, TIMER_GIRQ_BITPOS);
 
 	/* Restart the timer as early as possible to minimize drift... */
 	timer_restart(cached_icr);
@@ -325,26 +325,24 @@ int sys_clock_driver_init(const struct device *dev)
 #endif
 
 	TIMER_REGS->CTRL = 0U;
-	MCHP_GIRQ_SRC(DT_INST_PROP(0, girq)) =
-		BIT(DT_INST_PROP(0, girq_bit));
+	mchp_soc_ecia_girq_src_clr(TIMER_GIRQ, TIMER_GIRQ_BITPOS);
 	NVIC_ClearPendingIRQ(RTMR_IRQn);
 
 	IRQ_CONNECT(RTMR_IRQn,
 		    DT_INST_IRQ(0, priority),
 		    xec_rtos_timer_isr, 0, 0);
 
-	MCHP_GIRQ_ENSET(DT_INST_PROP(0, girq)) =
-		BIT(DT_INST_PROP(0, girq_bit));
+	mchp_soc_ecia_girq_src_en(TIMER_GIRQ, TIMER_GIRQ_BITPOS);
 	irq_enable(RTMR_IRQn);
 
 #ifdef CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT
 	uint32_t btmr_ctrl = B32TMR0_REGS->CTRL = (MCHP_BTMR_CTRL_ENABLE
 			  | MCHP_BTMR_CTRL_AUTO_RESTART
 			  | MCHP_BTMR_CTRL_COUNT_UP
-			  | (47UL << MCHP_BTMR_CTRL_PRESCALE_POS));
+			  | (47u << MCHP_BTMR_CTRL_PRESCALE_POS));
 	B32TMR0_REGS->CTRL = MCHP_BTMR_CTRL_SOFT_RESET;
 	B32TMR0_REGS->CTRL = btmr_ctrl;
-	B32TMR0_REGS->PRLD = 0xFFFFFFFFUL;
+	B32TMR0_REGS->PRLD = 0xffffffffu;
 	btmr_ctrl |= MCHP_BTMR_CTRL_START;
 
 	timer_restart(cached_icr);
@@ -362,7 +360,7 @@ int sys_clock_driver_init(const struct device *dev)
 #ifdef CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT
 
 /*
- * We implement custom busy wait using a MEC1501 basic timer running on
+ * We implement custom busy wait using a MEC basic timer running on
  * the 48MHz clock domain. This code is here for future power management
  * save/restore of the timer context.
  */
