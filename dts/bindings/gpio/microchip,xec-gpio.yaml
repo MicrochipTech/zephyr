@@ -17,6 +17,11 @@ properties:
     label:
       required: true
 
+    girq-id:
+      type: int
+      required: true
+      description: GIRQ number 8 to 26 for this bank of 32 GPIO pins.
+
     "#gpio-cells":
       const: 2
 
