@@ -9,6 +9,7 @@ choice
 
 config SOC_MEC172X_NSZ
 	bool "MEC172X_NSZ"
+	select HAS_MEC_HAL
 
 endchoice
 
@@ -27,6 +28,11 @@ config SOC_MEC172X_PROC_CLK_DIV
 	  and main 96 MHz clock (MCK):
 	  HCLK = MCK / PROC_CLK_DIV
 	  Allowed divider values: 1, 3, 4, 16, and 48.
+
+config SOC_MEC172X_VTR3_1_8V
+	bool "VTR3 power rail is tied to 1.8V"
+	help
+	  Set this is if VTR3 power sourcejumper in the board is changed.
 
 config SOC_MEC172X_VCI_PINS_AS_GPIOS
 	bool "Use VCI block pins as GPIOS"
