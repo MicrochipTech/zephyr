@@ -14,8 +14,21 @@ properties:
     interrupts:
       required: true
 
+    girqs:
+      type: array
+      required: true
+      description: array of GIRQ numbers and GIRQ bit position
+
     "#io-channel-cells":
       const: 1
 
+    "#girq-cells":
+      type: int
+      const: 2
+
 io-channel-cells:
     - input
+
+girq-cells:
+    - girq_id
+    - girq_bit
