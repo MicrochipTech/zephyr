@@ -29,6 +29,19 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 /* After 8 wait intervals yield */
 #define SAF_YIELD_THRESHOLD 64
 
+#define ESPI_XEC_REG_BASE						\
+	((struct espi_iom_regs *)(DT_REG_ADDR(DT_NODELABEL(espi0))))
+
+/* All SAF interrupt sources on the same GIRQ */
+#define ESPI_SAF_XEC_GIRQ		DT_INST_PROP_BY_IDX(0, girqs, 0)
+#define ESPI_SAF_XEC_DONE_GIRQ_BITPOS	DT_INST_PROP_BY_IDX(0, girqs, 1)
+#define ESPI_SAF_XEC_ERR_GIRQ_BITPOS	DT_INST_PROP_BY_IDX(0, girqs, 3)
+#define ESPI_SAF_XEC_CACHE_GIRQ_BITPOS	DT_INST_PROP_BY_IDX(0, girqs, 5)
+
+#define ESPI_SAF_XEC_DONE_GIRQ_BIT	BIT(DT_INST_PROP_BY_IDX(0, girqs, 1))
+#define ESPI_SAF_XEC_ERR_GIRQ_BIT	BIT(DT_INST_PROP_BY_IDX(0, girqs, 3))
+#define ESPI_SAF_XEC_CACHE_GIRQ_BIT	BIT(DT_INST_PROP_BY_IDX(0, girqs, 5))
+
 struct espi_isr {
 	uint32_t girq_bit;
 	void (*the_isr)(const struct device *dev);
@@ -73,14 +86,14 @@ static uint32_t slave_mem[MAX_SAF_ECP_BUFFER_SIZE];
  * @brief eSPI SAF configuration
  */
 
-static inline void mchp_saf_cs_descr_wr(MCHP_SAF_HW_REGS *regs, uint8_t cs,
-					uint32_t val)
+static inline void
+mchp_saf_cs_descr_wr(struct mchp_espi_saf *regs, uint8_t cs, uint32_t val)
 {
 	regs->SAF_CS_OP[cs].OP_DESCR = val;
 }
 
-static inline void mchp_saf_poll2_mask_wr(MCHP_SAF_HW_REGS *regs, uint8_t cs,
-					  uint16_t val)
+static inline void
+mchp_saf_poll2_mask_wr(struct mchp_espi_saf *regs, uint8_t cs, uint16_t val)
 {
 	LOG_DBG("%s cs: %d mask %x", __func__, cs, val);
 	if (cs == 0) {
@@ -90,8 +103,8 @@ static inline void mchp_saf_poll2_mask_wr(MCHP_SAF_HW_REGS *regs, uint8_t cs,
 	}
 }
 
-static inline void mchp_saf_cm_prefix_wr(MCHP_SAF_HW_REGS *regs, uint8_t cs,
-					 uint16_t val)
+static inline void
+mchp_saf_cm_prefix_wr(struct mchp_espi_saf *regs, uint8_t cs, uint16_t val)
 {
 	if (cs == 0) {
 		regs->SAF_CS0_CM_PRF = val;
@@ -146,7 +159,7 @@ static int xec_saf_spin_yield(int *counter)
  * WR = 0xFF
  * RD = 0xFF
  */
-static void saf_protection_regions_init(MCHP_SAF_HW_REGS *regs)
+static void saf_protection_regions_init(struct mchp_espi_saf *regs)
 {
 	LOG_DBG("%s", __func__);
 
@@ -212,7 +225,7 @@ static int saf_qmspi_init(const struct espi_saf_xec_config *xcfg,
 			  const struct espi_saf_cfg *cfg)
 {
 	uint32_t qmode, cstim, n;
-	QMSPI_Type *regs = (QMSPI_Type *)xcfg->qmspi_base_addr;
+	struct qmspi_regs *regs = (struct qmspi_regs *)xcfg->qmspi_base_addr;
 	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
 
 	qmode = regs->MODE;
@@ -276,7 +289,7 @@ static int saf_qmspi_init(const struct espi_saf_xec_config *xcfg,
  * SAF Suspend Check Delay @ 0x1ac. Not touched.
  *	Default = 0. Recommend = 20us. Units = MCLK. b[19:0]
  */
-static void saf_flash_timing_init(MCHP_SAF_HW_REGS *regs,
+static void saf_flash_timing_init(struct mchp_espi_saf *regs,
 				  const struct espi_saf_xec_config *cfg)
 {
 	LOG_DBG("%s\n", __func__);
@@ -295,7 +308,7 @@ static void saf_flash_timing_init(MCHP_SAF_HW_REGS *regs,
 /*
  * Disable DnX bypass feature.
  */
-static void saf_dnx_bypass_init(MCHP_SAF_HW_REGS *regs)
+static void saf_dnx_bypass_init(struct mchp_espi_saf *regs)
 {
 	regs->SAF_DNX_PROT_BYP = 0;
 	regs->SAF_DNX_PROT_BYP = 0xffffffff;
@@ -334,7 +347,9 @@ static int saf_init_erase_block_size(const struct espi_saf_cfg *cfg)
 		erase_bitmap |= MCHP_ESPI_SERASE_SZ_64K;
 	}
 
-	ESPI_CAP_REGS->FC_SERBZ = erase_bitmap;
+	struct espi_iom_regs *eiom_regs = ESPI_XEC_REG_BASE;
+
+	eiom_regs->SAFEBS = erase_bitmap;
 
 	return 0;
 }
@@ -347,7 +362,7 @@ static int saf_init_erase_block_size(const struct espi_saf_cfg *cfg)
  * SAF Flash Config Special Mode @ 0x1B0
  * SAF Flash Misc Config @ 0x38
  */
-static void saf_flash_misc_cfg(MCHP_SAF_HW_REGS *regs, uint8_t cs,
+static void saf_flash_misc_cfg(struct mchp_espi_saf *regs, uint8_t cs,
 			       const struct espi_saf_flash_cfg *fcfg)
 {
 	uint32_t d, v;
@@ -398,8 +413,9 @@ static void saf_flash_cfg(const struct device *dev,
 {
 	uint32_t d, did;
 	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
-	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
-	QMSPI_Type *qregs = (QMSPI_Type *)xcfg->qmspi_base_addr;
+	struct mchp_espi_saf *regs =
+		(struct mchp_espi_saf *)xcfg->saf_base_addr;
+	struct qmspi_regs *qregs = (struct qmspi_regs *)xcfg->qmspi_base_addr;
 
 	LOG_DBG("%s cs=%u", __func__, cs);
 
@@ -429,7 +445,7 @@ static const uint32_t tag_map_dflt[MCHP_ESPI_SAF_TAGMAP_MAX] = {
 	MCHP_SAF_TAG_MAP0_DFLT, MCHP_SAF_TAG_MAP1_DFLT, MCHP_SAF_TAG_MAP2_DFLT
 };
 
-static void saf_tagmap_init(MCHP_SAF_HW_REGS *regs,
+static void saf_tagmap_init(struct mchp_espi_saf *regs,
 			    const struct espi_saf_cfg *cfg)
 {
 	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
@@ -468,7 +484,8 @@ static int espi_saf_xec_configuration(const struct device *dev,
 	}
 
 	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
-	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
+	struct mchp_espi_saf *regs =
+		(struct mchp_espi_saf *)xcfg->saf_base_addr;
 	const struct espi_saf_flash_cfg *fcfg = cfg->flash_cfgs;
 
 	if ((fcfg == NULL) || (cfg->nflash_devices == 0U) ||
@@ -533,15 +550,16 @@ static int espi_saf_xec_configuration(const struct device *dev,
 		(regs->SAF_FL_CFG_MISC & ~(MCHP_SAF_FL_CFG_MISC_PFOE_MASK)) | u;
 
 	/* enable prefetch ? */
+	u = sys_read32(MCHP_ESPI_SAF_COMM_MODE_ADDR);
+	u &= ~(MCHP_SAF_COMM_MODE_PF_EN);
 	if (cfg->hwcfg.flags & MCHP_SAF_HW_CFG_FLAG_PFEN) {
-		MCHP_SAF_COMM_MODE_REG |= MCHP_SAF_COMM_MODE_PF_EN;
-	} else {
-		MCHP_SAF_COMM_MODE_REG &= ~(MCHP_SAF_COMM_MODE_PF_EN);
+		u |= MCHP_SAF_COMM_MODE_PF_EN;
 	}
+	sys_write32(u, MCHP_ESPI_SAF_COMM_MODE_ADDR);
 
+	u = sys_read32(MCHP_ESPI_SAF_COMM_MODE_ADDR);
 	LOG_DBG("%s SAF_FL_CFG_MISC: %x", __func__, regs->SAF_FL_CFG_MISC);
-	LOG_DBG("%s Aft MCHP_SAF_COMM_MODE_REG: %x", __func__,
-		MCHP_SAF_COMM_MODE_REG);
+	LOG_DBG("%s Aft MCHP_SAF_COMM_MODE_REG: %x", __func__, u);
 
 	return 0;
 }
@@ -558,7 +576,8 @@ static int espi_saf_xec_set_pr(const struct device *dev,
 	}
 
 	const struct espi_saf_xec_config *xcfg = DEV_CFG(dev);
-	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)xcfg->saf_base_addr;
+	struct mchp_espi_saf *regs =
+		(struct mchp_espi_saf *)xcfg->saf_base_addr;
 
 	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
 		return -EAGAIN;
@@ -601,7 +620,7 @@ static int espi_saf_xec_set_pr(const struct device *dev,
 static bool espi_saf_xec_channel_ready(const struct device *dev)
 {
 	const struct espi_saf_xec_config *cfg = DEV_CFG(dev);
-	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
+	struct mchp_espi_saf *regs = (struct mchp_espi_saf *)cfg->saf_base_addr;
 
 	if (regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN) {
 		return true;
@@ -637,7 +656,8 @@ static const struct erase_size_encoding ersz_enc[] = {
 
 static uint32_t get_erase_size_encoding(uint32_t erase_size)
 {
-	uint8_t supsz = ESPI_CAP_REGS->FC_SERBZ;
+	struct espi_iom_regs *eiom_regs = ESPI_XEC_REG_BASE;
+	uint8_t supsz = eiom_regs->SAFEBS;
 
 	LOG_DBG("%s\n", __func__);
 	for (int i = 0; i < SAF_ERASE_ENCODING_MAX_ENTRY; i++) {
@@ -675,7 +695,7 @@ static int saf_ecp_access(const struct device *dev,
 	int rc, counter;
 	struct espi_saf_xec_data *xdat = DEV_DATA(dev);
 	const struct espi_saf_xec_config *cfg = DEV_CFG(dev);
-	MCHP_SAF_HW_REGS *regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
+	struct mchp_espi_saf *regs = (struct mchp_espi_saf *)cfg->saf_base_addr;
 
 	counter = 0;
 	err_mask = MCHP_SAF_ECP_STS_ERR_MASK;
@@ -726,6 +746,9 @@ static int saf_ecp_access(const struct device *dev,
 	/*
 	 * TODO - Force SAF Done interrupt disabled until we have support
 	 * from eSPI driver.
+	 * NOTE: GIRQ19 SAF interrupt routing HW bug fixed on MEC172x
+	 * We have option to direct route all GIRQ19 sources.
+	 * Using direct mode we can locate SAF ISR's in this driver.
 	 */
 	MCHP_GIRQ_ENCLR(MCHP_SAF_GIRQ) = MCHP_SAF_GIRQ_ECP_DONE_BIT;
 	MCHP_GIRQ_SRC(MCHP_SAF_GIRQ) = MCHP_SAF_GIRQ_ECP_DONE_BIT;
@@ -744,6 +767,8 @@ static int saf_ecp_access(const struct device *dev,
 	/* TODO
 	 * ISR is in eSPI driver. Use polling until eSPI driver has been
 	 * modified to provide callback for GIRQ19 SAF ECP Done.
+	 * OPTION: MEC172x fixed the HW IRQ routing bug. We can use direct
+	 * mode on GIRQ19 with SAF interrupts here.
 	 */
 	rc = 0;
 	xdat->hwstatus = regs->SAF_ECP_STATUS;
@@ -757,6 +782,12 @@ static int saf_ecp_access(const struct device *dev,
 
 	/* clear hardware status and check for errors */
 	regs->SAF_ECP_STATUS = xdat->hwstatus;
+
+	mchp_xec_ecia_girq_src_clr_bitmap(ESPI_SAF_XEC_GIRQ,
+					  ESPI_SAF_XEC_DONE_GIRQ_BIT |
+					  ESPI_SAF_XEC_ERR_GIRQ_BIT |
+					  ESPI_SAF_XEC_CACHE_GIRQ_BIT);
+
 	if (xdat->hwstatus & MCHP_SAF_ECP_STS_ERR_MASK) {
 		rc = -EIO;
 		goto ecp_exit;
@@ -806,14 +837,14 @@ static int espi_saf_xec_manage_callback(const struct device *dev,
 static int espi_saf_xec_activate(const struct device *dev)
 {
 	const struct espi_saf_xec_config *cfg;
-	MCHP_SAF_HW_REGS *regs;
+	struct mchp_espi_saf *regs;
 
 	if (dev == NULL) {
 		return -EINVAL;
 	}
 
 	cfg = DEV_CFG(dev);
-	regs = (MCHP_SAF_HW_REGS *)cfg->saf_base_addr;
+	regs = (struct mchp_espi_saf *)cfg->saf_base_addr;
 
 	regs->SAF_FL_CFG_MISC |= MCHP_SAF_FL_CFG_MISC_SAF_EN;
 
@@ -866,9 +897,11 @@ static int espi_saf_xec_init(const struct device *dev)
 	mchp_pcr_periph_reset(PCR_ESPI_SAF);
 
 	/* Configure the channels and its capabilities based on build config */
-	ESPI_CAP_REGS->GLB_CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
-	ESPI_CAP_REGS->FC_CAP &= ~(MCHP_ESPI_FC_CAP_SHARE_MASK);
-	ESPI_CAP_REGS->FC_CAP |= MCHP_ESPI_FC_CAP_SHARE_MAF_SAF;
+	struct espi_iom_regs *eiom_regs = ESPI_XEC_REG_BASE;
+
+	eiom_regs->CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
+	eiom_regs->CAPFC &= ~(MCHP_ESPI_FC_CAP_SHARE_MASK);
+	eiom_regs->CAPFC |= MCHP_ESPI_FC_CAP_SHARE_MAF_SAF;
 
 	k_sem_init(&data->ecp_lock, 1, 1);
 

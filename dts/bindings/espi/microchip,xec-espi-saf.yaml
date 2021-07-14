@@ -13,6 +13,10 @@ properties:
       description: mmio register space
       required: true
 
+    interrupts:
+      description: interrupt lines and priorities
+      required: true
+
     io_girq:
       type: int
       description: soc group irq index for eSPI I/O
@@ -42,3 +46,16 @@ properties:
       type: int
       description: force suspended erase or program to resume in 32KHz periods
       required: false
+
+    girqs:
+      type: array
+      required: true
+      description: array of GIRQ numbers and GIRQ bit position
+
+    "#girq-cells":
+      type: int
+      const: 2
+
+girq-cells:
+    - girq_id
+    - girq_bit
