@@ -33,6 +33,10 @@ LOG_MODULE_REGISTER(kscan_mchp_xec);
 /* Thread stack size */
 #define TASK_STACK_SIZE 1024
 
+#define KSCAN_XEC_GIRQ		DT_INST_PROP_BY_IDX(0, girqs, 0)
+#define KSCAN_XEC_GIRQ_POS	DT_INST_PROP_BY_IDX(0, girqs, 1)
+#define KSCAN_XEC_NVIC_NO	DT_INST_IRQN(0)
+
 struct kscan_xec_data {
 	/* variables in usec units */
 	uint32_t deb_time_press;
@@ -57,8 +61,7 @@ struct kscan_xec_data {
 	K_KERNEL_STACK_MEMBER(thread_stack, TASK_STACK_SIZE);
 };
 
-static KSCAN_Type *base = (KSCAN_Type *)
-	(DT_INST_REG_ADDR(0));
+static struct kscan_regs *base = (struct kscan_regs *)(DT_INST_REG_ADDR(0));
 
 static struct kscan_xec_data kbd_data;
 
@@ -147,8 +150,8 @@ static void scan_matrix_xec_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 
-	MCHP_GIRQ_SRC(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
-	irq_disable(DT_INST_IRQN(0));
+	mchp_soc_ecia_girq_src_clr(KSCAN_XEC_GIRQ, KSCAN_XEC_GIRQ_POS);
+	irq_disable(KSCAN_XEC_NVIC_NO);
 	k_sem_give(&kbd_data.poll_lock);
 	LOG_DBG(" ");
 }
@@ -282,9 +285,9 @@ void polling_task(void *dummy1, void *dummy2, void *dummy3)
 		base->KSI_STS = MCHP_KSCAN_KSO_SEL_REG_MASK;
 
 		/* Ignore isr when releasing a key as we are polling */
-		MCHP_GIRQ_SRC(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
-		NVIC_ClearPendingIRQ(MCHP_KSAN_NVIC);
-		irq_enable(MCHP_KSAN_NVIC);
+		mchp_soc_ecia_girq_src_clr(KSCAN_XEC_GIRQ, KSCAN_XEC_GIRQ_POS);
+		NVIC_ClearPendingIRQ(KSCAN_XEC_NVIC_NO);
+		irq_enable(KSCAN_XEC_NVIC_NO);
 		drive_keyboard_column(KEYBOARD_COLUMN_DRIVE_ALL);
 		k_sem_take(&kbd_data.poll_lock, K_FOREVER);
 
@@ -341,7 +344,7 @@ static int kscan_xec_configure(const struct device *dev,
 
 	kbd_data.callback = callback;
 
-	MCHP_GIRQ_ENSET(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
+	mchp_soc_ecia_girq_src_en(KSCAN_XEC_GIRQ, KSCAN_XEC_GIRQ_POS);
 
 	return 0;
 }
@@ -408,7 +411,7 @@ static int kscan_xec_init(const struct device *dev)
 			K_PRIO_COOP(4), 0, K_NO_WAIT);
 
 	/* Interrupts are enabled in the thread function */
-	IRQ_CONNECT(MCHP_KSAN_NVIC, 0, scan_matrix_xec_isr, NULL, 0);
+	IRQ_CONNECT(KSCAN_XEC_NVIC_NO, 0, scan_matrix_xec_isr, NULL, 0);
 
 	return 0;
 }
