@@ -18,11 +18,27 @@ LOG_MODULE_REGISTER(ps2_mchp_xec);
 /* in 50us units */
 #define PS2_TIMEOUT 10000
 
-struct ps2_xec_config {
-	PS2_Type *base;
+/* Each PS/2 has an activity interrupt and up to two port wake interrupts */
+#define PS2_XEC_INTR_SRCS 3
+
+/* index for ps2_xec_config intr[] */
+enum ps2_xec_intr_src {
+	actv = 0,
+	p0wk,
+	p1wk,
+	intr_max
+};
+
+struct ps2_xec_intr_config {
+	uint8_t isr_nvic;
+	uint8_t isr_prio;
 	uint8_t girq_id;
 	uint8_t girq_bit;
-	uint8_t isr_nvic;
+};
+
+struct ps2_xec_config {
+	struct ps2_regs *base;
+	struct ps2_xec_intr_config intr[PS2_XEC_INTR_SRCS];
 };
 
 struct ps2_xec_data {
@@ -35,7 +51,7 @@ static int ps2_xec_configure(const struct device *dev,
 {
 	const struct ps2_xec_config *config = dev->config;
 	struct ps2_xec_data *data = dev->data;
-	PS2_Type *base = config->base;
+	struct ps2_regs *base = config->base;
 
 	uint8_t  __attribute__((unused)) dummy;
 
@@ -50,9 +66,10 @@ static int ps2_xec_configure(const struct device *dev,
 	 * interrupts. Instances must be allocated before the BAT or
 	 * the host may time out.
 	 */
-	MCHP_GIRQ_SRC(config->girq_id) = BIT(config->girq_bit);
 	dummy = base->TRX_BUFF;
 	base->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
+	mchp_soc_ecia_girq_src_clr(config->intr[actv].girq_id,
+				   config->intr[actv].girq_bit);
 
 	/* Enable FSM and init instance in rx mode*/
 	base->CTRL = MCHP_PS2_CTRL_EN_POS;
@@ -60,7 +77,8 @@ static int ps2_xec_configure(const struct device *dev,
 	/* We enable the interrupts in the EC aggregator so that the
 	 * result  can be forwarded to the ARM NVIC
 	 */
-	MCHP_GIRQ_ENSET(config->girq_id) = BIT(config->girq_bit);
+	mchp_soc_ecia_girq_src_en(config->intr[actv].girq_id,
+				  config->intr[actv].girq_bit);
 
 	k_sem_give(&data->tx_lock);
 
@@ -72,7 +90,7 @@ static int ps2_xec_write(const struct device *dev, uint8_t value)
 {
 	const struct ps2_xec_config *config = dev->config;
 	struct ps2_xec_data *data = dev->data;
-	PS2_Type *base = config->base;
+	struct ps2_regs *base = config->base;
 	int i = 0;
 
 	uint8_t  __attribute__((unused)) dummy;
@@ -121,15 +139,16 @@ static int ps2_xec_inhibit_interface(const struct device *dev)
 {
 	const struct ps2_xec_config *config = dev->config;
 	struct ps2_xec_data *data = dev->data;
-	PS2_Type *base = config->base;
+	struct ps2_regs *base = config->base;
 
 	if (k_sem_take(&data->tx_lock, K_MSEC(10)) != 0) {
 		return -EACCES;
 	}
 
 	base->CTRL = 0x00;
-	MCHP_GIRQ_SRC(config->girq_id) = BIT(config->girq_bit);
-	NVIC_ClearPendingIRQ(config->isr_nvic);
+	mchp_soc_ecia_girq_src_clr(config->intr[actv].girq_id,
+				   config->intr[actv].girq_bit);
+	NVIC_ClearPendingIRQ(config->intr[actv].isr_nvic);
 
 	k_sem_give(&data->tx_lock);
 
@@ -140,23 +159,27 @@ static int ps2_xec_enable_interface(const struct device *dev)
 {
 	const struct ps2_xec_config *config = dev->config;
 	struct ps2_xec_data *data = dev->data;
-	PS2_Type *base = config->base;
+	struct ps2_regs *base = config->base;
 
-	MCHP_GIRQ_SRC(config->girq_id) = BIT(config->girq_bit);
+	mchp_soc_ecia_girq_src_clr(config->intr[actv].girq_id,
+				   config->intr[actv].girq_bit);
 	base->CTRL = MCHP_PS2_CTRL_EN;
 
 	k_sem_give(&data->tx_lock);
 
 	return 0;
 }
+
+/*
+ * GIRQ sources bits are latched R/W1C. Clear PS2 controller status before
+ * clearing GIRQ source bit.
+ */
 static void ps2_xec_isr(const struct device *dev)
 {
 	const struct ps2_xec_config *config = dev->config;
 	struct ps2_xec_data *data = dev->data;
-	PS2_Type *base = config->base;
+	struct ps2_regs *base = config->base;
 	uint32_t status;
-
-	MCHP_GIRQ_SRC(config->girq_id) = BIT(config->girq_bit);
 
 	/* Read and clear status */
 	status = base->STATUS;
@@ -172,6 +195,9 @@ static void ps2_xec_isr(const struct device *dev)
 		base->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
 		LOG_ERR("TX time out: %0x", status);
 	}
+
+	mchp_soc_ecia_girq_src_clr(config->intr[actv].girq_id,
+				   config->intr[actv].girq_bit);
 
 	/* The control register reverts to RX automatically after
 	 * transmiting the data
@@ -191,10 +217,25 @@ static const struct ps2_driver_api ps2_xec_driver_api = {
 static int ps2_xec_init_0(const struct device *dev);
 
 static const struct ps2_xec_config ps2_xec_config_0 = {
-	.base = (PS2_Type *) DT_INST_REG_ADDR(0),
-	.girq_id = DT_INST_PROP(0, girq),
-	.girq_bit = DT_INST_PROP(0, girq_bit),
-	.isr_nvic = DT_INST_IRQN(0),
+	.base = (struct ps2_regs *) DT_INST_REG_ADDR(0),
+	.intr[0] = {
+		.isr_nvic = DT_INST_IRQN(0),
+		.isr_prio = DT_INST_IRQ(0, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(0, girqs, 0),
+		.girq_bit = DT_INST_PROP_BY_IDX(0, girqs, 1),
+	},
+	.intr[1] = {
+		.isr_nvic = DT_INST_IRQ_BY_IDX(0, 1, irq),
+		.isr_prio = DT_INST_IRQ_BY_IDX(0, 1, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(0, girqs, 2),
+		.girq_bit = DT_INST_PROP_BY_IDX(0, girqs, 3),
+	},
+	.intr[2] = {
+		.isr_nvic = DT_INST_IRQ_BY_IDX(0, 2, irq),
+		.isr_prio = DT_INST_IRQ_BY_IDX(0, 2, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(0, girqs, 4),
+		.girq_bit = DT_INST_PROP_BY_IDX(0, girqs, 5),
+	},
 };
 
 static struct ps2_xec_data ps2_xec_port_data_0;
@@ -225,15 +266,30 @@ static int ps2_xec_init_0(const struct device *dev)
 }
 #endif /* CONFIG_PS2_XEC_0 */
 
+#ifndef CONFIG_SOC_SERIES_MEC172X
 #ifdef CONFIG_PS2_XEC_1
 static int ps2_xec_init_1(const struct device *dev);
 
 static const struct ps2_xec_config ps2_xec_config_1 = {
-	.base = (PS2_Type *) DT_INST_REG_ADDR(1),
-	.girq_id = DT_INST_PROP(1, girq),
-	.girq_bit = DT_INST_PROP(1, girq_bit),
-	.isr_nvic = DT_INST_IRQN(1),
-
+	.base = (struct ps2_regs *) DT_INST_REG_ADDR(1),
+	.intr[0] = {
+		.isr_nvic = DT_INST_IRQN(1),
+		.isr_prio = DT_INST_IRQ(1, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(1, girqs, 0),
+		.girq_bit = DT_INST_PROP_BY_IDX(1, girqs, 1),
+	},
+	.intr[1] = {
+		.isr_nvic = DT_INST_IRQ_BY_IDX(1, 1, irq),
+		.isr_prio = DT_INST_IRQ_BY_IDX(1, 1, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(1, girqs, 2),
+		.girq_bit = DT_INST_PROP_BY_IDX(1, girqs, 3),
+	},
+	.intr[2] = {
+		.isr_nvic = DT_INST_IRQ_BY_IDX(1, 2, irq),
+		.isr_prio = DT_INST_IRQ_BY_IDX(1, 2, priority),
+		.girq_id = DT_INST_PROP_BY_IDX(1, girqs, 4),
+		.girq_bit = DT_INST_PROP_BY_IDX(1, girqs, 5),
+	},
 };
 
 static struct ps2_xec_data ps2_xec_port_data_1;
@@ -262,3 +318,4 @@ static int ps2_xec_init_1(const struct device *dev)
 	return 0;
 }
 #endif /* CONFIG_PS2_XEC_1 */
+#endif /* CONFIG_SOC_SERIES_MEC172X */
