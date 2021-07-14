@@ -61,6 +61,112 @@
 	};
 
 	soc {
+		pcr: pcr@40080100 {
+			reg = <0x40080100 0x100>;
+			label = "PCR";
+		};
+		vbr: vbr@4000a400 {
+			reg = <0x4000a400 0x40>;
+			label = "VBR";
+		};
+		vbm: vbm@4000a800 {
+			reg = <0x4000a800 0x40>;
+			LABEL = "VBATMEM";
+		};
+		ecia: ecia@4000e000 {
+			reg = <0x4000e000 0x400>;
+			label = "ECIA";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			ranges = <0x0 0x4000e000 0x400>;
+
+			girq8: girq8@0 {
+				reg = <0x0 0x14>;
+				label = "GIRQ_8";
+			};
+			girq9: girq9@14 {
+				reg = <0x14 0x14>;
+				label = "GIRQ_9";
+			};
+			girq10: girq10@28 {
+				reg = <0x28 0x14>;
+				label = "GIRQ_8";
+			};
+			girq11: girq11@3c {
+				reg = <0x3c 0x14>;
+				label = "GIRQ_11";
+			};
+			girq12: girq12@50 {
+				reg = <0x50 0x14>;
+				label = "GIRQ_12";
+			};
+			girq13: girq13@64 {
+				reg = <0x64 0x14>;
+				label = "GIRQ_8";
+			};
+			girq14: girq14@78 {
+				reg = <0x78 0x14>;
+				label = "GIRQ_14";
+			};
+			girq15: girq15@8c {
+				reg = <0x8c 0x14>;
+				label = "GIRQ_15";
+			};
+			girq16: girq16@a0 {
+				reg = <0xa0 0x14>;
+				label = "GIRQ_16";
+			};
+			girq17: girq17@b4 {
+				reg = <0xb4 0x14>;
+				label = "GIRQ_17";
+			};
+			girq18: girq18@c8 {
+				reg = <0xc8 0x14>;
+				label = "GIRQ_18";
+			};
+			girq19: girq19@dc {
+				reg = <0xdc 0x14>;
+				label = "GIRQ_19";
+			};
+			girq20: girq20@f0 {
+				reg = <0xf0 0x14>;
+				label = "GIRQ_20";
+			};
+			girq21: girq21@104 {
+				reg = <0x104 0x14>;
+				label = "GIRQ_21";
+			};
+			girq22: girq22@118 {
+				reg = <0x118 0x14>;
+				label = "GIRQ_22";
+			};
+			girq23: girq23@12c {
+				reg = <0x12c 0x14>;
+				label = "GIRQ_23";
+			};
+			girq24: girq24@140 {
+				reg = <0x140 0x14>;
+				label = "GIRQ_24";
+			};
+			girq25: girq25@154 {
+				reg = <0x154 0x14>;
+				label = "GIRQ_25";
+			};
+			girq26: girq26@168 {
+				reg = <0x168 0x14>;
+				label = "GIRQ_26";
+			};
+		};
+		ecs: ecs@4000fc00 {
+			reg = <0x4000fc00 0x200>;
+			label = "ECS";
+		};
+		vci0: vci@4000ae00 {
+			reg = <0x4000ae00 0x40>;
+			label = "VCI_0";
+			status = "disabled";
+		};
 		rtimer: timer@40007400 {
 			compatible = "microchip,xec-rtos-timer";
 			reg = <0x40007400 0x10>;
@@ -73,7 +179,9 @@
 			compatible = "microchip,xec-watchdog";
 			reg = <0x40000400 0x400>;
 			interrupts = <171 0>;
+			girqs = <21 2>;
 			label = "WDT_0";
+			status = "disabled";
 		};
 		uart0: uart@400f2400 {
 			compatible = "ns16550";
@@ -107,49 +215,61 @@
 		};
 		gpio_000_036: gpio@40081000 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081000 0x80>;
+			reg = < 0x40081000 0x80 0x40081300 0x04
+				0x40081380 0x04 0x400813fc 0x04>;
 			interrupts = <3 2>;
+			girq-id = <11>;
 			gpio-controller;
 			label="GPIO000_036";
 			#gpio-cells=<2>;
 		};
 		gpio_040_076: gpio@40081080 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081080 0x80>;
+			reg = < 0x40081080 0x80 0x40081304 0x04
+				0x40081384 0x04 0x400813f8 0x4>;
 			interrupts = <2 2>;
+			girq-id = <10>;
 			gpio-controller;
 			label="GPIO040_076";
 			#gpio-cells=<2>;
 		};
 		gpio_100_136: gpio@40081100 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081100 0x80>;
+			reg = < 0x40081100 0x80 0x40081308 0x04
+				0x40081388 0x04 0x400813f4 0x04>;
 			gpio-controller;
 			interrupts = <1 2>;
+			girq-id = <9>;
 			label="GPIO100_136";
 			#gpio-cells=<2>;
 		};
 		gpio_140_176: gpio@40081180 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081180 0x80>;
+			reg = < 0x40081180 0x80 0x4008130c 0x04
+				0x4008138c 0x04 0x400813f0 0x04>;
 			gpio-controller;
+			girq-id = <8>;
 			interrupts = <0 2>;
 			label="GPIO140_176";
 			#gpio-cells=<2>;
 		};
 		gpio_200_236: gpio@40081200 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081200 0x80>;
+			reg = < 0x40081200 0x80 0x40081310 0x04
+				0x40081390 0x04 0x400813ec 0x04>;
 			gpio-controller;
 			interrupts = <4 2>;
+			girq-id = <12>;
 			label="GPIO200_236";
 			#gpio-cells=<2>;
 		};
 		gpio_240_276: gpio@40081280 {
 			compatible = "microchip,xec-gpio";
-			reg = <0x40081280 0x80>;
+			reg = < 0x40081280 0x80 0x40081314 0x04
+				0x40081394 0x04 0x400813e8 0x04>;
 			gpio-controller;
 			interrupts = <17 2>;
+			girq-id = <26>;
 			label="GPIO240_276";
 			#gpio-cells=<2>;
 		};
@@ -163,7 +283,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <13>;
+			girq-id = <13>;
 			girq-bit = <0>;
 		};
 
@@ -176,7 +296,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <13>;
+			girq-id = <13>;
 			girq-bit = <1>;
 		};
 
@@ -189,7 +309,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <13>;
+			girq-id = <13>;
 			girq-bit = <2>;
 		};
 
@@ -202,7 +322,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <13>;
+			girq-id = <13>;
 			girq-bit = <3>;
 		};
 
@@ -215,13 +335,16 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <13>;
+			girq-id = <13>;
 			girq-bit = <4>;
 		};
 
 		espi0: espi@400f3400 {
 			compatible = "microchip,xec-espi";
-			reg = <0x400f3400 0x400>;
+			reg = < 0x400f3400 0x400
+				0x400f3800 0x400
+				0x400f9c00 0x200
+				0x400f9e00 0x200>;
 			interrupts = <11 3>, <15 3>, <7 3>, <16 3>;
 			label = "ESPI_0";
 			#address-cells = <1>;
@@ -233,6 +356,9 @@
 			reg = < 0x40008000 0x400
 				0x40070000 0x400
 				0x40071000 0x400>;
+			/* SAF Done, Error. HW bug no direct NVIC connection */
+			interrupts = <11 0>, <11 0>;
+			girqs = <19 9>, <19 10>;
 			label = "ESPI_SAF_0";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -277,24 +403,24 @@
 		ps2_0: ps2@40009000 {
 			compatible = "microchip,xec-ps2";
 			reg = <0x40009000 0x40>;
-			interrupts = <100 1>;
+			interrupts = <100 1>, <129 0>, <130 0>;
+			/* activity, port0 wake, port1 wake */
+			girqs = <18 10>, <21 18>, <21 19>;
 			label = "PS2_0";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <18>;
-			girq-bit = <10>;
 		};
 		ps2_1: ps2@40009040 {
 			compatible = "microchip,xec-ps2";
 			reg = <0x40009040 0x40>;
-			interrupts = <101 1>;
+			interrupts = <101 1>, <255 0>, <132 0>;
+			/* activity, port0 N/A, port1 wake */
+			girqs = <18 11>, <255 255>, <21 21>;
 			label = "PS2_1";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
-			girq = <18>;
-			girq-bit = <11>;
 		};
 		pwm0: pwm@40005800 {
 			compatible = "microchip,xec-pwm";
@@ -363,6 +489,7 @@
 			compatible = "microchip,xec-adc";
 			reg = <0x40007c00 0x90>;
 			interrupts = <78 0>, <79 0>;
+			girqs = <17 8>, <17 9>;
 			label = "ADC_0";
 			status = "disabled";
 			#io-channel-cells = <1>;
@@ -371,6 +498,7 @@
 			compatible = "microchip,xec-kscan";
 			reg = <0x40009c00 0x18>;
 			interrupts = <135 0>;
+			girqs = <21 25>;
 			label = "KSCAN";
 			status = "disabled";
 			#address-cells = <1>;
@@ -380,6 +508,7 @@
 			compatible = "microchip,xec-peci";
 			reg = <0x40006400 0x80>;
 			interrupts = <70 4>;
+			girqs = <17 0>;
 			label = "PECI_0";
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -388,6 +517,7 @@
 			compatible = "microchip,xec-qmspi";
 			reg = <0x40070000 0x400>;
 			interrupts = <91 2>;
+			girqs = <18 1>;
 			clock-frequency = <12000000>;
 			label = "SPI_0";
 			rxdma = <11>;
@@ -406,6 +536,7 @@
 			compatible = "microchip,xec-tach";
 			reg = <0x40006000 0x10>;
 			interrupts = <71 4>;
+			girqs = <17 1>;
 			label = "TACH_0";
 			status = "disabled";
 			#address-cells = <1>;
@@ -415,6 +546,7 @@
 			compatible = "microchip,xec-tach";
 			reg = <0x40006010 0x10>;
 			interrupts = <72 4>;
+			girqs = <17 2>;
 			label = "TACH_1";
 			status = "disabled";
 			#address-cells = <1>;
@@ -424,6 +556,7 @@
 			compatible = "microchip,xec-tach";
 			reg = <0x40006020 0x10>;
 			interrupts = <73 4>;
+			girqs = <17 3>;
 			label = "TACH_2";
 			status = "disabled";
 			#address-cells = <1>;
@@ -433,10 +566,32 @@
 			compatible = "microchip,xec-tach";
 			reg = <0x40006030 0x10>;
 			interrupts = <159 4>;
+			girqs = <17 3>;
 			label = "TACH_3";
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+		};
+		kbc0: kbc@400f0400 {
+			reg = <0x400f0400 0x400 0x400f2000 0x400>;
+			interrupts = <58 0>, <59 0>;
+			girqs = <15 18>, <15 19>;
+			label = "KBC_0";
+			status = "disabled";
+		};
+		p80cap0: p80cap@400f8000 {
+			reg = <0x400f8000 0x400>;
+			interrupts = <62 0>;
+			girqs = <15 22>;
+			label = "P80CAP_0";
+			status = "disabled";
+		};
+		p80cap1: p80cap@400f8400 {
+			reg = <0x400f8400 0x400>;
+			interrupts = <63 0>;
+			girqs = <15 23>;
+			label = "P80CAP_1";
+			status = "disabled";
 		};
 	};
 };

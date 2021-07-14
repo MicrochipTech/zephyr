@@ -220,7 +220,7 @@ static int board_pinmux_init(const struct device *dev)
 
 #ifdef CONFIG_ADC_XEC
 	/* Disable sleep for ADC block */
-	mchp_pcr_periph_slp_ctrl(PCR_ADC, MCHP_PCR_SLEEP_DIS);
+	mchp_pcr_periph_slp_ctrl(PCR_ADC_0, MCHP_PCR_SLEEP_DIS);
 
 	/* ADC pin muxes, ADC00 - ADC07 */
 	/* Note, by default ETM is enabled ADC00-ADC03 are not available */
