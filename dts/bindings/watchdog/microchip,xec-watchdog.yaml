@@ -16,3 +16,12 @@ properties:
 
     interrupts:
       required: true
+
+    girqs:
+      type: array
+      required: true
+      description: array of GIRQ numbers and GIRQ bit position
+
+girq-cells:
+    - girq_id
+    - girq_bit
