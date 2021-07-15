@@ -1,0 +1,33 @@
+description: Microchip XEC series External Interrupt Aggregator GIRQ V2
+
+compatible: "microchip,xec-ecia-girq"
+
+include: base.yaml
+
+properties:
+    reg:
+      required: true
+
+    interrupts:
+      required: true
+
+    label:
+      required: true
+
+    source-bitmap:
+      type: int
+      required: true
+      description: |
+        Bit map of interrupt sources connected to this GIRQ. Maximum is 31
+        sources (bit[31] is not used).
+
+    girq-id:
+       type: int
+       required: true
+       description: GIRQ ID number [0, 18]
+
+    direct-enable:
+      type: boolean
+      required: false
+      description: |
+        If this GIRQ is direct capable use direct mode routing.

@@ -1,0 +1,22 @@
+description: Microchip XEC series External Interrupt Aggregator V2 Controller
+
+compatible: "microchip,xec-ecia"
+
+include: base.yaml
+
+properties:
+    reg:
+      required: true
+
+    label:
+      required: true
+
+    clocks:
+      required: true
+
+    directmap:
+      type: int
+      required: true
+      description: |
+        Bit map of GIRQ's capable of direct interrupt connections. This value
+        is a constant and SoC specific.

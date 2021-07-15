@@ -9,6 +9,7 @@
 #include <dt-bindings/i2c/i2c.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/clock/mchp_xec_pcr.h>
+#include <dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 
 / {
 	cpus {
@@ -41,6 +42,196 @@
 			core-clock-div = <1>;
 			pll-32k-src = <MCHP_XEC_CLK32K_SRC_SIL_OSC>;
 			periph-32k-src = <MCHP_XEC_CLK32K_SRC_SIL_OSC>;
+			#clock-cells = <2>;
+		};
+		ecia: ecia@4000e000 {
+			compatible = "microchip,xec-ecia";
+			reg = <0x4000e000 0x400>;
+			directmap = <MCHP_ECIA_DIRECT_BITMAP>;
+			clocks = <&pcr 1 0>;
+/*			pcrs = <1 0>; */
+			label = "ECIA_0";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			#pcrs-cells = <2>;
+
+			ranges = <0x0 0x4000e000 0x400>;
+
+			girq8: girq8@0 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x0 0x14>;
+				interrupts = <0 0>;
+				label = "GIRQ_8";
+				source-bitmap = <MCHP_GIRQ8_SRC_BITMAP>;
+				girq-id = <0>;
+				status = "disabled";
+			};
+			girq9: girq9@14 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x14 0x14>;
+				interrupts = <1 0>;
+				label = "GIRQ_9";
+				source-bitmap = <MCHP_GIRQ9_SRC_BITMAP>;
+				girq-id = <1>;
+				status = "disabled";
+			};
+			girq10: girq10@28 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x28 0x14>;
+				interrupts = <2 0>;
+				label = "GIRQ_10";
+				source-bitmap = <MCHP_GIRQ10_SRC_BITMAP>;
+				girq-id = <2>;
+				status = "disabled";
+			};
+			girq11: girq11@3c {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x3c 0x14>;
+				interrupts = <3 0>;
+				label = "GIRQ_11";
+				source-bitmap = <MCHP_GIRQ11_SRC_BITMAP>;
+				girq-id = <3>;
+				status = "disabled";
+			};
+			girq12: girq12@50 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x50 0x14>;
+				interrupts = <4 0>;
+				label = "GIRQ_12";
+				source-bitmap = <MCHP_GIRQ12_SRC_BITMAP>;
+				girq-id = <4>;
+				status = "disabled";
+			};
+			girq13: girq13@64 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x64 0x14>;
+				interrupts = <5 0>;
+				label = "GIRQ_13";
+				source-bitmap = <MCHP_GIRQ13_SRC_BITMAP>;
+				girq-id = <5>;
+				status = "disabled";
+			};
+			girq14: girq14@78 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x78 0x14>;
+				interrupts = <6 0>;
+				label = "GIRQ_14";
+				source-bitmap = <MCHP_GIRQ14_SRC_BITMAP>;
+				girq-id = <6>;
+				status = "disabled";
+			};
+			girq15: girq15@8c {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x8c 0x14>;
+				interrupts = <7 0>;
+				label = "GIRQ_15";
+				source-bitmap = <MCHP_GIRQ15_SRC_BITMAP>;
+				girq-id = <7>;
+				status = "disabled";
+			};
+			girq16: girq16@a0 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0xa0 0x14>;
+				interrupts = <8 0>;
+				label = "GIRQ_16";
+				source-bitmap = <MCHP_GIRQ16_SRC_BITMAP>;
+				girq-id = <8>;
+				status = "disabled";
+			};
+			girq17: girq17@b4 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0xb4 0x14>;
+				interrupts = <9 0>;
+				label = "GIRQ_17";
+				source-bitmap = <MCHP_GIRQ17_SRC_BITMAP>;
+				girq-id = <9>;
+				status = "disabled";
+			};
+			girq18: girq18@c8 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0xc8 0x14>;
+				interrupts = <10 0>;
+				label = "GIRQ_18";
+				source-bitmap = <MCHP_GIRQ18_SRC_BITMAP>;
+				girq-id = <10>;
+				status = "disabled";
+			};
+			girq19: girq19@dc {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0xdc 0x14>;
+				interrupts = <11 0>;
+				label = "GIRQ_19";
+				source-bitmap = <MCHP_GIRQ19_SRC_BITMAP>;
+				girq-id = <11>;
+				status = "disabled";
+			};
+			girq20: girq20@f0 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0xf0 0x14>;
+				interrupts = <12 0>;
+				label = "GIRQ_20";
+				source-bitmap = <MCHP_GIRQ20_SRC_BITMAP>;
+				girq-id = <12>;
+				status = "disabled";
+			};
+			girq21: girq21@104 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x104 0x14>;
+				interrupts = <13 0>;
+				label = "GIRQ_21";
+				source-bitmap = <MCHP_GIRQ21_SRC_BITMAP>;
+				girq-id = <13>;
+				status = "disabled";
+			};
+			girq22: girq22@118 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x118 0x14>;
+				interrupts = <255 0>;
+				label = "GIRQ_22";
+				source-bitmap = <MCHP_GIRQ22_SRC_BITMAP>;
+				girq-id = <14>;
+				status = "disabled";
+			};
+			girq23: girq23@12c {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x12c 0x14>;
+				interrupts = <14 0>;
+				label = "GIRQ_23";
+				source-bitmap = <MCHP_GIRQ23_SRC_BITMAP>;
+				girq-id = <15>;
+				status = "disabled";
+			};
+			girq24: girq24@140 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x140 0x14>;
+				interrupts = <15 0>;
+				label = "GIRQ_24";
+				source-bitmap = <MCHP_GIRQ24_SRC_BITMAP>;
+				girq-id = <16>;
+				status = "disabled";
+			};
+			girq25: girq25@154 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x154 0x14>;
+				interrupts = <16 0>;
+				label = "GIRQ_25";
+				source-bitmap = <MCHP_GIRQ25_SRC_BITMAP>;
+				girq-id = <17>;
+				status = "disabled";
+			};
+			girq26: girq26@168 {
+				compatible = "microchip,xec-ecia-girq";
+				reg = <0x168 0x14>;
+				interrupts = <17 0>;
+				label = "GIRQ_26";
+				source-bitmap = <MCHP_GIRQ26_SRC_BITMAP>;
+				girq-id = <18>;
+				status = "disabled";
+			};
+		};
+		ecs: ecs@4000fc00 {
+			reg = <0x4000fc00 0x200>;
+			label = "ECS";
 		};
 		uart0: uart@400f2400 {
 			compatible = "ns16550";

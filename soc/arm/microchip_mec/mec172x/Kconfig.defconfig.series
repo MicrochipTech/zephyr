@@ -25,4 +25,9 @@ config CLOCK_CONTROL_MCHP_XEC
 	help
 	  Enable support for Microchip XEC clock controller driver.
 
+config MCHP_ECIA_XEC
+	default y
+	help
+	  Enable support for Microchip XEC ECIA driver.
+
 endif # SOC_SERIES_MEC172X

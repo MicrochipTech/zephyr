@@ -1,11 +1,11 @@
 # Copyright (c) 2021, Microchip Technology Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-description: Microchip XEC Power Clock Reset and VBAT register (PCRVBR) V2
+description: Microchip XEC Power Clock Reset and VBAT register (PCR)
 
-compatible: "microchip,xec-pcrvbr-v2"
+compatible: "microchip,xec-pcr"
 
-include: [base.yaml]
+include: [clock-controller.yaml, base.yaml]
 
 properties:
     reg:
@@ -43,3 +43,10 @@ properties:
       type: boolean
       required: false
       description: Use single ended crystal connection to XTAL2 pin.
+
+    "#clock-cells":
+      const: 2
+
+clock-cells:
+  - regidx
+  - bitpos

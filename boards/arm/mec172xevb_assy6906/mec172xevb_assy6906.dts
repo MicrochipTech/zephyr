@@ -27,7 +27,15 @@
 	status = "okay";
 };
 
+&ecs {
+	status = "okay";
+};
+
 &pcr {
+	status = "okay";
+};
+
+&girq8 {
 	status = "okay";
 };
 
