@@ -14,13 +14,15 @@ extern uint8_t boot_mode_maf;
 
 #if defined(CONFIG_SOC_FAMILY_MEC)
 
-#if defined(CONFIG_BOARD_MEC1501MODULAR_ASSY6885) || \
-    defined(CONFIG_BOARD_MEC172XEVB_ASSY6906)
+#if defined(CONFIG_BOARD_MEC1501MODULAR_ASSY6885)
 #ifdef CONFIG_BOARD_MEC1501_ICL
 #include "icl_mec1501.h"
 #else
 #include "tgl_mec1501.h"
-#endif
+#endif /* CONFIG_BOARD_MEC1501_ICL */
+#elif defined(CONFIG_BOARD_MEC172XEVB_ASSY6906)
+#include "adl_mec172x.h"
+
 #elif defined(CONFIG_BOARD_MEC1501_EUCLID)
 #include "euclid_mec1501.h"
 #elif defined(CONFIG_BOARD_MEC1501_ADL)

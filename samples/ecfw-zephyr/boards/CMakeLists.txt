@@ -16,9 +16,9 @@ target_sources_ifdef(CONFIG_BOARD_MEC1501_ICL app
 
 target_sources_ifdef(CONFIG_BOARD_MEC1501_TGL app
     PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/microchip/tgl_mec1501.c
+    ${CMAKE_CURRENT_LIST_DIR}/microchip/adl_mec172x.c
     PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/microchip/tgl_mec1501.h
+    ${CMAKE_CURRENT_LIST_DIR}/microchip/adl_mec172x.h
     )
 
 target_sources_ifdef(CONFIG_BOARD_MEC1501_EUCLID app
