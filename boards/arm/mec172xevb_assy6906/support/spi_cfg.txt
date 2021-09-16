@@ -1,6 +1,6 @@
 ; Everglades SPI Image Generator configuration file
 [SPI]
-SPISizeMegabits = 128
+SPISizeMegabits = 4
 Flashmap = false
 FlshmapAddr = 0
 
@@ -10,7 +10,7 @@ TagAddr1 = 0
 BoardID = 0x316
 
 [IMAGE "0"]
-ImageLocation = 0x2000
+ImageLocation = 0x100
 SpiFreqMHz = 24
 SpiReadCommand = Dual
 SpiDriveStrength = 4
