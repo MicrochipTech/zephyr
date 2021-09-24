@@ -101,9 +101,18 @@
 #define KM_NUMKEY_SLASH		95U
 #define KEY_RSVD		0U
 
+/* This refers to a scan code 1 or 2 to indicate that that we
+ * must not send anything to the host. This flag is used for
+ * scenarios where keys that have make code, but they don't
+ * have a defined make code. This is assigned to a scan_code
+ * data type.
+ */
+#define SC_UNMAPPED		0x0U
+
 struct scan_code {
 	uint8_t code[MAX_SCAN_CODE_LEN];
 	uint8_t len;
+	bool typematic;
 };
 
 /**
@@ -119,7 +128,7 @@ enum fn_data_type {
 
 /**
  * @brief fn_data enum.
- * Define if the message passed back to the kscan module.
+ * Define the message passed back to the kscan module.
  */
 struct fn_data {
 	enum fn_data_type type;
@@ -175,7 +184,14 @@ struct km_api {
  *
  * @retval Forward a keyboard API to the caller.
  */
-struct km_api *gtech_init();
+struct km_api *gtech_init(void);
+
+/**
+ * @brief Concrete implementatoin for fujits keyboard init.
+ *
+ * @retval Forward a keyboard API to the caller.
+ */
+struct km_api *fujitsu_init(void);
 
 /**
  * @brief Factory function to select a specific keyboard.
@@ -187,6 +203,8 @@ inline struct km_api *keymap_init_interface(void)
 {
 #if defined(CONFIG_EC_GTECH_KEYBOARD)
 	return gtech_init();
+#elif defined(CONFIG_EC_FUJITSU_KEYBOARD)
+	return fujitsu_init();
 #else
 	return NULL;
 #endif

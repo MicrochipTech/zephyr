@@ -1,4 +1,4 @@
-target_sources_ifdef(CONFIG_ESPI_PERIPHERAL_8042_KBC app
+target_sources_ifdef(CONFIG_PS2_KEYBOARD_AND_MOUSE app
     PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/ps2kbaux.c
     PUBLIC
@@ -13,11 +13,17 @@ target_sources_ifdef(CONFIG_KSCAN_EC app
     ${CMAKE_CURRENT_LIST_DIR}/kbs_keymap.h
     )
 
-if (CONFIG_KSCAN_EC)
+if (CONFIG_KSCAN_EC OR CONFIG_PS2_KEYBOARD_AND_MOUSE)
     if (CONFIG_EC_GTECH_KEYBOARD)
         target_sources(app
         PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/gtech_keymap.c
+        )
+    endif()
+    if (CONFIG_EC_FUJITSU_KEYBOARD)
+        target_sources(app
+        PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/fujitsu_keymap.c
         )
     endif()
 endif()

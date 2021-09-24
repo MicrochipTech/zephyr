@@ -450,6 +450,9 @@ choice
 	config EC_GTECH_KEYBOARD
 	bool "Gtech keyboard"
 
+	config EC_FUJITSU_KEYBOARD
+	bool "Fujitsu keyboard"
+
 endchoice
 endif
 

@@ -9,14 +9,17 @@
 #include "kbs_matrix.h"
 #include "board_config.h"
 #include "keyboard_utility.h"
+#include "sci.h"
+#include "scicodes.h"
+#include "smc.h"
 #include <logging/log.h>
 LOG_MODULE_DECLARE(kbchost, CONFIG_KBCHOST_LOG_LEVEL);
 
-static struct device *kscan_dev;
+static const struct device *kscan_dev;
 static struct k_timer typematic_timer;
 static kbs_matrix_callback kbs_callback;
 static void typematic_callback(struct k_timer *timer);
-static void kscan_callback(struct device *dev, uint32_t row,
+static void kscan_callback(const struct device *dev, uint32_t row,
 			   uint32_t col, bool pressed);
 
 /* This is received and forwarded by kbchost */
@@ -137,7 +140,7 @@ const struct scan_code scan_code2[MAX_SC2_TABLE_SIZE] = {
 	{{0x49U},		1U},	/* 54 */
 	{{0x4AU},		1U},	/* 55 */
 	{{0U},			0U},	/* 56 */
-	{{0x59U},		0U},	/* 57 */
+	{{0x59U},		1U},	/* 57 */
 	{{0x14U},		1U},	/* 58 */
 	{{0x0U},		0U},	/* 59 */
 	{{0x11U},		1U},	/* 60 */
@@ -306,6 +309,18 @@ static inline void set_shift_key(bool pressed)
 	}
 }
 
+static inline bool fn_with_valid_keynum(uint8_t key_num)
+{
+	return fn_pressed()
+		&& key_num != KM_LCNTRL_KEY
+		&& key_num != KM_RCNTRL_KEY
+		&& key_num != KM_LSHIFT_KEY
+		&& key_num != KM_RSHIFT_KEY
+		&& key_num != KM_LALT_KEY
+		&& key_num != KM_RALT_KEY
+		&& key_num != KM_LWIN_KEY;
+}
+
 int kbs_matrix_init(kbs_matrix_callback callback, uint8_t *initial_set)
 {
 	if (!callback) {
@@ -351,9 +366,6 @@ void kbs_keyboard_enable(void)
 {
 	kscan_enable_callback(kscan_dev);
 	kbs_write_typematic(dflt_typematic_delay_rate);
-	k_timer_start(&typematic_timer,
-		K_MSEC(typematic_delay[typematic_delay_idx]),
-		K_MSEC(typematic_period[typematic_period_idx]));
 }
 
 void kbs_keyboard_disable(void)
@@ -393,8 +405,7 @@ static void update_modifier_keys(uint8_t key_num, bool pressed)
 	}
 }
 
-static void get_print_screen_scode(struct scan_code *sc2,
-				   bool *typematic, bool pressed,
+static void get_print_screen_scode(struct scan_code *sc2, bool pressed,
 				   bool ctrl_pressed, bool alt_pressed,
 				   bool shift_pressed)
 {
@@ -406,7 +417,7 @@ static void get_print_screen_scode(struct scan_code *sc2,
 			sc2->code[2] = 0xe0U;
 			sc2->code[3] = 0x7cU;
 			sc2->len = 4U;
-			*typematic = true;
+			sc2->typematic = true;
 		} else {
 			sc2->code[0] = 0xe0U;
 			sc2->code[1] = 0xf0U;
@@ -415,39 +426,39 @@ static void get_print_screen_scode(struct scan_code *sc2,
 			sc2->code[4] = 0xf0U;
 			sc2->code[5] = 0x12U;
 			sc2->len = 6U;
-			*typematic = false;
+			sc2->typematic = false;
 		}
 	/* emulation of sys-req */
 	} else if (alt_pressed) {
 		if (pressed) {
 			sc2->code[0] = 0x84U;
 			sc2->len = 1U;
-			*typematic = true;
+			sc2->typematic = true;
 		} else {
 			sc2->code[0] = 0xf0U;
 			sc2->code[1] = 0x84U;
 			sc2->len = 2U;
-			*typematic = false;
+			sc2->typematic = false;
 		}
 	} else { /* ctrl or shift down */
 		if (pressed) {
 			sc2->code[0] = 0xe0U;
 			sc2->code[1] = 0x7cU;
 			sc2->len = 2U;
-			*typematic = true;
+			sc2->typematic = true;
 		} else {
 			sc2->code[0] = 0xf0;
 			sc2->code[1] = 0xe0;
 			sc2->code[2] = 0x7c;
 			sc2->len = 3U;
-			*typematic = false;
+			sc2->typematic = false;
 		}
 	}
 }
 
 /* Pause/break have neither typematic nor break code */
 static void get_pause_scode(struct scan_code *sc2,
-		     bool ctrl_pressed)
+			    bool ctrl_pressed)
 {
 	/* Break scan code 2 */
 	if (ctrl_pressed) {
@@ -469,11 +480,13 @@ static void get_pause_scode(struct scan_code *sc2,
 		sc2->code[7] = 0x77U;
 		sc2->len = 8U;
 	}
+
+	sc2->typematic = false;
 }
 
 /* This function is only exercised in keyboards with numlock button */
 void get_numpad_scode(uint8_t key_num, struct scan_code *sc2,
-			       bool *typematic, bool pressed)
+		      bool pressed)
 {
 	uint8_t scan_code = 0x0U;
 	/* This switch represents the keys in for keyboards without
@@ -533,13 +546,13 @@ void get_numpad_scode(uint8_t key_num, struct scan_code *sc2,
 		if (pressed) {
 			sc2->code[0] = scan_code;
 			sc2->len++;
-			*typematic = true;
+			sc2->typematic = true;
 
 		} else {
 			sc2->code[0] = 0xF0U;
 			sc2->code[1] = scan_code;
 			sc2->len = 2U;
-			*typematic = false;
+			sc2->typematic = false;
 		}
 	} else {
 		/* User just pressed numlock */
@@ -554,8 +567,7 @@ void get_numpad_scode(uint8_t key_num, struct scan_code *sc2,
  * This is an out parameter
  * pressed is either make or break
  */
-static void get_scan_code(uint8_t key_num, struct scan_code *sc2,
-			      bool *typematic, bool pressed)
+static void get_scan_code(uint8_t key_num, struct scan_code *sc2, bool pressed)
 {
 
 	update_modifier_keys(key_num, pressed);
@@ -570,8 +582,7 @@ static void get_scan_code(uint8_t key_num, struct scan_code *sc2,
 	 */
 
 	if (numlock_on()) {
-		get_numpad_scode(key_num, sc2,
-					  typematic, pressed);
+		get_numpad_scode(key_num, sc2, pressed);
 		/* If the length is zero, then allow the execution
 		 * to continue. This is because numlock may engaged,
 		 * but the user is pressing other keys.
@@ -583,13 +594,11 @@ static void get_scan_code(uint8_t key_num, struct scan_code *sc2,
 
 	if (key_num == KM_PRINT_SCREEN) {
 		/* Print screen plus other key combinations */
-		get_print_screen_scode(sc2,
-				       typematic, pressed, ctrl_down,
+		get_print_screen_scode(sc2, pressed, ctrl_down,
 				       alt_down, shift_down);
 	} else if (key_num == KM_PAUSE) {
 		/* Pause/break scancodes */
 		get_pause_scode(sc2, ctrl_down);
-		*typematic = false;
 	} else {
 		/* These are regular keys in the QWERTY key without any
 		 * esoteric key combination
@@ -605,7 +614,7 @@ static void get_scan_code(uint8_t key_num, struct scan_code *sc2,
 
 		if (code->len != 0U) {
 			if (pressed) {
-				*typematic = true;
+				sc2->typematic = true;
 				while (i < code->len) {
 					sc2->code[i] = code->code[i];
 					i++;
@@ -613,7 +622,7 @@ static void get_scan_code(uint8_t key_num, struct scan_code *sc2,
 
 				sc2->len = i;
 			} else {
-				*typematic = false;
+				sc2->typematic = false;
 				int j = 0;
 
 				while (i < code->len) {
@@ -642,7 +651,7 @@ static void make_key(uint8_t key_num)
 {
 	struct scan_code sc2;
 
-	bool typematic = false;
+	sc2.typematic = false;
 
 	/* Stop if we are in a current typematic state and
 	 * a new key has been pressed whitout releasing the
@@ -655,7 +664,25 @@ static void make_key(uint8_t key_num)
 		return;
 	}
 
-	get_scan_code(key_num, &sc2, &typematic, true);
+	/* Fn + key presed combination */
+	if (fn_with_valid_keynum(key_num)) {
+		struct fn_data data;
+
+		/* Retrieve data from custom keyboard implementation */
+		keymap_get_fnkey(keymap_api, key_num, &data, true);
+		if (data.type == FN_SCAN_CODE) {
+			sc2 = data.sc;
+			if (sc2.code[0] == SC_UNMAPPED)
+				return;
+		} else {
+			/* Send an SCI. Remember to add 0x80 for SCI break*/
+			LOG_DBG("Sci %x", data.sci_code);
+			g_acpi_tbl.acpi_hotkey_scan = data.sci_code;
+			enqueue_sci(SCI_HOTKEY);
+		}
+	} else { /* Handle ordinary key presses, qwerty keys + numlock */
+		get_scan_code(key_num, &sc2, true);
+	}
 
 	if (sc2.len == 0U) {
 		LOG_DBG("Invalid make code for key num = %d", key_num);
@@ -671,13 +698,12 @@ static void make_key(uint8_t key_num)
 		if (translate_key(*scan_code_set, &value) == 0U &&
 		    make_tpmatic_code.len  < MAX_SCAN_CODE_LEN) {
 			make_tpmatic_code.code[make_tpmatic_code.len++] = value;
-
 		}
 	}
 
 	kbs_callback(make_tpmatic_code.code, make_tpmatic_code.len);
 
-	if (typematic) {
+	if (sc2.typematic) {
 		/* Start timer to send scan codes while holding down
 		 * the current key
 		 */
@@ -692,7 +718,7 @@ static void break_key(uint8_t key_num)
 	struct scan_code sc2;
 	struct scan_code break_code;
 
-	bool __attribute__ ((unused)) typematic;
+	sc2.typematic = false;
 
 	k_timer_stop(&typematic_timer);
 
@@ -701,7 +727,20 @@ static void break_key(uint8_t key_num)
 		return;
 	}
 
-	get_scan_code(key_num, &sc2, &typematic, false);
+	/* Fn + key release combination */
+	if (fn_with_valid_keynum(key_num)) {
+		struct fn_data data;
+
+		/* Retrieve data from custom keyboard implementation */
+		keymap_get_fnkey(keymap_api, key_num, &data, false);
+		if (data.type == FN_SCAN_CODE) {
+			sc2 = data.sc;
+			if (sc2.code[0] == SC_UNMAPPED)
+				return;
+		}
+	} else { /* Handle ordinary key releases, qwerty keys + numlock */
+		get_scan_code(key_num, &sc2, false);
+	}
 
 	if (sc2.len == 0U) {
 		LOG_DBG("Invalid break code for keynum = %d", key_num);
@@ -729,13 +768,13 @@ static void typematic_callback(struct k_timer *timer)
 	kbs_callback(make_tpmatic_code.code, make_tpmatic_code.len);
 }
 
-static void kscan_callback(struct device *dev, uint32_t row,
+static void kscan_callback(const struct device *dev, uint32_t row,
 			   uint32_t col, bool pressed)
 {
 	ARG_UNUSED(dev);
 	int last_key =  keymap_get_keynum(keymap_api, col, row);
 
-	LOG_DBG("Keymap:  %d\n", last_key);
+	LOG_DBG("Keymap: %d col: %d row: %d", last_key, col, row);
 
 	if (pressed) {
 		make_key(last_key);
