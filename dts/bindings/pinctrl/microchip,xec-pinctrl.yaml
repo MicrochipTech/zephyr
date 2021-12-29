@@ -1,0 +1,63 @@
+# Copyright (c) 2020 Linaro Limited
+# Copyright (c) 2021 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Microchip XEC Pin controller Node
+    Based on pincfg-node.yaml binding.
+
+    Note: `bias-disable` and `drive-push-pull` are default pin configurations.
+           They will be applied in case no `bias-foo` or `driver-bar` properties
+           are set.
+
+compatible: "microchip,xec-pinctrl"
+
+include:
+    - name: base.yaml
+    - name: pincfg-node.yaml
+      child-binding:
+        property-allowlist:
+          - bias-disable
+          - bias-pull-down
+          - bias-pull-up
+          - drive-push-pull
+          - drive-open-drain
+          - output-high
+          - output-low
+
+properties:
+    reg:
+      required: true
+
+child-binding:
+    description: |
+        This binding gives a base representation of the Microchip XEC pins
+        configration
+
+    properties:
+        pinmux:
+            type: int
+            required: true
+            description: Pinmux selection
+
+        slew-rate:
+          required: false
+          type: string
+          default: "hw-default"
+          enum:
+          - "hw-default"        # Default value
+          - "low-speed"
+          - "high-speed"
+          description: Pin speed.
+
+        drive-strength:
+          required: false
+          type: string
+          default: "hw-default"
+          enum:
+            - "hw-default"      # Default value
+            - "2mA"
+            - "4mA"
+            - "8mA"
+            - "12mA"
+          description: Pin output drive strength.

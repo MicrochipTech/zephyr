@@ -14,6 +14,8 @@
 extern "C" {
 #endif
 
+#define MCHP_NVIC_NUM_EXT_IRQ		181u
+
 /*
  * Delay register address. Write n to delay for n + 1 microseconds where
  * 0 <= n <= 31.

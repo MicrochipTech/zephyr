@@ -14,7 +14,7 @@
 #include <drivers/gpio.h>
 #include <drivers/i2c.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
-#include <drivers/pinmux.h>
+#include <drivers/pinctrl.h>
 #include <sys/printk.h>
 #include <sys/sys_io.h>
 #include <logging/log.h>
@@ -46,8 +46,8 @@ LOG_MODULE_REGISTER(i2c_mchp, CONFIG_I2C_LOG_LEVEL);
 #define I2C_RECOVER_SCL_DELAY_US	50
 
 /* I2C SCL and SDA lines(signals) */
-#define I2C_LINES_SCL_HI	BIT(0)
-#define I2C_LINES_SDA_HI	BIT(1)
+#define I2C_LINES_SCL_HI	BIT(SOC_I2C_SCL_POS)
+#define I2C_LINES_SDA_HI	BIT(SOC_I2C_SDA_POS)
 #define I2C_LINES_BOTH_HI	(I2C_LINES_SCL_HI | I2C_LINES_SDA_HI)
 
 #define I2C_START		0U
@@ -86,6 +86,7 @@ struct i2c_xec_config {
 	uint8_t girq_pos;
 	uint8_t pcr_idx;
 	uint8_t pcr_bitpos;
+	const struct pinctrl_dev_config *pcfg;
 	void (*irq_config_func)(void);
 };
 
@@ -101,6 +102,10 @@ struct i2c_xec_data {
 	uint8_t i2c_addr;
 	uint8_t i2c_status;
 };
+
+#define DRV_CONFIG(dev) ((const struct i2c_xec_config *)(dev)->config)
+#define DRV_DATA(dev) ((struct i2c_xec_data *)(dev)->data)
+#define HAL_INSTANCE(dev) (struct i2c_smb_regs *)(DRV_CONFIG(dev)->base_addr)
 
 /* Recommended programming values based on 16MHz
  * i2c_baud_clk_period/bus_clk_period - 2 = (low_period + hi_period)
@@ -132,97 +137,10 @@ static const struct xec_speed_cfg xec_cfg_params[] = {
 	},
 };
 
-struct xec_i2c_port {
-	uint8_t scl_pin;
-	uint8_t scl_func;
-	uint8_t sda_pin;
-	uint8_t sda_func;
-};
-
-/* Indexed by port number */
-static const struct xec_i2c_port xec_i2c_ports[] = {
-	{ 0004, 1, 0003, 1 },
-	{ 0131, 1, 0130, 1 },
-	{ 0155, 1, 0154, 1 },
-	{ 0010, 1, 0007, 1 },
-	{ 0144, 1, 0143, 1 },
-	{ 0142, 1, 0141, 1 },
-	{ 0140, 1, 0132, 1 },
-	{ 0013, 1, 0012, 1 },
-#ifdef CONFIG_SOC_SERIES_MEC172X
-	{ 0230, 1, 0231, 1 },
-#else
-	{ 0212, 1, 0211, 1 },
-#endif
-	{ 0146, 1, 0145, 1 },
-	{ 0107, 3, 0030, 2 },
-	{ 0062, 2, 0000, 3 },
-	{ 0027, 3, 0026, 3 },
-	{ 0065, 2, 0066, 2 },
-	{ 0071, 2, 0070, 2 },
-	{ 0150, 1, 0147, 1 },
-};
-
-/* returns b[0]=SCL pin state, b[1]=SDA pin state */
-static uint32_t xec_i2c_port_lines(uint8_t port)
-{
-	uintptr_t base = (uintptr_t)XEC_GPIO_CTRL_BASE;
-	uint32_t lines = 0;
-
-	if (port < ARRAY_SIZE(xec_i2c_ports)) {
-		const struct xec_i2c_port *p = &xec_i2c_ports[port];
-		uintptr_t ctrl_addr = base + p->scl_pin * 4;
-
-		lines = (sys_read32(ctrl_addr) >> 24) & BIT(0);
-		ctrl_addr = base + p->scl_pin * 4;
-		lines |= ((sys_read32(ctrl_addr) >> 23) & BIT(1));
-	}
-
-	return lines;
-}
-
-#define XEC_I2C_PIN_PRE_CFG1						\
-	(MCHP_GPIO_CTRL_OUTV_HI | MCHP_GPIO_CTRL_MUX_GPIO |		\
-	 MCHP_GPIO_CTRL_DIR_OUTPUT | MCHP_GPIO_CTRL_BUFT_OPENDRAIN |	\
-	 MCHP_GPIO_CTRL_IDET_DISABLE | MCHP_GPIO_CTRL_PUD_NONE)
-
-static int xec_i2c_port_cfg(uint8_t port, uint8_t enable)
-{
-	if (port >= ARRAY_SIZE(xec_i2c_ports)) {
-		return -EINVAL;
-	}
-
-	const struct xec_i2c_port *p = &xec_i2c_ports[port];
-	uintptr_t scl_addr = (uintptr_t)XEC_GPIO_CTRL_BASE + p->scl_pin * 4;
-	uintptr_t sda_addr = (uintptr_t)XEC_GPIO_CTRL_BASE + p->sda_pin * 4;
-
-	if (enable) {
-		sys_write32(XEC_I2C_PIN_PRE_CFG1, sda_addr);
-		sys_write32(XEC_I2C_PIN_PRE_CFG1, scl_addr);
-
-		k_busy_wait(PIN_CFG_WAIT);
-
-		sys_write32(sys_read32(sda_addr) |
-			    ((uint32_t)(p->sda_func) << MCHP_GPIO_CTRL_MUX_POS),
-			    sda_addr);
-		sys_write32(sys_read32(scl_addr) |
-			    ((uint32_t)(p->scl_func) << MCHP_GPIO_CTRL_MUX_POS),
-			    scl_addr);
-	} else {
-		sys_write32(MCHP_GPIO_CTRL_DIS_PIN, scl_addr);
-		sys_write32(MCHP_GPIO_CTRL_DIS_PIN, sda_addr);
-	}
-
-	return 0;
-}
-
 static void i2c_ctl_wr(const struct device *dev, uint8_t ctrl)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 
 	data->i2c_ctrl = ctrl;
 	regs->CTRLSTS = ctrl;
@@ -235,11 +153,8 @@ static int i2c_xec_reset_config(const struct device *dev);
 
 static int wait_bus_free(const struct device *dev, uint32_t nwait)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	uint32_t count = nwait;
 	uint8_t sts = 0;
 
@@ -272,24 +187,28 @@ static int wait_bus_free(const struct device *dev, uint32_t nwait)
 /*
  * returns state of I2C SCL and SDA lines.
  * b[0] = SCL, b[1] = SDA
+ * TODO call soc specific routine to read GPIO pad input.
+ * Why? We can get the pins from our PINCTRL info but
+ * we do not know which pin is I2C clock and which pin
+ * is I2C data. There's no ordering in PINCTRL DT unless
+ * we impose an order.
  */
 static uint32_t get_lines(const struct device *dev)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	uint8_t port = regs->CFG & MCHP_I2C_SMB_CFG_PORT_SEL_MASK;
+	uint32_t lines = 0u;
 
-	return xec_i2c_port_lines(port);
+	soc_i2c_port_lines_get(port, &lines);
+
+	return lines;
 }
 
 static int i2c_xec_reset_config(const struct device *dev)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 
 	data->state = I2C_XEC_STATE_STOPPED;
 	data->read_discard = 0;
@@ -380,9 +299,8 @@ static int i2c_xec_reset_config(const struct device *dev)
  */
 static int i2c_xec_recover_bus(const struct device *dev)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	int i, j, ret;
 
 	LOG_ERR("I2C attempt bus recovery\n");
@@ -498,11 +416,8 @@ static void target_config_for_nack(const struct device *dev)
 
 static int wait_pin(const struct device *dev, bool pin_assert, uint32_t nwait)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 
 	for (;;) {
 		k_busy_wait(WAIT_INTERVAL);
@@ -539,11 +454,8 @@ static int wait_pin(const struct device *dev, bool pin_assert, uint32_t nwait)
 static int gen_start(const struct device *dev, uint8_t addr8,
 		     bool is_repeated)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	uint8_t ctrl = MCHP_I2C_SMB_CTRL_ESO | MCHP_I2C_SMB_CTRL_STA |
 		       MCHP_I2C_SMB_CTRL_ACK;
 
@@ -563,11 +475,8 @@ static int gen_start(const struct device *dev, uint8_t addr8,
 
 static int gen_stop(const struct device *dev)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	uint8_t ctrl = MCHP_I2C_SMB_CTRL_PIN | MCHP_I2C_SMB_CTRL_ESO |
 		       MCHP_I2C_SMB_CTRL_STO | MCHP_I2C_SMB_CTRL_ACK;
 
@@ -579,11 +488,8 @@ static int gen_stop(const struct device *dev)
 
 static int do_stop(const struct device *dev, uint32_t nwait)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	int ret;
 
 	data->state = I2C_XEC_STATE_STOPPED;
@@ -612,8 +518,7 @@ static int do_stop(const struct device *dev, uint32_t nwait)
 
 static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 {
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
+	struct i2c_xec_data *data = DRV_DATA(dev);
 	int ret;
 
 	gen_start(dev, addr8, is_repeated);
@@ -639,8 +544,7 @@ static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 static int i2c_xec_configure(const struct device *dev,
 			     uint32_t dev_config_raw)
 {
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
+	struct i2c_xec_data *data = DRV_DATA(dev);
 
 	if (!(dev_config_raw & I2C_MODE_MASTER)) {
 		return -ENOTSUP;
@@ -672,17 +576,24 @@ static int i2c_xec_configure(const struct device *dev,
 /* I2C Controller transmit: polling implementation */
 static int ctrl_tx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
+	uint32_t lines = 0;
 	int ret = 0;
 	uint8_t mflags = msg->flags;
 	uint8_t addr8 = (uint8_t)((addr & 0x7FU) << 1);
 
 	if (data->state == I2C_XEC_STATE_STOPPED) {
 		data->i2c_addr = addr8;
+
+		lines = get_lines(dev);
+		if ((lines & I2C_LINES_BOTH_HI) != I2C_LINES_BOTH_HI) {
+			ret = i2c_xec_recover_bus(dev);
+			if (ret) {
+				return ret;
+			}
+		}
+
 		/* Is bus free and controller ready? */
 		ret = wait_bus_free(dev, WAIT_COUNT);
 		if (ret) {
@@ -750,11 +661,9 @@ static int ctrl_tx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
  */
 static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 {
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
+	uint32_t lines = 0;
 	int ret = 0;
 	size_t data_len = msg->len;
 	uint8_t mflags = msg->flags;
@@ -763,6 +672,15 @@ static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 
 	if (data->state == I2C_XEC_STATE_STOPPED) {
 		data->i2c_addr = addr8;
+
+		lines = get_lines(dev);
+		if ((lines & I2C_LINES_BOTH_HI) != I2C_LINES_BOTH_HI) {
+			ret = i2c_xec_recover_bus(dev);
+			if (ret) {
+				return ret;
+			}
+		}
+
 		/* Is bus free and controller ready? */
 		ret = wait_bus_free(dev, WAIT_COUNT);
 		if (ret) {
@@ -844,7 +762,7 @@ static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 static int i2c_xec_transfer(const struct device *dev, struct i2c_msg *msgs,
 			    uint8_t num_msgs, uint16_t addr)
 {
-	struct i2c_xec_data *data = dev->data;
+	struct i2c_xec_data *data = DRV_DATA(dev);
 	int ret = 0;
 
 #ifdef CONFIG_I2C_SLAVE
@@ -877,19 +795,16 @@ static void i2c_xec_bus_isr(void *arg)
 {
 #ifdef CONFIG_I2C_SLAVE
 	struct device *dev = (struct device *)arg;
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_xec_data *data = dev->data;
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_xec_data *data = DRV_DATA(dev);
+	struct i2c_smb_regs *regs = HAL_INSTANCE(dev);
 	const struct i2c_slave_callbacks *target_cb =
 		data->target_cfg->callbacks;
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
-
 	int ret;
 	uint32_t status;
 	uint32_t compl_status;
 	uint8_t val;
-
-	uint8_t dummy = 0U;
+	uint8_t temp = 0U;
 
 	/* Get current status */
 	status = regs->CTRLSTS;
@@ -938,7 +853,7 @@ static void i2c_xec_bus_isr(void *arg)
 		if (rx_data & BIT(I2C_READ_WRITE_POS)) {
 			/* target transmitter mode */
 			data->target_read = true;
-			val = dummy;
+			val = temp;
 			if (target_cb->read_requested) {
 				target_cb->read_requested(
 					data->target_cfg, &val);
@@ -1004,12 +919,12 @@ static void i2c_xec_bus_isr(void *arg)
 			 * to de-assert 0 -> 1. Data is not transmitted.
 			 * SCL is not driven low by this controller.
 			 */
-			regs->I2CDATA = dummy;
+			regs->I2CDATA = temp;
 
 			status = regs->CTRLSTS;
 
 		} else {
-			val = dummy;
+			val = temp;
 			if (target_cb->read_processed) {
 				target_cb->read_processed(
 					data->target_cfg, &val);
@@ -1050,8 +965,8 @@ clear_iag:
 static int i2c_xec_target_register(const struct device *dev,
 				   struct i2c_slave_config *config)
 {
-	const struct i2c_xec_config *cfg = dev->config;
-	struct i2c_xec_data *data = dev->data;
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_xec_data *data = DRV_DATA(dev);
 	int ret;
 
 	if (!config) {
@@ -1091,8 +1006,8 @@ static int i2c_xec_target_register(const struct device *dev,
 static int i2c_xec_target_unregister(const struct device *dev,
 				     struct i2c_slave_config *config)
 {
-	const struct i2c_xec_config *cfg = dev->config;
-	struct i2c_xec_data *data = dev->data;
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_xec_data *data = DRV_DATA(dev);
 
 	if (!data->target_attached) {
 		return -EINVAL;
@@ -1118,17 +1033,17 @@ static const struct i2c_driver_api i2c_xec_driver_api = {
 
 static int i2c_xec_init(const struct device *dev)
 {
-	const struct i2c_xec_config *cfg = dev->config;
-	struct i2c_xec_data *data =
-		(struct i2c_xec_data *const) (dev->data);
+	const struct i2c_xec_config *cfg = DRV_CONFIG(dev);
+	struct i2c_xec_data *data = DRV_DATA(dev);
 	int ret;
 
 	data->state = I2C_XEC_STATE_STOPPED;
 	data->target_cfg = NULL;
 	data->target_attached = false;
 
-	ret = xec_i2c_port_cfg(cfg->port_sel, 1);
-	if (ret) {
+	ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+	if (ret != 0) {
+		LOG_ERR("XEC I2C pinctrl setup failed (%d)", ret);
 		return ret;
 	}
 
@@ -1150,6 +1065,9 @@ static int i2c_xec_init(const struct device *dev)
 }
 
 #define I2C_XEC_DEVICE(n)						\
+									\
+	PINCTRL_DT_INST_DEFINE(n);					\
+									\
 	static void i2c_xec_irq_config_func_##n(void);			\
 									\
 	static struct i2c_xec_data i2c_xec_data_##n;			\
@@ -1162,6 +1080,7 @@ static int i2c_xec_init(const struct device *dev)
 		.pcr_idx = DT_INST_PROP_BY_IDX(n, pcrs, 0),		\
 		.pcr_bitpos = DT_INST_PROP_BY_IDX(n, pcrs, 1),		\
 		.irq_config_func = i2c_xec_irq_config_func_##n,		\
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
 	};								\
 	I2C_DEVICE_DT_INST_DEFINE(n, i2c_xec_init, NULL,		\
 		&i2c_xec_data_##n, &i2c_xec_config_##n,			\
@@ -1169,7 +1088,7 @@ static int i2c_xec_init(const struct device *dev)
 		&i2c_xec_driver_api);					\
 									\
 	static void i2c_xec_irq_config_func_##n(void)			\
-	{                                                               \
+	{								\
 		IRQ_CONNECT(DT_INST_IRQN(n),				\
 			    DT_INST_IRQ(n, priority),			\
 			    i2c_xec_bus_isr,				\
