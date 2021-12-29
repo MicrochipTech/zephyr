@@ -12,6 +12,7 @@ LOG_MODULE_REGISTER(adc_mchp_xec);
 
 #include <drivers/adc.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#include <drivers/pinctrl.h>
 #include <soc.h>
 #include <errno.h>
 
@@ -37,6 +38,8 @@ struct adc_xec_config {
 	uint8_t girq_repeat_pos;
 	uint8_t pcr_regidx;
 	uint8_t pcr_bitpos;
+	const struct pinctrl_dev_config *pcfg;
+	void (*irq_config_func)(void);
 };
 
 struct adc_xec_data {
@@ -95,7 +98,7 @@ static void adc_context_update_buffer_pointer(struct adc_context *ctx,
 static int adc_xec_channel_setup(const struct device *dev,
 				 const struct adc_channel_cfg *channel_cfg)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_0_REG_BASE;
+	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE(dev);
 	uint32_t reg;
 
 	ARG_UNUSED(dev);
@@ -304,11 +307,20 @@ static int adc_xec_init(const struct device *dev)
 	const struct adc_xec_config *const cfg = ADC_XEC_CONFIG(dev);
 	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE(dev);
 	struct adc_xec_data *data = ADC_XEC_DATA(dev);
+	int ret;
+
+	ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+	if (ret != 0) {
+		LOG_ERR("XEC ADC V2 pinctrl setup failed (%d)", ret);
+		return ret;
+	}
 
 	adc_regs->control_reg =  XEC_ADC_CTRL_ACTIVATE
 		| XEC_ADC_CTRL_POWER_SAVER_DIS
 		| XEC_ADC_CTRL_SINGLE_DONE_STATUS
 		| XEC_ADC_CTRL_REPEAT_DONE_STATUS;
+
+	cfg->irq_config_func();
 
 	mchp_xec_ecia_girq_src_dis(cfg->girq_single, cfg->girq_single_pos);
 	mchp_xec_ecia_girq_src_dis(cfg->girq_repeat, cfg->girq_repeat_pos);
@@ -316,33 +328,45 @@ static int adc_xec_init(const struct device *dev)
 	mchp_xec_ecia_girq_src_clr(cfg->girq_repeat, cfg->girq_repeat_pos);
 	mchp_xec_ecia_girq_src_en(cfg->girq_single, cfg->girq_single_pos);
 
-	IRQ_CONNECT(DT_INST_IRQN(0),
-		    DT_INST_IRQ(0, priority),
-		    adc_xec_isr, DEVICE_DT_INST_GET(0), 0);
-	irq_enable(DT_INST_IRQN(0));
-
 	adc_context_unlock_unconditionally(&data->ctx);
 
 	return 0;
 }
 
-static struct adc_xec_config adc_xec_dev_cfg_0 = {
-	.base_addr = (uintptr_t)(DT_INST_REG_ADDR(0)),
-	.girq_single = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 0)),
-	.girq_single_pos = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 1)),
-	.girq_repeat = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 2)),
-	.girq_repeat_pos = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 3)),
-	.pcr_regidx = (uint8_t)(DT_INST_PROP_BY_IDX(0, pcrs, 0)),
-	.pcr_bitpos = (uint8_t)(DT_INST_PROP_BY_IDX(0, pcrs, 1)),
-};
+#define ADC_XEC_DEVICE(i)						\
+									\
+	PINCTRL_DT_INST_DEFINE(i);					\
+									\
+	static void adc_xec_irq_config_func_##i(void)			\
+	{								\
+		IRQ_CONNECT(DT_INST_IRQN(i),				\
+			    DT_INST_IRQ(i, priority),			\
+			    adc_xec_isr,				\
+			    DEVICE_DT_INST_GET(i), 0);			\
+		irq_enable(DT_INST_IRQN(i));				\
+	}								\
+									\
+	static struct adc_xec_data adc_xec_dev_data_##i = {		\
+		ADC_CONTEXT_INIT_TIMER(adc_xec_dev_data_##i, ctx),	\
+		ADC_CONTEXT_INIT_LOCK(adc_xec_dev_data_##i, ctx),	\
+		ADC_CONTEXT_INIT_SYNC(adc_xec_dev_data_##i, ctx),	\
+	};								\
+	static const struct adc_xec_config adc_xec_dev_cfg_##i = {	\
+		.base_addr = (uintptr_t)(DT_INST_REG_ADDR(i)),		\
+		.girq_single = (uint8_t)(DT_INST_PROP_BY_IDX(i, girqs, 0)), \
+		.girq_single_pos =					\
+			(uint8_t)(DT_INST_PROP_BY_IDX(i, girqs, 1)),	\
+		.girq_repeat = (uint8_t)(DT_INST_PROP_BY_IDX(i, girqs, 2)), \
+		.girq_repeat_pos =					\
+			(uint8_t)(DT_INST_PROP_BY_IDX(i, girqs, 3)),	\
+		.pcr_regidx = (uint8_t)(DT_INST_PROP_BY_IDX(i, pcrs, 0)), \
+		.pcr_bitpos = (uint8_t)(DT_INST_PROP_BY_IDX(i, pcrs, 1)), \
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),		\
+		.irq_config_func = adc_xec_irq_config_func_##i,		\
+	};								\
+	DEVICE_DT_INST_DEFINE(i, &adc_xec_init, NULL,			\
+		&adc_xec_dev_data_##i, &adc_xec_dev_cfg_##i,		\
+		PRE_KERNEL_1, CONFIG_ADC_INIT_PRIORITY,			\
+		&adc_xec_api);
 
-static struct adc_xec_data adc_xec_dev_data_0 = {
-	ADC_CONTEXT_INIT_TIMER(adc_xec_dev_data_0, ctx),
-	ADC_CONTEXT_INIT_LOCK(adc_xec_dev_data_0, ctx),
-	ADC_CONTEXT_INIT_SYNC(adc_xec_dev_data_0, ctx),
-};
-
-DEVICE_DT_INST_DEFINE(0, adc_xec_init, NULL,
-		    &adc_xec_dev_data_0, &adc_xec_dev_cfg_0,
-		    PRE_KERNEL_1, CONFIG_ADC_INIT_PRIORITY,
-		    &adc_xec_api);
+DT_INST_FOREACH_STATUS_OKAY(ADC_XEC_DEVICE)
