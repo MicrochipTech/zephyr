@@ -113,6 +113,9 @@
 	label = "I2C0";
 	port_sel = <0>;
 
+	pinctrl-0 = <&pinctrl_i2c_scl0 &pinctrl_i2c_sda0>;
+	pinctrl-names = "default";
+
 	pca9555@26 {
 		compatible = "nxp,pca95xx";
 		label = "GPIO_P0";
@@ -135,12 +138,16 @@
 	status = "okay";
 	label = "I2C1";
 	port_sel = <1>;
+	pinctrl-0 = <&pinctrl_i2c_scl1 &pinctrl_i2c_sda1>;
+	pinctrl-names = "default";
 };
 
 &i2c_smb_2 {
 	status = "okay";
 	label = "I2C7";
 	port_sel = <7>;
+	pinctrl-0 = <&pinctrl_i2c_scl7 &pinctrl_i2c_sda7>;
+	pinctrl-names = "default";
 };
 
 &spi0 {
