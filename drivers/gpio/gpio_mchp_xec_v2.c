@@ -9,9 +9,11 @@
 #include <errno.h>
 #include <device.h>
 #include <drivers/gpio.h>
+#include <dt-bindings/pinctrl/mchp-xec-pinctrl.h>
 #include <soc.h>
 #include <arch/arm/aarch32/cortex_m/cmsis.h>
 
+#include "gpio_mchp_xec.h"
 #include "gpio_utils.h"
 
 #define XEC_GPIO_EDGE_DLY_COUNT		4
@@ -49,6 +51,14 @@ static inline uintptr_t pin_ctrl_addr(const struct device *dev, gpio_pin_t pin)
 	const struct gpio_xec_config *config = dev->config;
 
 	return config->pcr1_base + ((uintptr_t)pin * 4u);
+}
+
+/* Each GPIO pin also has a second 32-bit control register for slew rate and
+ * driver strength located consecutively in memory
+ */
+static inline uintptr_t pin_ctrl2_addr(const struct device *dev, gpio_pin_t pin)
+{
+	return pin_ctrl_addr(dev, pin) + MCHP_GPIO_CTRL2_OFS;
 }
 
 /* GPIO Parallel input is a single 32-bit register per bank of 32 pins */
@@ -368,6 +378,112 @@ static void gpio_gpio_xec_port_isr(const struct device *dev)
 	gpio_fire_callbacks(&data->callbacks, dev, girq_result);
 }
 
+/*
+ * Public functions not part of GPIO driver API
+ * These are used by the PINCTRL driver and other users.
+ */
+
+static void config_drive_slew(const struct device *dev, uint32_t pin, uint32_t conf)
+{
+	uintptr_t pcr2_addr = pin_ctrl2_addr(dev, pin);
+	uint32_t slew = conf &
+		(MCHP_XEC_OSPEEDR_MASK << MCHP_XEC_OSPEEDR_SHIFT);
+	uint32_t drvstr = conf &
+		(MCHP_XEC_ODRVSTR_MASK << MCHP_XEC_ODRVSTR_SHIFT);
+	uint32_t val = 0;
+	uint32_t mask = 0;
+
+	if (slew) {
+		mask |= MCHP_GPIO_CTRL2_SLEW_MASK;
+		if (slew == MCHP_XEC_OSPEEDR_FAST) {
+			val |= MCHP_GPIO_CTRL2_SLEW_FAST;
+		}
+	}
+	if (drvstr) {
+		mask |= MCHP_GPIO_CTRL2_DRV_STR_MASK;
+		val |= ((drvstr - 1u) << MCHP_GPIO_CTRL2_DRV_STR_POS);
+	}
+
+	if (!mask) {
+		return;
+	}
+
+	xec_mask_write32(pcr2_addr, mask, val);
+}
+
+static void config_alt_func(const struct device *dev, uint32_t pin, uint32_t altf)
+{
+	uintptr_t pcr1_addr = pin_ctrl_addr(dev, pin);
+	uint32_t muxval = (uint32_t)((altf & MCHP_GPIO_CTRL_MUX_MASK0) <<
+				     MCHP_GPIO_CTRL_MUX_POS);
+
+	xec_mask_write32(pcr1_addr, MCHP_GPIO_CTRL_MUX_MASK, muxval);
+}
+
+/**
+ * @brief Called by PINCTRL, configures pin
+ * @param dev pointer to GPIO port device
+ * @param pin pin bit position in GPIO port
+ * @param cfg PINCTRL encoded pin properties:
+ *       Pulls, output buffer type, slew rate, drive strength
+ * @param altf = alternate function where 0 = GPIO
+ *
+ * @retval 0 on success.
+ * @retval -EINVAL if pin is not valid.
+ */
+int gpio_mchp_xec_configure(const struct device *dev, uint32_t pin,
+			    uint32_t conf, uint32_t altf)
+{
+	gpio_flags_t flags = 0;
+	uint32_t temp = 0;
+	int ret = 0;
+
+	temp = (conf & MCHP_XEC_PUPDR_MASK) >> MCHP_XEC_PUPDR_SHIFT;
+	switch (temp) {
+	case MCHP_XEC_PULL_UP:
+		flags |= GPIO_PULL_UP;
+		break;
+	case MCHP_XEC_PULL_DOWN:
+		flags |= GPIO_PULL_DOWN;
+		break;
+	case MCHP_XEC_REPEATER:
+		flags |= (GPIO_PULL_UP | GPIO_PULL_DOWN);
+		break;
+	default:
+		break;
+	}
+
+	if ((conf >> MCHP_XEC_OTYPER_SHIFT) & MCHP_XEC_OTYPER_MASK) {
+		flags |= GPIO_LINE_OPEN_DRAIN;
+	}
+
+	temp = (conf >> MCHP_XEC_OVAL_SHIFT) & MCHP_XEC_OVAL_MASK;
+	if (temp) {
+		flags |= GPIO_OUTPUT;
+		if (temp == MCHP_XEC_OVAL_DRV_HIGH) {
+			flags |= GPIO_OUTPUT_INIT_HIGH;
+		} else {
+			flags |= GPIO_OUTPUT_INIT_LOW;
+		}
+	} else {
+		flags |= GPIO_INPUT;
+	}
+
+	ret = gpio_xec_configure(dev, (gpio_pin_t)pin, flags);
+	if (ret) {
+		return ret;
+	}
+
+	/* program slew rate and drive strength */
+	config_drive_slew(dev, pin, conf);
+
+	/* program alternate function */
+	config_alt_func(dev, pin, altf);
+
+	return 0;
+}
+
+/* GPIO driver official API table */
 static const struct gpio_driver_api gpio_xec_driver_api = {
 	.pin_configure = gpio_xec_configure,
 	.port_get_raw = gpio_xec_port_get_raw,
