@@ -20,4 +20,9 @@
 #define MCHP_GPIO_MAX_PORT    6
 #define MCHP_NUM_GPIO_PORTS   6
 
+struct soc_gpio_pinctrl {
+	uint32_t pinmux;
+	uint32_t pincfg;
+};
+
 #endif /* _MICROCHIP_MEC_SOC_GPIO_H_ */
