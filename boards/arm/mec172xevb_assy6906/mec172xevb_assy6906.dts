@@ -83,6 +83,9 @@
 
 &adc0 {
 	status = "okay";
+	pinctrl-0 = <&pinctrl_adc0_in0 &pinctrl_adc0_in3
+		     &pinctrl_adc0_in4 &pinctrl_adc0_in5>;
+	pinctrl-names = "default";
 };
 
 &espi0 {
