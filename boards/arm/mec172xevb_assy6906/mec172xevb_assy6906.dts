@@ -77,6 +77,8 @@
 &uart1 {
 	status = "okay";
 	current-speed = <115200>;
+	pinctrl-0 = <&pinctrl_uart1_tx &pinctrl_uart1_rx>;
+	pinctrl-names = "default";
 };
 
 &adc0 {
