@@ -162,4 +162,13 @@
 	clock-frequency = <4000000>;
 	lines = <4>;
 	chip-select = <0>;
+	port-sel = <0>; /* Shared SPI */
+
+	pinctrl-0 = < &pinctrl_qshd_cs0
+		      &pinctrl_qshd_clk
+		      &pinctrl_qshd_io0
+		      &pinctrl_qshd_io1
+		      &pinctrl_qshd_io2
+		      &pinctrl_qshd_io3 >;
+	pinctrl-names = "default";
 };
