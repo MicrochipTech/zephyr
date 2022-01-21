@@ -85,6 +85,11 @@
 
 &espi0 {
 	status = "okay";
+	pinctrl-0 = <&pinctrl_espi_reset &pinctrl_espi_cs
+		     &pinctrl_espi_alert &pinctrl_espi_clk
+		     &pinctrl_espi_io0 &pinctrl_espi_io1
+		     &pinctrl_espi_io2 &pinctrl_espi_io3>;
+	pinctrl-names = "default";
 };
 
 /* enable various eSPI child devices (host facing) */
