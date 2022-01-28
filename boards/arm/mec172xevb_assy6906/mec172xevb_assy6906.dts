@@ -97,6 +97,16 @@
 	pinctrl-names = "default";
 };
 
+/* If ESPI_CS is open drain */
+&pinctrl_espi_cs {
+	drive-open-drain;
+};
+
+/* If ESPI_ALERT is open drain */
+&pinctrl_espi_alert {
+	drive-open-drain;
+};
+
 /* enable various eSPI child devices (host facing) */
 &kbc0 {
 	status = "okay";
@@ -144,6 +154,16 @@
 	};
 };
 
+&pinctrl_i2c_scl0 {
+	drive-open-drain;
+	output-high;
+};
+
+&pinctrl_i2c_sda0 {
+	drive-open-drain;
+	output-high;
+};
+
 &i2c_smb_1 {
 	status = "okay";
 	label = "I2C1";
@@ -152,12 +172,32 @@
 	pinctrl-names = "default";
 };
 
+&pinctrl_i2c_scl1 {
+	drive-open-drain;
+	output-high;
+};
+
+&pinctrl_i2c_sda1 {
+	drive-open-drain;
+	output-high;
+};
+
 &i2c_smb_2 {
 	status = "okay";
 	label = "I2C7";
 	port_sel = <7>;
 	pinctrl-0 = <&pinctrl_i2c_scl7 &pinctrl_i2c_sda7>;
 	pinctrl-names = "default";
+};
+
+&pinctrl_i2c_scl2 {
+	drive-open-drain;
+	output-high;
+};
+
+&pinctrl_i2c_sda2 {
+	drive-open-drain;
+	output-high;
 };
 
 &spi0 {
@@ -174,4 +214,8 @@
 		      &pinctrl_qshd_io2
 		      &pinctrl_qshd_io3 >;
 	pinctrl-names = "default";
+};
+
+&pinctrl_qshd_cs0 {
+	drive-open-drain;
 };

@@ -32,7 +32,7 @@
 			};
 
 			pinctrl_adc0_in5: adc0_in5 {
-				pinmux = < MCHP_XEC_PINMUX(0205, AF1) >;
+				pinmux = < MCHP_XEC_PINMUX(0204, AF1) >;
 			};
 
 			pinctrl_adc0_in6: adc0_in6 {
@@ -63,45 +63,34 @@
 			/* eSPI */
 			pinctrl_espi_alert: espi_alert {
 				pinmux = < MCHP_XEC_PINMUX(063, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_espi_clk: espi_clk {
 				pinmux = < MCHP_XEC_PINMUX(065, AF1) >;
-				slew-rate = "high-speed";
 			};
 
 			pinctrl_espi_cs: espi_cs {
 				pinmux = < MCHP_XEC_PINMUX(066, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_espi_io0: espi_io0 {
 				pinmux = < MCHP_XEC_PINMUX(070, AF1) >;
-				slew-rate = "high-speed";
 			};
 
 			pinctrl_espi_io1: espi_io1 {
 				pinmux = < MCHP_XEC_PINMUX(071, AF1) >;
-				slew-rate = "high-speed";
 			};
 
 			pinctrl_espi_io2: espi_io2 {
 				pinmux = < MCHP_XEC_PINMUX(072, AF1) >;
-				slew-rate = "high-speed";
 			};
 
 			pinctrl_espi_io3: espi_io3 {
 				pinmux = < MCHP_XEC_PINMUX(073, AF1) >;
-				slew-rate = "high-speed";
 			};
 
 			pinctrl_espi_reset: espi_reset {
 				pinmux = < MCHP_XEC_PINMUX(061, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			/* GPIO Pass Through */
@@ -156,390 +145,266 @@
 			/* I2C port 0 */
 			pinctrl_i2c_scl0: i2c_scl0 {
 				pinmux = < MCHP_XEC_PINMUX(004, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda0: i2c_sda0 {
 				pinmux = < MCHP_XEC_PINMUX(003, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 1 */
 			pinctrl_i2c_scl1: i2c_scl1 {
 				pinmux = < MCHP_XEC_PINMUX(0131, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_scl1_alt: i2c_scl1_alt {
 				pinmux = < MCHP_XEC_PINMUX(073, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda1: i2c_sda1 {
 				pinmux = < MCHP_XEC_PINMUX(0130, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda1_alt: i2c_sda1_alt {
 				pinmux = < MCHP_XEC_PINMUX(072, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 2 */
 			pinctrl_i2c_scl2: i2c_scl2 {
 				pinmux = < MCHP_XEC_PINMUX(0155, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda2: i2c_sda2 {
 				pinmux = < MCHP_XEC_PINMUX(0154, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 3 */
 			pinctrl_i2c_scl3: i2c_scl3 {
 				pinmux = < MCHP_XEC_PINMUX(010, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda3: i2c_sda3 {
 				pinmux = < MCHP_XEC_PINMUX(007, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 4 */
 			pinctrl_i2c_scl4: i2c_scl4 {
 				pinmux = < MCHP_XEC_PINMUX(0144, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda4: i2c_sda4 {
 				pinmux = < MCHP_XEC_PINMUX(0143, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 5 */
 			pinctrl_i2c_scl5: i2c_scl5 {
 				pinmux = < MCHP_XEC_PINMUX(0142, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda5: i2c_sda5 {
 				pinmux = < MCHP_XEC_PINMUX(0141, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 6 */
 			pinctrl_i2c_scl6: i2c_scl6 {
 				pinmux = < MCHP_XEC_PINMUX(0140, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda6: i2c_sda6 {
 				pinmux = < MCHP_XEC_PINMUX(0132, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 7 */
 			pinctrl_i2c_scl7: i2c_scl7 {
 				pinmux = < MCHP_XEC_PINMUX(013, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_scl7_alt: i2c_scl7_alt {
 				pinmux = < MCHP_XEC_PINMUX(024, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda7: i2c_sda7 {
 				pinmux = < MCHP_XEC_PINMUX(012, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda7_alt: i2c_sda7_alt {
 				pinmux = < MCHP_XEC_PINMUX(0152, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 9 */
 			pinctrl_i2c_scl9: i2c_scl9 {
 				pinmux = < MCHP_XEC_PINMUX(0146, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda9: i2c_sda9 {
 				pinmux = < MCHP_XEC_PINMUX(0145, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 10 */
 			pinctrl_i2c_scl10: i2c_scl10 {
 				pinmux = < MCHP_XEC_PINMUX(0107, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda10: i2c_sda10 {
 				pinmux = < MCHP_XEC_PINMUX(030, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 11 */
 			pinctrl_i2c_scl11: i2c_scl11 {
 				pinmux = < MCHP_XEC_PINMUX(062, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda11: i2c_sda11 {
 				pinmux = < MCHP_XEC_PINMUX(000, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 12 */
 			pinctrl_i2c_scl12: i2c_scl12 {
 				pinmux = < MCHP_XEC_PINMUX(027, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda12: i2c_sda12 {
 				pinmux = < MCHP_XEC_PINMUX(026, AF3) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 13 */
 			pinctrl_i2c_scl13: i2c_scl13 {
 				pinmux = < MCHP_XEC_PINMUX(065, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda13: i2c_sda13 {
 				pinmux = < MCHP_XEC_PINMUX(066, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 14 */
 			pinctrl_i2c_scl14: i2c_scl14 {
 				pinmux = < MCHP_XEC_PINMUX(071, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_i2c_sda14: i2c_sda14 {
 				pinmux = < MCHP_XEC_PINMUX(070, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* I2C port 15 */
 			pinctrl_i2c_scl15: i2c_scl15 {
 				pinmux = < MCHP_XEC_PINMUX(0150, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_sda15: i2c_sda15 {
 				pinmux = < MCHP_XEC_PINMUX(0147, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			/* KEYSCAN */
 			pinctrl_ksi0: ksi0 {
 				pinmux = < MCHP_XEC_PINMUX(017, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi1: ksi1 {
 				pinmux = < MCHP_XEC_PINMUX(020, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi2: ksi2 {
 				pinmux = < MCHP_XEC_PINMUX(021, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi3: ksi3 {
 				pinmux = < MCHP_XEC_PINMUX(026, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi4: ksi4 {
 				pinmux = < MCHP_XEC_PINMUX(027, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi5: ksi5 {
 				pinmux = < MCHP_XEC_PINMUX(030, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi6: ksi6 {
 				pinmux = < MCHP_XEC_PINMUX(031, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_ksi7: ksi7 {
 				pinmux = < MCHP_XEC_PINMUX(032, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso0: kso0 {
 				pinmux = < MCHP_XEC_PINMUX(040, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso1: kso1 {
 				pinmux = < MCHP_XEC_PINMUX(045, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso2: kso2 {
 				pinmux = < MCHP_XEC_PINMUX(046, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso3: kso3 {
 				pinmux = < MCHP_XEC_PINMUX(047, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso4: kso4 {
 				pinmux = < MCHP_XEC_PINMUX(0107, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso5: kso5 {
 				pinmux = < MCHP_XEC_PINMUX(0112, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso6: kso6 {
 				pinmux = < MCHP_XEC_PINMUX(0113, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso7: kso7 {
 				pinmux = < MCHP_XEC_PINMUX(0120, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso8: kso8 {
 				pinmux = < MCHP_XEC_PINMUX(0121, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso9: kso9 {
 				pinmux = < MCHP_XEC_PINMUX(0122, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso10: kso10 {
 				pinmux = < MCHP_XEC_PINMUX(0123, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso11: kso11 {
 				pinmux = < MCHP_XEC_PINMUX(0124, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso12: kso12 {
 				pinmux = < MCHP_XEC_PINMUX(0125, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso13: kso13 {
 				pinmux = < MCHP_XEC_PINMUX(0126, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso14: kso14 {
 				pinmux = < MCHP_XEC_PINMUX(0152, AF1) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso15: kso15 {
 				pinmux = < MCHP_XEC_PINMUX(0151, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso16: kso16 {
 				pinmux = < MCHP_XEC_PINMUX(0132, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_kso17: kso17 {
 				pinmux = < MCHP_XEC_PINMUX(0140, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			/* Quad SPI Shared Port. Two chip selects */
 			pinctrl_qshd_cs0: qshd_cs0 {
 				pinmux = < MCHP_XEC_PINMUX(055, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_qshd_cs1: qshd_cs1 {
 				pinmux = < MCHP_XEC_PINMUX(002, AF2) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_qshd_clk: qshd_clk {
@@ -565,8 +430,6 @@
 			/* Quad SPI Private Port. One chip select */
 			pinctrl_qpvt_cs0: qpvt_cs0 {
 				pinmux = < MCHP_XEC_PINMUX(0124, AF1) >;
-				drive-open-drain;
-				output-high;
 			};
 
 			pinctrl_qpvt_io0: qpvt_io0 {
@@ -597,8 +460,6 @@
 			 */
 			pinctrl_qint_cs0: qint_cs0 {
 				pinmux = < MCHP_XEC_PINMUX(0116, AF1) >;
-				bias-pull-up;
-				output-high;
 			};
 
 			pinctrl_qint_clk: qint_clk {
@@ -615,8 +476,6 @@
 
 			pinctrl_qint_wpn: qint_wpn {
 				pinmux = < MCHP_XEC_PINMUX(076, 0) >;
-				bias-pull-up;
-				output-high;
 			};
 
 			/* PECI */
@@ -631,7 +490,6 @@
 			/* PROCHOT */
 			pinctrl_prochot_in: prochot_in {
 				pinmux = < MCHP_XEC_PINMUX(0222, AF2) >;
-				drive-open-drain;
 			};
 
 			/* PS2 */
@@ -805,61 +663,42 @@
 
 			pinctrl_uart0_tx: uart0_tx {
 				pinmux = < MCHP_XEC_PINMUX(0104, AF1) >;
-				bias-pull-up;
 			};
 
 			pinctrl_uart0_cts: uart0_cts {
 				pinmux = < MCHP_XEC_PINMUX(0143, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_cts_alt: uart0_cts_alt {
 				pinmux = < MCHP_XEC_PINMUX(0127, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_dcd: uart0_dcd {
 				pinmux = < MCHP_XEC_PINMUX(017, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_dcd_alt: uart0_dcd_alt {
 				pinmux = < MCHP_XEC_PINMUX(0141, AF4) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_dtr: uart0_dtr {
 				pinmux = < MCHP_XEC_PINMUX(026, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_dtr_alt: uart0_dtr_alt {
 				pinmux = < MCHP_XEC_PINMUX(0143, AF4) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_ri: uart0_ri {
 				pinmux = < MCHP_XEC_PINMUX(032, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_ri_alt: uart0_ri_alt {
 				pinmux = < MCHP_XEC_PINMUX(0144, AF4) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart0_rts: uart0_rts {
 				pinmux = < MCHP_XEC_PINMUX(0144, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			/* UART1 */
@@ -869,7 +708,6 @@
 
 			pinctrl_uart1_tx: uart1_tx {
 				pinmux = < MCHP_XEC_PINMUX(0170, AF1) >;
-				bias-pull-up;
 			};
 
 			pinctrl_uart1_rx_alt: uart1_rx_alt {
@@ -878,32 +716,22 @@
 
 			pinctrl_uart1_cts: uart1_cts {
 				pinmux = < MCHP_XEC_PINMUX(040, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart1_dcd: uart1_dcd {
 				pinmux = < MCHP_XEC_PINMUX(060, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart1_dtr: uart1_dtr {
 				pinmux = < MCHP_XEC_PINMUX(0120, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart1_ri: uart1_ri {
 				pinmux = < MCHP_XEC_PINMUX(025, AF3) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			pinctrl_uart1_rts: uart1_rts {
 				pinmux = < MCHP_XEC_PINMUX(0127, AF2) >;
-				bias-pull-up;
-				drive-open-drain;
 			};
 
 			/* VCI */

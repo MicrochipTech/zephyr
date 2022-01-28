@@ -5,10 +5,63 @@
 description: |
     Microchip XEC Pin controller Node
     Based on pincfg-node.yaml binding.
+    The MCHP XEC pin controller is a singleton node responsible for controlling
+    pin function selection and pin properties. For example, you can use this
+    node to select peripheral pin functions. For example, I2C
 
-    Note: `bias-disable` and `drive-push-pull` are default pin configurations.
-           They will be applied in case no `bias-foo` or `driver-bar` properties
-           are set.
+    The node has the 'pinctrl' node label set in your SoC's devicetree,
+    so you can modify it like this:
+
+      &pinctrl {
+              /* your modifications go here */
+      };
+
+    All device pin configurations should be placed in child nodes of the
+    'pinctrl' node, as shown in this example:
+
+    A group can also specify shared pin properties common to all the specified
+    pins, such as the 'bias-pull-up' property in group 2. Here is a list of
+    supported standard pin properties:
+
+    - bias-disable: Disable pull-up/down (default behavior, not required).
+    - bias-pull-down: Enable pull-down resistor.
+    - bias-pull-up: Enable pull-up resistor.
+    - drive-push-pull: Output driver is push-pull (default, not required).
+    - drive-open-drain: Output driver is open-drain.
+    - output-high: Set output state high when pin configured.
+    - output-low: Set output state low when pin configured.
+
+    Custom pin properties for drive strength and slew rate are available:
+    - drive-strength
+    - slew-rate
+
+    Driver strength and slew rate hardware defaults vary by SoC and pin.
+    The "hw-default" setting tell the pinctrl code to not touch the slew
+    rate or drive strength settings for the respective pin.
+
+    An example for MEC172x family, include the chip level pinctrl
+    DTSI file in the board level DTS:
+
+      #include <microchip/mec172x/mec172xnsz-pinctrl.dtsi>
+
+      We want to use the shared SPI port of the MEC172x QMSPI controller
+      and want the chip select 0 to be open-drain.
+
+      To change a pin's pinctrl default properties add a reference to the
+      pin in the board's DTS file and set the properties.
+
+      &spi0 {
+        pinctrl-0 = < &pinctrl_qint_cs0
+                      &pinctrl_qint_clk
+                      &pinctrl_qint_io0
+                      &pinctrl_qint_io1
+                      &pinctrl_qint_wpn >;
+        pinctrl-names = "default";
+     }
+
+     &pinctrl_qint_cs0 {
+        drive-open-drain;
+     };
 
 compatible: "microchip,xec-pinctrl"
 
