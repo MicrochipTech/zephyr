@@ -76,7 +76,7 @@ const struct pin_info espi_pin_table[] = {
 
 /* kscan: KSCAN KSO & KSI */
 const struct pin_info kscan_pin_table[] = {
-#if defined(CONFIG_KSCAN_XEC_V2) && DT_NODE_HAS_STATUS(DT_NODELABEL(kscan0), okay)
+#if defined(CONFIG_KSCAN_XEC) && DT_NODE_HAS_STATUS(DT_NODELABEL(kscan0), okay)
 	{ port_040_076, MCHP_GPIO_040, MCHP_GPIO_CTRL_MUX_F2 | MCHP_GPIO_CTRL_PUD_PU },
 	{ port_040_076, MCHP_GPIO_045, MCHP_GPIO_CTRL_MUX_F1 | MCHP_GPIO_CTRL_PUD_PU },
 	{ port_040_076, MCHP_GPIO_046, MCHP_GPIO_CTRL_MUX_F1 | MCHP_GPIO_CTRL_PUD_PU },

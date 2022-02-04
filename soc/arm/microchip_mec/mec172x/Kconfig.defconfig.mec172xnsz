@@ -39,7 +39,7 @@ config SPI_XEC_QMSPI_LDMA
 	default y
 	depends on SPI
 
-config KSCAN_XEC_V2
+config KSCAN_XEC
 	default y
 	depends on KSCAN
 
