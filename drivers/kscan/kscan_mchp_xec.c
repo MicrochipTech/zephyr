@@ -37,7 +37,7 @@ LOG_MODULE_REGISTER(kscan_mchp_xec);
 #define TASK_STACK_SIZE 1024
 
 struct kscan_xec_config {
-	uintptr_t regbase;
+	struct kscan_regs *regs;
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint8_t irq_pri;
@@ -125,7 +125,7 @@ static void kscan_clr_slp_en(const struct device *dev)
 static void drive_keyboard_column(const struct device *dev, int data)
 {
 	struct kscan_xec_config const *cfg = dev->config;
-	struct kscan_regs *regs = (struct kscan_regs *)cfg->regbase;
+	struct kscan_regs *regs = cfg->regs;
 
 	if (data == KEYBOARD_COLUMN_DRIVE_ALL) {
 		/* KSO output controlled by the KSO_SELECT field */
@@ -144,7 +144,7 @@ static void drive_keyboard_column(const struct device *dev, int data)
 static uint8_t read_keyboard_row(const struct device *dev)
 {
 	struct kscan_xec_config const *cfg = dev->config;
-	struct kscan_regs *regs = (struct kscan_regs *)cfg->regbase;
+	struct kscan_regs *regs = cfg->regs;
 
 	/* In this implementation a 1 means key pressed */
 	return ~(regs->KSI_IN & 0xFF);
@@ -343,7 +343,7 @@ void polling_task(const struct device *dev, void *dummy2, void *dummy3)
 {
 	struct kscan_xec_config const *cfg = dev->config;
 	struct kscan_xec_data *const data = dev->data;
-	struct kscan_regs *regs = (struct kscan_regs *)cfg->regbase;
+	struct kscan_regs *regs = cfg->regs;
 	uint32_t current_cycles;
 	uint32_t cycles_diff;
 	uint32_t wait_period;
@@ -452,7 +452,7 @@ static int kscan_xec_init(const struct device *dev)
 {
 	struct kscan_xec_config const *cfg = dev->config;
 	struct kscan_xec_data *const data = dev->data;
-	struct kscan_regs *regs = (struct kscan_regs *)cfg->regbase;
+	struct kscan_regs *regs = cfg->regs;
 
 	kscan_clr_slp_en(dev);
 
@@ -490,7 +490,7 @@ static int kscan_xec_init(const struct device *dev)
 static struct kscan_xec_data kbd_data;
 
 static struct kscan_xec_config kscan_xec_cfg_0 = {
-	.regbase = (uintptr_t)(DT_INST_REG_ADDR(0)),
+	.regs = (struct kscan_regs *)(DT_INST_REG_ADDR(0)),
 #ifdef CONFIG_SOC_SERIES_MEC172X
 	.girq = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 0)),
 	.girq_pos = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 1)),
