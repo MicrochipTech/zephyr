@@ -16,9 +16,6 @@ LOG_MODULE_REGISTER(wdt_mchp_xec);
 #include <soc.h>
 #include <errno.h>
 
-#define WDT_XEC_REG_BASE						\
-	((struct wdt_regs *)(DT_INST_REG_ADDR(0)))
-
 struct wdt_xec_config {
 	struct wdt_regs *regs;
 	uint8_t girq;
