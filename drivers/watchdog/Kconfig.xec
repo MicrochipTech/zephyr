@@ -9,3 +9,13 @@ config WDT_XEC
 	default y
 	help
 	  Enable WDT driver for Microchip XEC MCU series.
+
+config WDT_XEC_DELAY_CYCLES
+	int "Number of delay cycles before generating watchdog event/signal"
+	depends on WDT_XEC
+	range 1 255
+	default 10
+	help
+	  This option defines the window in which a watchdog event must be
+	  handled, in units of 31ms. After this time window, the watchdog reset
+	  triggers immediately.
