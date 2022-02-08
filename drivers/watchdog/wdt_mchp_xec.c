@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(wdt_mchp_xec);
 	((struct wdt_regs *)(DT_INST_REG_ADDR(0)))
 
 struct wdt_xec_config {
-	uintptr_t base;
+	struct wdt_regs *regs;
 	uint8_t girq;
 	uint8_t girq_pos;
 };
@@ -30,16 +30,11 @@ struct wdt_xec_data {
 	bool timeout_installed;
 };
 
-#define DRV_CONFIG(dev) ((const struct wdt_xec_config *)(dev)->config)
-
-#define DRV_DATA(dev) ((struct wdt_xec_data *)(dev)->data)
-
-#define HAL_INSTANCE(dev) (struct wdt_regs *)(DRV_CONFIG(dev)->base)
-
 static int wdt_xec_setup(const struct device *dev, uint8_t options)
 {
-	struct wdt_regs *regs = HAL_INSTANCE(dev);
-	struct wdt_xec_data *data = DRV_DATA(dev);
+	struct wdt_xec_config const *cfg = dev->config;
+	struct wdt_xec_data *data = dev->data;
+	struct wdt_regs *regs = cfg->regs;
 
 	if (regs->CTRL & MCHP_WDT_CTRL_EN) {
 		return -EBUSY;
@@ -70,8 +65,9 @@ static int wdt_xec_setup(const struct device *dev, uint8_t options)
 
 static int wdt_xec_disable(const struct device *dev)
 {
-	struct wdt_regs *regs = HAL_INSTANCE(dev);
-	struct wdt_xec_data *data = DRV_DATA(dev);
+	struct wdt_xec_config const *cfg = dev->config;
+	struct wdt_xec_data *data = dev->data;
+	struct wdt_regs *regs = cfg->regs;
 
 	if (!(regs->CTRL & MCHP_WDT_CTRL_EN)) {
 		return -EALREADY;
@@ -88,8 +84,9 @@ static int wdt_xec_disable(const struct device *dev)
 static int wdt_xec_install_timeout(const struct device *dev,
 				   const struct wdt_timeout_cfg *config)
 {
-	struct wdt_regs *regs = HAL_INSTANCE(dev);
-	struct wdt_xec_data *data = DRV_DATA(dev);
+	struct wdt_xec_config const *cfg = dev->config;
+	struct wdt_xec_data *data = dev->data;
+	struct wdt_regs *regs = cfg->regs;
 
 	if (regs->CTRL & MCHP_WDT_CTRL_EN) {
 		return -EBUSY;
@@ -131,7 +128,8 @@ static int wdt_xec_install_timeout(const struct device *dev,
 
 static int wdt_xec_feed(const struct device *dev, int channel_id)
 {
-	struct wdt_regs *regs = HAL_INSTANCE(dev);
+	struct wdt_xec_config const *cfg = dev->config;
+	struct wdt_regs *regs = cfg->regs;
 
 	ARG_UNUSED(dev);
 	ARG_UNUSED(channel_id);
@@ -149,9 +147,9 @@ static int wdt_xec_feed(const struct device *dev, int channel_id)
 
 static void wdt_xec_isr(const struct device *dev)
 {
-	struct wdt_xec_config const *config = DRV_CONFIG(dev);
-	struct wdt_regs *regs = HAL_INSTANCE(dev);
-	struct wdt_xec_data *data = DRV_DATA(dev);
+	struct wdt_xec_config const *cfg = dev->config;
+	struct wdt_xec_data *data = dev->data;
+	struct wdt_regs *regs = cfg->regs;
 
 	LOG_DBG("WDT ISR");
 
@@ -160,9 +158,9 @@ static void wdt_xec_isr(const struct device *dev)
 	}
 
 #ifdef CONFIG_SOC_SERIES_MEC172X
-	mchp_soc_ecia_girq_src_clr(config->girq, config->girq_pos);
+	mchp_soc_ecia_girq_src_clr(cfg->girq, cfg->girq_pos);
 #else
-	MCHP_GIRQ_SRC(MCHP_WDT_GIRQ) = BIT(config->girq_pos);
+	MCHP_GIRQ_SRC(MCHP_WDT_GIRQ) = BIT(cfg->girq_pos);
 #endif
 	regs->IEN &= ~MCHP_WDT_IEN_EVENT_IRQ_EN;
 }
@@ -176,16 +174,16 @@ static const struct wdt_driver_api wdt_xec_api = {
 
 static int wdt_xec_init(const struct device *dev)
 {
-	struct wdt_xec_config const *config = DRV_CONFIG(dev);
+	struct wdt_xec_config const *cfg = dev->config;
 
 	if (IS_ENABLED(CONFIG_WDT_DISABLE_AT_BOOT)) {
 		wdt_xec_disable(dev);
 	}
 
 #ifdef CONFIG_SOC_SERIES_MEC172X
-	mchp_soc_ecia_girq_src_en(config->girq, config->girq_pos);
+	mchp_soc_ecia_girq_src_en(cfg->girq, cfg->girq_pos);
 #else
-	MCHP_GIRQ_ENSET(MCHP_WDT_GIRQ) = BIT(config->girq_pos);
+	MCHP_GIRQ_ENSET(MCHP_WDT_GIRQ) = BIT(cfg->girq_pos);
 #endif
 
 	IRQ_CONNECT(DT_INST_IRQN(0),
@@ -197,7 +195,7 @@ static int wdt_xec_init(const struct device *dev)
 }
 
 static const struct wdt_xec_config wdt_xec_config_0 = {
-	.base = DT_INST_REG_ADDR(0),
+	.regs = (struct wdt_regs *)(DT_INST_REG_ADDR(0)),
 	.girq = DT_INST_PROP_BY_IDX(0, girqs, 0),
 	.girq_pos = DT_INST_PROP_BY_IDX(0, girqs, 1),
 };
