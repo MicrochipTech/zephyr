@@ -73,6 +73,10 @@
 	status = "okay";
 };
 
+&timer5 {
+	status = "okay";
+};
+
 &pcr {
 	status = "okay";
 };
