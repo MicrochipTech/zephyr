@@ -99,6 +99,11 @@
 			pcrs = <1 9>;
 			label = "WDT_0";
 		};
+		bbram: bb-ram@4000a800 {
+			compatible = "microchip,xec-bbram";
+			reg = <0x4000a800 0x80>;
+			reg-names = "memory";
+		};
 		uart0: uart@400f2400 {
 			compatible = "ns16550";
 			reg = <0x400f2400 0x400>;
