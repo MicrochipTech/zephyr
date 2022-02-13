@@ -883,10 +883,11 @@
 			compatible = "microchip,xec-espi-v2";
 			reg = < 0x400f3400 0x400
 				0x400f3800 0x400
-				0x400f9c00 0x400>;
-			reg-names = "io", "mem", "vw";
+				0x400f9c00 0x200
+				0x400f9e00 0x200 >;
+			reg-names = "io", "mem", "msvw", "smvw";
 			interrupts = <103 3>, <104 3>, <105 3>, <106 3>,
-				     <107 3>, <108 3>, <109 3>, <110 3>,
+				     <107 3>, <108 3>, <109 3>, <110 2>,
 				     <156 3>;
 			interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_up",
 					  "oob_dn", "fc", "rst", "vw_chan_en";
@@ -900,7 +901,7 @@
 				  MCHP_XEC_ECIA(19, 7, 11, 110)
 				  MCHP_XEC_ECIA(19, 8, 11, 156) >;
 			pcrs = <2 19>;
-			label = "ESPI_0";
+			label = "ESPI_0"; /* required */
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -912,7 +913,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 20, 7, 60) >;
 				pcrs = <2 17>;
 				ldn = <0>;
-				label = "MBOX_0";
 				status = "disabled";
 			};
 			kbc0: kbc@400f0400 {
@@ -923,7 +923,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 18, 7, 58)
 					  MCHP_XEC_ECIA(15, 19, 7, 58) >;
 				ldn = <1>;
-				label = "KBC_0";
 				status = "disabled";
 			};
 			acpi_ec0: acpi_ec@400f0800 {
@@ -934,7 +933,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 5, 7, 45)
 					  MCHP_XEC_ECIA(15, 6, 7, 46) >;
 				ldn = <2>;
-				label = "ACPI_EC_0";
 				status = "disabled";
 			};
 			acpi_ec1: acpi_ec@400f0c00 {
@@ -945,7 +943,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 7, 7, 58)
 					  MCHP_XEC_ECIA(15, 8, 7, 58) >;
 				ldn = <3>;
-				label = "ACPI_EC_1";
 				status = "disabled";
 			};
 			acpi_ec2: acpi_ec@400f1000 {
@@ -956,7 +953,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 9, 7, 58)
 					  MCHP_XEC_ECIA(15, 10, 7, 58) >;
 				ldn = <4>;
-				label = "ACPI_EC_2";
 				status = "disabled";
 			};
 			acpi_ec3: acpi_ec@400f1400 {
@@ -967,7 +963,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 11, 7, 58)
 					  MCHP_XEC_ECIA(15, 12, 7, 58) >;
 				ldn = <5>;
-				label = "ACPI_EC_3";
 				status = "disabled";
 			};
 			acpi_ec4: acpi_ec@400f1800 {
@@ -978,7 +973,6 @@
 				girqs = < MCHP_XEC_ECIA(15, 13, 7, 58)
 					  MCHP_XEC_ECIA(15, 14, 7, 58) >;
 				ldn = <6>;
-				label = "ACPI_EC_4";
 				status = "disabled";
 			};
 			acpi_pm1: acpi_pm1@400f1c00 {
@@ -990,13 +984,11 @@
 					  MCHP_XEC_ECIA(15, 16, 7, 58)
 					  MCHP_XEC_ECIA(15, 17, 7, 58) >;
 				ldn = <7>;
-				label = "ACPI_PM1";
 				status = "disabled";
 			};
 			port92: port92@400f2000 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f2000 0x400>;
-				label = "PORT92";
 				ldn = <8>;
 				status = "disabled";
 			};
@@ -1006,10 +998,10 @@
 				interrupts = <40 0>;
 				clock-frequency = <1843200>;
 				current-speed = <38400>;
-				label = "UART_0";
 				girqs = <15 0>;
 				pcrs = <2 1>;
 				ldn = <9>;
+				label = "UART0"; /* required */
 				status = "disabled";
 			};
 			uart1: uart@400f2800 {
@@ -1018,10 +1010,10 @@
 				interrupts = <41 0>;
 				clock-frequency = <1843200>;
 				current-speed = <38400>;
-				label = "UART_1";
 				girqs = <15 1>;
 				pcrs = <2 2>;
 				ldn = <10>;
+				label = "UART1"; /* required */
 				status = "disabled";
 			};
 			emi0: emi@400f4000 {
@@ -1029,7 +1021,6 @@
 				reg = <0x400f4000 0x400>;
 				interrupts = <42 0>;
 				girqs = < MCHP_XEC_ECIA(15, 2, 7, 42) >;
-				label = "EMI_0";
 				ldn = <16>;
 				status = "disabled";
 			};
@@ -1038,7 +1029,6 @@
 				reg = <0x400f4400 0x400>;
 				interrupts = <43 0>;
 				girqs = < MCHP_XEC_ECIA(15, 3, 7, 43) >;
-				label = "EMI_1";
 				ldn = <17>;
 				status = "disabled";
 			};
@@ -1047,7 +1037,6 @@
 				reg = <0x400f4800 0x400>;
 				interrupts = <44 0>;
 				girqs = < MCHP_XEC_ECIA(15, 4, 7, 44) >;
-				label = "EMI_2";
 				ldn = <18>;
 				status = "disabled";
 			};
@@ -1058,7 +1047,6 @@
 				girqs = < MCHP_XEC_ECIA(21, 8, 13, 119)
 					  MCHP_XEC_ECIA(21, 9, 13, 120) >;
 				pcrs = <2 18>;
-				label = "RTC_0";
 				ldn = <20>;
 				status = "disabled";
 			};
@@ -1070,14 +1058,12 @@
 				girqs = < MCHP_XEC_ECIA(15, 22, 7, 58) >;
 				pcrs = <2 25>;
 				ldn = <32>;
-				label = "P80BD_0";
 				status = "disabled";
 			};
 			/* Capture writes to an 8-bit I/O and map to one of 0x80 to 0x83 */
 			p80bd0_alias: p80bd@400f8400 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f8400 0x400>;
-				label = "P80BD_0_ALIAS";
 				ldn = <33>;
 				host-io = <0x90>;
 				/* map 0x90 to 0x80 */

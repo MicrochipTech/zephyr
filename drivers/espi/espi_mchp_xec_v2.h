@@ -34,16 +34,15 @@ struct espi_xec_irq_info {
 };
 
 struct espi_xec_config {
-	uint32_t base_addr;
-	uint32_t vw_base_addr;
+	struct espi_iom_regs * const iom_base;
+	struct espi_msvw_ar_regs * const msvw_base;
+	struct espi_smvw_ar_regs * const smvw_base;
 	uint8_t pcr_idx;
 	uint8_t pcr_bitpos;
-	const struct espi_xec_irq_info *irq_info_list;
 	uint8_t irq_info_size;
+	uint8_t rsvd[1];
+	const struct espi_xec_irq_info *irq_info_list;
 };
-
-#define ESPI_XEC_CONFIG(dev)						\
-	((struct espi_xec_config * const)(dev)->config)
 
 struct espi_xec_data {
 	sys_slist_t callbacks;
@@ -57,9 +56,6 @@ struct espi_xec_data {
 	uint32_t espi_rst_count;
 #endif
 };
-
-#define ESPI_XEC_DATA(dev)						\
-	((struct espi_xec_data * const)(dev)->data)
 
 struct xec_signal {
 	uint8_t xec_reg_idx;

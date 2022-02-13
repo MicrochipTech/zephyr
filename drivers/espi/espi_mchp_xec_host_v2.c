@@ -65,10 +65,6 @@
 #define UART_DEFAULT_IRQ_POS	    2u
 #define UART_DEFAULT_IRQ	    BIT(UART_DEFAULT_IRQ_POS)
 
-/* PCR */
-#define XEC_PCR_REG_BASE						\
-	((struct pcr_regs *)(DT_REG_ADDR(DT_NODELABEL(pcr))))
-
 struct xec_espi_host_sram_config {
 	uint32_t host_sram1_base;
 	uint32_t host_sram2_base;
@@ -89,7 +85,7 @@ struct xec_espi_host_dev_config {
 };
 
 struct xec_acpi_ec_config {
-	uintptr_t regbase;
+	struct acpi_ec_regs * const regs;
 	uint32_t ibf_ecia_info;
 	uint32_t obe_ecia_info;
 };
@@ -100,13 +96,26 @@ struct xec_acpi_ec_config {
 BUILD_ASSERT(DT_NODE_HAS_STATUS(DT_NODELABEL(mbox0), okay),
 	     "XEC mbox0 DT node is disabled!");
 
-static struct xec_mbox_config {
-	uintptr_t regbase;
+#define XEC_MBOX_MAX 32
+
+struct mbox_regs {
+	volatile uint8_t OS_IDX;	/* 0x0000 Host vislibe OS Index */
+	volatile uint8_t OS_DATA;	/* 0x0001 Host visible OS Data */
+	uint8_t RSVD1[0x100u - 0x02u];
+	volatile uint32_t HOST_TO_EC;	/* 0x0100 Host to EC */
+	volatile uint32_t EC_TO_HOST;	/* 0x0104 EC to Host */
+	volatile uint32_t SMI_SRC;	/* 0x0108 SMI Source */
+	volatile uint32_t SMI_MASK;	/* 0x010c SMI Mask */
+	volatile uint8_t mboxes[32];	/* 0x110 - 0x12f mailboxes 0-31 */
+};
+
+struct xec_mbox_config {
+	struct mbox_regs * const mbox;
 	uint32_t ecia_info;
 };
 
-static const struct xec_mbox0_config xec_mbox0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(mbox0)),
+static const struct xec_mbox_config xec_mbox0_cfg = {
+	.mbox = (struct mbox_regs * const)(DT_REG_ADDR(DT_NODELABEL(mbox0))),
 	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(mbox0), girqs, 0),
 };
 
@@ -125,12 +134,12 @@ static int connect_irq_mbox0(const struct device *dev)
 	/* clear GIRQ source */
 	mchp_xec_ecia_info_girq_src_clr(xec_mbox0_cfg.ecia_info);
 
-	IRQ_CONNECT(DT_IRQN(DT_NODELABLE(mbox0)),
-		    DT_IRQ(DT_NODELABLE(mbox0), priority),
-		    acpi_ec0_isr,
+	IRQ_CONNECT(DT_IRQN(DT_NODELABEL(mbox0)),
+		    DT_IRQ(DT_NODELABEL(mbox0), priority),
+		    mbox0_isr,
 		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
 		    0);
-	irq_enable(DT_IRQN(DT_NODELABLE(mbox0)));
+	irq_enable(DT_IRQN(DT_NODELABEL(mbox0)));
 
 	/* enable GIRQ source */
 	mchp_xec_ecia_info_girq_src_en(xec_mbox0_cfg.ecia_info);
@@ -143,8 +152,8 @@ static int connect_irq_mbox0(const struct device *dev)
  */
 static int init_mbox0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *const cfg = dev->config;
+	struct espi_iom_regs * const regs = cfg->iom_base;
 
 	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS |
 				 MCHP_ESPI_IO_BAR_HOST_VALID;
@@ -163,24 +172,22 @@ static int init_mbox0(const struct device *dev)
 BUILD_ASSERT(DT_NODE_HAS_STATUS(DT_NODELABEL(kbc0), okay),
 	     "XEC kbc0 DT node is disabled!");
 
-struct xec_kbc0_config {
-	uintptr_t regbase;
+struct xec_kbc_config {
+	struct kbc_regs * const regs;
 	uint32_t ibf_ecia_info;
 	uint32_t obe_ecia_info;
 };
 
-static const struct xec_kbc0_config xec_kbc0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(kbc0)),
+static const struct xec_kbc_config xec_kbc0_cfg = {
+	.regs = (struct kbc_regs * const)(DT_REG_ADDR(DT_NODELABEL(kbc0))),
 	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(kbc0), girqs, 1),
 	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(kbc0), girqs, 0),
 };
 
 static void kbc0_ibf_isr(const struct device *dev)
 {
-	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-
+	struct kbc_regs * const kbc_hw = xec_kbc0_cfg.regs;
+	struct espi_xec_data *const data = dev->data;
 
 	/* The high byte contains information from the host,
 	 * and the lower byte speficies if the host sent
@@ -212,7 +219,7 @@ static void kbc0_obe_isr(const struct device *dev)
 static int kbc0_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
 		       uint32_t *data)
 {
-	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
+	struct kbc_regs * const kbc_hw = xec_kbc0_cfg.regs;
 
 	ARG_UNUSED(dev);
 
@@ -250,7 +257,7 @@ static int kbc0_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
 static int kbc0_wr_req(const struct device *dev, enum lpc_peripheral_opcode op,
 		       uint32_t *data)
 {
-	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
+	struct kbc_regs * const kbc_hw = xec_kbc0_cfg.regs;
 
 	volatile uint32_t __attribute__((unused)) dummy;
 
@@ -333,9 +340,9 @@ static int connect_irq_kbc0(const struct device *dev)
 
 static int init_kbc0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
+	const struct espi_xec_config * const cfg = dev->config;
+	struct espi_iom_regs *const regs = cfg->iom_base;
+	struct kbc_regs * const kbc_hw = xec_kbc0_cfg.regs;
 
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_AUXH;
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_OBFEN;
@@ -357,15 +364,15 @@ static int init_kbc0(const struct device *dev)
 #ifdef CONFIG_ESPI_PERIPHERAL_HOST_IO
 
 static const struct xec_acpi_ec_config xec_acpi_ec0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(acpi_ec0)),
+	.regs = (struct acpi_ec_regs * const)(
+		DT_REG_ADDR(DT_NODELABEL(acpi_ec0))),
 	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec0), girqs, 0),
 	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec0), girqs, 1),
 };
 
 static void acpi_ec0_ibf_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
+	struct espi_xec_data *const data = dev->data;
 	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION,
 		ESPI_PERIPHERAL_HOST_IO, ESPI_PERIPHERAL_NODATA
 	};
@@ -432,8 +439,8 @@ static int connect_irq_acpi_ec0(const struct device *dev)
 
 static int init_acpi_ec0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config * const cfg = dev->config;
+	struct espi_iom_regs *const regs = cfg->iom_base;
 
 	regs->IOHBAR[IOB_ACPI_EC0] = ESPI_XEC_ACPI_EC0_BAR_ADDRESS |
 				MCHP_ESPI_IO_BAR_HOST_VALID;
@@ -452,15 +459,15 @@ static int init_acpi_ec0(const struct device *dev)
 	defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT)
 
 static const struct xec_acpi_ec_config xec_acpi_ec1_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(acpi_ec1)),
+	.regs = (struct acpi_ec_regs * const)(
+		DT_REG_ADDR(DT_NODELABEL(acpi_ec1))),
 	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec1), girqs, 0),
 	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec1), girqs, 1),
 };
 
 static void acpi_ec1_ibf_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
+	struct espi_xec_data *const data = dev->data;
 	struct espi_event evt = {
 		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
@@ -511,8 +518,8 @@ static int connect_irq_acpi_ec1(const struct device *dev)
 
 static int init_acpi_ec1(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config * const cfg = dev->config;
+	struct espi_iom_regs *const regs = cfg->iom_base;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 	regs->IOHBAR[IOB_ACPI_EC1] =
@@ -542,30 +549,29 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS(DT_NODELABEL(emi0), okay),
 	     "XEC EMI0 DT node is disabled!");
 
 struct xec_emi_config {
-	uintptr_t regbase;
+	struct emi_regs * const regs;
 };
 
 static const struct xec_emi_config xec_emi0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(emi0)),
+	.regs = (struct emi_regs * const)(DT_REG_ADDR(DT_NODELABEL(emi0))),
 };
 
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
 static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
-						CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE];
+				CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE];
 #else
 static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE];
 #endif
 
 static int init_emi0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct emi_regs *emi_hw =
-		(struct emi_regs *)xec_emi0_cfg.regbase;
+	const struct espi_xec_config * const cfg = dev->config;
+	struct espi_iom_regs *const regs = cfg->iom_base;
+	struct emi_regs *emi_hw = xec_emi0_cfg.regbase;
 
 	regs->IOHBAR[IOB_EMI0] =
-				(CONFIG_ESPI_PERIPHERAL_HOST_CMD_PARAM_PORT_NUM << 16) |
-				MCHP_ESPI_IO_BAR_HOST_VALID;
+		((CONFIG_ESPI_PERIPHERAL_HOST_CMD_PARAM_PORT_NUM << 16) |
+		 MCHP_ESPI_IO_BAR_HOST_VALID);
 
 	emi_hw->MEM_BA_0 = (uint32_t)ec_host_cmd_sram;
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
@@ -626,6 +632,7 @@ static int eacpi_shm_rd_req(const struct device *dev,
 			uint32_t *data)
 {
 	ARG_UNUSED(dev);
+	uint32_t index = 0u;
 
 	switch (op) {
 	case EACPI_GET_SHARED_MEMORY:
@@ -655,12 +662,12 @@ static int eacpi_shm_wr_req(const struct device *dev,
 #ifdef CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80
 
 struct xec_p80bd_config {
-	uintptr_t regbase;
+	struct p80bd_regs * const regs;
 	uint32_t ecia_info;
 };
 
 static const struct xec_p80bd_config xec_p80bd0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(p80bd0)),
+	.regs = (struct p80bd_regs * const)(DT_REG_ADDR(DT_NODELABEL(p80bd0))),
 	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(p80bd0), girqs, 0),
 };
 
@@ -672,10 +679,8 @@ static const struct xec_p80bd_config xec_p80bd0_cfg = {
  */
 static void p80bd0_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-	struct p80bd_regs *p80regs =
-		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
+	struct espi_xec_data *const data = dev->data;
+	struct p80bd_regs *p80regs = xec_p80bd0_cfg.regs;
 	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION, 0,
 				  ESPI_PERIPHERAL_NODATA };
 	int count = 8; /* limit ISR to 8 bytes */
@@ -732,10 +737,9 @@ static int connect_irq_p80bd0(const struct device *dev)
 
 static int init_p80bd0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct p80bd_regs *p80bd_hw =
-		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
+	const struct espi_xec_config * const cfg = dev->config;
+	struct espi_iom_regs * const regs = cfg->iom_base;
+	struct p80bd_regs *p80bd_hw = xec_p80bd0_cfg.regs;
 
 	regs->IOHBAR[IOB_P80BD] = ESPI_XEC_PORT80_BAR_ADDRESS |
 				  MCHP_ESPI_IO_BAR_HOST_VALID;
@@ -758,8 +762,8 @@ static int init_p80bd0(const struct device *dev)
 #if CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING == 0
 int init_uart0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *const cfg = dev->config;
+	struct espi_iom_regs * const regs = cfg->iom_base;
 
 	regs->IOHBAR[IOB_UART0] = ESPI_XEC_UART0_BAR_ADDRESS |
 				  MCHP_ESPI_IO_BAR_HOST_VALID;
@@ -773,8 +777,8 @@ int init_uart0(const struct device *dev)
 #elif CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING == 1
 int init_uart1(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *const cfg = dev->config;
+	struct espi_iom_regs * const regs = cfg->iom_base;
 
 	regs->IOHBAR[IOB_UART1] = ESPI_XEC_UART0_BAR_ADDRESS |
 				  MCHP_ESPI_IO_BAR_HOST_VALID;
