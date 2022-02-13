@@ -51,6 +51,10 @@
 	status = "okay";
 };
 
+&wdog {
+	status = "okay";
+};
+
 /* Initialize ECIA. Does not initialize child devices */
 &ecia {
 	status = "okay";
