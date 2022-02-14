@@ -609,6 +609,7 @@
 			status = "disabled";
 		};
 		pwm0: pwm@40005800 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005800 0x20>;
 			pcrs = <1 4>;
 			label = "PWM_0";
@@ -616,6 +617,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm1: pwm@40005810 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005810 0x20>;
 			pcrs = <1 20>;
 			label = "PWM_1";
@@ -623,6 +625,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm2: pwm@40005820 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005820 0x20>;
 			pcrs = <1 21>;
 			label = "PWM_2";
@@ -630,6 +633,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm3: pwm@40005830 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005830 0x20>;
 			pcrs = <1 22>;
 			label = "PWM_3";
@@ -637,6 +641,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm4: pwm@40005840 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005840 0x20>;
 			pcrs = <1 23>;
 			label = "PWM_4";
@@ -644,6 +649,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm5: pwm@40005850 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005850 0x20>;
 			pcrs = <1 24>;
 			label = "PWM_5";
@@ -651,6 +657,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm6: pwm@40005860 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005860 0x20>;
 			pcrs = <1 25>;
 			label = "PWM_6";
@@ -658,6 +665,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm7: pwm@40005870 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005870 0x20>;
 			pcrs = <1 26>;
 			label = "PWM_7";
@@ -665,6 +673,7 @@
 			#pwm-cells = <1>;
 		};
 		pwm8: pwm@40005880 {
+			compatible = "microchip,xec-pwm";
 			reg = <0x40005880 0x20>;
 			pcrs = <1 27>;
 			label = "PWM_8";
