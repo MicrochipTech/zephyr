@@ -881,6 +881,11 @@
 		};
 		espi0: espi@400f3400 {
 			compatible = "microchip,xec-espi-v2";
+			/* reg tuple contains one 32-bit address cell and
+			 * one 32-bit length(size) cell
+			 */
+			#address-cells = <1>;
+			#size-cells = <1>;
 			reg = < 0x400f3400 0x400
 				0x400f3800 0x400
 				0x400f9c00 0x200
@@ -902,13 +907,26 @@
 				  MCHP_XEC_ECIA(19, 8, 11, 156) >;
 			pcrs = <2 19>;
 			label = "ESPI_0"; /* required */
-			#address-cells = <1>;
-			#size-cells = <0>;
 			status = "disabled";
+
+			espi_saf0: espi_saf@40008000 {
+				compatible = "microchip,xec-espi-saf-v2";
+				reg = < 0x40008000 0x400 >, < 0x40070000 0x400 >,
+				      < 0x40071000 0x400 >;
+				reg-names = "safbr", "safqspi", "safcomm";
+				interrupts = < 166 3 >, < 167 3 >;
+				interrupt-names = "done", "err";
+				girqs = < MCHP_XEC_ECIA(19, 9, 11, 166) >,
+					< MCHP_XEC_ECIA(19, 10, 11, 167) >;
+				pcrs = <2 27>;
+				label = "ESPI_SAF_0";
+				status = "disabled";
+			};
 
 			mbox0: mbox@400f0000 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f0000 0x200>;
+				reg-names = "mboxregs";
 				interrupts = <60 0>;
 				girqs = < MCHP_XEC_ECIA(15, 20, 7, 60) >;
 				pcrs = <2 17>;
@@ -920,8 +938,8 @@
 				reg = <0x400f0400 0x400>;
 				interrupts = <58 3>, <59 3>;
 				interrupt-names = "kbc_obe", "kbc_ibf";
-				girqs = < MCHP_XEC_ECIA(15, 18, 7, 58)
-					  MCHP_XEC_ECIA(15, 19, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 18, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 19, 7, 58) >;
 				ldn = <1>;
 				status = "disabled";
 			};
@@ -930,8 +948,8 @@
 				reg = <0x400f0800 0x400>;
 				interrupts = <45 3>, <46 3>;
 				interrupt-names = "acpi_ibf", "acpi_obe";
-				girqs = < MCHP_XEC_ECIA(15, 5, 7, 45)
-					  MCHP_XEC_ECIA(15, 6, 7, 46) >;
+				girqs = < MCHP_XEC_ECIA(15, 5, 7, 45) >,
+					< MCHP_XEC_ECIA(15, 6, 7, 46) >;
 				ldn = <2>;
 				status = "disabled";
 			};
@@ -940,8 +958,8 @@
 				reg = <0x400f0c00 0x400>;
 				interrupts = <47 3>, <48 3>;
 				interrupt-names = "acpi_ibf", "acpi_obe";
-				girqs = < MCHP_XEC_ECIA(15, 7, 7, 58)
-					  MCHP_XEC_ECIA(15, 8, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 7, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 8, 7, 58) >;
 				ldn = <3>;
 				status = "disabled";
 			};
@@ -950,8 +968,8 @@
 				reg = <0x400f1000 0x400>;
 				interrupts = <49 3>, <50 3>;
 				interrupt-names = "acpi_ibf", "acpi_obe";
-				girqs = < MCHP_XEC_ECIA(15, 9, 7, 58)
-					  MCHP_XEC_ECIA(15, 10, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 9, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 10, 7, 58) >;
 				ldn = <4>;
 				status = "disabled";
 			};
@@ -960,8 +978,8 @@
 				reg = <0x400f1400 0x400>;
 				interrupts = <51 3>, <52 3>;
 				interrupt-names = "acpi_ibf", "acpi_obe";
-				girqs = < MCHP_XEC_ECIA(15, 11, 7, 58)
-					  MCHP_XEC_ECIA(15, 12, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 11, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 12, 7, 58) >;
 				ldn = <5>;
 				status = "disabled";
 			};
@@ -970,8 +988,8 @@
 				reg = <0x400f1800 0x400>;
 				interrupts = <53 3>, <54 3>;
 				interrupt-names = "acpi_ibf", "acpi_obe";
-				girqs = < MCHP_XEC_ECIA(15, 13, 7, 58)
-					  MCHP_XEC_ECIA(15, 14, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 13, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 14, 7, 58) >;
 				ldn = <6>;
 				status = "disabled";
 			};
@@ -980,9 +998,9 @@
 				reg = <0x400f1c00 0x400>;
 				interrupts = <55 3>, <56 3>, <57 3>;
 				interrupt-names = "pm1_ctl", "pm1_en", "pm1_sts";
-				girqs = < MCHP_XEC_ECIA(15, 15, 7, 58)
-					  MCHP_XEC_ECIA(15, 16, 7, 58)
-					  MCHP_XEC_ECIA(15, 17, 7, 58) >;
+				girqs = < MCHP_XEC_ECIA(15, 15, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 16, 7, 58) >,
+					< MCHP_XEC_ECIA(15, 17, 7, 58) >;
 				ldn = <7>;
 				status = "disabled";
 			};
@@ -1044,8 +1062,8 @@
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f5000 0x100>;
 				interrupts = <119 0>, <120 0>;
-				girqs = < MCHP_XEC_ECIA(21, 8, 13, 119)
-					  MCHP_XEC_ECIA(21, 9, 13, 120) >;
+				girqs = < MCHP_XEC_ECIA(21, 8, 13, 119) >,
+					< MCHP_XEC_ECIA(21, 9, 13, 120) >;
 				pcrs = <2 18>;
 				ldn = <20>;
 				status = "disabled";
