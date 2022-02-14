@@ -69,6 +69,8 @@ LOG_MODULE_REGISTER(i2c_mchp, CONFIG_I2C_LOG_LEVEL);
 #define I2C_XEC_ERR_BUS		2
 #define I2C_XEC_ERR_TMOUT	3
 
+#define I2C_CFG_MODE_LEADER	BIT(0)
+
 #define XEC_GPIO_CTRL_BASE	DT_REG_ADDR(DT_NODELABEL(gpio_000_036))
 
 struct xec_speed_cfg {
@@ -93,6 +95,7 @@ struct i2c_xec_data {
 	uint8_t state;
 	uint8_t read_discard;
 	uint8_t speed_id;
+	uint8_t mode;
 	struct i2c_slave_config *target_cfg;
 	bool target_attached;
 	bool target_read;
@@ -275,7 +278,7 @@ static int i2c_xec_reset_config(const struct device *dev)
  * to be set.
  * NOTE 4: The controller must be reset after using bit-bang mode.
  */
-static int i2c_xec_recover_bus(const struct device *dev)
+static int i2c_xec_bus_recover(const struct device *dev)
 {
 	const struct i2c_xec_config * const cfg = dev->config;
 	struct i2c_smb_regs * const regs = cfg->regs;
@@ -512,12 +515,14 @@ static int i2c_xec_configure(const struct device *dev,
 {
 	struct i2c_xec_data * const data = dev->data;
 
-	if (!(dev_config_raw & I2C_MODE_MASTER)) {
-		return -ENOTSUP;
-	}
+	data->mode = 0U;
 
 	if (dev_config_raw & I2C_ADDR_10_BITS) {
 		return -ENOTSUP;
+	}
+
+	if (dev_config_raw & I2C_MODE_MASTER) {
+		data->mode |= I2C_CFG_MODE_LEADER;
 	}
 
 	switch (I2C_SPEED_GET(dev_config_raw)) {
@@ -554,7 +559,7 @@ static int ctrl_tx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 		/* Is bus free and controller ready? */
 		ret = wait_bus_free(dev, WAIT_COUNT);
 		if (ret) {
-			ret = i2c_xec_recover_bus(dev);
+			ret = i2c_xec_bus_recover(dev);
 			if (ret) {
 				return ret;
 			}
@@ -737,6 +742,19 @@ static int i2c_xec_transfer(const struct device *dev, struct i2c_msg *msgs,
 	}
 
 	return ret;
+}
+
+/* I2C bus recovery for Controller(Leader) mode only */
+static int i2c_xec_recover_bus(const struct device *dev)
+{
+	struct i2c_xec_data * const data = dev->data;
+
+	/* Recovery allowed only if controller is a leader */
+	if (!(data->mode & I2C_CFG_MODE_LEADER)) {
+		return -ENOSYS;
+	}
+
+	return i2c_xec_bus_recover(dev);
 }
 
 static void i2c_xec_bus_isr(void *arg)
@@ -973,6 +991,7 @@ static int i2c_xec_target_unregister(const struct device *dev,
 static const struct i2c_driver_api i2c_xec_driver_api = {
 	.configure = i2c_xec_configure,
 	.transfer = i2c_xec_transfer,
+	.recover_bus = i2c_xec_recover_bus,
 #ifdef CONFIG_I2C_SLAVE
 	.slave_register = i2c_xec_target_register,
 	.slave_unregister = i2c_xec_target_unregister,
