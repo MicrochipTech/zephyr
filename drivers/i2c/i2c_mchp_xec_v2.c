@@ -132,89 +132,6 @@ static const struct xec_speed_cfg xec_cfg_params[] = {
 	},
 };
 
-struct xec_i2c_port {
-	uint8_t scl_pin;
-	uint8_t scl_func;
-	uint8_t sda_pin;
-	uint8_t sda_func;
-};
-
-/* Indexed by port number */
-static const struct xec_i2c_port xec_i2c_ports[] = {
-	{ 0004, 1, 0003, 1 },
-	{ 0131, 1, 0130, 1 },
-	{ 0155, 1, 0154, 1 },
-	{ 0010, 1, 0007, 1 },
-	{ 0144, 1, 0143, 1 },
-	{ 0142, 1, 0141, 1 },
-	{ 0140, 1, 0132, 1 },
-	{ 0013, 1, 0012, 1 },
-#ifdef CONFIG_SOC_SERIES_MEC172X
-	{ 0230, 1, 0231, 1 },
-#else
-	{ 0212, 1, 0211, 1 },
-#endif
-	{ 0146, 1, 0145, 1 },
-	{ 0107, 3, 0030, 2 },
-	{ 0062, 2, 0000, 3 },
-	{ 0027, 3, 0026, 3 },
-	{ 0065, 2, 0066, 2 },
-	{ 0071, 2, 0070, 2 },
-	{ 0150, 1, 0147, 1 },
-};
-
-/* returns b[0]=SCL pin state, b[1]=SDA pin state */
-static uint32_t xec_i2c_port_lines(uint8_t port)
-{
-	uintptr_t base = (uintptr_t)XEC_GPIO_CTRL_BASE;
-	uint32_t lines = 0;
-
-	if (port < ARRAY_SIZE(xec_i2c_ports)) {
-		const struct xec_i2c_port *p = &xec_i2c_ports[port];
-		uintptr_t ctrl_addr = base + p->scl_pin * 4;
-
-		lines = (sys_read32(ctrl_addr) >> 24) & BIT(0);
-		ctrl_addr = base + p->scl_pin * 4;
-		lines |= ((sys_read32(ctrl_addr) >> 23) & BIT(1));
-	}
-
-	return lines;
-}
-
-#define XEC_I2C_PIN_PRE_CFG1						\
-	(MCHP_GPIO_CTRL_OUTV_HI | MCHP_GPIO_CTRL_MUX_GPIO |		\
-	 MCHP_GPIO_CTRL_DIR_OUTPUT | MCHP_GPIO_CTRL_BUFT_OPENDRAIN |	\
-	 MCHP_GPIO_CTRL_IDET_DISABLE | MCHP_GPIO_CTRL_PUD_NONE)
-
-static int xec_i2c_port_cfg(uint8_t port, uint8_t enable)
-{
-	if (port >= ARRAY_SIZE(xec_i2c_ports)) {
-		return -EINVAL;
-	}
-
-	const struct xec_i2c_port *p = &xec_i2c_ports[port];
-	uintptr_t scl_addr = (uintptr_t)XEC_GPIO_CTRL_BASE + p->scl_pin * 4;
-	uintptr_t sda_addr = (uintptr_t)XEC_GPIO_CTRL_BASE + p->sda_pin * 4;
-
-	if (enable) {
-		sys_write32(XEC_I2C_PIN_PRE_CFG1, sda_addr);
-		sys_write32(XEC_I2C_PIN_PRE_CFG1, scl_addr);
-
-		k_busy_wait(PIN_CFG_WAIT);
-
-		sys_write32(sys_read32(sda_addr) |
-			    ((uint32_t)(p->sda_func) << MCHP_GPIO_CTRL_MUX_POS),
-			    sda_addr);
-		sys_write32(sys_read32(scl_addr) |
-			    ((uint32_t)(p->scl_func) << MCHP_GPIO_CTRL_MUX_POS),
-			    scl_addr);
-	} else {
-		sys_write32(MCHP_GPIO_CTRL_DIS_PIN, scl_addr);
-		sys_write32(MCHP_GPIO_CTRL_DIS_PIN, sda_addr);
-	}
-
-	return 0;
-}
 
 static void i2c_ctl_wr(const struct device *dev, uint8_t ctrl)
 {
@@ -263,20 +180,6 @@ static int wait_bus_free(const struct device *dev, uint32_t nwait)
 	}
 
 	return I2C_XEC_ERR_TMOUT;
-}
-
-/*
- * returns state of I2C SCL and SDA lines.
- * b[0] = SCL, b[1] = SDA
- */
-static uint32_t get_lines(const struct device *dev)
-{
-	const struct i2c_xec_config *cfg =
-		(const struct i2c_xec_config *const) (dev->config);
-	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->regs;
-	uint8_t port = regs->CFG & MCHP_I2C_SMB_CFG_PORT_SEL_MASK;
-
-	return xec_i2c_port_lines(port);
 }
 
 static int i2c_xec_reset_config(const struct device *dev)
@@ -576,21 +479,9 @@ static int do_stop(const struct device *dev, uint32_t nwait)
 
 	gen_stop(dev);
 	ret = wait_bus_free(dev, nwait);
-	if (ret) {
-		uint32_t lines = get_lines(dev);
 
-		if (lines != I2C_LINES_BOTH_HI) {
-			i2c_xec_recover_bus(dev);
-		} else {
-			ret = i2c_xec_reset_config(dev);
-		}
-	}
-
-	if (ret == 0) {
-		/* stop success: prepare for next transaction */
-		regs->CTRLSTS = MCHP_I2C_SMB_CTRL_PIN | MCHP_I2C_SMB_CTRL_ESO |
-				MCHP_I2C_SMB_CTRL_ACK;
-	}
+	regs->CTRLSTS = (MCHP_I2C_SMB_CTRL_PIN | MCHP_I2C_SMB_CTRL_ESO |
+			 MCHP_I2C_SMB_CTRL_ACK);
 
 	return ret;
 }
@@ -598,7 +489,7 @@ static int do_stop(const struct device *dev, uint32_t nwait)
 static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 {
 	struct i2c_xec_data * const data = dev->data;
-	int ret;
+	int ret = 0;
 
 	gen_start(dev, addr8, is_repeated);
 	ret = wait_pin(dev, I2C_WAIT_PIN_ASSERT, WAIT_COUNT);
@@ -611,13 +502,9 @@ static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 	if (data->i2c_status & MCHP_I2C_SMB_STS_LRB_AD0) {
 		gen_stop(dev);
 		ret = wait_bus_free(dev, WAIT_COUNT);
-		if (ret) {
-			i2c_xec_reset_config(dev);
-		}
-		return -EIO;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int i2c_xec_configure(const struct device *dev,
@@ -1104,11 +991,6 @@ static int i2c_xec_init(const struct device *dev)
 	data->state = I2C_XEC_STATE_STOPPED;
 	data->target_cfg = NULL;
 	data->target_attached = false;
-
-	ret = xec_i2c_port_cfg(cfg->port_sel, 1);
-	if (ret) {
-		return ret;
-	}
 
 	/* Default configuration */
 	ret = i2c_xec_configure(dev,

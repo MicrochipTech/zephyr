@@ -5,7 +5,11 @@
 #
 
 zephyr_library()
-zephyr_library_sources(pinmux.c)
+zephyr_library_sources_ifdef(CONFIG_PINMUX pinmux.c)
+
+if(CONFIG_PINMUX AND NOT CONFIG_PINCTRL)
+  zephyr_library_sources(pinmux.c)
+endif()
 
 if(DEFINED ENV{MEC172X_SPI_GEN})
   # Grab it from environment variable if defined
