@@ -122,7 +122,7 @@
 &i2c_smb_0 {
 	status = "okay";
 	label = "I2C0";
-	port_sel = <0>;
+	port-sel = <0>;
 
 	pca9555@26 {
 		compatible = "nxp,pca95xx";
@@ -145,13 +145,13 @@
 &i2c_smb_1 {
 	status = "okay";
 	label = "I2C1";
-	port_sel = <1>;
+	port-sel = <1>;
 };
 
 &i2c_smb_2 {
 	status = "okay";
 	label = "I2C7";
-	port_sel = <7>;
+	port-sel = <7>;
 };
 
 &spi0 {
