@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019 Intel Corporation.
+ * Copyright (c) 2022 Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +12,10 @@
 LOG_MODULE_REGISTER(adc_mchp_xec);
 
 #include <drivers/adc.h>
+#ifdef CONFIG_SOC_SERIES_MEC172X
+#include <drivers/clock_control/mchp_xec_clock_control.h>
+#include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#endif
 #include <soc.h>
 #include <errno.h>
 
@@ -48,13 +53,62 @@ struct adc_xec_regs {
 	uint32_t sar_control_reg;
 };
 
-#define ADC_XEC_REG_BASE						\
-	((struct adc_xec_regs *)(DT_INST_REG_ADDR(0)))
+struct adc_xec_config {
+	struct adc_xec_regs * const base;
+	uint8_t girq_single;
+	uint8_t girq_single_pos;
+	uint8_t girq_repeat;
+	uint8_t girq_repeat_pos;
+};
+
+static struct adc_xec_data adc_xec_dev_data_0 = {
+	ADC_CONTEXT_INIT_TIMER(adc_xec_dev_data_0, ctx),
+	ADC_CONTEXT_INIT_LOCK(adc_xec_dev_data_0, ctx),
+	ADC_CONTEXT_INIT_SYNC(adc_xec_dev_data_0, ctx),
+};
+
+static struct adc_xec_config adc_xec_cfg_0 = {
+	.base = (struct adc_xec_regs * const)DT_INST_REG_ADDR(0),
+	.girq_single = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 0),
+	.girq_single_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 1),
+	.girq_repeat = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 2),
+	.girq_repeat_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 3),
+};
+
+#ifdef CONFIG_SOC_SERIES_MEC172X
+static void adc_xec_girq_single_clr(const struct device *dev)
+{
+	const struct adc_xec_config * const cfg = dev->config;
+
+	mchp_xec_ecia_girq_src_clr(cfg->girq_single, cfg->girq_single_pos);
+}
+
+static void adc_xec_girq_single_enable(const struct device *dev)
+{
+	const struct adc_xec_config * const cfg = dev->config;
+
+	mchp_xec_ecia_girq_src_en(cfg->girq_single, cfg->girq_single_pos);
+}
+#else
+static void adc_xec_girq_single_clr(const struct device *dev)
+{
+	const struct adc_xec_config * const cfg = dev->config;
+
+	MCHP_GIRQ_SRC_CLR(cfg->girq_single, cfg->girq_single_pos);
+}
+
+static void adc_xec_girq_single_enable(const struct device *dev)
+{
+	const struct adc_xec_config * const cfg = dev->config;
+
+	MCHP_GIRQ_SET_EN(cfg->girq_single, cfg->girq_single_pos);
+}
+#endif
 
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
-	struct adc_xec_data *data = CONTAINER_OF(ctx, struct adc_xec_data, ctx);
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
+	struct adc_xec_data * const data = CONTAINER_OF(ctx, struct adc_xec_data, ctx);
+	struct adc_xec_regs * const adc_regs = adc_xec_cfg_0.base;
 
 	data->repeat_buffer = data->buffer;
 
@@ -65,7 +119,7 @@ static void adc_context_start_sampling(struct adc_context *ctx)
 static void adc_context_update_buffer_pointer(struct adc_context *ctx,
 					      bool repeat_sampling)
 {
-	struct adc_xec_data *data = CONTAINER_OF(ctx, struct adc_xec_data, ctx);
+	struct adc_xec_data * const data = CONTAINER_OF(ctx, struct adc_xec_data, ctx);
 
 	if (repeat_sampling) {
 		data->buffer = data->repeat_buffer;
@@ -75,10 +129,9 @@ static void adc_context_update_buffer_pointer(struct adc_context *ctx,
 static int adc_xec_channel_setup(const struct device *dev,
 				 const struct adc_channel_cfg *channel_cfg)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
+	const struct adc_xec_config * const cfg = dev->config;
+	struct adc_xec_regs * const adc_regs =  cfg->base;
 	uint32_t reg;
-
-	ARG_UNUSED(dev);
 
 	if (channel_cfg->acquisition_time != ADC_ACQ_TIME_DEFAULT) {
 		return -EINVAL;
@@ -145,8 +198,9 @@ static bool adc_xec_validate_buffer_size(const struct adc_sequence *sequence)
 static int adc_xec_start_read(const struct device *dev,
 			      const struct adc_sequence *sequence)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
-	struct adc_xec_data *data = dev->data;
+	const struct adc_xec_config * const cfg = dev->config;
+	struct adc_xec_regs * const adc_regs =  cfg->base;
+	struct adc_xec_data * const data = dev->data;
 	uint32_t reg;
 
 	if (sequence->channels & ~BIT_MASK(MCHP_ADC_MAX_CHAN)) {
@@ -190,7 +244,7 @@ static int adc_xec_start_read(const struct device *dev,
 static int adc_xec_read(const struct device *dev,
 			const struct adc_sequence *sequence)
 {
-	struct adc_xec_data *data = dev->data;
+	struct adc_xec_data * const data = dev->data;
 	int error;
 
 	adc_context_lock(&data->ctx, false, NULL);
@@ -205,7 +259,7 @@ static int adc_xec_read_async(const struct device *dev,
 			      const struct adc_sequence *sequence,
 			      struct k_poll_signal *async)
 {
-	struct adc_xec_data *data = dev->data;
+	struct adc_xec_data * const data = dev->data;
 	int error;
 
 	adc_context_lock(&data->ctx, true, async);
@@ -218,8 +272,9 @@ static int adc_xec_read_async(const struct device *dev,
 
 static void xec_adc_get_sample(const struct device *dev)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
-	struct adc_xec_data *data = dev->data;
+	const struct adc_xec_config * const cfg = dev->config;
+	struct adc_xec_regs * const adc_regs =  cfg->base;
+	struct adc_xec_data * const data = dev->data;
 	uint32_t idx;
 	uint32_t channels = adc_regs->status_reg;
 	uint32_t ch_status = channels;
@@ -249,8 +304,9 @@ static void xec_adc_get_sample(const struct device *dev)
 
 static void adc_xec_isr(const struct device *dev)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
-	struct adc_xec_data *data = dev->data;
+	const struct adc_xec_config * const cfg = dev->config;
+	struct adc_xec_regs * const adc_regs =  cfg->base;
+	struct adc_xec_data * const data = dev->data;
 	uint32_t reg;
 
 	/* Clear START_SINGLE bit and clear SINGLE_DONE_STATUS */
@@ -260,7 +316,7 @@ static void adc_xec_isr(const struct device *dev)
 	adc_regs->control_reg = reg;
 
 	/* Also clear GIRQ source status bit */
-	MCHP_GIRQ_SRC(MCHP_ADC_GIRQ) = MCHP_ADC_SNG_DONE_GIRQ_VAL;
+	adc_xec_girq_single_clr(dev);
 
 	xec_adc_get_sample(dev);
 
@@ -285,8 +341,9 @@ struct adc_driver_api adc_xec_api = {
 
 static int adc_xec_init(const struct device *dev)
 {
-	struct adc_xec_regs *adc_regs = ADC_XEC_REG_BASE;
-	struct adc_xec_data *data = dev->data;
+	const struct adc_xec_config * const cfg = dev->config;
+	struct adc_xec_regs * const adc_regs =  cfg->base;
+	struct adc_xec_data * const data = dev->data;
 
 	adc_regs->config_reg = XEC_ADC_CFG_CLK_VAL(DT_INST_PROP(0, clktime));
 
@@ -295,8 +352,8 @@ static int adc_xec_init(const struct device *dev)
 		| XEC_ADC_CTRL_SINGLE_DONE_STATUS
 		| XEC_ADC_CTRL_REPEAT_DONE_STATUS;
 
-	MCHP_GIRQ_SRC(MCHP_ADC_GIRQ) = MCHP_ADC_SNG_DONE_GIRQ_VAL;
-	MCHP_GIRQ_ENSET(MCHP_ADC_GIRQ) = MCHP_ADC_SNG_DONE_GIRQ_VAL;
+	adc_xec_girq_single_clr(dev);
+	adc_xec_girq_single_enable(dev);
 
 	IRQ_CONNECT(DT_INST_IRQN(0),
 		    DT_INST_IRQ(0, priority),
@@ -308,13 +365,7 @@ static int adc_xec_init(const struct device *dev)
 	return 0;
 }
 
-static struct adc_xec_data adc_xec_dev_data_0 = {
-	ADC_CONTEXT_INIT_TIMER(adc_xec_dev_data_0, ctx),
-	ADC_CONTEXT_INIT_LOCK(adc_xec_dev_data_0, ctx),
-	ADC_CONTEXT_INIT_SYNC(adc_xec_dev_data_0, ctx),
-};
-
 DEVICE_DT_INST_DEFINE(0, adc_xec_init, NULL,
-		    &adc_xec_dev_data_0, NULL,
+		    &adc_xec_dev_data_0, &adc_xec_cfg_0,
 		    PRE_KERNEL_1, CONFIG_ADC_INIT_PRIORITY,
 		    &adc_xec_api);
