@@ -681,6 +681,7 @@
 			#pwm-cells = <1>;
 		};
 		tach0: tach@40006000 {
+			compatible = "microchip,xec-tach";
 			reg = <0x40006000 0x10>;
 			interrupts = <71 4>;
 			girqs = <17 1>;
@@ -691,6 +692,7 @@
 			status = "disabled";
 		};
 		tach1: tach@40006010 {
+			compatible = "microchip,xec-tach";
 			reg = <0x40006010 0x10>;
 			interrupts = <72 4>;
 			girqs = <17 2>;
@@ -701,6 +703,7 @@
 			status = "disabled";
 		};
 		tach2: tach@40006020 {
+			compatible = "microchip,xec-tach";
 			reg = <0x40006020 0x10>;
 			interrupts = <73 4>;
 			girqs = <17 3>;
@@ -711,6 +714,7 @@
 			status = "disabled";
 		};
 		tach3: tach@40006030 {
+			compatible = "microchip,xec-tach";
 			reg = <0x40006030 0x10>;
 			interrupts = <159 4>;
 			girqs = <17 4>;
