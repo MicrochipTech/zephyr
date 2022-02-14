@@ -38,7 +38,7 @@ properties:
 
     port-sel:
       type: int
-      required: false
+      required: true
       description: |
         SPI Port 0, 1, or 2. Port 0 is the shared SPI, port 1 is
         the private SPI, and port 2 is the internal SPI port for
