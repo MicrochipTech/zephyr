@@ -6,10 +6,13 @@
 
 #define DT_DRV_COMPAT microchip_xec_kscan
 
+#include <arch/arm/aarch32/cortex_m/cmsis.h>
 #include <errno.h>
 #include <device.h>
+#ifdef CONFIG_SOC_SERIES_MEC172X
 #include <drivers/clock_control/mchp_xec_clock_control.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#endif
 #include <drivers/kscan.h>
 #include <kernel.h>
 #include <soc.h>
@@ -37,7 +40,7 @@ LOG_MODULE_REGISTER(kscan_mchp_xec);
 #define TASK_STACK_SIZE 1024
 
 struct kscan_xec_config {
-	struct kscan_regs *regs;
+	struct kscan_regs * const regs;
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint8_t irq_pri;
@@ -73,25 +76,21 @@ struct kscan_xec_data {
 #ifdef CONFIG_SOC_SERIES_MEC172X
 static void kscan_clear_girq_status(const struct device *dev)
 {
-	struct kscan_xec_config const *cfg = dev->config;
+	const struct kscan_xec_config * const cfg = dev->config;
 
 	mchp_xec_ecia_girq_src_clr(cfg->girq, cfg->girq_pos);
 }
 
-static void kscan_configure_girq(const struct device *dev, bool enable)
+static void kscan_girq_enable(const struct device *dev)
 {
-	struct kscan_xec_config const *cfg = dev->config;
+	const struct kscan_xec_config * const cfg = dev->config;
 
-	if (enable) {
-		mchp_xec_ecia_enable(cfg->girq, cfg->girq_pos);
-	} else {
-		mchp_xec_ecia_disable(cfg->girq, cfg->girq_pos);
-	}
+	mchp_xec_ecia_enable(cfg->girq, cfg->girq_pos);
 }
 
 static void kscan_clr_slp_en(const struct device *dev)
 {
-	struct kscan_xec_config const *cfg = dev->config;
+	const struct kscan_xec_config * const cfg = dev->config;
 
 	z_mchp_xec_pcr_periph_sleep(cfg->pcr_idx, cfg->pcr_pos, 0);
 }
@@ -99,18 +98,16 @@ static void kscan_clr_slp_en(const struct device *dev)
 #else
 static void kscan_clear_girq_status(const struct device *dev)
 {
-	ARG_UNUSED(dev);
+	const struct kscan_xec_config * const cfg = dev->config;
 
-	MCHP_GIRQ_SRC(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
+	MCHP_GIRQ_SRC(cfg->girq) = BIT(cfg->girq_pos);
 }
 
-static void kscan_configure_girq(const struct device *dev, bool enable)
+static void kscan_girq_enable(const struct device *dev)
 {
-	if (enable) {
-		MCHP_GIRQ_ENSET(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
-	} else {
-		MCHP_GIRQ_ENCLR(MCHP_KSCAN_GIRQ) = BIT(MCHP_KSCAN_GIRQ_POS);
-	}
+	const struct kscan_xec_config * const cfg = dev->config;
+
+	MCHP_GIRQ_ENSET(cfg->girq) = BIT(cfg->girq_pos);
 }
 
 static void kscan_clr_slp_en(const struct device *dev)
@@ -124,8 +121,8 @@ static void kscan_clr_slp_en(const struct device *dev)
 
 static void drive_keyboard_column(const struct device *dev, int data)
 {
-	struct kscan_xec_config const *cfg = dev->config;
-	struct kscan_regs *regs = cfg->regs;
+	const struct kscan_xec_config * const cfg = dev->config;
+	struct kscan_regs * const regs = cfg->regs;
 
 	if (data == KEYBOARD_COLUMN_DRIVE_ALL) {
 		/* KSO output controlled by the KSO_SELECT field */
@@ -143,8 +140,8 @@ static void drive_keyboard_column(const struct device *dev, int data)
 
 static uint8_t read_keyboard_row(const struct device *dev)
 {
-	struct kscan_xec_config const *cfg = dev->config;
-	struct kscan_regs *regs = cfg->regs;
+	const struct kscan_xec_config * const cfg = dev->config;
+	struct kscan_regs * const regs = cfg->regs;
 
 	/* In this implementation a 1 means key pressed */
 	return ~(regs->KSI_IN & 0xFF);
@@ -341,9 +338,9 @@ static bool poll_expired(uint32_t start_cycles, int64_t *timeout)
 
 void polling_task(const struct device *dev, void *dummy2, void *dummy3)
 {
-	struct kscan_xec_config const *cfg = dev->config;
+	const struct kscan_xec_config * const cfg = dev->config;
 	struct kscan_xec_data *const data = dev->data;
-	struct kscan_regs *regs = cfg->regs;
+	struct kscan_regs * const regs = cfg->regs;
 	uint32_t current_cycles;
 	uint32_t cycles_diff;
 	uint32_t wait_period;
@@ -419,7 +416,7 @@ static int kscan_xec_configure(const struct device *dev,
 	data->callback = callback;
 
 	kscan_clear_girq_status(dev);
-	kscan_configure_girq(dev, 1);
+	kscan_girq_enable(dev);
 
 	return 0;
 }
@@ -450,9 +447,9 @@ static const struct kscan_driver_api kscan_xec_driver_api = {
 
 static int kscan_xec_init(const struct device *dev)
 {
-	struct kscan_xec_config const *cfg = dev->config;
-	struct kscan_xec_data *const data = dev->data;
-	struct kscan_regs *regs = cfg->regs;
+	const struct kscan_xec_config * const cfg = dev->config;
+	struct kscan_xec_data * const data = dev->data;
+	struct kscan_regs * const regs = cfg->regs;
 
 	kscan_clr_slp_en(dev);
 
@@ -490,21 +487,15 @@ static int kscan_xec_init(const struct device *dev)
 static struct kscan_xec_data kbd_data;
 
 static struct kscan_xec_config kscan_xec_cfg_0 = {
-	.regs = (struct kscan_regs *)(DT_INST_REG_ADDR(0)),
-#ifdef CONFIG_SOC_SERIES_MEC172X
+	.regs = (struct kscan_regs * const)(DT_INST_REG_ADDR(0)),
 	.girq = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 0)),
 	.girq_pos = (uint8_t)(DT_INST_PROP_BY_IDX(0, girqs, 1)),
 	.pcr_idx = (uint8_t)(DT_INST_PROP_BY_IDX(0, pcrs, 0)),
 	.pcr_pos = (uint8_t)(DT_INST_PROP_BY_IDX(0, pcrs, 1)),
-#else
-	.girq = MCHP_KSCAN_GIRQ,
-	.girq_pos = MCHP_KSCAN_GIRQ_POS,
-	.pcr_idx = 3u,
-	.pcr_pos = MCHP_PCR3_KEYSCAN_POS,
-#endif
 };
 
 DEVICE_DT_INST_DEFINE(0, kscan_xec_init,
-		      NULL, &kbd_data, &kscan_xec_cfg_0,
+		      NULL,
+		      &kbd_data, &kscan_xec_cfg_0,
 		      POST_KERNEL, CONFIG_KSCAN_INIT_PRIORITY,
 		      &kscan_xec_driver_api);

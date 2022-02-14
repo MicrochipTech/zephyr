@@ -23,12 +23,12 @@ properties:
 
     girqs:
       type: array
-      required: false
+      required: true
       description: Array of pairs of GIRQ number and bit position
 
     pcrs:
       type: array
-      required: false
+      required: true
       description: ADC PCR register index and bit position
 
 girq-cells:

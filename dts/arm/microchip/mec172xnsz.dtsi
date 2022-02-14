@@ -744,7 +744,7 @@
 			interrupts = <135 0>;
 			girqs = <21 25>;
 			pcrs = <3 11>;
-			label = "KSCAN";
+			label = "KSCAN"; /* required */
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
