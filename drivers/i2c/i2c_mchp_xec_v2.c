@@ -10,7 +10,7 @@
 #include <kernel.h>
 #include <soc.h>
 #include <errno.h>
-#include <drivers/clock_control.h>
+#include <drivers/clock_control/mchp_xec_clock_control.h>
 #include <drivers/gpio.h>
 #include <drivers/i2c.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
@@ -1097,6 +1097,9 @@ static int i2c_xec_init(const struct device *dev)
 	const struct i2c_xec_config * const cfg = dev->config;
 	struct i2c_xec_data * const data = dev->data;
 	int ret;
+
+	/* ungate SAF clocks by disabling PCR sleep enable */
+	z_mchp_xec_pcr_periph_sleep(cfg->pcr_idx, cfg->pcr_bitpos, 0);
 
 	data->state = I2C_XEC_STATE_STOPPED;
 	data->target_cfg = NULL;
