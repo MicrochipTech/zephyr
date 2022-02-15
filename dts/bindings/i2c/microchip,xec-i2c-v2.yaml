@@ -5,11 +5,17 @@ description: Microchip I2C/SMB V2 controller
 
 compatible: "microchip,xec-i2c-v2"
 
-include: i2c-controller.yaml
+include: [i2c-controller.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
       required: true
+
+    pinctrl-0:
+      required: false
+
+    pinctrl-names:
+      required: false
 
     port-sel:
       type: int

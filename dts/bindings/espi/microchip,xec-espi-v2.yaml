@@ -18,10 +18,10 @@ properties:
       description: Name of each register space
 
     pinctrl-0:
-      required: false
+      required: true
 
     pinctrl-names:
-      required: false
+      required: true
 
     girqs:
       type: array

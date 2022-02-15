@@ -14,7 +14,7 @@
 #include <drivers/gpio.h>
 #include <drivers/i2c.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
-#include <drivers/pinmux.h>
+#include <drivers/pinctrl.h>
 #include <sys/printk.h>
 #include <sys/sys_io.h>
 #include <logging/log.h>
@@ -89,6 +89,7 @@ struct i2c_xec_config {
 	uint8_t pcr_idx;
 	uint8_t pcr_bitpos;
 	void (*irq_config_func)(void);
+	const struct pinctrl_dev_config *pcfg;
 };
 
 struct i2c_xec_data {
@@ -1004,6 +1005,13 @@ static int i2c_xec_init(const struct device *dev)
 	struct i2c_xec_data * const data = dev->data;
 	int ret;
 
+	ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+
+	if (ret != 0) {
+		LOG_ERR("XEC I2C V2 pinctrl init failed (%d)", ret);
+		return ret;
+	}
+
 	/* ungate SAF clocks by disabling PCR sleep enable */
 	z_mchp_xec_pcr_periph_sleep(cfg->pcr_idx, cfg->pcr_bitpos, 0);
 
@@ -1027,10 +1035,9 @@ static int i2c_xec_init(const struct device *dev)
 	return 0;
 }
 
-#define I2C_XEC_DEVICE(n)						\
-	static void i2c_xec_irq_config_func_##n(void);			\
-									\
-	static struct i2c_xec_data i2c_xec_data_##n;			\
+#define I2C_XEC_DEVICE_PINCTRL(n) PINCTRL_DT_INST_DEFINE(n)
+
+#define I2C_XEC_DEVICE_CFG(n)						\
 	static const struct i2c_xec_config i2c_xec_config_##n = {	\
 		.regs = (struct i2c_smb_regs *const)DT_INST_REG_ADDR(n),\
 		.port_sel = DT_INST_PROP(n, port_sel),			\
@@ -1039,11 +1046,12 @@ static int i2c_xec_init(const struct device *dev)
 		.pcr_idx = DT_INST_PROP_BY_IDX(n, pcrs, 0),		\
 		.pcr_bitpos = DT_INST_PROP_BY_IDX(n, pcrs, 1),		\
 		.irq_config_func = i2c_xec_irq_config_func_##n,		\
-	};								\
-	I2C_DEVICE_DT_INST_DEFINE(n, i2c_xec_init, NULL,		\
-		&i2c_xec_data_##n, &i2c_xec_config_##n,			\
-		POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,			\
-		&i2c_xec_driver_api);					\
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
+	}
+
+#define I2C_XEC_DEVICE(n)						\
+									\
+	static struct i2c_xec_data i2c_xec_data_##n;			\
 									\
 	static void i2c_xec_irq_config_func_##n(void)			\
 	{								\
@@ -1052,6 +1060,17 @@ static int i2c_xec_init(const struct device *dev)
 			    i2c_xec_bus_isr,				\
 			    DEVICE_DT_INST_GET(n), 0);			\
 		irq_enable(DT_INST_IRQN(n));				\
-	}
+	}								\
+									\
+	I2C_XEC_DEVICE_PINCTRL(n);					\
+									\
+	I2C_XEC_DEVICE_CFG(n);						\
+									\
+	I2C_DEVICE_DT_INST_DEFINE(n, i2c_xec_init, NULL,		\
+		&i2c_xec_data_##n, &i2c_xec_config_##n,			\
+		POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,			\
+		&i2c_xec_driver_api);					\
+									\
+
 
 DT_INST_FOREACH_STATUS_OKAY(I2C_XEC_DEVICE)
