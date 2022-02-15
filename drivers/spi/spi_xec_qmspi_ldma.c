@@ -1182,7 +1182,7 @@ static const struct spi_driver_api spi_qmspi_xec_driver_api = {
 	};								\
 	static const struct spi_qmspi_config qmspi_xec_config_##i = {	\
 		.regs = (struct qmspi_regs *) DT_INST_REG_ADDR(i),	\
-		.cs1_freq = DT_INST_PROP_OR(i, cs1-freq, 0),		\
+		.cs1_freq = DT_INST_PROP_OR(i, cs1_freq, 0),		\
 		.cs_timing = XEC_QMSPI_CS_TIMING(i),			\
 		.taps_adj = XEC_QMSPI_TAPS_ADJ(i),			\
 		.girq = XEC_QMSPI_GIRQ(i),				\
@@ -1192,8 +1192,8 @@ static const struct spi_driver_api spi_qmspi_xec_driver_api = {
 		.irq_pri = DT_INST_IRQ(i, priority),			\
 		.pcr_idx = DT_INST_PROP_BY_IDX(i, pcrs, 0),		\
 		.pcr_pos = DT_INST_PROP_BY_IDX(i, pcrs, 1),		\
-		.port_sel = DT_INST_PROP_OR(i, port-sel, 0),		\
-		.chip_sel = DT_INST_PROP_OR(i, chip-select, 0),		\
+		.port_sel = DT_INST_PROP_OR(i, port_sel, 0),		\
+		.chip_sel = DT_INST_PROP_OR(i, chip_select, 0),		\
 		.width = DT_INST_PROP_OR(0, lines, 1),			\
 		.irq_config_func = qmspi_xec_irq_config_func_##i,	\
 	};								\
