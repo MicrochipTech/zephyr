@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <device.h>
 #include <drivers/espi.h>
+#include <drivers/pinctrl.h>
 
 #define ESPI_XEC_V2_DEBUG	1
 
@@ -42,6 +43,7 @@ struct espi_xec_config {
 	uint8_t irq_info_size;
 	uint8_t rsvd[1];
 	const struct espi_xec_irq_info *irq_info_list;
+	const struct pinctrl_dev_config *pcfg;
 };
 
 struct espi_xec_data {

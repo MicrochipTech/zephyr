@@ -1204,6 +1204,8 @@ static const struct espi_xec_irq_info espi_xec_irq_info_0[] = {
 	DT_FOREACH_PROP_ELEM(DT_NODELABEL(espi0), girqs, XEC_IRQ_INFO)
 };
 
+PINCTRL_DT_INST_DEFINE(0);
+
 static const struct espi_xec_config espi_xec_config = {
 	.iom_base = (struct espi_iom_regs * const)DT_INST_REG_ADDR(0),
 	.msvw_base = (struct espi_msvw_ar_regs * const)(
@@ -1214,6 +1216,7 @@ static const struct espi_xec_config espi_xec_config = {
 	.pcr_bitpos = DT_INST_PROP_BY_IDX(0, pcrs, 1),
 	.irq_info_size = ARRAY_SIZE(espi_xec_irq_info_0),
 	.irq_info_list = espi_xec_irq_info_0,
+	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(0),
 };
 
 DEVICE_DT_INST_DEFINE(0, &espi_xec_init, NULL,
@@ -1298,7 +1301,13 @@ static int espi_xec_init(const struct device *dev)
 	struct espi_xec_data *const data = (struct espi_xec_data *)dev->data;
 	struct pcr_regs * const pcr =
 		((struct pcr_regs *)(DT_REG_ADDR(DT_NODELABEL(pcr))));
-	int ret = 0;
+
+	int ret = pinctrl_apply_state(dcfg->pcfg, PINCTRL_STATE_DEFAULT);
+
+	if (ret != 0) {
+		LOG_ERR("XEC eSPI V2 pinctrl init failed (%d)", ret);
+		return ret;
+	}
 
 	data->plt_rst_asserted = 0;
 #ifdef ESPI_XEC_V2_DEBUG

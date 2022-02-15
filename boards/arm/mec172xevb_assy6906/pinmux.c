@@ -60,20 +60,6 @@ const struct pin_info uart_pin_table[] = {
 #endif
 };
 
-/* eSPI: Reset#, Alert#, CS#, CLK, IO0 - IO4 */
-const struct pin_info espi_pin_table[] = {
-#if defined(CONFIG_ESPI_XEC_V2) && DT_NODE_HAS_STATUS(DT_NODELABEL(espi0), okay)
-	{ port_040_076, MCHP_GPIO_061, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_063, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_066, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_065, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_070, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_071, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_072, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_073, MCHP_GPIO_CTRL_MUX_F1 },
-#endif
-};
-
 /* kscan: KSCAN KSO & KSI */
 const struct pin_info kscan_pin_table[] = {
 #if defined(CONFIG_KSCAN_XEC) && DT_NODE_HAS_STATUS(DT_NODELABEL(kscan0), okay)
@@ -309,7 +295,6 @@ static int board_pinmux_init(const struct device *dev)
 
 	brd_init_pinmux_ports(&pp);
 	brd_pin_table_init(&pp, uart_pin_table, ARRAY_SIZE(uart_pin_table));
-	brd_pin_table_init(&pp, espi_pin_table, ARRAY_SIZE(espi_pin_table));
 	brd_pin_table_init(&pp, kscan_pin_table, ARRAY_SIZE(kscan_pin_table));
 	brd_pin_table_init(&pp, i2c_pin_table, ARRAY_SIZE(i2c_pin_table));
 	brd_pin_table_init(&pp, spi0_pin_table, ARRAY_SIZE(spi0_pin_table));
