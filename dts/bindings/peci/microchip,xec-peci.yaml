@@ -5,11 +5,17 @@ description: Microchip XEC PECI controller
 
 compatible: "microchip,xec-peci"
 
-include: peci.yaml
+include: [peci.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
       required: true
+
+    pinctrl-0:
+      required: false
+
+    pinctrl-names:
+      required: false
 
     interrupts:
       required: true
