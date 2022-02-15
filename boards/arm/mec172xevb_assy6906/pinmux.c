@@ -49,17 +49,6 @@ struct pinmux_ports_t {
 #endif
 };
 
-const struct pin_info uart_pin_table[] = {
-#if DT_NODE_HAS_STATUS(DT_NODELABEL(uart0), okay)
-	{ port_100_136, MCHP_GPIO_104, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_100_136, MCHP_GPIO_105, MCHP_GPIO_CTRL_MUX_F1 },
-#endif
-#if DT_NODE_HAS_STATUS(DT_NODELABEL(uart1), okay)
-	{ port_140_176, MCHP_GPIO_170, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_140_176, MCHP_GPIO_171, MCHP_GPIO_CTRL_MUX_F1 },
-#endif
-};
-
 /* kscan: KSCAN KSO & KSI */
 const struct pin_info kscan_pin_table[] = {
 #if defined(CONFIG_KSCAN_XEC) && DT_NODE_HAS_STATUS(DT_NODELABEL(kscan0), okay)
@@ -216,7 +205,6 @@ static int board_pinmux_init(const struct device *dev)
 	struct pinmux_ports_t pp;
 
 	brd_init_pinmux_ports(&pp);
-	brd_pin_table_init(&pp, uart_pin_table, ARRAY_SIZE(uart_pin_table));
 	brd_pin_table_init(&pp, kscan_pin_table, ARRAY_SIZE(kscan_pin_table));
 	brd_pin_table_init(&pp, spi0_pin_table, ARRAY_SIZE(spi0_pin_table));
 

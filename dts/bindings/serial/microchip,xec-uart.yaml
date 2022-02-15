@@ -2,7 +2,7 @@ description: Microchip XEC UART
 
 compatible: "microchip,xec-uart"
 
-include: uart-controller.yaml
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
@@ -15,6 +15,12 @@ properties:
       type: int
       required: true
       description: logical device number
+
+    pinctrl-0:
+      required: true
+
+    pinctrl-names:
+      required: true
 
     girqs:
       type: array

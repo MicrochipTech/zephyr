@@ -89,6 +89,8 @@
 &uart0 {
 	status = "okay";
 	current-speed = <115200>;
+	pinctrl-0 = < &uart0_tx_gpio104 &uart0_rx_gpio105 >;
+	pinctrl-names = "default";
 };
 
 &adc0 {
