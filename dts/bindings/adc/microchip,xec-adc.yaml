@@ -5,7 +5,7 @@ description: Microchip XEC ADC
 
 compatible: "microchip,xec-adc"
 
-include: adc-controller.yaml
+include: [adc-controller.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
@@ -16,6 +16,12 @@ properties:
 
     "#io-channel-cells":
       const: 1
+
+    pinctrl-0:
+      required: false
+
+    pinctrl-names:
+      required: false
 
     clktime:
       type: int

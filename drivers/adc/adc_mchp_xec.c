@@ -16,6 +16,9 @@ LOG_MODULE_REGISTER(adc_mchp_xec);
 #include <drivers/clock_control/mchp_xec_clock_control.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
 #endif
+#ifdef CONFIG_PINCTRL
+#include <drivers/pinctrl.h>
+#endif
 #include <soc.h>
 #include <errno.h>
 
@@ -35,6 +38,7 @@ LOG_MODULE_REGISTER(adc_mchp_xec);
 
 struct adc_xec_data {
 	struct adc_context ctx;
+	struct adc_xec_regs * const base;
 	uint16_t *buffer;
 	uint16_t *repeat_buffer;
 };
@@ -59,20 +63,15 @@ struct adc_xec_config {
 	uint8_t girq_single_pos;
 	uint8_t girq_repeat;
 	uint8_t girq_repeat_pos;
+#ifdef CONFIG_PINCTRL
+	const struct pinctrl_dev_config *pcfg;
+#endif
 };
 
 static struct adc_xec_data adc_xec_dev_data_0 = {
 	ADC_CONTEXT_INIT_TIMER(adc_xec_dev_data_0, ctx),
 	ADC_CONTEXT_INIT_LOCK(adc_xec_dev_data_0, ctx),
 	ADC_CONTEXT_INIT_SYNC(adc_xec_dev_data_0, ctx),
-};
-
-static struct adc_xec_config adc_xec_cfg_0 = {
-	.base = (struct adc_xec_regs * const)DT_INST_REG_ADDR(0),
-	.girq_single = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 0),
-	.girq_single_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 1),
-	.girq_repeat = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 2),
-	.girq_repeat_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 3),
 };
 
 #ifdef CONFIG_SOC_SERIES_MEC172X
@@ -108,7 +107,7 @@ static void adc_xec_girq_single_enable(const struct device *dev)
 static void adc_context_start_sampling(struct adc_context *ctx)
 {
 	struct adc_xec_data * const data = CONTAINER_OF(ctx, struct adc_xec_data, ctx);
-	struct adc_xec_regs * const adc_regs = adc_xec_cfg_0.base;
+	struct adc_xec_regs * const adc_regs = data->base;
 
 	data->repeat_buffer = data->buffer;
 
@@ -345,6 +344,15 @@ static int adc_xec_init(const struct device *dev)
 	struct adc_xec_regs * const adc_regs =  cfg->base;
 	struct adc_xec_data * const data = dev->data;
 
+#ifdef CONFIG_PINCTRL
+	int ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+
+	if (ret != 0) {
+		LOG_ERR("XEC ADC V2 pinctrl setup failed (%d)", ret);
+		return ret;
+	}
+#endif
+
 	adc_regs->config_reg = XEC_ADC_CFG_CLK_VAL(DT_INST_PROP(0, clktime));
 
 	adc_regs->control_reg =  XEC_ADC_CTRL_ACTIVATE
@@ -365,7 +373,26 @@ static int adc_xec_init(const struct device *dev)
 	return 0;
 }
 
-DEVICE_DT_INST_DEFINE(0, adc_xec_init, NULL,
+/* NOTE: PINCTRL macros must appear in order:
+ * 1. PINCTRL_DT_INST_DEFINE
+ * 2. PINCTRL_DT_INST_DEV_CONFIG_GET in device configuration structure
+ */
+#ifdef CONFIG_PINCTRL
+PINCTRL_DT_INST_DEFINE(0);
+#endif
+
+static struct adc_xec_config adc_xec_cfg_0 = {
+	.base = (struct adc_xec_regs * const)DT_INST_REG_ADDR(0),
+	.girq_single = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 0),
+	.girq_single_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 1),
+	.girq_repeat = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 2),
+	.girq_repeat_pos = (uint8_t)DT_INST_PROP_BY_IDX(0, girqs, 3),
+#ifdef CONFIG_PINCTRL
+	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(0),
+#endif
+};
+
+DEVICE_DT_INST_DEFINE(0, &adc_xec_init, NULL,
 		    &adc_xec_dev_data_0, &adc_xec_cfg_0,
 		    PRE_KERNEL_1, CONFIG_ADC_INIT_PRIORITY,
 		    &adc_xec_api);

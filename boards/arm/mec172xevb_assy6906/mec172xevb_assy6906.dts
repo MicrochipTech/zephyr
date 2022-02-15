@@ -93,6 +93,9 @@
 
 &adc0 {
 	status = "okay";
+	pinctrl-0 = < &adc00_gpio200 &adc03_gpio203
+		      &adc04_gpio204 &adc05_gpio205 >;
+	pinctrl-names = "default";
 };
 
 &espi0 {
