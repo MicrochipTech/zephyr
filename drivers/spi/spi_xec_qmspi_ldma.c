@@ -13,6 +13,7 @@ LOG_MODULE_REGISTER(spi_xec, CONFIG_SPI_LOG_LEVEL);
 #include <device.h>
 #include <drivers/clock_control/mchp_xec_clock_control.h>
 #include <drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#include <drivers/pinctrl.h>
 #include <drivers/spi.h>
 #include <dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <sys/sys_io.h>
@@ -79,6 +80,7 @@ struct spi_qmspi_config {
 	uint8_t width;	/* 0(half) 1(single), 2(dual), 4(quad) */
 	uint8_t unused[2];
 	void (*irq_config_func)(void);
+	const struct pinctrl_dev_config *pcfg;
 };
 
 #define XEC_QMSPI_XFR_FLAG_TX		BIT(0)
@@ -1109,6 +1111,13 @@ static int qmspi_xec_init(const struct device *dev)
 
 	qdata->initialized = false;
 
+	int ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+
+	if (ret != 0) {
+		LOG_ERR("XEC QMSPI-LDMA pinctrl init failed (%d)", ret);
+		return ret;
+	}
+
 	z_mchp_xec_pcr_periph_sleep(cfg->pcr_idx, cfg->pcr_pos, 0);
 
 	qmspi_reset(regs);
@@ -1167,6 +1176,8 @@ static const struct spi_driver_api spi_qmspi_xec_driver_api = {
  */
 #define QMSPI_XEC_DEVICE(i)						\
 									\
+	PINCTRL_DT_INST_DEFINE(i);					\
+									\
 	static void qmspi_xec_irq_config_func_##i(void)			\
 	{								\
 		IRQ_CONNECT(DT_INST_IRQN(i),				\
@@ -1196,6 +1207,7 @@ static const struct spi_driver_api spi_qmspi_xec_driver_api = {
 		.chip_sel = DT_INST_PROP_OR(i, chip_select, 0),		\
 		.width = DT_INST_PROP_OR(0, lines, 1),			\
 		.irq_config_func = qmspi_xec_irq_config_func_##i,	\
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),		\
 	};								\
 	DEVICE_DT_INST_DEFINE(i, &qmspi_xec_init,			\
 		NULL,							\

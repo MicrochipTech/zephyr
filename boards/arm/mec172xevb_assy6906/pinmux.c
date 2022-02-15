@@ -79,41 +79,6 @@ const struct pin_info kscan_pin_table[] = {
 #endif
 };
 
-const struct pin_info spi0_pin_table[] = {
-#if defined(CONFIG_SPI_XEC_QMSPI_LDMA) && DT_NODE_HAS_STATUS(DT_NODELABEL(spi0), okay)
-#if DT_PROP(DT_NODELABEL(spi0), port_sel) == 0
-#if DT_PROP(DT_NODELABEL(spi0), chip_sel) == 0
-	{ port_040_076, MCHP_GPIO_055, MCHP_GPIO_CTRL_MUX_F2 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN },
-#endif
-#if DT_PROP(DT_NODELABEL(spi0), chip_sel) == 1
-	{ port_000_036, MCHP_GPIO_002, MCHP_GPIO_CTRL_MUX_F2 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN },
-#endif
-	{ port_040_076, MCHP_GPIO_056, MCHP_GPIO_CTRL_MUX_F2 },
-	{ port_200_236, MCHP_GPIO_223, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_200_236, MCHP_GPIO_224, MCHP_GPIO_CTRL_MUX_F2 },
-#if DT_PROP(DT_NODELABEL(spi0), lines) == 4
-	{ port_200_236, MCHP_GPIO_227, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_000_036, MCHP_GPIO_016, MCHP_GPIO_CTRL_MUX_F2 },
-#endif
-#elif DT_PROP(DT_NODELABEL(spi0), port_sel) == 1
-	{ port_100_136, MCHP_GPIO_124, MCHP_GPIO_CTRL_MUX_F1 | MCHP_GPIO_CTRL_BUFT_OPENDRAIN },
-	{ port_100_136, MCHP_GPIO_125, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_100_136, MCHP_GPIO_121, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_100_136, MCHP_GPIO_122, MCHP_GPIO_CTRL_MUX_F1 },
-#if DT_PROP(DT_NODELABEL(spi0), lines) == 4
-	{ port_100_136, MCHP_GPIO_123, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_100_136, MCHP_GPIO_126, MCHP_GPIO_CTRL_MUX_F1 },
-#endif
-#elif DT_PROP(DT_NODELABEL(spi0), port_sel) == 2
-	{ port_100_136, MCHP_GPIO_116, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_100_136, MCHP_GPIO_117, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_074, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_075, MCHP_GPIO_CTRL_MUX_F1 },
-	{ port_040_076, MCHP_GPIO_076, MCHP_GPIO_CTRL_MUX_F0 },
-#endif
-#endif
-};
-
 static void brd_init_pinmux_ports(struct pinmux_ports_t *pp)
 {
 	ARG_UNUSED(pp);
@@ -206,7 +171,6 @@ static int board_pinmux_init(const struct device *dev)
 
 	brd_init_pinmux_ports(&pp);
 	brd_pin_table_init(&pp, kscan_pin_table, ARRAY_SIZE(kscan_pin_table));
-	brd_pin_table_init(&pp, spi0_pin_table, ARRAY_SIZE(spi0_pin_table));
 
 	return 0;
 }

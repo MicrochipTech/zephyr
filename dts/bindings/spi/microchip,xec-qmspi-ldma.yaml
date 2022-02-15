@@ -6,10 +6,16 @@ description: Microchip XEC QMSPI controller with local DMA
 
 compatible: "microchip,xec-qmspi-ldma"
 
-include: spi-controller.yaml
+include: [spi-controller.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
+      required: true
+
+    pinctrl-0:
+      required: true
+
+    pinctrl-names:
       required: true
 
     girqs:
