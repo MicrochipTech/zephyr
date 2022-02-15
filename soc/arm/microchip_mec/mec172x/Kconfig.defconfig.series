@@ -47,4 +47,14 @@ config PS2_XEC
 	default y
 	depends on PS2
 
+if SOC_POWER_MANAGEMENT
+
+config PM
+	default y if SYS_CLOCK_EXISTS
+
+config PM_DEVICE
+	default n
+
+endif # SOC_POWER_MANAGEMENT
+
 endif # SOC_SERIES_MEC172X
