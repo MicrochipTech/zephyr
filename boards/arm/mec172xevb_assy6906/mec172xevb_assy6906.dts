@@ -252,3 +252,10 @@
 		      &kso13_gpio126 >;
 	pinctrl-names = "default";
 };
+
+&ps2_0 {
+	status = "okay";
+
+	pinctrl-0 = <&ps2_clk0a_gpio114 &ps2_dat0a_gpio115>;
+	pinctrl-names = "default";
+};

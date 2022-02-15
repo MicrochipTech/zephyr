@@ -5,11 +5,17 @@ description: Microchip XEC PS/2 controller
 
 compatible: "microchip,xec-ps2"
 
-include: ps2.yaml
+include: [ps2.yaml, pinctrl-device.yaml]
 
 properties:
     reg:
       required: true
+
+    pinctrl-0:
+      required: false
+
+    pinctrl-names:
+      required: false
 
     interrupts:
       required: true
