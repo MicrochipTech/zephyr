@@ -262,6 +262,7 @@ typedef enum {
 /* common peripheral register defines */
 #include "../common/reg/mec_acpi_ec.h"
 #include "../common/reg/mec_adc.h"
+#include "../common/reg/mec_dma.h"
 #include "../common/reg/mec_global_cfg.h"
 #include "../common/reg/mec_kbc.h"
 #include "../common/reg/mec_keyscan.h"
