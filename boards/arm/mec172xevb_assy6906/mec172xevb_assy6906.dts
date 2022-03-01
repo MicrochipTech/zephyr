@@ -114,6 +114,10 @@
 	pinctrl-names = "default";
 };
 
+&dmac0 {
+	status = "okay";
+};
+
 &espi0 {
 	status = "okay";
 	pinctrl-0 = < &espi_reset_n_gpio061 &espi_cs_n_gpio066
@@ -151,6 +155,9 @@
 
 	pinctrl-0 = < &i2c00_scl_gpio004 &i2c00_sda_gpio003 >;
 	pinctrl-names = "default";
+
+	scl-gpios = < &gpio_000_036 4 0 >;
+	sda-gpios = < &gpio_000_036 3 0 >;
 
 	pca9555@26 {
 		compatible = "nxp,pca95xx";

@@ -14,3 +14,11 @@ config I2C_XEC_V2
 	depends on SOC_SERIES_MEC172X
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_XEC_NL
+	bool "XEC Microchip I2C with Network Layer driver"
+	depends on SOC_SERIES_MEC172X
+	default $(dt_compat_enabled,${DT_COMPAT_ST_I2C_XEC_NL})
+	select EVENTS
+	help
+	  Enable the Microchip XEC I2C Network Layer driver.
