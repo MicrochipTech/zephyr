@@ -62,7 +62,14 @@ static uint8_t flash_read_buf[MAX_TEST_BUF_SIZE];
 #endif
 
 #ifdef CONFIG_ESPI_SAF
-#define SAF_BASE_ADDR     DT_REG_ADDR(ESPI_SAF_NODE)
+#ifdef CONFIG_SOC_SERIES_MEC172X
+#define SAF_BASE_ADDR     DT_REG_ADDR(DT_INST(0, microchip_xec_espi_saf_v2))
+#else
+#define SAF_BASE_ADDR     DT_REG_ADDR(DT_INST(0, microchip_xec_espi_saf))
+#endif
+#define ESPI_SAF_DEV      DT_LABEL(DT_NODELABEL(espi_saf0))
+#define SPI_DEV           DT_LABEL(DT_NODELABEL(spi0))
+#endif
 
 #define SAF_TEST_FREQ_HZ 24000000U
 #define SAF_TEST_BUF_SIZE 4096U
@@ -102,8 +109,60 @@ static const struct device *const espi_saf_dev =
 static uint8_t safbuf[SAF_TEST_BUF_SIZE] __aligned(4);
 static uint8_t safbuf2[SAF_TEST_BUF_SIZE] __aligned(4);
 
-/*
- * W25Q128 SPI flash SAF configuration.
+#ifdef CONFIG_SOC_SERIES_MEC172X
+/* MEC172x  W25Q128 SPI flash SAF configuration.
+ * Size is 16Mbytes, it requires no continuous mode prefix, or
+ * other special SAF configuration.
+ */
+static const struct espi_saf_flash_cfg flash_w25q128 = {
+	.version = MCHP_SAF_VER_2,
+	.flags = 0,
+	.flashsz = 0x1000000u,
+	.rd_freq_mhz = 0, /* use QMSPI driver freq */
+	.freq_mhz = 0, /* use QMSPI driver freq */
+	.opa = MCHP_SAF_OPCODE_REG_VAL(0x06U, 0x75U, 0x7aU, 0x05U),
+	.opb = MCHP_SAF_OPCODE_REG_VAL(0x20U, 0x52U, 0xd8U, 0x02U),
+	.opc = MCHP_SAF_OPCODE_REG_VAL(0xebU, 0xffU, 0xa5U, 0x35U),
+	.opd = MCHP_SAF_OPCODE_REG_VAL(0xb9U, 0xabU, 0U, 0U),
+	.poll2_mask = MCHP_W25Q128_POLL2_MASK,
+	.cont_prefix = 0u,
+	.cs_cfg_descr_ids = MCHP_CS0_CFG_DESCR_IDX_REG_VAL,
+	.descr = {
+		MCHP_W25Q128_CM_RD_D0,
+		MCHP_W25Q128_CM_RD_D1,
+		MCHP_W25Q128_CM_RD_D2,
+		MCHP_W25Q128_ENTER_CM_D0,
+		MCHP_W25Q128_ENTER_CM_D1,
+		MCHP_W25Q128_ENTER_CM_D2
+	}
+};
+
+/* MEC172x SAF driver configuration.
+ * One SPI flash device.
+ * Use QMSPI frequency, chip select timing, and signal sampling configured
+ * by QMSPI driver.
+ * Use SAF hardware default TAG map.
+ */
+static const struct espi_saf_cfg saf_cfg1 = {
+	.nflash_devices = 1U,
+	.hwcfg = {
+		.version = MCHP_SAF_VER_2,
+		.flags = 0U,
+		.qmspi_cpha = 0U,
+		.qmspi_cs_timing = 0U,
+		.flash_pd_timeout = 0U,
+		.flash_pd_min_interval = 0U,
+		.generic_descr = {
+			MCHP_SAF_EXIT_CM_DESCR12, MCHP_SAF_EXIT_CM_DESCR13,
+			MCHP_SAF_POLL_DESCR14, MCHP_SAF_POLL_DESCR15,
+		},
+		.tag_map = { 0U, 0U, 0U }
+	},
+	.flash_cfgs = (struct espi_saf_flash_cfg *)&flash_w25q128
+};
+
+#else
+/* MEC15xx W25Q128 SPI flash SAF configuration.
  * Size is 16Mbytes, it requires no continuous mode prefix, or
  * other special SAF configuration.
  */
@@ -126,8 +185,7 @@ static const struct espi_saf_flash_cfg flash_w25q128 = {
 	}
 };
 
-/*
- * SAF driver configuration.
+/* MEC15xx SAF driver configuration.
  * One SPI flash device.
  * Use QMSPI frequency, chip select timing, and signal sampling configured
  * by QMSPI driver.
@@ -148,10 +206,9 @@ static const struct espi_saf_cfg saf_cfg1 = {
 	},
 	.flash_cfgs = (struct espi_saf_flash_cfg *)&flash_w25q128
 };
+#endif /* CONFIG_SOC_SERIES_MEC172X */
 
-/*
- * Example for SAF driver set protection regions API.
- */
+/* Example for SAF driver set protection regions API. */
 static const struct espi_saf_pr w25q128_protect_regions[2] = {
 	{
 		.start = 0xe00000U,
@@ -181,9 +238,10 @@ static const struct espi_saf_protection saf_pr_w25q128 = {
 /*
  * Initialize the local attached SPI flash.
  * 1. Get SPI driver binding
- * 2. Read JEDEC ID and verify its a W25Q128
- * 3. Read STATUS2 and check QE bit
- * 4. If QE bit is not set
+ * 2. Make sure Flash device is NOT in continous read mode
+ * 3. Read JEDEC ID and verify its a W25Q128
+ * 4. Read STATUS2 and check QE bit
+ * 5. If QE bit is not set
  *      Send volatile status write enable
  *      Set volatile QE bit
  *      Check STATUS1 BUSY, not expected to be set for volatile status write.
@@ -205,6 +263,37 @@ int spi_saf_init(void)
 	uint32_t jedec_id;
 	int ret;
 
+	LOG_INF("%s: Send sequence to exit SPI flash continous read mode", __func__);
+
+	spi_cfg.slave = 0;
+	spi_cfg.cs = NULL;
+
+	/* Take SPI flash out of continuous read mode by transmitting 16 SPI
+	 * clocks with IO0(MOSI) = 1
+	 */
+	safbuf[0] = 0xffu;
+	safbuf[1] = 0xffu;
+
+	spi_cfg.frequency = SAF_TEST_FREQ_HZ;
+	spi_cfg.operation = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB
+			    | SPI_WORD_SET(8);
+
+	txb.buf = &safbuf;
+	txb.len = 2U;
+
+	tx_bufs.buffers = (const struct spi_buf *)&txb;
+	tx_bufs.count = 1U;
+
+	ret = spi_transceive(qspi_dev, (const struct spi_config *)&spi_cfg,
+			     (const struct spi_buf_set *)&tx_bufs,
+			     NULL);
+	if (ret) {
+		LOG_ERR("Exit SPI continuous read mode failure: error %d", ret);
+		return ret;
+	}
+
+	LOG_INF("%s: Issue read SPI flash JEDEC ID command", __func__);
+
 	/* Read JEDEC ID command and fill read buffer */
 	safbuf[0] = SPI_READ_JEDEC_ID;
 	memset(safbuf2, 0x55, 4U);
@@ -218,8 +307,6 @@ int spi_saf_init(void)
 	 * controls chip select.
 	 */
 	jedec_id = 0U;
-	spi_cfg.slave = 0;
-	spi_cfg.cs = NULL;
 
 	txb.buf = &safbuf;
 	txb.len = 1U;
@@ -228,7 +315,7 @@ int spi_saf_init(void)
 	tx_bufs.count = 1U;
 
 	rxb.buf = &jedec_id;
-	rxb.len = 3U;
+	rxb.len = 4U; /* MCHP changed from 3 to 4. Any effect? */
 
 	rx_bufs.buffers = (const struct spi_buf *)&rxb;
 	rx_bufs.count = 1U;
@@ -242,9 +329,11 @@ int spi_saf_init(void)
 	}
 
 	if (jedec_id != W25Q128_JEDEC_ID) {
-		LOG_ERR("JEDIC ID does not match W25Q128 %0x", safbuf2[0]);
+		LOG_ERR("JEDIC ID does not match W25Q128 0x%08x", jedec_id);
 		return -1;
 	}
+
+	LOG_INF("%s: Issue read SPI flash STATUS2", __func__);
 
 	/* Read STATUS2 to get quad enable bit */
 	safbuf[0] = SPI_READ_STATUS2;
@@ -554,6 +643,8 @@ static int saf_read(uint32_t spi_addr, uint8_t *dest, int len)
 	saf_pkt.flash_addr = spi_addr;
 	saf_pkt.buf = dest;
 
+	LOG_INF("%s: spi_addr=%x len=%x", __func__, saf_pkt.flash_addr, saf_pkt.len);
+
 	n = len;
 	while (n) {
 		chunk_len = 64;
@@ -608,6 +699,8 @@ static int saf_erase_block(uint32_t spi_addr, enum saf_erase_size ersz)
 
 	saf_pkt.flash_addr = spi_addr;
 
+	LOG_INF("%s: spi_addr=0x%08x len=%u", __func__, saf_pkt.flash_addr, saf_pkt.len);
+
 	rc = espi_saf_flash_erase(espi_saf_dev, &saf_pkt);
 	if (rc != 0) {
 		LOG_INF("espi_saf_test1: erase fail = %d", rc);
@@ -635,6 +728,9 @@ static int saf_page_prog(uint32_t spi_addr, const uint8_t *src, int progsz)
 
 	saf_pkt.flash_addr = spi_addr;
 	saf_pkt.buf = (uint8_t *)src;
+
+	LOG_INF("%s: spi_addr=0x%08x buf=0x%08x len=%u", __func__,
+		saf_pkt.flash_addr, (uint32_t)saf_pkt.buf, saf_pkt.len);
 
 	n = progsz;
 	while (n) {
@@ -769,7 +865,7 @@ int espi_saf_test1(uint32_t spi_addr)
 
 	return rc;
 }
-#endif /* CONFIG_ESPI_SAF */
+#endif /* CONFIG_ESPI_SAF || CONFIG_ESPI_SAF_V2 */
 
 static void host_warn_handler(uint32_t signal, uint32_t status)
 {
@@ -1194,7 +1290,7 @@ static void send_slave_bootdone(void)
 
 int espi_test(void)
 {
-	int ret;
+	int ret = 0;
 
 	/* Account for the time serial port is detected so log messages can
 	 * be seen
@@ -1248,11 +1344,10 @@ int espi_test(void)
 		LOG_ERR("Unable to initialize %d", rsm_gpio.pin);
 		return -1;
 	}
-#endif
 
 	espi_init();
 
-#ifdef CONFIG_ESPI_SAF
+#if defined(CONFIG_ESPI_SAF) || (CONFIG_ESPI_SAF_V2)
 	/*
 	 * eSPI SAF configuration must be after eSPI configuration.
 	 * eSPI SAF EC portal flash tests before EC releases RSMRST# and
@@ -1269,7 +1364,6 @@ int espi_test(void)
 		LOG_ERR("Unable to configure %d:%s", ret, espi_saf_dev->name);
 		return ret;
 	}
-
 
 	ret = espi_saf_test_pr1(&saf_pr_w25q128);
 	if (ret) {
@@ -1369,6 +1463,7 @@ int espi_test(void)
 	LOG_INF("eSPI sample completed err: %d", ret);
 
 	return ret;
+#endif
 }
 
 void main(void)
