@@ -67,10 +67,16 @@ static uint8_t flash_read_buf[MAX_TEST_BUF_SIZE];
 #else
 #define SAF_BASE_ADDR     DT_REG_ADDR(DT_INST(0, microchip_xec_espi_saf))
 #endif
-#define ESPI_SAF_DEV      DT_LABEL(DT_NODELABEL(espi_saf0))
-#define SPI_DEV           DT_LABEL(DT_NODELABEL(spi0))
-#endif
 
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(espi_saf0), okay)
+#define ESPI_SAF_DEV      DT_LABEL(DT_NODELABEL(espi_saf0))
+#else
+#error "DT error espi_saf0 not defined"
+#endif /* DT_NODE_HAS_STATUS(DT_NODELABEL(espi_saf0), okay) */
+
+#define SPI_DEV           DT_LABEL(DT_NODELABEL(spi0))
+
+#define SAF_BASE_ADDR     0x40008000
 #define SAF_TEST_FREQ_HZ 24000000U
 #define SAF_TEST_BUF_SIZE 4096U
 
