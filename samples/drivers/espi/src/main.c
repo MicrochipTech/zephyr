@@ -1228,6 +1228,16 @@ static int espi_flash_test(uint32_t start_flash_addr, uint8_t blocks)
 	uint32_t flash_addr;
 	int ret = 0;
 
+	struct espi_flash_packet pckt;
+
+	LOG_INF("Test eSPI erase flash");
+	pckt.flash_addr = start_flash_addr;
+	ret = espi_flash_erase(espi_dev, &pckt);
+	if (ret) {
+		LOG_ERR("espi_erase_flash failed: %d", ret);
+		return ret;
+	}
+
 	LOG_INF("Test eSPI write flash");
 	flash_addr = start_flash_addr;
 	pattern = 0x99;
