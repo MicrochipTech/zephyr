@@ -1,0 +1,15 @@
+/*
+ * Copyright (c) 2020 Intel Corporation
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	resources {
+		compatible = "microchip,mec15xx-board-power";
+		/* MCHP_GPIO_227 */
+		pwrg-gpios = <&gpio_200_236 23 GPIO_ACTIVE_HIGH>;
+		/* MCHP_GPIO_0055 */
+		rsm-gpios = <&gpio_040_076 13 GPIO_ACTIVE_HIGH>;
+	};
+};
