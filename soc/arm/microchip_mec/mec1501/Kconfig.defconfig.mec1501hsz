@@ -31,6 +31,10 @@ config KSCAN_XEC
 	default y
 	depends on KSCAN
 
+config ESPI_SAF_XEC
+	default y
+	depends on ESPI_SAF
+
 config PECI_XEC
 	default y
 	depends on PECI
