@@ -12,7 +12,7 @@
 #define _SOC_ESPI_SAF_H_
 
 #include <stdint.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 
 #define MCHP_SAF_MAX_FLASH_DEVICES		2U
 
@@ -152,6 +152,16 @@
  *	op1 = SPI flash op0 mode byte value for non-continuous mode
  *	op2 = SPI flash op0 mode byte value for continuous mode
  *	op3 = SPI flash read STATUS2 opcode
+ * SAF Opcode D
+ *	op0 = SPI flash enter power down opcode
+ *	op1 = SPI flash exit power down opcode
+ *	op2 = RPMC status/data opcode
+ *	op3 = Unused
+ * SAF RPMC OP1
+ *	op0 = RPMC OP1 opcode
+ *	op1 = Number of RPMC counters implemented in flash
+ *	op2 = RPMC display config bit map
+ *	op3 = Unused
  */
 #define MCHP_SAF_OPCODE_REG_VAL(op0, op1, op2, op3)			\
 	(((uint32_t)(op0)&0xffU) | (((uint32_t)(op1)&0xffU) << 8) |	\
@@ -427,25 +437,43 @@ struct espi_saf_hw_cfg {
 #define MCHP_FLASH_FLAG_V2_PD_CS0_EC_WK_EN	BIT(10)
 #define MCHP_FLASH_FLAG_V2_PD_CS1_EC_WK_EN	BIT(11)
 
+/* Industry standard SPI RPMC Opcode1 and Opcode2
+ * OP1 is an multi-command where first parameter byte specifies the sub-command
+ * OP2 is read RPMC status/data.
+ */
+#define MCHP_FLASH_RPMC_OP1_DFLT		0x9bu
+#define MCHP_FLASH_RPMC_OP2_DFLT		0x96u
+
+/* Positions in 32-bit rpmc_op1 word */
+#define MCHP_FLASH_RPMC_OP1_OPCODE_POS		0
+#define MCHP_FLASH_RPMC_OP1_OPCODE_MSK0		0xffU
+#define MCHP_FLASH_RPMC_OP1_NCTR_POS		8
+#define MCHP_FLASH_RPMC_OP1_NCTR_MSK0		0x1fU
+#define MCHP_FLASH_RPMC_OP1_FLAGS_POS		16
+#define MCHP_FLASH_RPMC_OP1_FLAGS_MSK0		0xffU
+
+/* RPMC OP1 flags */
+#define MCHP_FLASH_RPMC_MIRROR_048		BIT(0)
+#define MCHP_FLASH_RPMC_MIRROR_848		BIT(1)
+#define MCHP_FLASH_RPMC_MIRROR_NCTNR		BIT(2)
+
 struct espi_saf_flash_cfg {
 	uint8_t  version;
-	uint8_t  rsvd1;
-	uint16_t flags;
-	uint32_t flashsz;
 	uint8_t  rd_freq_mhz;
 	uint8_t  freq_mhz;
-	uint8_t  rsvd2[2];
+	uint8_t  rsvd1;
+	uint32_t flashsz;
 	uint32_t opa;
 	uint32_t opb;
 	uint32_t opc;
 	uint32_t opd;
+	uint32_t rpmc_op1;
+	uint16_t flags;
 	uint16_t poll2_mask;
 	uint16_t cont_prefix;
 	uint16_t cs_cfg_descr_ids;
-	uint16_t rsvd3;
 	uint32_t descr[MCHP_SAF_QMSPI_NUM_FLASH_DESCR];
 };
-
 
 /*
  * 17 flash protection regions

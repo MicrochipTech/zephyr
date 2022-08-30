@@ -66,10 +66,9 @@
 #define MCHP_SAF_ECP_CMD_READ			0x00u
 #define MCHP_SAF_ECP_CMD_WRITE			0x01u
 #define MCHP_SAF_ECP_CMD_ERASE			0x02u
-#define MCHP_SAF_ECP_CMD_RPMC_OP1_CS0		0x03u
-#define MCHP_SAF_ECP_CMD_RPMC_OP2_CS0		0x04u
-#define MCHP_SAF_ECP_CMD_RPMC_OP1_CS1		0x83u
-#define MCHP_SAF_ECP_CMD_RPMC_OP2_CS1		0x84u
+#define MCHP_SAF_ECP_CMD_RPMC_OP1		0x03u
+#define MCHP_SAF_ECP_CMD_RPMC_OP2		0x04u
+#define MCHP_SAF_ECP_CMD_RPMC_CS1		0x80u
 
 /* SAF EC Portal Flash Address register */
 #define MCHP_SAF_ECP_FLAR_OFS		0x1cu
@@ -567,7 +566,7 @@ struct mchp_espi_saf_op {
 	volatile uint32_t OPB;
 	volatile uint32_t OPC;
 	volatile uint32_t OP_DESCR;
-};
+}; /* Size = 16 (0x10) */
 
 /** @brief SAF protection regions contain 4 32-bit registers. */
 struct mchp_espi_saf_pr {
@@ -575,7 +574,7 @@ struct mchp_espi_saf_pr {
 	volatile uint32_t LIMIT;
 	volatile uint32_t WEBM;
 	volatile uint32_t RDBM;
-};
+}; /* Size = 16 (0x10) */
 
 /** @brief eSPI SAF configuration and control registers at 0x40008000 */
 struct mchp_espi_saf {
@@ -592,7 +591,7 @@ struct mchp_espi_saf {
 	volatile uint32_t SAF_ESPI_MON_STATUS;		/* 0x3c */
 	volatile uint32_t SAF_ESPI_MON_INTEN;		/* 0x40 */
 	volatile uint32_t SAF_ECP_BUSY;			/* 0x44 */
-	uint32_t RSVD2[1];
+	uint32_t RSVD_048_04B;
 	struct mchp_espi_saf_op SAF_CS_OP[2];		/* 0x4c - 0x6b */
 	volatile uint32_t SAF_FL_CFG_GEN_DESCR;		/* 0x6c */
 	volatile uint32_t SAF_PROT_LOCK;		/* 0x70 */
@@ -616,7 +615,7 @@ struct mchp_espi_saf {
 	volatile uint32_t SAF_CFG_CS0_OPD;		/* 0x1c4 */
 	volatile uint32_t SAF_CFG_CS1_OPD;		/* 0x1c8 */
 	volatile uint32_t SAF_FL_PWR_TMOUT;		/* 0x1cc */
-	uint32_t RSVD[12];
+	uint32_t RSVD_1D0_1FF[12];
 	volatile uint32_t SAF_CLKDIV_CS0;		/* 0x200 */
 	volatile uint32_t SAF_CLKDIV_CS1;		/* 0x204 */
 	volatile uint32_t SAF_RPMC_OP2_ESPI_RES;	/* 0x208 */
