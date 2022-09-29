@@ -62,21 +62,9 @@ static uint8_t flash_read_buf[MAX_TEST_BUF_SIZE];
 #endif
 
 #ifdef CONFIG_ESPI_SAF
-#ifdef CONFIG_SOC_SERIES_MEC172X
-#define SAF_BASE_ADDR     DT_REG_ADDR(DT_INST(0, microchip_xec_espi_saf_v2))
-#else
-#define SAF_BASE_ADDR     DT_REG_ADDR(DT_INST(0, microchip_xec_espi_saf))
-#endif
-
-#if DT_NODE_HAS_STATUS(DT_NODELABEL(espi_saf0), okay)
-#define ESPI_SAF_DEV      DT_LABEL(DT_NODELABEL(espi_saf0))
-#else
-#error "DT error espi_saf0 not defined"
-#endif /* DT_NODE_HAS_STATUS(DT_NODELABEL(espi_saf0), okay) */
-
 #define SPI_DEV           DT_LABEL(DT_NODELABEL(spi0))
 
-#define SAF_BASE_ADDR     0x40008000
+#define SAF_BASE_ADDR     DT_REG_ADDR(DT_NODELABEL(espisaf0))
 #define SAF_TEST_FREQ_HZ 24000000U
 #define SAF_TEST_BUF_SIZE 4096U
 
@@ -108,10 +96,11 @@ struct saf_addr_info {
 	uintptr_t saf_struct_addr;
 	uintptr_t saf_exp_addr;
 };
+
 static const struct device *const qspi_dev =
 	DEVICE_DT_GET(DT_NODELABEL(spi0));
 static const struct device *const espi_saf_dev =
-	DEVICE_DT_GET(DT_NODELABEL(espi_saf0));
+	DEVICE_DT_GET(DT_NODELABEL(espisaf0));
 static uint8_t safbuf[SAF_TEST_BUF_SIZE] __aligned(4);
 static uint8_t safbuf2[SAF_TEST_BUF_SIZE] __aligned(4);
 
@@ -1363,7 +1352,7 @@ int espi_test(void)
 
 	espi_init();
 
-#if defined(CONFIG_ESPI_SAF) || (CONFIG_ESPI_SAF_V2)
+#ifdef CONFIG_ESPI_SAF
 	/*
 	 * eSPI SAF configuration must be after eSPI configuration.
 	 * eSPI SAF EC portal flash tests before EC releases RSMRST# and
