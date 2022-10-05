@@ -1,0 +1,262 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <errno.h>
+#include <soc.h>
+#include <string.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
+
+#include "app_hmac.h"
+
+#if defined(CONFIG_HAS_MEC_HAL)
+/* mec172x HAL crypto */
+#include <mec_crypt/mec_crypt.h>
+#elif defined(CONFIG_TINYCRYPT)
+#include <tinycrypt/constants.h>
+#include <tinycrypt/hmac.h>
+#include <tinycrypt/hmac_prng.h>
+#else
+#error "BUILD ERROR: No crypto library defined in project!"
+#endif
+
+static const uint8_t hmac_key4[25] = {
+	0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+	0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+	0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+	0x19
+};
+static const uint8_t hmac_msg4[50] = {
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd, 0xcd,
+	0xcd, 0xcd
+};
+static const uint8_t hmac_digest4[32] = {
+	0x82, 0x55, 0x8a, 0x38, 0x9a, 0x44, 0x3c, 0x0e,
+	0xa4, 0xcc, 0x81, 0x98, 0x99, 0xf2, 0x08, 0x3a,
+	0x85, 0xf0, 0xfa, 0xa3, 0xe5, 0x78, 0xf8, 0x07,
+	0x7a, 0x2e, 0x3f, 0xf4, 0x67, 0x29, 0x66, 0x5b
+};
+
+static const uint8_t key131[] = {
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+	0xaa, 0xaa, 0xaa };
+
+static const uint8_t msg54[] = {
+	0x54, 0x65, 0x73, 0x74, 0x20, 0x55, 0x73, 0x69,
+	0x6e, 0x67, 0x20, 0x4c, 0x61, 0x72, 0x67, 0x65,
+	0x72, 0x20, 0x54, 0x68, 0x61, 0x6e, 0x20, 0x42,
+	0x6c, 0x6f, 0x63, 0x6b, 0x2d, 0x53, 0x69, 0x7a,
+	0x65, 0x20, 0x4b, 0x65, 0x79, 0x20, 0x2d, 0x20,
+	0x48, 0x61, 0x73, 0x68, 0x20, 0x4b, 0x65, 0x79,
+	0x20, 0x46, 0x69, 0x72, 0x73, 0x74 };
+
+static const uint8_t msg54_k131_hmac_sha256[] = {
+	0x60, 0xe4, 0x31, 0x59, 0x1e, 0xe0, 0xb6, 0x7f,
+	0x0d, 0x8a, 0x26, 0xaa, 0xcb, 0xf5, 0xb7, 0x7f,
+	0x8e, 0x0b, 0xc6, 0x21, 0x37, 0x28, 0xc5, 0x14,
+	0x05, 0x46, 0x04, 0x0f, 0x0e, 0xe3, 0x7f, 0x54 };
+
+static int hmac_test(void)
+{
+	uint8_t result[32] = {0};
+
+	int ret = app_hmac_sha256_mesg(hmac_key4, sizeof(hmac_key4),
+				       hmac_msg4, sizeof(hmac_msg4),
+				       result, sizeof(result));
+	if (ret) {
+		return ret;
+	}
+
+	ret = memcmp(result, hmac_digest4, sizeof(hmac_digest4));
+	if (ret) {
+		return ret;
+	}
+
+	memset(result, 0, sizeof(result));
+	ret = app_hmac_sha256_mesg(key131, sizeof(key131),
+				   msg54, sizeof(msg54),
+				   result, sizeof(result));
+	if (ret) {
+		return ret;
+	}
+
+	ret = memcmp(result, msg54_k131_hmac_sha256, sizeof(msg54_k131_hmac_sha256));
+
+	return ret;
+}
+
+#ifdef CONFIG_HAS_MEC_HAL
+int app_crypto_init(void)
+{
+	uint32_t crflags = MEC_CRYPTO_INIT_AESH | MEC_CRYPTO_INIT_AESH_SRST | MEC_CRYPTO_INIT_RNG;
+	int ret = mec_crypto_init(crflags, NULL);
+
+	if (ret) {
+		LOG_ERR("MEC crypto init error %d\n", ret);
+	}
+
+	return ret;
+}
+
+int app_get_rand(uint8_t *dest, size_t destsz, size_t req_nbytes)
+{
+	int ret;
+	uint32_t nr;
+
+	if (destsz < req_nbytes) {
+		return -EINVAL;
+	}
+
+	nr = 0;
+	ret = mec_ndrng_get_bytes(dest, (uint32_t)req_nbytes, 256U, &nr);
+	if (ret || (nr < req_nbytes)) {
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int app_hmac_sha256_mesg(const uint8_t *key, size_t keysz,
+			 const uint8_t *msg, size_t msgsz,
+			 uint8_t *result, size_t resultsz)
+{
+	return mhmac_message(MHASH_ALG_SHA256, key, keysz, msg, msgsz,
+			     result, resultsz);
+}
+
+int app_hmac_test(void)
+{
+	return hmac_test();
+}
+
+#elif CONFIG_TINYCRYPT_SHA256_HMAC
+
+static const char tc_hprng0_ps[] = "TC HPRNG0 PS";
+/* TinyCrypt HMAC PRNG minimum seed length is 32 bytes */
+static const char tc_hprng0_seed[] = "TC SEED minimum Length is 32 bytes";
+static const char tc_hprng0_addin[] = "TC ADDITIONAL INPUT0";
+
+struct tc_hmac_prng_struct tc_hprng0;
+
+int app_crypto_init(void)
+{
+	int ret = tc_hmac_prng_init(&tc_hprng0, tc_hprng0_ps, sizeof(tc_hprng0_ps));
+
+	if (ret == TC_CRYPTO_SUCCESS) {
+		return 0;
+	}
+
+	return -EIO;
+}
+
+int app_get_rand(uint8_t *dest, size_t destsz, size_t req_nbytes)
+{
+	int ret;
+
+	if (destsz < req_nbytes) {
+		return -EINVAL;
+	}
+
+	ret = tc_hmac_prng_generate(dest, (unsigned int)req_nbytes, &tc_hprng0);
+	if (ret == TC_CRYPTO_SUCCESS) {
+		ret = 0;
+	} else if (ret == TC_HMAC_PRNG_RESEED_REQ) {
+		ret = tc_hmac_prng_reseed(&tc_hprng0, tc_hprng0_seed, sizeof(tc_hprng0_seed),
+					  tc_hprng0_addin, sizeof(tc_hprng0_addin));
+		if (ret == TC_CRYPTO_SUCCESS) {
+			ret = tc_hmac_prng_generate(dest, (unsigned int)req_nbytes, &tc_hprng0);
+			if (ret == TC_CRYPTO_SUCCESS) {
+				ret = 0;
+			} else {
+				ret = -EIO;
+			}
+		} else {
+			ret = -EIO;
+		}
+	} else {
+		ret = -EIO;
+	}
+
+	return ret;
+}
+
+int app_hmac_sha256_mesg(const uint8_t *key, size_t keysz,
+			 const uint8_t *msg, size_t msgsz,
+			 uint8_t *result, size_t resultsz)
+{
+	struct tc_hmac_state_struct hctx;
+	int ret = tc_hmac_set_key(&hctx, key, keysz);
+
+	if (ret != TC_CRYPTO_SUCCESS) {
+		return -EINVAL;
+	}
+
+	ret = tc_hmac_init(&hctx);
+	if (ret != TC_CRYPTO_SUCCESS) {
+		return -EINVAL;
+	}
+
+	ret = tc_hmac_update(&hctx, msg, msgsz);
+	if (ret != TC_CRYPTO_SUCCESS) {
+		return -EINVAL;
+	}
+
+	ret = tc_hmac_final(result, resultsz, &hctx);
+	if (ret != TC_CRYPTO_SUCCESS) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int app_hmac_test(void)
+{
+	return hmac_test();
+}
+
+#else
+
+int app_crypto_init(void)
+{
+	return -ENOSYS;
+}
+
+int app_hmac_sha256_mesg(const uint8_t *key, size_t keysz,
+			 const uint8_t *msg, size_t msgsz,
+			 uint8_t *result, size_t resultsz)
+{
+	return -ENOSYS;
+}
+
+int app_hmac_test(void)
+{
+	return -ENOSYS;
+}
+#endif
+

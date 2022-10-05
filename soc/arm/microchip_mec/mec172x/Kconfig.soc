@@ -29,3 +29,7 @@ config SOC_MEC172X_TEST_CLK_OUT
 	bool "Test clock out pin"
 	help
 	  Enables a test clock out pin
+
+config MEC_MEC172X_MCRYPT
+	bool "Use MEC172x hardware crypto HAL library"
+	depends on HAS_MEC_HAL
