@@ -28,9 +28,9 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 #define MAX_SAF_ECP_BUFFER_SIZE 64ul
 
 /* 1 second maximum for flash operations */
-#define MAX_SAF_FLASH_TIMEOUT 125000ul /* 1000ul */
+#define MAX_SAF_FLASH_TIMEOUT 125000ul
 
-#define MAX_SAF_FLASH_TIMEOUT_MS 1000ul
+#define MAX_SAF_FLASH_TIMEOUT_MS 2000ul
 
 /* 64 bytes @ 24MHz quad is approx. 6 us */
 #define SAF_WAIT_INTERVAL 8
@@ -80,25 +80,34 @@ struct espi_saf_xec_config {
 	const struct espi_xec_irq_info *irq_info_list;
 };
 
+/* flash device(s) at CS0/CS1 configured for flash access */
+#define XEC_ESPI_SAF_CFG_CS0 BIT(0)
+#define XEC_ESPI_SAF_CFG_CS1 BIT(1)
+/* flash device(s) at CS0/CS1 configured for RPMC */
+#define XEC_ESPI_SAF_CFG_CS0_RPMC BIT(2)
+#define XEC_ESPI_SAF_CFG_CS1_RPMC BIT(3)
+
+/* OP2 eSPI result, OP2 EC0 result, OP2 EC1 result */
+enum mchp_espi_rpmc_result_idx {
+	MCHP_RPMC_ESPI_RESULT_IDX = 0,
+	MCHP_RPMC_EC0_RESULT_IDX,
+	MCHP_RPMC_EC1_RESULT0_IDX,
+	MCHP_RPMC_EC1_RESULT1_IDX,
+	MCHP_RPMC_RESULT_IDX_MAX
+};
+
 struct espi_saf_xec_data {
 	struct k_sem ecp_lock;
 	uint32_t hwstatus;
+	uint8_t cfg_flags;
+	uint8_t rsvd[3];
 	sys_slist_t callbacks;
+	uint64_t ecp_mem[MAX_SAF_ECP_BUFFER_SIZE / sizeof(uint64_t)];
 };
-
-/* EC portal local flash r/w buffer */
-static uint32_t slave_mem[MAX_SAF_ECP_BUFFER_SIZE];
 
 /*
  * @brief eSPI SAF configuration
  */
-
-static inline void mchp_saf_cs_descr_wr(struct mchp_espi_saf *regs, uint8_t cs,
-					uint32_t val)
-{
-	regs->SAF_CS_OP[cs].OP_DESCR = val;
-}
-
 static inline void mchp_saf_poll2_mask_wr(struct mchp_espi_saf *regs, uint8_t cs,
 					  uint16_t val)
 {
@@ -496,6 +505,118 @@ static int saf_flash_freq_cfg(struct mchp_espi_saf * const regs, uint8_t cs,
 	return 0;
 }
 
+#ifdef CONFIG_ESPI_SAF_RPMC
+/* Configure SAF RPMC flash specific settings except for RPMC OP2 opcode
+ * programmed in OPD configuration.
+ * OP1 opcode and number of counters for CSn# in RPMC_OP1_NC
+ * OP1 display flags for CSn# in RPMC_OP1_ODC
+ * Update total number of counters in RPMC_OP1_ODC
+ * Program host visibilty flags:
+ * DS048 flag makes number of RPMC counters for the flash appear in eSPI
+ * configuration register 048h.
+ * DS048 flag makes number of RPMC counters for the flash appear in eSPI
+ * configuration register 848h.
+ * DSNC flag makes OP1 opcode and total number of counters appear in eSPI
+ * configuration register 0E4h.
+ * If opcode != 0 and nc != 0 then return 0 else return -ENODEV
+ */
+static int saf_flash_rpmc_op1_cfg(const struct device *dev,
+				  const struct espi_saf_cfg *cfg,
+				  uint8_t cs)
+{
+	const struct espi_saf_xec_config * const xcfg = dev->config;
+	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
+	struct mchp_espi_saf * const regs = xcfg->saf_base;
+	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
+	const struct espi_saf_flash_cfg *fcfg = cfg->flash_cfgs;
+
+	uint32_t opcode, nc, dflags;
+	uint32_t total_nc, temp;
+
+	opcode = ((fcfg->rpmc_op1 >> MCHP_FLASH_RPMC_OP1_OPCODE_POS)
+		  & MCHP_FLASH_RPMC_OP1_OPCODE_MSK0);
+	nc  = ((fcfg->rpmc_op1 >> MCHP_FLASH_RPMC_OP1_NCTR_POS)
+		& MCHP_FLASH_RPMC_OP1_NCTR_MSK0);
+
+	if ((opcode == 0) && (nc == 0)) {
+		return -ENODEV;
+	}
+
+	if (cs == 0) {
+		temp = (opcode << MCHP_ESPI_RPMC_OP1_NC_CS0_OP1_POS)
+			& MCHP_ESPI_RPMC_OP1_NC_CS0_OP1_MSK;
+		temp |= (nc << MCHP_ESPI_RPMC_OP1_NC_CS0_CNT_POS)
+			& MCHP_ESPI_RPMC_OP1_NC_CS0_CNT_MSK;
+		espi_iom->RPMC_OP1_NC = ((espi_iom->RPMC_OP1_NC &
+					  ~(MCHP_ESPI_RPMC_OP1_NC_CS0_MSK)) | temp);
+	} else {
+		temp = (opcode << MCHP_ESPI_RPMC_OP1_NC_CS1_OP1_POS)
+			& MCHP_ESPI_RPMC_OP1_NC_CS1_OP1_MSK;
+		temp |= (nc << MCHP_ESPI_RPMC_OP1_NC_CS1_CNT_POS)
+			& MCHP_ESPI_RPMC_OP1_NC_CS1_CNT_MSK;
+		espi_iom->RPMC_OP1_NC = ((espi_iom->RPMC_OP1_NC &
+					  ~(MCHP_ESPI_RPMC_OP1_NC_CS1_MSK)) | temp);
+	}
+
+	total_nc = ((espi_iom->RPMC_OP1_ODC & MCHP_ESPI_RPMC_OP1_ODC_TOTAL_MSK)
+		    >> MCHP_ESPI_RPMC_OP1_ODC_TOTAL_POS);
+	total_nc += nc;
+	total_nc = ((total_nc << MCHP_ESPI_RPMC_OP1_ODC_TOTAL_POS)
+		    & MCHP_ESPI_RPMC_OP1_ODC_TOTAL_MSK);
+	espi_iom->RPMC_OP1_ODC = ((espi_iom->RPMC_OP1_ODC & ~MCHP_ESPI_RPMC_OP1_ODC_TOTAL_MSK)
+				  | total_nc);
+
+	/* SAF controller can be configured to always report to Host that OP1 operations
+	 * are successful. This is feature affects all RPMC flash devices connected to
+	 * the SAF controller.
+	 */
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_RPMC_OP1_FRSC_POS)) {
+		regs->SAF_FL_CFG_MISC |= BIT(MCHP_SAF_FL_CFG_MISC_RPMC_OP1_FRSC_POS);
+	}
+
+	temp = fcfg[cs].rpmc_op1 >> MCHP_FLASH_RPMC_OP1_FLAGS_POS;
+
+	/* RPMC specification suspend of OP1 operations is optional.
+	 * Inform our SAF controller if this specific flash supports suspend of OP1
+	 * operations.
+	 */
+	if (temp & MCHP_FLASH_RPMC_NO_OP1_SUSPEND) {
+		if (cs == 0) {
+			regs->SAF_FL_CFG_MISC |= BIT(MCHP_SAF_FL_CFG_MISC_RPMC_NOP1S_CS0_POS);
+		} else {
+			regs->SAF_FL_CFG_MISC |= BIT(MCHP_SAF_FL_CFG_MISC_RPMC_NOP1S_CS1_POS);
+		}
+	}
+
+	/* make RPMC visible to host */
+	dflags = 0U;
+	if (temp & MCHP_FLASH_RPMC_MIRROR_048) {
+		if (cs == 0) {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS0_DS048_POS);
+		} else {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS1_DS048_POS);
+		}
+	}
+	if (temp & MCHP_FLASH_RPMC_MIRROR_848) {
+		if (cs == 0) {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS0_DS848_POS);
+		} else {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS1_DS848_POS);
+		}
+	}
+	if (temp & MCHP_FLASH_RPMC_MIRROR_NCTNR) {
+		if (cs == 0) {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS0_DSNC_POS);
+		} else {
+			dflags |= BIT(MCHP_ESPI_RPMC_OP1_ODC_CS1_DSNC_POS);
+		}
+	}
+	espi_iom->RPMC_OP1_ODC |= dflags;
+
+	return 0;
+}
+#endif /* CONFIG_ESPI_SAF_RPMC */
+
 /*
  * Program flash device specific SAF and QMSPI registers.
  *
@@ -523,6 +644,12 @@ static int saf_flash_cfg(const struct device *dev,
 	regs->SAF_CS_OP[cs].OPB = fcfg->opb;
 	regs->SAF_CS_OP[cs].OPC = fcfg->opc;
 	regs->SAF_CS_OP[cs].OP_DESCR = (uint32_t)fcfg->cs_cfg_descr_ids;
+
+	if (cs == 0) {
+		regs->SAF_CFG_CS0_OPD = fcfg->opd;
+	} else {
+		regs->SAF_CFG_CS1_OPD = fcfg->opd;
+	}
 
 	did = MCHP_SAF_QMSPI_CS0_START_DESCR;
 	if (cs != 0) {
@@ -601,6 +728,66 @@ static void saf_qmspi_ldma_cfg(const struct espi_saf_xec_config * const xcfg)
 	qregs->MODE = qmode;
 }
 
+#ifdef CONFIG_ESPI_SAF_RPMC
+/* SAF RPMC HW feature requires buffers to cache RPMC OP2 responses
+ * because the HW does not know how many response bytes the requester
+ * may read. HW implements two 64-byte buffers on the AHB one for
+ * ESPI Host chipset as requester and one for EC0 firmware via the
+ * EC SAF Portal as requestor. Program the addresses into the respective
+ * SAF RPMC registers.
+ * NOTE 1: Once SAF is activated the AHB buffers are no longer visisble
+ * to the EC. EC access via program instructions will result in a bus
+ * fault being propagated to the ARM Core.
+ * NOTE 2: The driver could use data SRAM for these buffers. In this case
+ * the buffers are accessible by EC firmware while SAF is activated.
+ */
+static void saf_rpmc_result_init(struct mchp_espi_saf * const regs,
+				 struct espi_saf_xec_data *xdat)
+{
+	regs->SAF_RPMC_OP2_ESPI_RES = MCHP_XEC_SAF_RPMC_OP2_ESPI_BUF_ADDR;
+	regs->SAF_RPMC_OP2_EC0_RES = MCHP_XEC_SAF_RPMC_OP2_EC0_BUF_ADDR;
+}
+#endif
+
+/* Configure events triggering SAF to put attached SPI flash devices into
+ * low power state. When SAF 32KHz based activity counter reaches 0 the SAF
+ * controller can send the SPI low power command to the attached flash devices.
+ * The activity counter can be reloaded on activity from the eSPI Host or EC.
+ * In addition, SAF can be configured to issue the SPI low power command in
+ * response to SoC light and/or deep sleep.
+ */
+static void saf_low_power_config(const struct device *dev, const struct espi_saf_cfg *cfg)
+{
+	const struct espi_saf_xec_config * const xcfg = dev->config;
+	struct mchp_espi_saf * const regs = xcfg->saf_base;
+	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
+	uint32_t temp = regs->SAF_FL_CFG_MISC;
+
+	temp &= ~(BIT(MCHP_SAF_FL_CFG_MISC_LSLP_EN_POS)
+		  | BIT(MCHP_SAF_FL_CFG_MISC_DSLP_EN_POS)
+		  | BIT(MCHP_SAF_FL_CFG_MISC_SLP_SAC_EN_POS)
+		  | BIT(MCHP_SAF_FL_CFG_MISC_SAC_RLD_ESPI_POS)
+		  | BIT(MCHP_SAF_FL_CFG_MISC_SAC_RLD_EC0_POS));
+
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_ESPI_ACT_RLD_POS)) {
+		temp |= BIT(MCHP_SAF_FL_CFG_MISC_SAC_RLD_ESPI_POS);
+	}
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_EC0_ACT_RLD_POS)) {
+		temp |= BIT(MCHP_SAF_FL_CFG_MISC_SAC_RLD_EC0_POS);
+	}
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_SLP_NO_ACT_POS)) {
+		temp |= BIT(MCHP_SAF_FL_CFG_MISC_SLP_SAC_EN_POS);
+	}
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_SOC_LSLP_POS)) {
+		temp |= BIT(MCHP_SAF_FL_CFG_MISC_LSLP_EN_POS);
+	}
+	if (hwcfg->misc_flags & BIT(MCHP_SAF_HW_CFG_MFLAG_SOC_DSLP_POS)) {
+		temp |= BIT(MCHP_SAF_FL_CFG_MISC_DSLP_EN_POS);
+	}
+
+	regs->SAF_FL_CFG_MISC = temp;
+}
+
 /*
  * Configure SAF and QMSPI for SAF operation based upon the
  * number and characteristics of local SPI flash devices.
@@ -622,6 +809,8 @@ static int espi_saf_xec_configuration(const struct device *dev,
 	}
 
 	const struct espi_saf_xec_config * const xcfg = dev->config;
+	struct espi_saf_xec_data *xdat = dev->data;
+	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
 	struct mchp_espi_saf * const regs = xcfg->saf_base;
 	struct mchp_espi_saf_comm * const comm_regs = xcfg->saf_comm_base;
 	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
@@ -636,10 +825,22 @@ static int espi_saf_xec_configuration(const struct device *dev,
 		return -EAGAIN;
 	}
 
+	xdat->cfg_flags = 0U;
+
 	saf_qmspi_init(xcfg, cfg);
+
+	/* Default miscellaneous config */
+	regs->SAF_FL_CFG_MISC = 0U;
+
+	/* Disable RPMC */
+	espi_iom->RPMC_OP1_ODC = 0U;
+	espi_iom->RPMC_OP1_NC = 0U;
 
 	regs->SAF_CS0_CFG_P2M = 0;
 	regs->SAF_CS1_CFG_P2M = 0;
+
+	regs->SAF_CFG_CS0_OPD = 0U;
+	regs->SAF_CFG_CS1_OPD = 0U;
 
 	regs->SAF_FL_CFG_GEN_DESCR = MCHP_SAF_FL_CFG_GEN_DESCR_STD;
 
@@ -654,6 +855,15 @@ static int espi_saf_xec_configuration(const struct device *dev,
 	if (ret) {
 		return ret;
 	}
+
+	xdat->cfg_flags |= XEC_ESPI_SAF_CFG_CS0;
+
+#ifdef CONFIG_ESPI_SAF_RPMC
+	ret = saf_flash_rpmc_op1_cfg(dev, cfg, 0);
+	if (ret == 0) {
+		xdat->cfg_flags |= XEC_ESPI_SAF_CFG_CS0_RPMC;
+	}
+#endif
 
 	/* optional second flash device connected to CS1 */
 	if (cfg->nflash_devices > 1) {
@@ -672,8 +882,25 @@ static int espi_saf_xec_configuration(const struct device *dev,
 
 	regs->SAF_FL_CFG_SIZE_LIM = totalsz - 1;
 
+	if (cfg->nflash_devices > 1) {
+		xdat->cfg_flags |= XEC_ESPI_SAF_CFG_CS1;
+#ifdef CONFIG_ESPI_SAF_RPMC
+		ret = saf_flash_rpmc_op1_cfg(dev, cfg, 1);
+		if (ret == 0) {
+			xdat->cfg_flags |= XEC_ESPI_SAF_CFG_CS1_RPMC;
+		}
+#endif
+	}
+
 	LOG_DBG("SAF_FL_CFG_THRH = %x SAF_FL_CFG_SIZE_LIM = %x",
 		regs->SAF_FL_CFG_THRH, regs->SAF_FL_CFG_SIZE_LIM);
+
+#ifdef CONFIG_ESPI_SAF_RPMC
+	LOG_DBG("ESPI RPMC_OP1_ODC = %x RPMC_OP1_NC = %x",
+		espi_iom->RPMC_OP1_ODC, espi_iom->RPMC_OP1_NC);
+
+	saf_rpmc_result_init(regs, xdat);
+#endif
 
 	saf_tagmap_init(regs, cfg);
 
@@ -688,6 +915,8 @@ static int espi_saf_xec_configuration(const struct device *dev,
 		LOG_ERR("SAF Config bad flash erase config");
 		return ret;
 	}
+
+	saf_low_power_config(dev, cfg);
 
 	/* Default or expedited prefetch? */
 	u = MCHP_SAF_FL_CFG_MISC_PFOE_DFLT;
@@ -822,23 +1051,135 @@ static uint32_t get_erase_size_encoding(const struct device *dev, uint32_t erase
 	return 0xffffffffU;
 }
 
-static int check_ecp_access_size(uint32_t reqlen)
+static int check_ecp_buf(void *p, uint32_t reqlen)
 {
+	if (!p) {
+		return -EFAULT;
+	}
+
 	if ((reqlen < MCHP_SAF_ECP_CMD_RW_LEN_MIN) ||
 	    (reqlen > MCHP_SAF_ECP_CMD_RW_LEN_MAX)) {
+		LOG_ERR("SAF ECP bad packet buffer");
 		return -EAGAIN;
 	}
 
 	return 0;
 }
 
-/*
- * EC access to SAF atttached flash array
- * Allowed commands:
- * MCHP_SAF_ECP_CMD_READ(0x0), MCHP_SAF_ECP_CMD_WRITE(0x01),
- * MCHP_SAF_ECP_CMD_ERASE(0x02), MCHP_SAF_ECP_CMD_RPMC_OP1_CS0(0x03),
- * MCHP_SAF_ECP_CMD_RPMC_OP2_CS0(0x04), MCHP_SAF_ECP_CMD_RPMC_OP1_CS1(0x83),
- * MCHP_SAF_ECP_CMD_RPMC_OP2_CS1(0x84)
+#ifdef CONFIG_ESPI_SAF_RPMC
+/* RPMC using SAF EC Portal
+ * OP1 = 0x9B + subcmd
+ *  subcmd = 0x00 Write Root Key register
+ *    TX: 0x9B, 0x00, CounterAddr[7:0], RSVD[7:0], RootKey[255:0], TruncatedSign[223:0]
+ *    512 clocks. TX Len = 1 + 1 + 1 + 1 + 32 + 28 = 64 bytes
+ *  subcmd = 0x01 Update HMAC key
+ *    TX: 0x9B, 0x01, CounterAddr[7:0], RSVD[7:0], KeyData[31:0], Signature[255:0]
+ *    320 clocks. TX Len = 1 + 1 + 1 + 1 + 4 + 32 = 40 bytes
+ *  subcmd = 0x02 Increment Monotonic Counter
+ *    TX: 0x9B, 0x02, CounterAddr[7:0], RSVD[7:0], CounterData[31:0], Signature[255:0]
+ *    320 clocks. TX Len = 1 + 1 + 1 + 1 + 4 + 32 = 40 bytes
+ *  subcmd = 0x03 Request Monotonic Counter
+ *    TX: 0x9B, 0x03, CounterAddr[7:0], RSVD[7:0], Tag[95:0], Signature[255:0]
+ *    384 clocks. TX Len = 1 + 1 + 1 + 1 + 12 + 32 = 48 bytes
+ *  subcmd = 0x04 - 0xFF reserved
+ * OP2 = 0x96 is Read RPMC Status/Data
+ *  Protocol:
+ *  TX: 0x96, dummy[7:0], RX: RPMC-Status[7:0], TAG[95:0], CounterData[31:0], Signature[255:0]
+ *  TX Len = 2 bytes
+ *  RX Len = 1 + 12 + 4 + 32 = 49 bytes
+ *  MCPH eSPI v1.4 spec. states OP2 reads 64 bytes if RPMC-Status.BUSY not set
+ *
+ * This driver expects the caller to fill the packet buffer with RPMC opcode followed
+ * by all necessary parameters. Refer to the EC Hardening RPMC specification.
+ * NOTE1: Issuing a RPMC OP1 command causes SAF HW to issue a one or more OP2 commands to
+ * read the extended status. HW checks the one byte extended status returned by OP2 for
+ * BUSY and/or other status bits. Once extended STATUS BUSY is clear, HW will issue another
+ * OP2 command and read 64 bytes into a HW cache and single EC Portal transaction is done.
+ * At this point, the application can call SAF EC Portal RPMC API to issue another OP2.
+ * SAF HW will return the cached OP2 data.
+ */
+
+static int saf_flash_rpmc_present(const struct device *dev, struct espi_saf_packet *pckt)
+{
+	struct espi_saf_xec_data *xdat = dev->data;
+	uint32_t flagmsk;
+
+	switch (ESPI_SAF_RPMC_GET_CS(pckt->flash_addr)) {
+	case 0:
+		flagmsk = XEC_ESPI_SAF_CFG_CS0_RPMC;
+		break;
+	case 1:
+		flagmsk = XEC_ESPI_SAF_CFG_CS1_RPMC;
+		break;
+	default:
+		flagmsk = 0U;
+	}
+
+	if (xdat->cfg_flags & flagmsk) {
+		return 0;
+	}
+
+	return -ENXIO;
+}
+#endif /* CONFIG_ESPI_SAF_RPMC */
+
+static int saf_check_en_busy(struct mchp_espi_saf * const regs)
+{
+	if (!(regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN)) {
+		LOG_ERR("SAF is disabled");
+		return -EIO;
+	}
+
+	if (regs->SAF_ECP_BUSY & (MCHP_SAF_ECP_EC0_BUSY | MCHP_SAF_ECP_EC1_BUSY)) {
+		LOG_ERR("SAF ECP is busy");
+		return -EBUSY;
+	}
+
+	return 0;
+}
+
+static void saf_ecp_prep1(struct mchp_espi_saf * const regs,
+			  const struct espi_xec_irq_info *safirq)
+{
+	regs->SAF_ECP_FLAR = 0U;
+	regs->SAF_ECP_INTEN = 0;
+	regs->SAF_ECP_STATUS = MCHP_SAF_ECP_STS_MASK;
+	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
+}
+
+/* User (EC0) request for access to SAF connected flash device(s).
+ * Allowed transfer sizes are 1 <= N <= 64 bytes.
+ * User supplies struct espi_saf_packet containing a SPI flash address,
+ * buffer pointer, and and requested number of bytes. SPI flash address
+ * is a logical address that can span up to two flash devices.
+ * SPI flash Read Data:
+ *   SAF transmits SPI commands based upon driver configuration and
+ *   reads data into a driver local buffer. When SAF HW finishes the
+ *   driver copies the data into the user supplied buffer.
+ * SPI flash Erase:
+ *   SAF transmits SPI commands for flash erase sector based upon
+ *   driver configuration. SAF then loops issuing SPI flash read status1
+ *   commands until flash clears its BUSY bit or a SAF timeout occurs.
+ * SPI flash Program:
+ *   SAF transmits SPI commands for flash program based upon driver
+ *   configuration. SAF then loops issuing SPI flash read status1
+ *   commands until flash clears its BUSY bit or a SAF timeout occurs.
+ * Erase does not require the packet buffer pointer to be valid as it
+ * is not used.
+ * RPMC support: if enabled by SAF flash configuration.
+ * SAF HW supports RPMC flash OP1 and OP2 commands. When an RPMC OP1
+ * command is requested, SAF overwrites byte 0 of the user supplied packet
+ * buffer with the OP1 opcode from eSPI RPMC OP1 configuration register.
+ * SAF then transmits the packet. After the OP1 packet is transmitted and
+ * CS# de-asserted, SAF loops transmitting RPMC OP2 Read Status for length
+ * 64 bytes into a buffer specified by the SAF OP2 EC0 buffer address registers.
+ * Byte[0] of the OP2 data read from the flash is the RPMC Extended Status byte.
+ * If this byte indicates an error or busy is cleared SAF will stop issuing
+ * OP2 command and report EC Portal Done. The user then calls the SAF driver
+ * API requesting OP2 and the driver copies the last received OP2 from the
+ * OP2 EC0 buffer into the user's buffer. The driver is designed for the user
+ * to issue a RPMC OP1 command first. User should only request OP2 after issuing
+ * an OP1 request successfully.
  */
 static int saf_ecp_access(const struct device *dev,
 			  struct espi_saf_packet *pckt, uint8_t cmd)
@@ -849,86 +1190,81 @@ static int saf_ecp_access(const struct device *dev,
 	const struct espi_saf_xec_config * const xcfg = dev->config;
 	struct mchp_espi_saf * const regs = xcfg->saf_base;
 	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[0];
+	void *pecp = (void *)&xdat->ecp_mem[0];
 
 	counter = 0;
 	err_mask = MCHP_SAF_ECP_STS_ERR_MASK;
 
 	LOG_DBG("%s", __func__);
 
-	if (!(regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN)) {
-		LOG_ERR("SAF is disabled");
-		return -EIO;
+	rc = saf_check_en_busy(regs);
+	if (rc) {
+		return rc;
 	}
 
-	n = regs->SAF_ECP_BUSY;
-	if (n & (MCHP_SAF_ECP_EC0_BUSY | MCHP_SAF_ECP_EC1_BUSY)) {
-		LOG_ERR("SAF EC Portal is busy: 0x%08x", n);
-		return -EBUSY;
+	saf_ecp_prep1(regs, safirq);
+
+	if (cmd != MCHP_SAF_ECP_CMD_ERASE) {
+		rc = check_ecp_buf(pckt->buf, pckt->len);
+		if (rc) {
+			LOG_ERR("SAF ECP bad packet buffer");
+			return rc;
+		}
 	}
+
+	rc = 0;
+	regs->SAF_ECP_BFAR = (uint32_t)pecp;
 
 	switch (cmd) {
 	case MCHP_SAF_ECP_CMD_READ:
 	case MCHP_SAF_ECP_CMD_WRITE:
-		rc = check_ecp_access_size(pckt->len);
-		if (rc) {
-			LOG_ERR("SAF EC Portal size out of bounds");
-			return rc;
-		}
-
+		regs->SAF_ECP_FLAR = pckt->flash_addr;
 		if (cmd == MCHP_SAF_ECP_CMD_WRITE) {
-			memcpy(slave_mem, pckt->buf, pckt->len);
+			memcpy(pecp, pckt->buf, pckt->len);
+		} else {
+			memset(pecp, 0, MAX_SAF_ECP_BUFFER_SIZE);
 		}
-
 		n = pckt->len;
 		break;
 	case MCHP_SAF_ECP_CMD_ERASE:
+		regs->SAF_ECP_FLAR = pckt->flash_addr;
 		n = get_erase_size_encoding(dev, pckt->len);
 		if (n == UINT32_MAX) {
 			LOG_ERR("SAF EC Portal unsupported erase size");
 			return -EAGAIN;
 		}
 		break;
-	case MCHP_SAF_ECP_CMD_RPMC_OP1_CS0:
-	case MCHP_SAF_ECP_CMD_RPMC_OP2_CS0:
-		rc = check_ecp_access_size(pckt->len);
+#ifdef CONFIG_ESPI_SAF_RPMC
+	case MCHP_SAF_ECP_CMD_RPMC_OP1:
+	case MCHP_SAF_ECP_CMD_RPMC_OP2:
+		rc = saf_flash_rpmc_present(dev, pckt);
 		if (rc) {
-			LOG_ERR("SAF EC Portal RPMC size out of bounds");
+			LOG_ERR("SAF ECP RPMC not supported for cs %d",
+				ESPI_SAF_RPMC_GET_CS(pckt->flash_addr));
 			return rc;
 		}
-		if (!(regs->SAF_CFG_CS0_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
-			LOG_ERR("SAF CS0 RPMC opcode not configured");
-			return -EIO;
-		}
+
 		n = pckt->len;
-		break;
-	case MCHP_SAF_ECP_CMD_RPMC_OP1_CS1:
-	case MCHP_SAF_ECP_CMD_RPMC_OP2_CS1:
-		rc = check_ecp_access_size(pckt->len);
-		if (rc) {
-			LOG_ERR("SAF EC Portal RPMC size out of bounds");
-			return rc;
+		if (cmd == MCHP_SAF_ECP_CMD_RPMC_OP1) {
+			/* copy packet data into transfer buffer */
+			memcpy(pecp, pckt->buf, pckt->len);
+		} else { /* OP2 transmits OP2 opcode plus 0x00 byte */
+			/* transfer from EC0 OP2 buffer to user buffer */
+			regs->SAF_ECP_BFAR = (uint32_t)pckt->buf;
 		}
-		if (!(regs->SAF_CFG_CS1_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
-			LOG_ERR("SAF CS1 RPMC opcode not configured");
-			return -EIO;
+		if (ESPI_SAF_RPMC_GET_CS(pckt->flash_addr)) {
+			cmd |= MCHP_SAF_ECP_CMD_RPMC_CS1;
 		}
-		n = pckt->len;
 		break;
+#endif
 	default:
-		LOG_ERR("SAF EC Portal bad cmd");
+		LOG_ERR("SAF EC Portal invalid cmd");
 		return -EAGAIN;
 	}
 
 	LOG_DBG("%s params val done", __func__);
 
-	regs->SAF_ECP_INTEN = 0;
-	regs->SAF_ECP_STATUS = MCHP_SAF_ECP_STS_MASK;
-	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
-
 	regs->SAF_ECP_INTEN = BIT(MCHP_SAF_ECP_INTEN_DONE_POS);
-
-	regs->SAF_ECP_FLAR = pckt->flash_addr;
-	regs->SAF_ECP_BFAR = (uint32_t)&slave_mem[0];
 
 	scmd = MCHP_SAF_ECP_CMD_PUT_FLASH_NP |
 		((uint32_t)cmd << MCHP_SAF_ECP_CMD_CTYPE_POS) |
@@ -957,8 +1293,8 @@ static int saf_ecp_access(const struct device *dev,
 		return -EIO;
 	}
 
-	if (cmd == MCHP_SAF_ECP_CMD_READ) {
-		memcpy(pckt->buf, slave_mem, pckt->len);
+	if  (cmd == MCHP_SAF_ECP_CMD_READ) {
+		memcpy(pckt->buf, pecp, pckt->len);
 	}
 
 	return rc;
@@ -969,6 +1305,11 @@ static int saf_xec_flash_read(const struct device *dev,
 			      struct espi_saf_packet *pckt)
 {
 	LOG_DBG("%s", __func__);
+
+	if (!dev || !pckt) {
+		return -EFAULT;
+	}
+
 	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_READ);
 }
 
@@ -976,6 +1317,10 @@ static int saf_xec_flash_read(const struct device *dev,
 static int saf_xec_flash_write(const struct device *dev,
 			       struct espi_saf_packet *pckt)
 {
+	if (!dev || !pckt) {
+		return -EFAULT;
+	}
+
 	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_WRITE);
 }
 
@@ -983,8 +1328,25 @@ static int saf_xec_flash_write(const struct device *dev,
 static int saf_xec_flash_erase(const struct device *dev,
 			       struct espi_saf_packet *pckt)
 {
+	if (!dev || !pckt) {
+		return -EFAULT;
+	}
+
 	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_ERASE);
 }
+
+#ifdef CONFIG_ESPI_SAF_RPMC
+/* Flash RPMC commands */
+static int espi_saf_xec_rpmc(const struct device *dev,
+			     struct espi_saf_packet *pckt)
+{
+	if (!dev || !pckt) {
+		return -EFAULT;
+	}
+
+	return saf_ecp_access(dev, pckt, ESPI_SAF_RPMC_GET_CMD(pckt->flash_addr));
+}
+#endif
 
 static int espi_saf_xec_manage_callback(const struct device *dev,
 					struct espi_callback *callback,
@@ -1020,6 +1382,20 @@ static int espi_saf_xec_activate(const struct device *dev)
 	return 0;
 }
 
+static const uint32_t saf_err_codes[] = {
+	ESPI_SAF_STATUS_ERROR_TIMEOUT,
+	ESPI_SAF_STATUS_ERROR_OOR,
+	ESPI_SAF_STATUS_ERROR_AV,
+	ESPI_SAF_STATUS_ERROR_4KB,
+	ESPI_SAF_STATUS_ERROR_ERSZ,
+	ESPI_SAF_STATUS_ERROR_START_OVFL,
+	ESPI_SAF_STATUS_ERROR_BAD_REQ,
+};
+
+/* SAF EC Portal done interrupt handler.
+ * SAF hardware always sets it done bit. Other status bits indicate
+ * an error occurred.
+ */
 static void espi_saf_done_isr(const struct device *dev)
 {
 	const struct espi_saf_xec_config * const xcfg = dev->config;
@@ -1028,14 +1404,27 @@ static void espi_saf_done_isr(const struct device *dev)
 	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[0];
 	uint32_t ecp_status = regs->SAF_ECP_STATUS;
 	struct espi_event evt = { .evt_type = ESPI_BUS_SAF_NOTIFICATION,
-				  .evt_details = BIT(0),
-				  .evt_data = ecp_status };
+				  .evt_details = ESPI_SAF_EVT_DETAILS_ECP,
+				  .evt_data = ESPI_SAF_STATUS_DONE };
 
 	regs->SAF_ECP_INTEN = 0u;
 	regs->SAF_ECP_STATUS = BIT(MCHP_SAF_ECP_STS_DONE_POS);
 	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
 
 	data->hwstatus = ecp_status;
+	if (ecp_status & MCHP_SAF_ECP_STS_ERR_MASK) {
+		unsigned int bitpos = MCHP_SAF_ECP_STS_TMOUT_POS;
+		unsigned int idx = 0U;
+
+		while (bitpos <= MCHP_SAF_ECP_STS_BAD_REQ_POS) {
+			if (ecp_status & BIT(bitpos)) {
+				evt.evt_data = saf_err_codes[idx];
+				break;
+			}
+			bitpos++;
+			idx++;
+		}
+	}
 
 	LOG_DBG("SAF Done ISR: status=0x%x", ecp_status);
 
@@ -1044,6 +1433,19 @@ static void espi_saf_done_isr(const struct device *dev)
 	k_sem_give(&data->ecp_lock);
 }
 
+/* SAF Bus Monitor interrupt handler for events:
+ * Timeout - Flash not clearing its BUSY status for Erase, Write,
+ * or RPMC operations with the timeout value programmed in the various
+ * SAF polling time registers.
+ * Out of Range - Flash address sent by Host chipset is not in the
+ * configured flash range.
+ * Access Violation - Operation and address sent by Host chipset violates
+ * one of the enabled SAF flash protection ranges. Does not apply to RPMC.
+ * 4K Boundary - Read request from Host chipset is rejected due to crossing
+ * a 4K flash address boundary.
+ * Erase Size - Host sent an invalid erase size.
+ * The SAF status register is copied into the struct espi_event.evt_data member.
+ */
 static void espi_saf_err_isr(const struct device *dev)
 {
 	const struct espi_saf_xec_config * const xcfg = dev->config;
@@ -1051,16 +1453,32 @@ static void espi_saf_err_isr(const struct device *dev)
 	struct mchp_espi_saf * const regs = xcfg->saf_base;
 	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[1];
 	uint32_t mon_status = regs->SAF_ESPI_MON_STATUS;
-	struct espi_event evt = { .evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-				  .evt_details = BIT(7),
-				  .evt_data = mon_status };
+	struct espi_event evt = { .evt_type = ESPI_BUS_SAF_NOTIFICATION,
+				  .evt_details = ESPI_SAF_EVT_DETAILS_BUS_MONITOR,
+				  .evt_data = ESPI_SAF_STATUS_DONE };
 
 	regs->SAF_ESPI_MON_STATUS = mon_status;
 	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
 
 	data->hwstatus = mon_status;
+	if (mon_status & MCHP_SAF_ESPI_MON_STS_IEN_MSK) {
+		unsigned int bitpos = MCHP_SAF_ESPI_MON_STS_IEN_TMOUT_POS;
+		unsigned int idx = 0U;
+
+		while (bitpos <= MCHP_SAF_ESPI_MON_STS_IEN_ERSZ_POS) {
+			if (mon_status & BIT(bitpos)) {
+				evt.evt_data = saf_err_codes[idx];
+				break;
+			}
+			bitpos++;
+			idx++;
+		}
+	}
+
 	espi_send_callbacks(&data->callbacks, dev, evt);
 }
+
+static int espi_saf_xec_init(const struct device *dev);
 
 static const struct espi_saf_driver_api espi_saf_xec_driver_api = {
 	.config = espi_saf_xec_configuration,
@@ -1071,6 +1489,9 @@ static const struct espi_saf_driver_api espi_saf_xec_driver_api = {
 	.flash_write = saf_xec_flash_write,
 	.flash_erase = saf_xec_flash_erase,
 	.manage_callback = espi_saf_xec_manage_callback,
+#ifdef CONFIG_ESPI_SAF_RPMC
+	.rpmc = espi_saf_xec_rpmc,
+#endif
 };
 
 static int espi_saf_xec_init(const struct device *dev)
@@ -1093,7 +1514,6 @@ static int espi_saf_xec_init(const struct device *dev)
 
 	return 0;
 }
-
 
 /* n = node-id, p = property, i = index */
 #define XEC_SAF_IRQ_INFO(n, p, i)					    \

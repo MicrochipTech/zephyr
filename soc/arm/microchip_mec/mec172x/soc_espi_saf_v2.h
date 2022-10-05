@@ -152,6 +152,16 @@
  *	op1 = SPI flash op0 mode byte value for non-continuous mode
  *	op2 = SPI flash op0 mode byte value for continuous mode
  *	op3 = SPI flash read STATUS2 opcode
+ * SAF Opcode D
+ *	op0 = SPI flash enter power down opcode
+ *	op1 = SPI flash exit power down opcode
+ *	op2 = RPMC status/data opcode
+ *	op3 = Unused
+ * SAF RPMC OP1
+ *	op0 = RPMC OP1 opcode
+ *	op1 = Number of RPMC counters implemented in flash
+ *	op2 = RPMC display config bit map
+ *	op3 = Unused
  */
 #define MCHP_SAF_OPCODE_REG_VAL(op0, op1, op2, op3)			\
 	(((uint32_t)(op0)&0xffU) | (((uint32_t)(op1)&0xffU) << 8) |	\
@@ -369,6 +379,7 @@
 #define MCHP_CS1_CFG_DESCR_IDX_REG_VAL_DUAL \
 		MCHP_SAF_CS_CFG_DESCR_IDX_REG_VAL(9U, 6U, 7U)
 
+/* Hardware configuration flags */
 #define MCHP_SAF_HW_CFG_FLAG_FREQ 0x01U
 #define MCHP_SAF_HW_CFG_FLAG_CSTM 0x02U
 #define MCHP_SAF_HW_CFG_FLAG_CPHA 0x04U
@@ -387,10 +398,25 @@
 #define MCHP_SAF_VER_1			0
 #define MCHP_SAF_VER_2			1
 
+/* SAF miscellaneous flags
+ * Bit 0 Reload activity counter for requests from eSPI
+ * Bit 1 Reload activity counter for requests from EC0
+ * Bit 2 Enable SAF to sleep the flash(s) on inactivity
+ * Bit 3 Enable SAF to sleep the flash(s) on SoC light sleep entry
+ * Bit 4 Enable SAF to sleep the flash(s) on SoC deep sleep entry
+ * Bit 7 Force reporting of success for all RPMC OP1 operations
+ */
+#define MCHP_SAF_HW_CFG_MFLAG_ESPI_ACT_RLD_POS	0
+#define MCHP_SAF_HW_CFG_MFLAG_EC0_ACT_RLD_POS	1
+#define MCHP_SAF_HW_CFG_MFLAG_SLP_NO_ACT_POS	2
+#define MCHP_SAF_HW_CFG_MFLAG_SOC_LSLP_POS	3
+#define MCHP_SAF_HW_CFG_MFLAG_SOC_DSLP_POS	4
+#define MCHP_SAF_HW_CFG_MFLAG_RPMC_OP1_FRSC_POS	7
+
 struct espi_saf_hw_cfg {
 	uint8_t  version;
 	uint8_t  flags;
-	uint8_t  rsvd1;
+	uint8_t  misc_flags;
 	uint8_t  qmspi_cpha;
 	uint32_t qmspi_cs_timing;
 	uint16_t flash_pd_timeout;
@@ -427,25 +453,44 @@ struct espi_saf_hw_cfg {
 #define MCHP_FLASH_FLAG_V2_PD_CS0_EC_WK_EN	BIT(10)
 #define MCHP_FLASH_FLAG_V2_PD_CS1_EC_WK_EN	BIT(11)
 
+/* Industry standard SPI RPMC Opcode1 and Opcode2
+ * OP1 is an multi-command where first parameter byte specifies the sub-command
+ * OP2 is read RPMC status/data.
+ */
+#define MCHP_FLASH_RPMC_OP1_DFLT		0x9bu
+#define MCHP_FLASH_RPMC_OP2_DFLT		0x96u
+
+/* Positions in 32-bit rpmc_op1 word */
+#define MCHP_FLASH_RPMC_OP1_OPCODE_POS		0
+#define MCHP_FLASH_RPMC_OP1_OPCODE_MSK0		0xffU
+#define MCHP_FLASH_RPMC_OP1_NCTR_POS		8
+#define MCHP_FLASH_RPMC_OP1_NCTR_MSK0		0x1fU
+#define MCHP_FLASH_RPMC_OP1_FLAGS_POS		16
+#define MCHP_FLASH_RPMC_OP1_FLAGS_MSK0		0xffU
+
+/* RPMC OP1 flags flags */
+#define MCHP_FLASH_RPMC_MIRROR_048		BIT(0)
+#define MCHP_FLASH_RPMC_MIRROR_848		BIT(1)
+#define MCHP_FLASH_RPMC_MIRROR_NCTNR		BIT(2)
+#define MCHP_FLASH_RPMC_NO_OP1_SUSPEND		BIT(3)
+
 struct espi_saf_flash_cfg {
 	uint8_t  version;
-	uint8_t  rsvd1;
-	uint16_t flags;
-	uint32_t flashsz;
 	uint8_t  rd_freq_mhz;
 	uint8_t  freq_mhz;
-	uint8_t  rsvd2[2];
+	uint8_t  rsvd1;
+	uint32_t flashsz;
 	uint32_t opa;
 	uint32_t opb;
 	uint32_t opc;
 	uint32_t opd;
+	uint32_t rpmc_op1;
+	uint16_t flags;
 	uint16_t poll2_mask;
 	uint16_t cont_prefix;
 	uint16_t cs_cfg_descr_ids;
-	uint16_t rsvd3;
 	uint32_t descr[MCHP_SAF_QMSPI_NUM_FLASH_DESCR];
 };
-
 
 /*
  * 17 flash protection regions

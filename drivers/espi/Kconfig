@@ -191,4 +191,14 @@ config ESPI_SAF_INIT_PRIORITY
 	  Driver initialization priority for eSPI SAF driver. SAF driver must
 	  initialize after the ESPI driver.
 
+if ESPI_SAF
+
+config ESPI_SAF_RPMC
+	bool "ESPI SAF RPMC support"
+	default n
+	help
+	  Enable RPMC flash operations support in ESPI SAF driver
+
+endif # ESPI_SAF
+
 endif # ESPI

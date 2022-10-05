@@ -115,6 +115,57 @@ struct espi_saf_packet {
 	uint32_t len;
 };
 
+/**
+ * @brief eSPI SAF encode RPMC in packet flash_addr field
+ */
+#define ESPI_SAF_RPMC_ENCODE_PARAMS(cs, cmd, subcmd) \
+	(((uint32_t)(cs) & 0xffu) | (((uint32_t)(cmd) & 0xffu) << 8) | \
+	 (((uint32_t)(subcmd) & 0xffu) << 16))
+
+#define ESPI_SAF_RPMC_GET_CS(fa) (uint8_t)((uint32_t)(fa) & 0xffU)
+#define ESPI_SAF_RPMC_GET_CMD(fa) (uint8_t)(((uint32_t)(fa) >> 8) & 0xffU)
+#define ESPI_SAF_RPMC_GET_SUBCMD(fa) (uint8_t)(((uint32_t)(fa) >> 16) & 0xffU)
+
+/**
+ * @brief eSPI SAF notification type.
+ *
+ * eSPI SAF notification event details to indicate SAF unit
+ * triggered the eSPI SAF callback
+ */
+enum espi_saf_peripheral {
+	ESPI_SAF_EVT_DETAILS_UNKNOWN,
+	ESPI_SAF_EVT_DETAILS_ECP,
+	ESPI_SAF_EVT_DETAILS_BUS_MONITOR,
+};
+
+/**
+ * @brief eSPI SAF Event data
+ *
+ * eSPI SAF notification data indicates status of the operation requested
+ * by either the eSPI Host or EC firmware(via the SAF EC Portal).
+ * Timeout - SPI Flash did not clear its busy status within the configured
+ * SAF driver timeout interval.
+ * Out-of-Range - Flash address in not within the address range of the
+ * array of SAF's SPI flash devices.
+ * Access Violation - Flash address and operation violates one of the SAF
+ * flash protection regions.
+ * 4KB - Flash Read request crossed a 4KB boundary.
+ * ERSZ - Erase request specified an invalid erase block size.
+ * Start Overflow - SAF was busy with a request from one initiator when
+ * the same initiator requested another access.
+ * Bad Request - Unsupported operation was started.
+ */
+enum espi_saf_evt_data {
+	ESPI_SAF_STATUS_DONE = 0,
+	ESPI_SAF_STATUS_ERROR_TIMEOUT,
+	ESPI_SAF_STATUS_ERROR_OOR,
+	ESPI_SAF_STATUS_ERROR_AV,
+	ESPI_SAF_STATUS_ERROR_4KB,
+	ESPI_SAF_STATUS_ERROR_ERSZ,
+	ESPI_SAF_STATUS_ERROR_START_OVFL,
+	ESPI_SAF_STATUS_ERROR_BAD_REQ,
+};
+
 /*
  *defined in espi.h
  * struct espi_callback
@@ -150,6 +201,9 @@ typedef int (*espi_saf_api_manage_callback)(const struct device *dev,
 					    struct espi_callback *callback,
 					    bool set);
 
+typedef int (*espi_saf_api_rpmc)(const struct device *dev,
+				 struct espi_saf_packet *pckt);
+
 __subsystem struct espi_saf_driver_api {
 	espi_saf_api_config config;
 	espi_saf_api_set_protection_regions set_protection_regions;
@@ -159,6 +213,9 @@ __subsystem struct espi_saf_driver_api {
 	espi_saf_api_flash_write flash_write;
 	espi_saf_api_flash_erase flash_erase;
 	espi_saf_api_manage_callback manage_callback;
+#ifdef CONFIG_ESPI_SAF_RPMC
+	espi_saf_api_rpmc rpmc;
+#endif
 };
 
 /**
@@ -382,6 +439,37 @@ static inline int z_impl_espi_saf_flash_erase(const struct device *dev,
 
 	return api->flash_erase(dev, pckt);
 }
+
+#ifdef CONFIG_ESPI_SAF_RPMC
+/**
+ * @brief Sends a RPMC command to the flash device
+ *
+ * This routines provides an interface to send a RPMC request to the flash
+ * components shared between the host eSPI controller and eSPI endpoint device.
+ *
+ * @param dev Pointer to the device structure for the driver instance.
+ * @param pckt Address of the representation of RPMC transaction.
+ *
+ * @retval -ENOTSUP eSPI flash logical channel transactions not supported.
+ * @retval -EBUSY eSPI flash channel is not ready or disabled by master.
+ * @retval -EIO General input / output error, failed request to master.
+ */
+__syscall int espi_saf_rpmc(const struct device *dev,
+			    struct espi_saf_packet *pckt);
+
+static inline int z_impl_espi_saf_rpmc(const struct device *dev,
+				       struct espi_saf_packet *pckt)
+{
+	const struct espi_saf_driver_api *api =
+		(const struct espi_saf_driver_api *)dev->api;
+
+	if (!api->rpmc) {
+		return -ENOTSUP;
+	}
+
+	return api->rpmc(dev, pckt);
+}
+#endif
 
 /**
  * Callback model
