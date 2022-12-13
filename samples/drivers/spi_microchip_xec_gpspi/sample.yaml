@@ -1,0 +1,8 @@
+sample:
+  name: Microchip XEC GPSPI Driver Sample
+tests:
+  sample.drivers.spi.microchip_xec_gpspi:
+    tags: drivers gpspi
+    harness: fram
+    depends_on: gpio spi
+    filter: dt_alias_exists("spi-1")
