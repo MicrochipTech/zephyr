@@ -5,9 +5,9 @@
  */
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/spi.h>
 
@@ -22,6 +22,7 @@
 
 #define W25Q128_JEDEC_ID 0x001840efU
 #define W25Q128JV_JEDEC_ID 0x001870efU
+#define SPI_FLASH_JEDEC_ID_MSK 0x00ffffffu
 
 #define SPI_FLASH_READ_JEDEC_ID_CMD	0x9fu
 
@@ -88,7 +89,7 @@ static const struct spi_flash_info flash_table[] = {
 struct spi_flash_info const *lookup_spi_flash(uint32_t jedec_id)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(flash_table); i++) {
-		if (flash_table[i].jedec_id == jedec_id) {
+		if (flash_table[i].jedec_id == (jedec_id & SPI_FLASH_JEDEC_ID_MSK)) {
 			return &flash_table[i];
 		}
 	}
@@ -140,7 +141,7 @@ static int spi_flash_read_id(const struct device *spi,
 	sb[0].buf = &txdata;
 	sb[0].len = 1;
 	sb[1].buf = jedec_id;
-	sb[1].len = 4;
+	sb[1].len = 3;
 
 	const struct spi_buf_set txs = {
 		.buffers = sb,
@@ -538,7 +539,7 @@ static int buf_contains(uint8_t *data, size_t datasz, uint8_t val)
 
 static void pr_data_buf(uint8_t *data, size_t datasz)
 {
-	printk("Data @ 0x%08x len = %u\n", (uint32_t)data, datasz);
+	printf("Data @ 0x%08x len = %u\n", (uint32_t)data, datasz);
 
 	if (!data || !datasz) {
 		return;
@@ -546,10 +547,10 @@ static void pr_data_buf(uint8_t *data, size_t datasz)
 
 	int count = 0;
 	for (size_t n = 0; n < datasz; n++) {
-		printk("0x%02x, ", data[n]);
+		printf("0x%02x ", data[n]);
 		if (++count == 8) {
 			count = 0;
-			printk("\n");
+			printf("\n");
 		}
 	}
 }
@@ -578,8 +579,15 @@ static int spi_flash_read_async(const struct device *spi,
 				uint32_t spi_addr, uint8_t *data, size_t datasz)
 {
 	int err;
+#if 0 /* working */
+	uint8_t txdata1[4] = {0};
+	uint8_t rxdata1[4] = {0};
+	struct spi_buf txb[2] = {0};
+	struct spi_buf rxb[2] = {0};
+#else /* should work but failed due to not waiting for done before returning */
 	uint8_t txdata1[4] = {0};
 	struct spi_buf sb[2] = {0};
+#endif
 	struct spi_user_data ud = {0};
 	uint64_t wait_count = 0;
 
@@ -592,7 +600,27 @@ static int spi_flash_read_async(const struct device *spi,
 	if (err) {
 		return err;
 	}
+#if 0
+	txb[0].buf = &txdata1;
+	txb[0].len = 4;
+	txb[1].buf = data;
+	txb[1].len = datasz;
 
+	rxb[0].buf = &rxdata1;
+	rxb[0].len = 4;
+	rxb[1].buf = data;
+	rxb[1].len = datasz;
+
+	const struct spi_buf_set txs = {
+		.buffers = txb,
+		.count = 2,
+	};
+
+	const struct spi_buf_set rxs = {
+		.buffers = rxb,
+		.count = 2,
+	};
+#else
 	sb[0].buf = &txdata1;
 	sb[0].len = 4;
 	sb[1].buf = data;
@@ -607,6 +635,7 @@ static int spi_flash_read_async(const struct device *spi,
 		.buffers = sb,
 		.count = 2,
 	};
+#endif
 
 	err = spi_transceive_cb(spi, spi_cfg, &txs, &rxs, spi_callback, (void *)&ud);
 	if (err == 0) {
@@ -614,14 +643,14 @@ static int spi_flash_read_async(const struct device *spi,
 		while (!spi_cb_called) {
 			wait_count++;
 		}
-		printk("Asynchronous read completed after %llu spin loops\n", wait_count);
-		printk("Callback done = %u  result = %u\n", ud.done, ud.result);
+		printf("Asynchronous read completed after %llu spin loops\n", wait_count);
+		printf("Callback done = %u  result = %u\n", ud.done, ud.result);
 	}
 
 	return err;
 }
 
-#endif /* CONFIG_SPI_ASYNC */
+#endif
 
 static uint8_t testbuf1[4096];
 
@@ -636,7 +665,10 @@ void main(void)
 	uint8_t cmd;
 	uint8_t spi_status;
 
-	printk("Microchip XEC GPSPI example application\n");
+	printf("Microchip XEC GPSPI example application\n");
+#ifdef CONFIG_DMA
+	printf("GPSPI driver DMA support enabed in build\n");
+#endif
 
 	spi = DEVICE_DT_GET(DT_ALIAS(gpspi));
 	if (!device_is_ready(spi)) {
@@ -656,7 +688,7 @@ void main(void)
 	spi_cfg.operation = SPI_WORD_SET(8);
 	spi_cfg.frequency = MHZ(4);
 
-	printk("Read SPI flash JEDEC ID\n");
+	printf("Read SPI flash JEDEC ID\n");
 
 	jedec_id = 0x55555555U;
 	err = spi_flash_read_id(spi, &spi_cfg, &jedec_id);
@@ -665,7 +697,7 @@ void main(void)
 		return;
 	}
 
-	printk("Read SPI device JEDEC_ID as 0x%08x\n", jedec_id);
+	printf("Read SPI device JEDEC_ID as 0x%08x\n", jedec_id);
 
 	flash = lookup_spi_flash(jedec_id);
 	if (!flash) {
@@ -673,9 +705,9 @@ void main(void)
 		return;
 	}
 
-	printk("SPI Flash is %s\n", flash->name);
+	printf("SPI Flash is %s\n", flash->name);
 
-	printk("Read SPI flash status1\n");
+	printf("Read SPI flash status1\n");
 	spi_status = 0x55u;
 	cmd = SPI_FLASH_READ_STATUS1_CMD;
 	err = spi_flash_read_status(spi, &spi_cfg, cmd, &spi_status);
@@ -685,9 +717,9 @@ void main(void)
 		return;
 	}
 
-	printk("SPI flash status1 = 0x%02x\n", spi_status);
+	printf("SPI flash status1 = 0x%02x\n", spi_status);
 
-	printk("Send SPI flash write enable\n");
+	printf("Send SPI flash write enable\n");
 	cmd = SPI_FLASH_WRITE_ENABLE_CMD;
 	err = spi_flash_send_cmd(spi, &spi_cfg, cmd);
 	if (err) {
@@ -695,7 +727,7 @@ void main(void)
 		return;
 	}
 
-	printk("Read SPI flash status1\n");
+	printf("Read SPI flash status1\n");
 	spi_status = 0x55u;
 	cmd = SPI_FLASH_READ_STATUS1_CMD;
 	err = spi_flash_read_status(spi, &spi_cfg, cmd, &spi_status);
@@ -705,9 +737,9 @@ void main(void)
 		return;
 	}
 
-	printk("SPI flash status1 = 0x%02x\n", spi_status);
+	printf("SPI flash status1 = 0x%02x\n", spi_status);
 
-	printk("Send SPI flash write disable\n");
+	printf("Send SPI flash write disable\n");
 	cmd = SPI_FLASH_WRITE_DISABLE_CMD;
 	err = spi_flash_send_cmd(spi, &spi_cfg, cmd);
 	if (err) {
@@ -715,7 +747,7 @@ void main(void)
 		return;
 	}
 
-	printk("Read SPI flash status1\n");
+	printf("Read SPI flash status1\n");
 	spi_status = 0x55u;
 	cmd = SPI_FLASH_READ_STATUS1_CMD;
 	err = spi_flash_read_status(spi, &spi_cfg, cmd, &spi_status);
@@ -725,13 +757,13 @@ void main(void)
 		return;
 	}
 
-	printk("SPI flash status1 = 0x%02x\n", spi_status);
+	printf("SPI flash status1 = 0x%02x\n", spi_status);
 
 	memset(testbuf1, 0xAAu, sizeof(testbuf1));
 	spi_addr = 0u;
 	datalen = 16U;
 	cmd = SPI_FLASH_READ_SLOW_CMD;
-	printk("Read %u bytes at SPI offset 0x%08x using cmd 0x%02x\n", datalen, spi_addr, cmd);
+	printf("Read %u bytes at SPI offset 0x%08x using cmd 0x%02x\n", datalen, spi_addr, cmd);
 
 	err = spi_flash_read(spi, &spi_cfg, cmd, spi_addr, testbuf1, datalen);
 	if (err) {
@@ -748,9 +780,9 @@ void main(void)
 	}
 
 	if (n == datalen) {
-		printk("Data pattern matched expected value\n");
+		printf("Data pattern matched expected value\n");
 	} else {
-		printk("Data pattern does not match. Erase and program\n");
+		printf("Data pattern does not match. Erase and program\n");
 		/* erase 4KB sector */
 
 		err = erase_region(spi, &spi_cfg, 0x20u, spi_addr);
@@ -759,7 +791,7 @@ void main(void)
 			return;
 		}
 
-		printk("Read back and check if ersased\n");
+		printf("Read back and check if ersased\n");
 
 		memset(testbuf1, 0xAAu, sizeof(testbuf1));
 
@@ -774,7 +806,7 @@ void main(void)
 		pr_data_buf(testbuf1, datalen);
 
 		if (buf_contains(testbuf1, datalen, 0xffu)) {
-			printk("SPI flash region is erase\n");
+			printf("SPI flash region is erase\n");
 		} else {
 			printk("SPI flash region not erased!\n");
 			return;
@@ -811,14 +843,14 @@ void main(void)
 			}
 		}
 		if (n == datalen) {
-			printk("After programming data pattern matched expected value\n");
+			printf("After programming data pattern matched expected values\n");
 		} else {
 			printk("After programming data mismatch\n");
 			return;
 		}
 	}
 
-	printk("Read data using fast read command\n");
+	printf("Read data using fast read command\n");
 	memset(testbuf1, 0x66u, sizeof(testbuf1));
 
 	cmd = SPI_FLASH_READ_FAST_CMD;
@@ -837,16 +869,45 @@ void main(void)
 		}
 	}
 	if (n == datalen) {
-		printk("SPI Fast Read: data pattern matched expected value\n");
+		printf("SPI Fast Read: data pattern matched expected values\n");
 	} else {
 		printk("SPI Fast Read: data mismatch\n");
 		return;
 	}
 
+#ifdef CONFIG_SPI_ASYNC
+	printf("\nTest SPI Async\n");
+	memset(testbuf1, 0x66u, sizeof(testbuf1));
+	cmd = 0x03u;
+	datalen = 16u;
+	spi_addr = 0;
+	printf("Read %u bytes at SPI offset 0x%08x using cmd 0x%02x\n", datalen, spi_addr, cmd);
+
+	err = spi_flash_read_async(spi, &spi_cfg, cmd, spi_addr, testbuf1, datalen);
+	if (err) {
+		printf("SPI flash read async error %d\n", err);
+	}
+
+	pr_data_buf(testbuf1, datalen);
+
+	for (n = 0; n < datalen; n++) {
+		if (testbuf1[n] != (n + 1)) {
+			break;
+		}
+	}
+	if (n == datalen) {
+		printf("SPI Aynsc Read: data pattern matched expected values\n");
+	} else {
+		printk("SPI Async Read: data mismatch\n");
+		return;
+	}
+#endif
+
 #ifdef CONFIG_SPI_EXTENDED_MODES
+	printf("\nTest GPSPI dual data read. GPSPI transmits using one line only. It can receive on one or two lines\n");
 	memset(testbuf1, 0xAAu, sizeof(testbuf1));
 	cmd = SPI_FLASH_READ_DUAL_CMD;
-	printk("Read %u bytes at SPI offset 0x%08x using dual (1-1-2-8)\n", datalen, spi_addr);
+	printf("Read %u bytes at SPI offset 0x%08x using dual (1-1-2-8)\n", datalen, spi_addr);
 
 	err = spi_flash_read_dual(spi, &spi_cfg, cmd, spi_addr, testbuf1, datalen);
 	if (err) {
@@ -862,26 +923,11 @@ void main(void)
 		}
 	}
 	if (n == datalen) {
-		printk("SPI read dual opcode 0x3b matched expected value\n");
+		printf("SPI read dual opcode 0x3b matched expected value\n");
 	} else {
-		printk("ERROR: SPI read dual opcode 0x3b did not match!\n");
+		printf("SPI read dual opcode 0x3b data MISMATCH\n");
 	}
 #endif
 
-#ifdef CONFIG_SPI_ASYNC
-	printk("\nTest SPI Async\n");
-	memset(testbuf1, 0x66u, sizeof(testbuf1));
-	cmd = 0x03u;
-	datalen = 16u;
-	spi_addr = 0;
-	printk("Read %u bytes at SPI offset 0x%08x using cmd 0x%02x\n", datalen, spi_addr, cmd);
-
-	err = spi_flash_read_async(spi, &spi_cfg, cmd, spi_addr, testbuf1, datalen);
-	if (err) {
-		printk("SPI flash read async error %d\n", err);
-	}
-
-	pr_data_buf(testbuf1, datalen);
-#endif
-	printk("end main\n");
+	printf("end main\n");
 }

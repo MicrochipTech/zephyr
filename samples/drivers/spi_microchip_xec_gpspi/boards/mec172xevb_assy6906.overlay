@@ -7,8 +7,25 @@
 / {
 	aliases {
 		gpspi = &spi1;
+		counter = &timer5;
 	};
 };
+
+&timer5 {
+	status = "okay";
+};
+
+&dmac {
+	aggregated-girq = <&girq14>;
+	status = "okay";
+};
+
+/* DMA controller implementation requires GIRQ14 aggregated */
+/* !!! NO !!!
+&girq14 {
+	status = "okay";
+};
+*/
 
 &pinctrl {
 	spi0_cs0_n_gpio003_sleep: spi0_cs0_n_gpio003_sleep {
@@ -37,17 +54,18 @@
 	pinctrl-1 = <&spi0_cs0_n_gpio003_sleep &spi0_clk_gpio034_sleep
 		     &spi0_mosi_gpio004_sleep &spi0_miso_gpio036_sleep>;
 	pinctrl-names = "default", "sleep";
+	dmas = <&dmac 12 12>, <&dmac 13 13>;
+	dma-names = "tx", "rx";
 };
 
 &spi0_cs0_n_gpio003 {
-	drive-open-drain;
+/*	drive-open-drain; */
 	output-high;
 };
 
-/* Example using GPIO driver for SPI chip select control.
+/* SPI driver calls GPIO driver to drive chip select
  * Requires application to create a struct spi_cs_control
- * instance and pass a pointer to it in struct spi_config.
- * NOTE: GPSPI driver PM code will not touch chip select!
+ * structure and pass a pointer to it in struct spi_config.
  *
 &spi1 {
 	status = "okay";
@@ -56,5 +74,7 @@
 	pinctrl-1 = <&spi0_clk_gpio034_sleep &spi0_mosi_gpio004_sleep
 		     &spi0_miso_gpio036_sleep>;
 	pinctrl-names = "default", "sleep";
+	dmas = <&dmac 12 12>, <&dmac 13 13>;
+	dma-names = "tx", "rx";
 };
 */

@@ -32,3 +32,20 @@ properties:
 
     pinctrl-names:
       required: true
+
+    dmas:
+      description: |
+        Optional TX & RX dma specifiers.  Each specifier will have a phandle
+        reference to the dmac controller, the channel number, and peripheral
+        trigger source.
+
+        For example dmas for TX, RX on GPSPI
+           dmas = <&dmac 0 12>, <&dmac 1 13>;
+
+    dma-names:
+      description: |
+        Required if the dmas property exists.  This should be "tx" and "rx"
+        to match the dmas property.
+
+        For example
+           dma-names = "tx", "rx";
