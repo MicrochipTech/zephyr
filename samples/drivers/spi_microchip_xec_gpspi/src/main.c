@@ -904,6 +904,8 @@ void main(void)
 #endif
 
 #ifdef CONFIG_SPI_EXTENDED_MODES
+	spi_addr = 0u;
+	datalen = 16u;
 	printf("\nTest GPSPI dual data read. GPSPI transmits using one line only. It can receive on one or two lines\n");
 	memset(testbuf1, 0xAAu, sizeof(testbuf1));
 	cmd = SPI_FLASH_READ_DUAL_CMD;
