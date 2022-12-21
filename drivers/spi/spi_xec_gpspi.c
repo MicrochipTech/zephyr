@@ -913,8 +913,8 @@ static int xec_gpspi_pm_action(const struct device *dev,
 
 	case PM_DEVICE_ACTION_SUSPEND:
 		ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_SLEEP);
-		if (ret < 0) {
-			return ret;
+		if ((ret == 0) || (ret == -ENOENT)) {
+			ret = 0; /* -ENOENT indicates no sleep state defined */
 		}
 		break;
 
@@ -1084,9 +1084,9 @@ static void xec_gpspi_rxbf_handler(const struct device *dev)
 		.irq_connect = xec_gpspi_irq_connect##i,		\
 		XEC_GPSPI_DMA_CFG(i)					\
 	};								\
-	PM_DEVICE_DT_DEFINE(i, xec_gpspi_pm_action);			\
+	PM_DEVICE_DT_INST_DEFINE(i, xec_gpspi_pm_action);		\
 	DEVICE_DT_INST_DEFINE(i, &xec_gpspi_init,			\
-		PM_DEVICE_DT_GET(i),					\
+		PM_DEVICE_DT_INST_GET(i),				\
 		&xec_gpspi_data_##i, &xec_gpspi_config_##i,		\
 		POST_KERNEL, CONFIG_SPI_INIT_PRIORITY,			\
 		&spi_xec_gpspi_driver_api);
