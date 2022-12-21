@@ -153,19 +153,20 @@ struct spi_xec_gpspi_data {
 	struct spi_context ctx;
 	struct spi_config scfg;
 	uint8_t configured;
-	uint8_t gpstatus;
 	uint8_t isr_ctx_done;
-#ifdef CONFIG_SPI_ASYNC
-	size_t ctx_longest_buf_len;
-#endif
 #ifdef CONFIG_SPI_XEC_GPSPI_DMA
 	const struct device *dev;
 	struct k_sem dma_sem;
-	uint32_t wait_count;
+	uint32_t dma_len;
+	int rx_cb_status;
 	volatile int tx_dma_done;
 	volatile int tx_dma_status;
 	volatile int rx_dma_done;
 	volatile int rx_dma_status;
+	struct dma_config tx_dma_cfg;
+	struct dma_config rx_dma_cfg;
+	struct dma_block_config tx_dma_block;
+	struct dma_block_config rx_dma_block;
 	volatile uint8_t dma_buf[XEC_GPSPI_DMA_BUF_SIZE];
 #endif
 };
@@ -364,6 +365,8 @@ static int gpspi_configure(const struct device *dev, const struct spi_config *sp
 		regs->status = regs->rx_data;
 	}
 
+	data->configured = 1u;
+
 	return 0;
 }
 
@@ -392,6 +395,7 @@ static void xec_gpspi_dma_rx_cb(const struct device *dev, void *user_data,
 
 	data->rx_dma_done = 1;
 	data->rx_dma_status = status;
+	data->rx_cb_status = 0;
 
 	/* increments semaphore count */
 	k_sem_give(&data->dma_sem);
@@ -425,6 +429,83 @@ static void xec_gpspi_dma_cfg(const struct device *dev, struct dma_config *dma_c
 	}
 }
 
+static int xec_gpspi_xfr_dma(const struct device *dev, size_t *pdlen)
+{
+	const struct spi_xec_gpspi_config *devcfg = dev->config;
+	struct xec_gpspi_regs * const regs = devcfg->regs;
+	struct spi_xec_gpspi_data * const data = dev->data;
+	struct spi_context *ctx = &data->ctx;
+	struct dma_config *tx_dma_cfg = &data->tx_dma_cfg;
+	struct dma_config *rx_dma_cfg = &data->rx_dma_cfg;
+	struct dma_block_config *tx_dma_block = &data->tx_dma_block;
+	struct dma_block_config *rx_dma_block = &data->rx_dma_block;
+	size_t dma_len;
+	bool use_dma_buf;
+	int ret;
+
+	use_dma_buf = false;
+	dma_len = spi_context_max_continuous_chunk(ctx);
+
+	data->dma_len = dma_len;
+	data->tx_dma_done = 0;
+	data->tx_dma_status = 0;
+	data->rx_dma_done = 0;
+	data->rx_dma_status = 0;
+
+	/* TX DMA always required to generate SPI clocks. */
+	if (spi_context_tx_buf_on(ctx)) {
+		regs->control |= BIT(XEC_GPSPI_CTRL_BI_DIR_OUT_EN_POS);
+		tx_dma_block->source_address = (uint32_t)ctx->tx_buf;
+	} else { /* No data to TX, set output pin direction to input */
+		regs->control &= ~BIT(XEC_GPSPI_CTRL_BI_DIR_OUT_EN_POS);
+		tx_dma_block->source_address = (uint32_t)data->dma_buf;
+		use_dma_buf = true;
+	}
+
+	if (spi_context_rx_buf_on(ctx)) {
+		rx_dma_block->dest_address = (uint32_t)ctx->rx_buf;
+	} else {
+		rx_dma_block->dest_address = (uint32_t)data->dma_buf;
+		use_dma_buf = true;
+	}
+
+	if (use_dma_buf && (dma_len > XEC_GPSPI_DMA_BUF_SIZE)) {
+		dma_len = XEC_GPSPI_DMA_BUF_SIZE;
+		data->dma_len = dma_len;
+	}
+
+	if (pdlen) {
+		*pdlen = dma_len;
+	}
+
+	tx_dma_block->block_size = dma_len;
+	rx_dma_block->block_size = dma_len;
+
+	ret = dma_config(devcfg->dma_dev, devcfg->tx_dma_channel, tx_dma_cfg);
+	if (ret) {
+		return ret;
+	}
+
+	ret = dma_config(devcfg->dma_dev, devcfg->rx_dma_channel, rx_dma_cfg);
+	if (ret) {
+		return ret;
+	}
+
+	/* HW state: TXBE=1 TX_DMA_REQ=1, RXBF=0 RX_DMA_REQ=0
+	 * Start DMA in order: RX then TX
+	 */
+	ret = dma_start(devcfg->dma_dev, devcfg->rx_dma_channel);
+	if (ret) {
+		return ret;
+	}
+	ret = dma_start(devcfg->dma_dev, devcfg->tx_dma_channel);
+	if (ret) {
+		dma_stop(devcfg->dma_dev, devcfg->rx_dma_channel);
+	}
+
+	return ret;
+}
+
 /* GPSPI synchronous transfer using DMA. GPSPI implements one byte TX and RX FIFO's
  * in the form of its TX DATA and RX DATA registers. GPSPI requires write to TX DATA
  * to generate clocks. We always configure TX and RX DMA to ensure clocks are
@@ -440,75 +521,22 @@ static int xec_gpspi_xfr_sync(const struct device *dev, const struct spi_config 
 	struct xec_gpspi_regs * const regs = devcfg->regs;
 	struct spi_xec_gpspi_data * const data = dev->data;
 	struct spi_context *ctx = &data->ctx;
-	struct dma_config tx_dma_cfg = {0};
-	struct dma_config rx_dma_cfg = {0};
-	struct dma_block_config tx_dma_block = {0};
-	struct dma_block_config rx_dma_block = {0};
 	int ret = 0;
+	size_t dma_len;
 
 	if ((regs->status & XEC_GPSPI_STS_RXBF_TXBE) != BIT(XEC_GPSPI_STATUS_TXBE_POS)) {
 		return -EBUSY;
 	}
 
-	xec_gpspi_dma_cfg(dev, &tx_dma_cfg, &tx_dma_block, xec_gpspi_dma_tx_cb, 1);
-	xec_gpspi_dma_cfg(dev, &rx_dma_cfg, &rx_dma_block, xec_gpspi_dma_rx_cb, 0);
+	xec_gpspi_dma_cfg(dev, &data->tx_dma_cfg, &data->tx_dma_block, xec_gpspi_dma_tx_cb, 1);
+	xec_gpspi_dma_cfg(dev, &data->rx_dma_cfg, &data->rx_dma_block, xec_gpspi_dma_rx_cb, 0);
 
 	while (spi_context_tx_buf_on(ctx) || spi_context_rx_buf_on(ctx)) {
-		size_t dma_len = spi_context_max_continuous_chunk(ctx);
-		bool use_dma_buf = false;
-
-		data->wait_count = 0;
-		data->tx_dma_done = 0;
-		data->tx_dma_status = 0;
-		data->rx_dma_done = 0;
-		data->rx_dma_status = 0;
-
 		k_sem_reset(&data->dma_sem);
 
-		/* TX DMA always required to generate SPI clocks. */
-		if (spi_context_tx_buf_on(ctx)) {
-			regs->control |= BIT(XEC_GPSPI_CTRL_BI_DIR_OUT_EN_POS);
-			tx_dma_block.source_address = (uint32_t)ctx->tx_buf;
-		} else { /* No data to TX, set output pin direction to input */
-			regs->control &= ~BIT(XEC_GPSPI_CTRL_BI_DIR_OUT_EN_POS);
-			tx_dma_block.source_address = (uint32_t)data->dma_buf;
-			use_dma_buf = true;
-		}
-
-		if (spi_context_rx_buf_on(ctx)) {
-			rx_dma_block.dest_address = (uint32_t)ctx->rx_buf;
-		} else {
-			rx_dma_block.dest_address = (uint32_t)data->dma_buf;
-			use_dma_buf = true;
-		}
-
-		if (use_dma_buf && (dma_len > XEC_GPSPI_DMA_BUF_SIZE)) {
-			dma_len = XEC_GPSPI_DMA_BUF_SIZE;
-		}
-
-		tx_dma_block.block_size = dma_len;
-		rx_dma_block.block_size = dma_len;
-
-		ret = dma_config(devcfg->dma_dev, devcfg->tx_dma_channel, &tx_dma_cfg);
+		dma_len = 0;
+		ret = xec_gpspi_xfr_dma(dev, &dma_len);
 		if (ret) {
-			return ret;
-		}
-
-		ret = dma_config(devcfg->dma_dev, devcfg->rx_dma_channel, &rx_dma_cfg);
-		if (ret) {
-			return ret;
-		}
-
-		/* HW state: TXBE=1 TX_DMA_REQ=1, RXBF=0 RX_DMA_REQ=0
-		 * Start DMA in order: RX then TX
-		 */
-		ret = dma_start(devcfg->dma_dev, devcfg->rx_dma_channel);
-		if (ret) {
-			return ret;
-		}
-		ret = dma_start(devcfg->dma_dev, devcfg->tx_dma_channel);
-		if (ret) {
-			dma_stop(devcfg->dma_dev, devcfg->rx_dma_channel);
 			return ret;
 		}
 
@@ -620,12 +648,91 @@ static int xec_gpspi_xfr_sync(const struct device *dev,
 
 	return 0;
 }
-#endif
+#endif /* CONFIG_SPI_XEC_GPSPI_DMA */
 
 #ifdef CONFIG_SPI_ASYNC
-/* TODO GPSPI controller is byte oriented. DMA can only be done using
- * the XEC legacy DMA controller (no Zephyr driver). Therefore we
- * implement asynchronous mode using GPSPI RXBF interrupt.
+#ifdef CONFIG_SPI_XEC_GPSPI_DMA
+/* Aync DMA uses different DMA RX callback. RX DMA callback start another
+ * SPI sequency using DMA if more SPI context data is present.
+ * !!! WARNING !!!
+ * This function is called in DMA channel ISR context.
+ */
+static void xec_gpspi_dma_rx_cb_async(const struct device *dev, void *user_data,
+				      uint32_t channel, int status)
+{
+	const struct device *gpspi_dev = (struct device *)user_data;
+	const struct spi_xec_gpspi_config *devcfg = gpspi_dev->config;
+	struct spi_xec_gpspi_data * const data = gpspi_dev->data;
+	struct xec_gpspi_regs * const regs = devcfg->regs;
+	struct spi_context *ctx = &data->ctx;
+	size_t dma_len;
+	int ret;
+
+	data->rx_dma_done = 1;
+	data->rx_dma_status = status;
+	data->rx_cb_status = 0;
+
+	if (spi_context_tx_buf_on(ctx)) {
+		spi_context_update_tx(ctx, 1, data->dma_len);
+	}
+	if (spi_context_rx_buf_on(ctx)) {
+		spi_context_update_rx(ctx, 1, data->dma_len);
+	}
+
+	/* more data to transfer? */
+	if (spi_context_tx_buf_on(ctx) || spi_context_rx_buf_on(ctx)) {
+		dma_len = 0;
+		ret = xec_gpspi_xfr_dma(gpspi_dev, &dma_len);
+		if (ret) {
+			data->rx_cb_status = ret;
+			spi_context_complete(ctx, gpspi_dev, ret);
+			regs->control &= ~BIT(XEC_GPSPI_CTRL_CE_POS);
+		}
+	} else {
+		spi_context_complete(ctx, gpspi_dev, 0);
+		if (!(ctx->config->operation & SPI_LOCK_ON)) {
+			regs->control &= ~BIT(XEC_GPSPI_CTRL_CE_POS);
+		}
+	}
+}
+
+/* DMA version */
+static int xec_gpspi_xfr_async(const struct device *dev,
+			       const struct spi_config *spi_conf)
+{
+	const struct spi_xec_gpspi_config *devcfg = dev->config;
+	struct xec_gpspi_regs * const regs = devcfg->regs;
+	struct spi_xec_gpspi_data * const data = dev->data;
+	struct spi_context *ctx = &data->ctx;
+	size_t dma_len;
+	int ret = 0;
+
+	if ((regs->status & XEC_GPSPI_STS_RXBF_TXBE) != BIT(XEC_GPSPI_STATUS_TXBE_POS)) {
+		return -EBUSY;
+	}
+
+	xec_gpspi_dma_cfg(dev, &data->tx_dma_cfg, &data->tx_dma_block,
+			  xec_gpspi_dma_tx_cb, 1);
+	xec_gpspi_dma_cfg(dev, &data->rx_dma_cfg, &data->rx_dma_block,
+			  xec_gpspi_dma_rx_cb_async, 0);
+
+	if (spi_context_tx_buf_on(ctx) || spi_context_rx_buf_on(ctx)) {
+
+		dma_len = 0;
+		ret = xec_gpspi_xfr_dma(dev, &dma_len);
+		if (ret) {
+			return ret;
+		}
+	} else {
+		spi_context_complete(ctx, dev, 0);
+	}
+
+	return 0;
+}
+#else /* 0 */
+
+/* Asynchronous mode non-DMA transfer. An interrupt will be generated
+ * for every byte transfer. Implement using GPSPI RXBF interrupt.
  * This code enables the RXBF interrupt and writes the GPSPI TX FIFO
  * to trigger the interrupt when HW completes clocking 8 bits of
  * data to its RX data register.
@@ -636,7 +743,6 @@ static int xec_gpspi_xfr_sync(const struct device *dev,
  *    or 0 if RX and clears status.
  * 4. RXBF handler reads the byte from RX data register and clears status.
  *    If RX buffer exists write data to it.
- * TODO Logic to disable these interrupts
  */
 static int xec_gpspi_xfr_async(const struct device *dev,
 			       const struct spi_config *spi_conf)
@@ -652,7 +758,6 @@ static int xec_gpspi_xfr_async(const struct device *dev,
 	}
 
 	if (spi_context_tx_buf_on(ctx) || spi_context_rx_buf_on(ctx)) {
-		data->ctx_longest_buf_len = spi_context_longest_current_buf(ctx);
 		data->isr_ctx_done = 0u;
 
 		/* Enable GPSPI controller's RXBF interrupt.
@@ -676,7 +781,8 @@ static int xec_gpspi_xfr_async(const struct device *dev,
 
 	return 0;
 }
-#endif
+#endif /* CONFIG_SPI_XEC_GPSPI_DMA */
+#endif /* CONFIG_SPI_ASYNC */
 
 /* SPI model is for every clock edge where data is transmitted we must
  * read data in on the sample clock edge. The chosen SPI mode specifies
@@ -702,8 +808,6 @@ static int xec_gpspi_xfr(const struct device *dev,
 	struct spi_xec_gpspi_data * const data = dev->data;
 	struct spi_context *ctx = &data->ctx;
 	int ret = 0;
-
-	/* TODO check tx_bufs and rx_bufs NULL pointer and count == 0 */
 
 	spi_context_lock(ctx, asynchronous, cb, userdata, spi_conf);
 
@@ -836,7 +940,6 @@ static int xec_gpspi_init(const struct device *dev)
 	struct xec_gpspi_regs * const regs = cfg->regs;
 	int ret = 0;
 
-	data->gpstatus = 0u;
 	data->configured = 0u;
 	memset(&data->scfg, 0, sizeof(struct spi_config));
 
