@@ -12,9 +12,9 @@
 #include <soc.h>
 #include <zephyr/arch/cpu.h>
 #include <zephyr/arch/arm/aarch32/cortex_m/cmsis.h>
-#ifndef CONFIG_PM_DEVICE
+/* #ifndef CONFIG_PM_DEVICE */
 #include "device_power.h"
-#endif
+/* #endif */
 
 #include "soc_power_debug.h"
 
@@ -61,11 +61,11 @@ static void z_power_soc_deep_sleep(void)
 	__disable_irq();
 	basepri = __get_BASEPRI();
 
-#ifndef CONFIG_PM_DEVICE
+/* #ifndef CONFIG_PM_DEVICE */
 	soc_deep_sleep_periph_save();
 	soc_deep_sleep_wake_en();
 	soc_deep_sleep_non_wake_en();
-#endif
+/* #endif */
 
 	/*
 	 * Enable deep sleep mode in CM4 and MEC172x.
@@ -109,11 +109,11 @@ static void z_power_soc_deep_sleep(void)
 
 	__set_BASEPRI(basepri);
 
-#ifndef CONFIG_PM_DEVICE
+/* #ifndef CONFIG_PM_DEVICE */
 	soc_deep_sleep_non_wake_dis();
 	soc_deep_sleep_wake_dis();
 	soc_deep_sleep_periph_restore();
-#endif
+/* #endif */
 
 	PM_DP_EXIT();
 }

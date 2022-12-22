@@ -22,7 +22,7 @@
 /* Enable SoC control over peripherals only when drivers do not support
  * power management
  */
-#ifndef CONFIG_PM_DEVICE
+/* #ifndef CONFIG_PM_DEVICE */
 
 /* Comment out to use JTAG without interruptions.
  * Beware this blocks PLL going off, hence should be enabled
@@ -84,7 +84,7 @@ struct ds_dev_info {
 	uint8_t comp_en;
 };
 
-#endif /* CONFIG_PM_DEVICE */
+/* #endif */ /* CONFIG_PM_DEVICE */
 
 void soc_deep_sleep_periph_save(void);
 void soc_deep_sleep_periph_restore(void);

@@ -17,6 +17,7 @@ LOG_MODULE_REGISTER(spi_xec, CONFIG_SPI_LOG_LEVEL);
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
 #include <soc.h>
@@ -1083,6 +1084,35 @@ void qmspi_xec_isr(const struct device *dev)
 #endif
 }
 
+#ifdef CONFIG_PM_DEVICE
+/* If the application wants the QMSPI pins to be disabled in suspend it must
+ * define pinctr-1 values for each pin in the app/project DT overlay.
+ */
+static int qmspi_xec_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct spi_qmspi_config *devcfg = dev->config;
+/*	struct spi_qmspi_data *qdata = dev->data; */
+/*	struct qmspi_regs *regs = cfg->regs; */
+	int ret;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_RESUME:
+		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
+		break;
+	case PM_DEVICE_ACTION_SUSPEND:
+		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
+		if (ret == -ENOENT) { /* pinctrl-1 does not exist */
+			ret = 0;
+		}
+		break;
+	default:
+		ret = -ENOTSUP;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_PM_DEVICE */
+
 /*
  * Called for each QMSPI controller instance
  * Initialize QMSPI controller.
@@ -1221,7 +1251,9 @@ static const struct spi_driver_api spi_qmspi_xec_driver_api = {
 		.irq_config_func = qmspi_xec_irq_config_func_##i,	\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),		\
 	};								\
-	DEVICE_DT_INST_DEFINE(i, &qmspi_xec_init, NULL,			\
+	PM_DEVICE_DT_INST_DEFINE(i, qmspi_xec_pm_action);		\
+	DEVICE_DT_INST_DEFINE(i, &qmspi_xec_init,			\
+		PM_DEVICE_DT_INST_GET(i),				\
 		&qmspi_xec_data_##i, &qmspi_xec_config_##i,		\
 		POST_KERNEL, CONFIG_SPI_INIT_PRIORITY,			\
 		&spi_qmspi_xec_driver_api);

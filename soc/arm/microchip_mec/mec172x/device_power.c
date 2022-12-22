@@ -247,7 +247,7 @@ static void deep_sleep_save_blocks(void)
 {
 	struct tfdp_regs *tfdp = TFDP_0_XEC_REG_BASE;
 	struct ecs_regs *ecs = ECS_XEC_REG_BASE;
-#ifdef CONFIG_ADC
+#if 0 /* #if defined(CONFIG_ADC) */
 	struct adc_regs *adc0 = ADC_0_XEC_REG_BASE;
 
 	/* ADC deactivate  */
@@ -255,7 +255,7 @@ static void deep_sleep_save_blocks(void)
 #endif
 
 #ifdef CONFIG_PECI
-	struct peci_regs *peci = PECI_XEC_REG_BASE;
+	struct peci_regs *peci = PECI_XEC_REG_BASE;`
 
 	ds_ctx.peci_info.peci_ctrl = peci->CONTROL;
 	ds_ctx.peci_info.peci_dis = ecs->PECI_DIS;
@@ -307,7 +307,7 @@ static void deep_sleep_restore_blocks(void)
 {
 	struct tfdp_regs *tfdp = TFDP_0_XEC_REG_BASE;
 	struct ecs_regs *ecs = ECS_XEC_REG_BASE;
-#ifdef CONFIG_ADC
+#if 0 /* #ifdef CONFIG_ADC */
 	struct adc_regs *adc0 = ADC_0_XEC_REG_BASE;
 
 	adc0->CONTROL |= MCHP_ADC_CTRL_ACTV;
