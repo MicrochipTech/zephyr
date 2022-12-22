@@ -96,6 +96,8 @@
 	current-speed = <115200>;
 	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
 	pinctrl-names = "default";
+	wakerx-gpios = <&gpio_140_176 25 GPIO_ACTIVE_HIGH>;
+	wakeup-source;
 };
 
 &adc0 {

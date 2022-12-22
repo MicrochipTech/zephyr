@@ -31,3 +31,8 @@ properties:
 
   pinctrl-names:
     required: true
+
+  wakerx-gpios:
+    type: phandle-array
+    required: false
+    description: GPIO configured as UART RX wake source
