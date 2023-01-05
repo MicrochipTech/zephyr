@@ -454,21 +454,28 @@ static void uart_xec_wake_handler(const struct device *gpio, struct gpio_callbac
 	pm_policy_state_lock_get(PM_STATE_STANDBY, PM_ALL_SUBSTATES);
 	k_work_reschedule(&rx_refresh_timeout_work, delay);
 #endif
+	printk("uart_xec: wake handler\n");
 }
 
 static int uart_xec_pm_action(const struct device *dev,
 					 enum pm_device_action action)
 {
 	const struct uart_xec_device_config * const dev_cfg = dev->config;
+	struct uart_regs *regs = dev_cfg->regs;
 	int ret = 0;
 
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
-		/* Nothing to do. */
+		//printk("uart_xec: PM_DEVICE_ACTION_RESUME\n");
+		regs->ACTV |= MCHP_UART_LD_ACTIVATE;
 		break;
 	case PM_DEVICE_ACTION_SUSPEND:
 		/* Enable UART wake interrupt */
+		printk("uart_xec: PM_DEVICE_ACTION_SUSPEND\n");
+		regs->ACTV = 0;
+#if 1
 		if ((dev_cfg->wakeup_source) && (dev_cfg->wakerx_gpio.port != NULL)) {
+			//printk("uart_xec: enable wake rx gpio interrupt\n");
 			ret = gpio_pin_interrupt_configure_dt(&dev_cfg->wakerx_gpio,
 								  GPIO_INT_MODE_EDGE | GPIO_INT_TRIG_LOW);
 			if (ret < 0) {
@@ -476,6 +483,7 @@ static int uart_xec_pm_action(const struct device *dev,
 				return ret;
 			}
 		}
+#endif
 		break;
 	default:
 		return -ENOTSUP;
@@ -488,6 +496,8 @@ static int uart_xec_pm_action(const struct device *dev,
 static void uart_xec_rx_refresh_timeout(struct k_work *work)
 {
 	ARG_UNUSED(work);
+
+	printk("uart_xec: uart_xec_rx_refresh_timeout - release\n");
 
 	pm_policy_state_lock_put(PM_STATE_STANDBY, PM_ALL_SUBSTATES);
 }
@@ -526,12 +536,16 @@ static int uart_xec_init(const struct device *dev)
 #endif
 
 #ifdef CONFIG_PM_DEVICE
+	printk("uart_xec: dev_cfg->wakeup_source = %d\n", dev_cfg->wakeup_source);
+	printk("uart_xec: dev_cfg->wakerx_gpio.port = %x\n", dev_cfg->wakerx_gpio.port);
 #ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
+		printk("uart_xec: install uart rx refresh timeout\n");
 		k_work_init_delayable(&rx_refresh_timeout_work, uart_xec_rx_refresh_timeout);
 #endif
 	if ((dev_cfg->wakeup_source) && (dev_cfg->wakerx_gpio.port != NULL)) {
 		static struct gpio_callback uart_xec_wake_cb;
 
+		printk("uart_xec: add gpio callback\n");
 		gpio_init_callback(&uart_xec_wake_cb, uart_xec_wake_handler,
 				   BIT(dev_cfg->wakerx_gpio.pin));
 
@@ -1035,8 +1049,8 @@ static const struct uart_driver_api uart_xec_driver_api = {
 	DT_INST_PROP_OR(n, hw_flow_control, UART_CFG_FLOW_CTRL_NONE)
 
 #ifdef CONFIG_PM_DEVICE
-#define XEC_UART_PM_WAKEUP(index)						\
-		.wakeup_source = (uint8_t)DT_INST_PROP_OR(index, wakeup_source, 0),	\
+#define XEC_UART_PM_WAKEUP(n)						\
+		.wakeup_source = (uint8_t)DT_INST_PROP_OR(n, wakeup_source, 0),	\
 		.wakerx_gpio = GPIO_DT_SPEC_INST_GET_OR(n, wakerx_gpios, {0}),
 #else
 #define XEC_UART_PM_WAKEUP(index) /* Not used */
