@@ -1,0 +1,181 @@
+/*
+ * Copyright (c) 2021 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	zephyr,user {
+		io-channels =  <&adc0 0>, <&adc0 3>, <&adc0 4>, <&adc0 5>;
+	};
+};
+
+/*
+&uart1 {
+	status = "disabled";
+};
+*/
+
+&espi0 {
+	status = "disabled";
+};
+
+&kbc0 {
+	status = "disabled";
+};
+
+&acpi_ec0 {
+	status = "disabled";
+};
+
+&acpi_ec1 {
+	status = "disabled";
+};
+
+&emi0 {
+	status = "disabled";
+};
+
+&p80bd0 {
+	status = "disabled";
+};
+
+&i2c_smb_0 {
+	status = "disabled";
+};
+
+&i2c_smb_1 {
+	status = "disabled";
+};
+
+&i2c_smb_2 {
+	status = "disabled";
+};
+
+&kscan0 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
+
+&tach0 {
+	status = "disabled";
+};
+
+&ps2_0 {
+	status = "disabled";
+};
+
+&timer5 {
+	status = "disabled";
+};
+
+&pinctrl {
+	adc00_gpio200_sleep: adc00_gpio200_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0200, MCHP_AF1) >;
+		low-power-enable;
+	};
+	adc03_gpio203_sleep: adc03_gpio203_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0203, MCHP_AF1) >;
+		low-power-enable;
+	};
+	adc04_gpio204_sleep: adc04_gpio204_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0204, MCHP_AF1) >;
+		low-power-enable;
+	};
+	adc05_gpio205_sleep: adc05_gpio205_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0205, MCHP_AF1) >;
+		low-power-enable;
+	};
+
+	shd_cs0_n_gpio055_sleep: shd_cs0_n_gpio055_sleep {
+		pinmux = < MCHP_XEC_PINMUX(055, MCHP_AF2) >;
+		low-power-enable;
+	};
+	shd_clk_gpio056_sleep: shd_clk_gpio056_sleep {
+		pinmux = < MCHP_XEC_PINMUX(056, MCHP_AF2) >;
+		low-power-enable;
+	};
+	shd_io0_gpio223_sleep: shd_io0_gpio223_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0223, MCHP_AF1) >;
+		low-power-enable;
+	};
+	shd_io1_gpio224_sleep: shd_io1_gpio224_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0224, MCHP_AF2) >;
+		low-power-enable;
+	};
+	shd_io2_gpio227_sleep: shd_io2_gpio227_sleep {
+		pinmux = < MCHP_XEC_PINMUX(0227, MCHP_AF1) >;
+		low-power-enable;
+	};
+	shd_io3_gpio016_sleep: shd_io3_gpio016_sleep {
+		pinmux = < MCHP_XEC_PINMUX(016, MCHP_AF2) >;
+		low-power-enable;
+	};
+};
+
+&adc0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <0>;
+		zephyr,resolution = <12>;
+	};
+	channel@3 {
+		reg = <3>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <0>;
+		zephyr,resolution = <12>;
+	};
+	channel@4 {
+		reg = <4>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <0>;
+		zephyr,resolution = <12>;
+	};
+	channel@5 {
+		reg = <5>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <0>;
+		zephyr,resolution = <12>;
+	};
+
+	status = "okay";
+	pinctrl-0 = <&adc00_gpio200 &adc03_gpio203
+		     &adc04_gpio204 &adc05_gpio205>;
+	pinctrl-1 = <&adc00_gpio200_sleep &adc03_gpio203_sleep
+		     &adc04_gpio204_sleep &adc05_gpio205_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&spi0 {
+	status = "okay";
+	compatible = "microchip,xec-qmspi-ldma";
+	clock-frequency = <4000000>;
+	lines = <4>;
+	chip-select = <0>;
+	port-sel = <0>; /* Shared SPI */
+
+	pinctrl-0 = < &shd_cs0_n_gpio055
+		      &shd_clk_gpio056
+		      &shd_io0_gpio223
+		      &shd_io1_gpio224
+		      &shd_io2_gpio227
+		      &shd_io3_gpio016 >;
+	pinctrl-1 = < &shd_cs0_n_gpio055_sleep
+		      &shd_clk_gpio056_sleep
+		      &shd_io0_gpio223_sleep
+		      &shd_io1_gpio224_sleep
+		      &shd_io2_gpio227_sleep
+		      &shd_io3_gpio016_sleep >;
+	pinctrl-names = "default", "sleep";
+};
