@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "zephyr/kernel.h"
 #define DT_DRV_COMPAT microchip_xec_gpspi
 
 #include <zephyr/logging/log.h>
@@ -40,7 +41,7 @@ LOG_MODULE_REGISTER(spi_xec_gpspi, CONFIG_SPI_LOG_LEVEL);
 #define XEC_GPSPI_CTRL_SPDIN_SEL_MSK		0xcu
 #define XEC_GPSPI_CTRL_SPDIN_SEL_FULL_DUPLEX	0
 #define XEC_GPSPI_CTRL_SPDIN_SEL_HALF_DUPLEX	0x4u
-#define XEC_GPSPI_CTRL_SPDIN_SEL_DUAL		0x8u
+#define XEC_GPSPI_CTRL_SPDIN_SEL_DUAL_RX	0x8u
 #define XEC_GPSPI_CTRL_SRST_POS			4
 #define XEC_GPSPI_CTRL_AUTO_READ_POS		5
 #define XEC_GPSPI_CTRL_CE_POS			6
@@ -60,8 +61,8 @@ LOG_MODULE_REGISTER(spi_xec_gpspi, CONFIG_SPI_LOG_LEVEL);
 #define XEC_GPSPI_CLK_CTRL_RCLKPH_POS		1
 #define XEC_GPSPI_CLK_CTRL_CLKPOL_POS		2
 
-/* default GPSPI reference clock source is 2 MHz */
-#define XEC_GPSPI_CLK_CTRL_SRC_CLK_48M_POS	4
+/* default GPSPI reference clock source is 48 MHz */
+#define XEC_GPSPI_CLK_CTRL_SRC_CLK_2M_POS	4
 
 #define XEC_GPSPI_CLK_GEN_PRELOAD_POS		0
 #define XEC_GPSPI_CLK_GEN_PRELOAD_MSK		0x3fu
@@ -194,30 +195,29 @@ static void xec_gpspi_reset(struct xec_gpspi_regs *regs)
  */
 static int gpspi_configure_spi_clock(struct xec_gpspi_regs * const regs, uint32_t spi_clk_hz)
 {
-	uint32_t preload, ref_clk;
+	uint32_t preload;
 
-	if (spi_clk_hz > MHZ(24)) {
-		/* HW can only do 48 MHz. set preload = 0 */
-		preload = 0u;
-	} else if (spi_clk_hz < KHZ(16)) {
-		regs->clock_control &= ~BIT(XEC_GPSPI_CLK_CTRL_SRC_CLK_48M_POS);
-		preload = 63u;
+	regs->clock_control &= ~BIT(XEC_GPSPI_CLK_CTRL_SRC_CLK_2M_POS);
+
+	if (spi_clk_hz >= MHZ(48)) {
+		preload = 0; /* 48 MHz */
+	} else if (spi_clk_hz >= MHZ(24)) {
+		preload = 1u; /* 24 MHz */
+	} else if (spi_clk_hz > MHZ(1)) {
+		preload = MHZ(48) / (2u * spi_clk_hz);
 	} else {
-		regs->clock_control &= ~BIT(XEC_GPSPI_CLK_CTRL_SRC_CLK_48M_POS);
-		ref_clk = MHZ(2);
-		if (spi_clk_hz > ref_clk) {
-			ref_clk = MHZ(48);
-			regs->clock_control |= BIT(XEC_GPSPI_CLK_CTRL_SRC_CLK_48M_POS);
-		}
+		regs->clock_control |= BIT(XEC_GPSPI_CLK_CTRL_SRC_CLK_2M_POS);
+		preload = MHZ(2) / (2u * spi_clk_hz);
+	}
 
-		preload = ref_clk / (2u * spi_clk_hz);
+	if (preload > 63u) {
+		preload = 63u;
 	}
 
 	regs->clock_gen = preload;
 
 	return 0;
 }
-
 
 static const uint8_t gpspi_spi_mode_tbl[] = {
 	XEC_GPIO_CLK_CTRL_SPI_MODE_0, XEC_GPIO_CLK_CTRL_SPI_MODE_1,
@@ -256,11 +256,9 @@ static int gpspi_check_unsupported_features(const struct spi_config *spi_conf)
 		return -ENOTSUP;
 	}
 
-	if (IS_ENABLED(CONFIG_SPI_EXTENDED_MODES)) {
-		if ((lines != SPI_LINES_SINGLE) && (lines != SPI_LINES_DUAL)) {
-			LOG_ERR("Supports single(full-duples) and dual only");
+	if (IS_ENABLED(CONFIG_SPI_EXTENDED_MODES) && (lines != SPI_LINES_SINGLE)) {
+			LOG_ERR("Supports single(full-duplex) only");
 			return -ENOTSUP;
-		}
 	}
 
 	if (spi_conf->operation & SPI_CS_ACTIVE_HIGH) {
@@ -290,9 +288,9 @@ static int req_full_reconfig(const struct device *dev, const struct spi_config *
 	return 0;
 }
 
-/* Configure GPSPI for full-duplex operation.
- * We support CONFIG_SPI_EXTENDED_MODES dual mode only. Controller does not support
- * quad mode.
+/* Configure GPSPI for full-duplex operation. Hardware only support dual I/O
+ * for receive not transmit therefore we will not support dual. Quad I/O is
+ * not supported by hardware.
  * If target device is a SPI flash the commands for dual/quad involve mutiple phases:
  * transmit command, transmit address, optional transmit mode byte, optional transmit
  * clocks with I/O tri-stated, read data using multiple I/O pins.
@@ -341,12 +339,7 @@ static int gpspi_configure(const struct device *dev, const struct spi_config *sp
 
 	ctrl = regs->control & ~(XEC_GPSPI_CTRL_SPDIN_SEL_MSK | BIT(XEC_GPSPI_CTRL_LSBF_POS));
 	ctrl |= BIT(XEC_GPSPI_CTRL_BI_DIR_OUT_EN_POS);
-
-	if ((spi_conf->operation & SPI_LINES_MASK) == SPI_LINES_DUAL) {
-		ctrl |= XEC_GPSPI_CTRL_SPDIN_SEL_DUAL;
-	} else {
-		ctrl |= XEC_GPSPI_CTRL_SPDIN_SEL_FULL_DUPLEX;
-	}
+	ctrl |= XEC_GPSPI_CTRL_SPDIN_SEL_FULL_DUPLEX;
 
 	if (spi_conf->operation & SPI_TRANSFER_LSB) {
 		ctrl |= BIT(XEC_GPSPI_CTRL_LSBF_POS);
@@ -514,6 +507,15 @@ static int xec_gpspi_xfr_dma(const struct device *dev, size_t *pdlen)
  * in the device data structure. This local buffer is limited in size and if used we
  * break up the SPI context into multiple DMA chunks. DMA driver callbacks are used
  * to know when both DMA channels are done.
+ * NOTE: We wait on a semaphore set by the DMA RX channel callback. The timeout can be
+ * exceeded if the SPI is configured for a very low frequency and the number of bytes
+ * being transferred is large. Also, the semphore API timeout parameter uses type "int"
+ * and has the special value K_FOREVER. If we attempt to calculate the timeout value
+ * based on current SPI frequency and number of bytes, we must handle exceeding the
+ * maximum timeout. This will require, breaking up DMA transfers into smaller chunks
+ * that never exceed the maximum allowed timeout. Is this extra complexity worth it?
+ * The minimum controller SPI frequency is 15.9 KHz for 504 us per byte. A 64KB read
+ * would take ~33 seconds.
  */
 static int xec_gpspi_xfr_sync(const struct device *dev, const struct spi_config *spi_conf)
 {
@@ -540,10 +542,11 @@ static int xec_gpspi_xfr_sync(const struct device *dev, const struct spi_config 
 			return ret;
 		}
 
-		/* wait on RX DMA to finish */
-		ret = k_sem_take(&data->dma_sem, K_MSEC(100));
+		/* wait on RX DMA to finish and invoke callback */
+		ret = k_sem_take(&data->dma_sem, K_FOREVER);
 		if (ret) {
-			return -EIO;
+			LOG_ERR("XEC GPSPI wait on RX DMA error %d", ret);
+			return ret;
 		}
 
 		if (spi_context_tx_buf_on(ctx)) {
@@ -652,10 +655,9 @@ static int xec_gpspi_xfr_sync(const struct device *dev,
 
 #ifdef CONFIG_SPI_ASYNC
 #ifdef CONFIG_SPI_XEC_GPSPI_DMA
-/* Aync DMA uses different DMA RX callback. RX DMA callback start another
- * SPI sequency using DMA if more SPI context data is present.
- * !!! WARNING !!!
- * This function is called in DMA channel ISR context.
+/* Aync DMA uses different DMA RX callback. If SPI context indicates more data
+ * is present configure and start another another transfer.
+ * NOTE: This function is called in DMA channel ISR context.
  */
 static void xec_gpspi_dma_rx_cb_async(const struct device *dev, void *user_data,
 				      uint32_t channel, int status)
@@ -729,7 +731,7 @@ static int xec_gpspi_xfr_async(const struct device *dev,
 
 	return 0;
 }
-#else /* 0 */
+#else /* CONFIG_SPI_XEC_GPSPI_DMA */
 
 /* Asynchronous mode non-DMA transfer. An interrupt will be generated
  * for every byte transfer. Implement using GPSPI RXBF interrupt.
@@ -950,7 +952,7 @@ static int xec_gpspi_init(const struct device *dev)
 		return -ENODEV;
 	}
 	data->dev = dev;
-	k_sem_init(&data->dma_sem, 0, 2);
+	k_sem_init(&data->dma_sem, 0, 1);
 #endif
 
 	/* chip selects */
@@ -1069,7 +1071,7 @@ static void xec_gpspi_rxbf_handler(const struct device *dev)
 	};								\
 	static const struct spi_xec_gpspi_config xec_gpspi_config_##i = { \
 		.regs = (struct xec_gpspi_regs *) DT_INST_REG_ADDR(i),	\
-		.freqhz = DT_INST_PROP_OR(i, clock_frequency, 0),	\
+		.freqhz = DT_INST_PROP_OR(i, clock_frequency, MHZ(12)),	\
 		.irqtx.irq_num = DT_INST_IRQ_BY_NAME(i, tx, irq),	\
 		.irqtx.irq_pri = DT_INST_IRQ_BY_NAME(i, tx, priority),	\
 		.irqtx.girq = DT_INST_PROP_BY_IDX(i, girqs, 0),		\
