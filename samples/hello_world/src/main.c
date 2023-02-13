@@ -10,4 +10,5 @@ void main(void)
 {
 	printk("Hello World! %s\n", CONFIG_BOARD);
 	printk("First Commit\n");
+	printk("Second Commit\n");
 }
