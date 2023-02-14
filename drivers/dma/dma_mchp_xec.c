@@ -160,7 +160,7 @@ static inline struct dma_xec_chan_regs *xec_chan_regs(struct dma_xec_regs *regs,
 }
 
 static inline
-struct dma_xec_irq_info const *xec_chan_irq_info(const struct dma_xec_config * devcfg,
+struct dma_xec_irq_info const *xec_chan_irq_info(const struct dma_xec_config *devcfg,
 						 uint32_t channel)
 {
 	return &devcfg->irq_info_list[channel];
@@ -192,7 +192,7 @@ static int is_data_aligned(uint32_t src, uint32_t dest, uint32_t unitsz)
 }
 
 static void xec_dma_chan_clr(struct dma_xec_chan_regs * const chregs,
-			     const struct dma_xec_irq_info * info)
+			     const struct dma_xec_irq_info *info)
 {
 	chregs->actv = 0;
 	chregs->control = 0;
@@ -349,7 +349,7 @@ static int dma_xec_configure(const struct device *dev, uint32_t channel,
 	xec_dma_debug_clean();
 #endif
 
-	const struct dma_xec_irq_info * info = xec_chan_irq_info(devcfg, channel);
+	const struct dma_xec_irq_info *info = xec_chan_irq_info(devcfg, channel);
 	struct dma_xec_chan_regs * const chregs = xec_chan_regs(regs, channel);
 	struct dma_xec_channel *chdata = &data->channels[channel];
 
@@ -440,7 +440,7 @@ static int dma_xec_configure(const struct device *dev, uint32_t channel,
 	return 0;
 }
 
-/* Update previously configured DMA channel with new data source adress,
+/* Update previously configured DMA channel with new data source address,
  * data destination address, and size in bytes.
  * src = source address for DMA transfer
  * dst = destination address for DMA transfer
@@ -461,7 +461,7 @@ static int dma_xec_reload(const struct device *dev, uint32_t channel,
 	}
 
 	struct dma_xec_channel *chdata = &data->channels[channel];
-	struct dma_xec_chan_regs * chregs = xec_chan_regs(regs, channel);
+	struct dma_xec_chan_regs *chregs = xec_chan_regs(regs, channel);
 
 	if (chregs->control & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS)) {
 		return -EBUSY;
@@ -503,7 +503,7 @@ static int dma_xec_start(const struct device *dev, uint32_t channel)
 		return -EINVAL;
 	}
 
-	struct dma_xec_chan_regs * chregs = xec_chan_regs(regs, channel);
+	struct dma_xec_chan_regs *chregs = xec_chan_regs(regs, channel);
 
 	if (chregs->control & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS)) {
 		return -EBUSY;
@@ -521,6 +521,7 @@ static int dma_xec_start(const struct device *dev, uint32_t channel)
 
 	chregs->ienable = BIT(XEC_DMA_CHAN_IES_BERR_POS) | BIT(XEC_DMA_CHAN_IES_DONE_POS);
 	chregs->control = chan_ctrl;
+	chregs->actv |= BIT(XEC_DMA_CHAN_ACTV_EN_POS);
 
 	return 0;
 }
@@ -535,24 +536,27 @@ static int dma_xec_stop(const struct device *dev, uint32_t channel)
 		return -EINVAL;
 	}
 
-	struct dma_xec_chan_regs * chregs = xec_chan_regs(regs, channel);
+	struct dma_xec_chan_regs *chregs = xec_chan_regs(regs, channel);
+
+	chregs->ienable = 0;
 
 	if (chregs->control & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS)) {
 		chregs->ienable = 0;
 		chregs->control |= BIT(XEC_DMA_CHAN_CTRL_ABORT_POS);
 		/* HW stops on next unit boundary (1, 2, or 4 bytes) */
 
-		while (chregs->control & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS)) {
-			if (!wait_loops) {
-				return -ETIMEDOUT;
+		do {
+			if (!(chregs->control & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS))) {
+				break;
 			}
-			wait_loops--;
-		}
+		} while (wait_loops--);
 	}
 
+	chregs->mem_addr = chregs->mem_addr_end;
+	chregs->fsm = 0; /* delay */
 	chregs->control = 0;
-	chregs->ienable = 0;
 	chregs->istatus = 0xffu;
+	chregs->actv = 0;
 
 	return 0;
 }
@@ -562,14 +566,14 @@ static int dma_xec_stop(const struct device *dev, uint32_t channel)
  * PERIPHERAL_TO_MEMORY
  * current DMA runtime status structure
  *
- * busy 			- is current DMA transfer busy or idle
+ * busy				- is current DMA transfer busy or idle
  * dir				- DMA transfer direction
- * pending_length 		- data length pending to be transferred in bytes
- * 					or platform dependent.
+ * pending_length		- data length pending to be transferred in bytes
+ *					or platform dependent.
  * We don't implement a circular buffer
- * free                         - free buffer space
- * write_position               - write position in a circular dma buffer
- * read_position                - read position in a circular dma buffer
+ * free				- free buffer space
+ * write_position		- write position in a circular dma buffer
+ * read_position		- read position in a circular dma buffer
  *
  */
 static int dma_xec_get_status(const struct device *dev, uint32_t channel,
@@ -586,16 +590,18 @@ static int dma_xec_get_status(const struct device *dev, uint32_t channel,
 	}
 
 	struct dma_xec_channel *chan_data = &data->channels[channel];
-	struct dma_xec_chan_regs * chregs = xec_chan_regs(regs, channel);
+	struct dma_xec_chan_regs *chregs = xec_chan_regs(regs, channel);
 
 	chan_ctrl = chregs->control;
 
 	if (chan_ctrl & BIT(XEC_DMA_CHAN_CTRL_BUSY_POS)) {
 		status->busy = true;
 		/* number of bytes remaining in channel */
-		status->pending_length = chan_data->total_req_xfr_len - (chregs->mem_addr_end - chregs->mem_addr);
+		status->pending_length = chan_data->total_req_xfr_len -
+						(chregs->mem_addr_end - chregs->mem_addr);
 	} else {
-		status->pending_length = chan_data->total_req_xfr_len - chan_data->total_curr_xfr_len;
+		status->pending_length = chan_data->total_req_xfr_len -
+						chan_data->total_curr_xfr_len;
 		status->busy = false;
 	}
 
@@ -714,6 +720,7 @@ static void dma_xec_irq_handler(const struct device *dev, uint32_t channel)
 
 #ifdef XEC_DMA_DEBUG
 	uint8_t idx = channel_isr_idx[channel];
+
 	if (idx < 16) {
 		channel_isr_sts[channel][idx] = sts;
 		channel_isr_ctrl[channel][idx] = regs->control;
@@ -730,9 +737,9 @@ static void dma_xec_irq_handler(const struct device *dev, uint32_t channel)
 	chan_data->isr_hw_status = sts;
 	chan_data->total_curr_xfr_len += (regs->mem_addr - chan_data->mstart);
 
-	if (sts & BIT(XEC_DMA_CHAN_IES_BERR_POS)) { /* Bus Error? */
+	if (sts & BIT(XEC_DMA_CHAN_IES_BERR_POS)) {/* Bus Error? */
 		if (!(chan_data->flags & BIT(DMA_XEC_CHAN_FLAGS_CB_ERR_DIS_POS))) {
-		    cb_status = -EIO;
+			cb_status = -EIO;
 		}
 	}
 
