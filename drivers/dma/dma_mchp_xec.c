@@ -571,9 +571,9 @@ static int dma_xec_stop(const struct device *dev, uint32_t channel)
  * pending_length		- data length pending to be transferred in bytes
  *					or platform dependent.
  * We don't implement a circular buffer
- * free                         - free buffer space
- * write_position               - write position in a circular dma buffer
- * read_position                - read position in a circular dma buffer
+ * free				- free buffer space
+ * write_position		- write position in a circular dma buffer
+ * read_position		- read position in a circular dma buffer
  *
  */
 static int dma_xec_get_status(const struct device *dev, uint32_t channel,
