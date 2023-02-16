@@ -16,3 +16,11 @@ config I2C_XEC_V2
 	depends on DT_HAS_MICROCHIP_XEC_I2C_V2_ENABLED
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_XEC_NL
+	bool "XEC Microchip I2C with Network Layer driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select EVENTS
+	help
+	  Enable the Microchip XEC I2C Network Layer driver.

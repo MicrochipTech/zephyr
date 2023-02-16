@@ -1,0 +1,78 @@
+# Copyright (c) 2022 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip I2C/SMB with Network Layer controller
+
+compatible: "microchip,xec-i2c-nl"
+
+include: [i2c-controller.yaml, pinctrl-device.yaml]
+
+properties:
+    reg:
+      required: true
+
+    pinctrl-0:
+      required: false
+
+    pinctrl-names:
+      required: false
+
+    port_sel:
+      type: int
+      description: soc block mapping to pin
+      required: true
+
+    girqs:
+      type: array
+      required: true
+      description: array of GIRQ numbers [8:26] and bit positions [0:31]
+
+    pcrs:
+      type: array
+      required: true
+      description: PCR sleep register index and bit position
+
+    dmas:
+      description: |
+        Optional TX & RX dma specifiers.  Each specifier will have a phandle
+        reference to the dmac controller, the channel number, and peripheral
+        trigger source.
+
+        For example dmas using DMA channels 2 and 3 for controller/device modes on I2C01
+           dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
+
+    dma-names:
+      description: |
+        Required if the dmas property exists.  This should be "ctr" and "dev"
+        to match the dmas property.
+
+        For example
+           dma-names = "ctr", "dev";
+
+    scl-gpios:
+      type: phandle-array
+      required: true
+      description: |
+        I2C clock line gpio info
+
+    sda-gpios:
+      type: phandle-array
+      required: true
+      description: |
+        I2C data line gpio info
+
+    "#girq-cells":
+      type: int
+      const: 2
+
+    "#pcr-cells":
+      type: int
+      const: 2
+
+girq-cells:
+    - girq_num
+    - bitpos
+
+pcr-cells:
+    - regidx
+    - bitpos
