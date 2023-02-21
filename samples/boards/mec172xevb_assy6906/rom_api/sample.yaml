@@ -1,0 +1,9 @@
+sample:
+  description: MEC172x EVB ROM API sample application
+  name: rom_api
+common:
+  harness: console
+tests:
+  boards.mec172xevb_assy6906.qspi:
+    platform_allow: mec172xevb_assy6906
+    tags: drivers crypto
