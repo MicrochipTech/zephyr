@@ -4,7 +4,7 @@
 
 description: Microchip XEC ADC
 
-compatible: "microchip,xec-adc-v2"
+compatible: "microchip,xec-adc"
 
 include: [adc-controller.yaml, pinctrl-device.yaml]
 

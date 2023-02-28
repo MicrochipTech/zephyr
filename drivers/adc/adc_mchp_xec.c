@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#define DT_DRV_COMPAT microchip_xec_adc_v2
+#define DT_DRV_COMPAT microchip_xec_adc
 
 #define LOG_LEVEL CONFIG_ADC_LOG_LEVEL
 #include <zephyr/logging/log.h>
