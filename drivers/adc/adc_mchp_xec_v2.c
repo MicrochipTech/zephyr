@@ -12,7 +12,9 @@
 LOG_MODULE_REGISTER(adc_mchp_xec);
 
 #include <zephyr/drivers/adc.h>
+#ifdef CONFIG_SOC_SERIES_MEC172X
 #include <zephyr/drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#endif
 #include <zephyr/drivers/pinctrl.h>
 #include <soc.h>
 #include <errno.h>
@@ -264,6 +266,7 @@ static void xec_adc_get_sample(const struct device *dev)
 	regs->status_reg = ch_status;
 }
 
+#ifdef CONFIG_SOC_SERIES_MEC172X
 static void adc_xec_single_isr(const struct device *dev)
 {
 	const struct adc_xec_config *const cfg = dev->config;
@@ -286,6 +289,28 @@ static void adc_xec_single_isr(const struct device *dev)
 
 	LOG_DBG("ADC ISR triggered.");
 }
+#else
+static void adc_xec_single_isr(const struct device *dev)
+{
+	const struct adc_xec_config *const cfg = dev->config;
+	struct adc_xec_regs * const regs = cfg->regs;
+	struct adc_xec_data * const data = dev->data;
+	uint32_t ctrl;
+
+	/* Clear START_SINGLE bit and clear SINGLE_DONE_STATUS */
+	ctrl = regs->control_reg;
+	ctrl &= ~XEC_ADC_CTRL_START_SINGLE;
+	ctrl |= XEC_ADC_CTRL_SINGLE_DONE_STATUS;
+	regs->control_reg = ctrl;
+	/* Also clear GIRQ source status bit */
+	MCHP_GIRQ_SRC(cfg->girq_single) = BIT(cfg->girq_single_pos);
+	xec_adc_get_sample(dev);
+
+	adc_context_on_sampling_done(&data->ctx, dev);
+
+	LOG_DBG("ADC ISR triggered.");
+}
+#endif
 
 struct adc_driver_api adc_xec_api = {
 	.channel_setup = adc_xec_channel_setup,
@@ -296,6 +321,7 @@ struct adc_driver_api adc_xec_api = {
 	.ref_internal = XEC_ADC_VREF_ANALOG,
 };
 
+#ifdef CONFIG_SOC_SERIES_MEC172X
 static int adc_xec_init(const struct device *dev)
 {
 	const struct adc_xec_config *const cfg = dev->config;
@@ -331,6 +357,38 @@ static int adc_xec_init(const struct device *dev)
 
 	return 0;
 }
+#else
+static int adc_xec_init(const struct device *dev)
+{
+	const struct adc_xec_config *const cfg = dev->config;
+	struct adc_xec_regs * const regs = cfg->regs;
+	struct adc_xec_data * const data = dev->data;
+	int ret;
+
+	data->adc_dev = dev;
+
+	ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+	if (ret != 0) {
+		LOG_ERR("XEC ADC V2 pinctrl setup failed (%d)", ret);
+		return ret;
+	}
+
+	regs->control_reg =  XEC_ADC_CTRL_ACTIVATE
+		| XEC_ADC_CTRL_POWER_SAVER_DIS
+		| XEC_ADC_CTRL_SINGLE_DONE_STATUS
+		| XEC_ADC_CTRL_REPEAT_DONE_STATUS;
+	MCHP_GIRQ_SRC(cfg->girq_single) = BIT(cfg->girq_single_pos);
+	MCHP_GIRQ_ENSET(cfg->girq_single) = BIT(cfg->girq_single_pos);
+	IRQ_CONNECT(DT_INST_IRQN(0),
+		    DT_INST_IRQ(0, priority),
+		    adc_xec_single_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_INST_IRQN(0));
+
+	adc_context_unlock_unconditionally(&data->ctx);
+
+	return 0;
+}
+#endif
 
 PINCTRL_DT_INST_DEFINE(0);
 
