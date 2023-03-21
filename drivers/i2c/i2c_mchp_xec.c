@@ -51,6 +51,8 @@ struct i2c_xec_config {
 	uint8_t girq_bit;
 	struct gpio_dt_spec sda_gpio;
 	struct gpio_dt_spec scl_gpio;
+        uint8_t pcr_idx;
+        uint8_t pcr_bitpos;
 	const struct pinctrl_dev_config *pcfg;
 	void (*irq_config_func)(void);
 };
@@ -104,15 +106,12 @@ static void i2c_xec_reset_config(const struct device *dev)
 		(struct i2c_xec_data *const) (dev->data);
 
 	uint32_t ba = config->base_addr;
+        const struct mchp_xec_pcr_clk_ctrl *pclksrc = &config->clksrc;
+        uint8_t slp_idx = MCHP_XEC_PCR_SCR_GET_IDX(pclksrc->pcr_info);
+        uint8_t slp_pos = MCHP_XEC_PCR_SCR_GET_BITPOS(pclksrc->pcr_info);
 
-	/* Assert RESET and clr others */
-	MCHP_I2C_SMB_CFG(ba) = MCHP_I2C_SMB_CFG_RESET;
-
-	k_busy_wait(RESET_WAIT_US);
-
-	/* Bus reset */
-	MCHP_I2C_SMB_CFG(ba) = 0;
-
+	/* Assert RESET */
+	z_mchp_xec_pcr_periph_reset(slp_idx, slp_pos);
 	/* Write 0x80. i.e Assert PIN bit, ESO = 0 and Interrupts
 	 * disabled (ENI)
 	 */
@@ -901,6 +900,8 @@ static int i2c_xec_init(const struct device *dev)
 		.girq_bit = DT_INST_PROP(n, girq_bit),			\
 		.sda_gpio = GPIO_DT_SPEC_INST_GET(n, sda_gpios),	\
 		.scl_gpio = GPIO_DT_SPEC_INST_GET(n, scl_gpios),	\
+                .pcr_idx = DT_INST_PROP_BY_IDX(n, pcrs, 0),             \
+                .pcr_bitpos = DT_INST_PROP_BY_IDX(n, pcrs, 1),          \
 		.irq_config_func = i2c_xec_irq_config_func_##n,		\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
 	};								\

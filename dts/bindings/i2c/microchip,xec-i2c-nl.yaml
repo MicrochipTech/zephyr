@@ -1,0 +1,80 @@
+# Copyright (c) 2022 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip I2C/SMB with Network Layer controller
+
+compatible: "microchip,xec-i2c-nl"
+
+include: [i2c-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+
+  pinctrl-0:
+    required: false
+
+  pinctrl-names:
+    required: false
+
+  port_sel:
+    type: int
+    description: soc block mapping to pin
+    required: true
+
+  girqs:
+    type: array
+    required: true
+    description: array of GIRQ numbers [8:26] and bit positions [0:31]
+
+  dmas:
+    required: true
+    description: |
+      Optional TX & RX dma specifiers.  Each specifier will have a phandle
+      reference to the dmac controller, the channel number, and peripheral
+      trigger source.
+
+      For example dmas using DMA channels 2 and 3 for controller/device modes on I2C01
+       dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
+
+  dma-names:
+    required: true
+    description: |
+      Required if the dmas property exists.  This should be "ctr" and "dev"
+      to match the dmas property.
+
+      For example
+         dma-names = "ctr", "dev";
+
+  init-pin-wait:
+    type: int
+    description: |
+      Amount of time in microseconds allowing the controller to sample
+      pins during driver initialization. If not present default is 100.
+
+  config-pin-wait:
+    type: int
+    description: |
+      Amount of time in microseconds allowing the controller to sample
+      pins after controller is enabled during configuration. If not
+      present the default is 35000 (the SMBus bus timeout).
+
+  target_addrs:
+    type: array
+    description: |
+      Array of two 7-bit target addresses this controller can respond to.
+      If not present the controller defaults to 0 for both addresses.
+
+  "#girq-cells":
+    type: int
+    const: 2
+
+girq-cells:
+  - girq_num
+  - bitpos

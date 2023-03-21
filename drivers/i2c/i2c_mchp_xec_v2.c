@@ -219,15 +219,16 @@ static int i2c_xec_reset_config(const struct device *dev)
 	struct i2c_xec_data *data =
 		(struct i2c_xec_data *const) (dev->data);
 	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+        const struct mchp_xec_pcr_clk_ctrl *pclksrc = &cfg->clksrc;
+        uint8_t slp_idx = MCHP_XEC_PCR_SCR_GET_IDX(pclksrc->pcr_info);
+        uint8_t slp_pos = MCHP_XEC_PCR_SCR_GET_BITPOS(pclksrc->pcr_info);
 
 	data->state = I2C_XEC_STATE_STOPPED;
 	data->read_discard = 0;
 
-	/* Assert RESET and clr others */
-	regs->CFG = MCHP_I2C_SMB_CFG_RESET;
-	k_busy_wait(RESET_WAIT_US);
-	/* clear reset, set filter enable, select port */
-	regs->CFG = 0;
+	/* Assert RESET */
+	z_mchp_xec_pcr_periph_reset(slp_idx, slp_pos);
+
 	regs->CFG = MCHP_I2C_SMB_CFG_FLUSH_SXBUF_WO |
 		    MCHP_I2C_SMB_CFG_FLUSH_SRBUF_WO |
 		    MCHP_I2C_SMB_CFG_FLUSH_MXBUF_WO |
@@ -313,13 +314,16 @@ static int i2c_xec_recover_bus(const struct device *dev)
 	const struct i2c_xec_config *cfg =
 		(const struct i2c_xec_config *const) (dev->config);
 	struct i2c_smb_regs *regs = (struct i2c_smb_regs *)cfg->base_addr;
+        const struct mchp_xec_pcr_clk_ctrl *pclksrc = &cfg->clksrc;
+        uint8_t slp_idx = MCHP_XEC_PCR_SCR_GET_IDX(pclksrc->pcr_info);
+        uint8_t slp_pos = MCHP_XEC_PCR_SCR_GET_BITPOS(pclksrc->pcr_info);
 	int i, j, ret;
 
 	LOG_ERR("I2C attempt bus recovery\n");
 
 	/* reset controller to a known state */
-	regs->CFG = MCHP_I2C_SMB_CFG_RESET;
-	k_busy_wait(RESET_WAIT_US);
+	z_mchp_xec_pcr_periph_reset(slp_idx, slp_pos);
+
 	regs->CFG = BIT(14) | MCHP_I2C_SMB_CFG_FEN |
 		    (cfg->port_sel & MCHP_I2C_SMB_CFG_PORT_SEL_MASK);
 	regs->CFG |= MCHP_I2C_SMB_CFG_FLUSH_SXBUF_WO |
