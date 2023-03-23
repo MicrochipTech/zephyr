@@ -1,0 +1,120 @@
+/*
+ * Copyright (c) 2020 Intel Corporation
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	zephyr,user {
+		/* Pins used for testing I2C. Inject faults, etc */
+		i2c-sda-gpios = <&gpio_140_176 1 GPIO_OPEN_DRAIN>;
+		i2c-scl-gpios = <&gpio_140_176 2 GPIO_OPEN_DRAIN>;
+	};
+};
+
+/* use default silicon OSC for everything
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_XTAL>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_XTAL_XTAL>;
+	xtal-single-ended;
+};
+*/
+
+&dmac {
+	status = "okay";
+};
+
+&i2c_smb_0 {
+	status = "okay";
+	port_sel = <0>;
+
+	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-names = "default";
+
+	sda-gpios = < &gpio_000_036 3  0 >;
+	scl-gpios = < &gpio_000_036 4  0 >;
+
+	wake-pll-ecia-info = < MCHP_XEC_ECIA(22, 1, 255, 255) >;
+
+/*	wakeup-source; this device can make from deep sleep */
+
+	/* Requires jumpers on JP58 1-2, 3-4 */
+	pca9555_evb: pca9555@26 {
+		compatible = "nxp,pca95xx";
+
+		/* Depends on JP53 for device address.
+		 * Pin 1-2 = A0, pin 3-4 = A1, pin 5-6 = A2.
+		 * Address is: 0100<A2><A1><A0>b.
+		 *
+		 * Default has pin 1-2 on JP53 connected,
+		 * resulting in device address 0x26.
+		 */
+		reg = <0x26>;
+
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+
+	/* Analog Devices LTC2496 ADC */
+	ltc2489_evb: ltc2489@34 {
+		/* no driver exists */
+
+		/* JP124 sets device address.
+		 * No jumpers: CA0=CA1=1 address 0x34
+		 * 1-2 & 3-4: CA0=CA1=0 address 0x14
+		 * 3-4: CA0=1 CA1=0 address 0x16
+		 * 1-2: CA0=0 CA1=1 address 0x26
+		 */
+		 reg = <0x34>;
+
+		 #io-channels-cells = <1>;
+	};
+
+	/* Fujitsu MB85RC256V 256K (32K x 8) FRAM */
+	mb85rc256v: mb85rc256v@50 {
+		/* no driver exists */
+		reg = <0x50>;
+	};
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_1 {
+	status = "okay";
+	port_sel = <7>;
+
+	pinctrl-0 = < &i2c07_sda_gpio012 &i2c07_scl_gpio013 >;
+	pinctrl-names = "default";
+
+	sda-gpios = < &gpio_000_036 10  0 >;
+	scl-gpios = < &gpio_000_036 11  0 >;
+
+	wake-pll-ecia-info = < MCHP_XEC_ECIA(22, 2, 255, 255) >;
+};
+
+&i2c07_sda_gpio012 {
+	drive-open-drain;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c07_scl_gpio013 {
+	drive-open-drain;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_2 {
+	status = "disabled";
+};

@@ -17,8 +17,9 @@
 #include "mec172x/mec172xnlj-pinctrl.dtsi"
 
 / {
-	flash0: flash@c0000 {
-		reg = <0x000C0000 0x58000>;
+
+	flash0: flash@c8000 {
+		reg = <0x000C8000 0x50000>;
 	};
 
 	sram0: memory@118000 {
@@ -35,20 +36,30 @@
 			#pwm-cells = <3>;
 		};
 
-		pwm10: pwm@400058A0 {
+		pwm10: pwm@400058a0 {
 			compatible = "microchip,xec-pwm";
-			reg = <0x400058A0 0x20>;
+			reg = <0x400058a0 0x20>;
 			pcrs = <4 0>;
 			status = "disabled";
 			#pwm-cells = <3>;
 		};
 
-		pwm11: pwm@400058B0 {
+		pwm11: pwm@400058b0 {
 			compatible = "microchip,xec-pwm";
-			reg = <0x400058B0 0x20>;
+			reg = <0x400058b0 0x20>;
 			pcrs = <4 1>;
 			status = "disabled";
 			#pwm-cells = <3>;
 		};
+
+		/* TODO PowerGuard */
+		/* TODO ENVMON */
+		/* TODO PROCHOT_IO? */
+		/* TODO No SPI Target */
+		/* TODO No internal SPI port */
+		/* TODO No EEPROM */
+		/* TODO No keyscan */
+		/* TODO No Vref-2 ADC pin */
+		/* TODO No Analog comparators */
 	};
 };

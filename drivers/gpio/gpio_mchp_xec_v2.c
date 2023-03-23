@@ -10,6 +10,7 @@
 #include <zephyr/arch/cpu.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/pinctrl/mchp-xec-pinctrl.h>
 #include <soc.h>
 #include <zephyr/arch/arm/aarch32/cortex_m/cmsis.h>
@@ -81,6 +82,78 @@ static inline void xec_mask_write32(uintptr_t addr, uint32_t mask, uint32_t val)
 	sys_write32(r, addr);
 }
 
+#if 1
+/* NOTE: gpio_flags_t b[0:15] are defined in the dt-binding gpio header.
+ * b[31:16] are defined in the driver gpio header.
+ */
+static uint32_t gpio_xec_build_config(gpio_flags_t flags)
+{
+	uint32_t pcr1 = 0x8040u; /* default: input pad off, direction input, interrupt detection disabled, no PUD, mux=GPIO */
+
+	if (flags == GPIO_DISCONNECTED) {
+		return pcr1;
+	}
+
+	if (flags & GPIO_OUTPUT) {
+		pcr1 |= BIT(9);
+		if (flags & GPIO_OUTPUT_INIT_HIGH) {
+			pcr1 |= BIT(16);
+		}
+	} else if (flags & GPIO_INPUT) {
+		pcr1 &= ~BIT(15); /* enable input pad */
+	}
+
+	if ((flags & (GPIO_SINGLE_ENDED | GPIO_LINE_OPEN_DRAIN))
+	    == (GPIO_SINGLE_ENDED | GPIO_LINE_OPEN_DRAIN)) {
+		pcr1 |= BIT(8);
+	}
+
+	if (flags & GPIO_PULL_UP) {
+		pcr1 |= BIT(0);
+	}
+	if (flags & GPIO_PULL_DOWN) {
+		pcr1 |= BIT(1);
+	}
+
+	return pcr1;
+}
+
+/* what happens for these scenarios, in addition the PUD could be changed.
+ * original	requested
+ *  input	input
+ *  input	output
+ *  output	input
+ *  output	output
+ */
+static int gpio_xec_configure2(const struct device *dev,
+			       gpio_pin_t pin, gpio_flags_t flags)
+{
+	const struct gpio_xec_config *config = dev->config;
+
+	if (!(valid_ctrl_masks[config->port_num] & BIT(pin))) {
+		return -EINVAL;
+	}
+
+	if (flags & GPIO_LINE_OPEN_DRAIN) {
+		return -ENOTSUP;
+	}
+
+	uint32_t req_pcr1 = gpio_xec_build_config(flags);
+	uintptr_t pcr1_addr = pin_ctrl_addr(dev, pin);
+	uint32_t pcr1 = sys_read32(pcr1_addr);
+	uint32_t msk = 0x1ff0fu;
+
+	if ((req_pcr1 & msk) == pcr1) {
+		return 0;
+	}
+
+	sys_write32(req_pcr1, pcr1_addr);
+
+	return 0;
+}
+#endif
+
+#if 0 /* TEST EXPERIMENT */
 /*
  * notes: The GPIO parallel output bits are read-only until the
  * Alternate-Output-Disable (AOD) bit is set in the pin's control
@@ -180,6 +253,7 @@ static int gpio_xec_configure(const struct device *dev,
 
 	return 0;
 }
+#endif /* 0 */
 
 static int gen_gpio_ctrl_icfg(enum gpio_int_mode mode, enum gpio_int_trig trig,
 			      uint32_t *pin_ctr1)
@@ -373,7 +447,7 @@ static void gpio_gpio_xec_port_isr(const struct device *dev)
 
 /* GPIO driver official API table */
 static const struct gpio_driver_api gpio_xec_driver_api = {
-	.pin_configure = gpio_xec_configure,
+	.pin_configure = gpio_xec_configure2,
 	.port_get_raw = gpio_xec_port_get_raw,
 	.port_set_masked_raw = gpio_xec_port_set_masked_raw,
 	.port_set_bits_raw = gpio_xec_port_set_bits_raw,

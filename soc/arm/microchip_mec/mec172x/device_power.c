@@ -262,7 +262,7 @@ static void deep_sleep_save_blocks(void)
 	ecs->PECI_DIS |= MCHP_ECS_PECI_DISABLE;
 #endif
 
-#ifdef CONFIG_I2C
+#if defined(CONFIG_I2C) && !defined(CONFIG_PM_DEVICE) && !defined(CONFIG_PM_DEVICE_RUNTIME)
 	for (size_t n = 0; n < MCHP_I2C_SMB_INSTANCES; n++) {
 		uint32_t addr = MCHP_I2C_SMB_BASE_ADDR(n) +
 				MCHP_I2C_SMB_CFG_OFS;
@@ -320,7 +320,7 @@ static void deep_sleep_restore_blocks(void)
 	peci->CONTROL = ds_ctx.peci_info.peci_ctrl;
 #endif
 
-#ifdef CONFIG_I2C
+#if defined(CONFIG_I2C) && !defined(CONFIG_PM_DEVICE) && !defined(CONFIG_PM_DEVICE_RUNTIME)
 	for (size_t n = 0; n < MCHP_I2C_SMB_INSTANCES; n++) {
 		uint32_t addr = MCHP_I2C_SMB_BASE_ADDR(n) +
 				MCHP_I2C_SMB_CFG_OFS;

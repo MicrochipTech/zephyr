@@ -6,12 +6,11 @@
 
 /dts-v1/;
 
-#include <microchip/mec172xnsz.dtsi>
-#include <microchip/mec172x/mec172xnsz-pinctrl.dtsi>
+#include <microchip/mec172xnlj.dtsi>
 
 / {
 	model = "Microchip MEC172XEVB_ASSY6906 evaluation board";
-	compatible = "microchip,mec172xevb_assy6906", "microchip,mec172xnsz";
+	compatible = "microchip,mec172xevb_assy6906", "microchip,mec172xnlj";
 
 	chosen {
 		zephyr,sram = &sram0;

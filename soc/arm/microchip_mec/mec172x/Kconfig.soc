@@ -11,6 +11,8 @@ config SOC_MEC172X_NSZ
 	bool "MEC172X_NSZ"
 config SOC_MEC172X_NLJ
 	bool "MEC172X_NLJ"
+config SOC_MEC520X_MLJ
+	bool "MEC520X_MLJ"
 
 endchoice
 

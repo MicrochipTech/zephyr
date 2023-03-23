@@ -22,8 +22,8 @@
 
 static void config_drive_slew(struct gpio_regs * const regs, uint32_t idx, uint32_t conf)
 {
-	uint32_t slew = conf & (MCHP_XEC_OSPEEDR_MASK << MCHP_XEC_OSPEEDR_POS);
-	uint32_t drvstr = conf & (MCHP_XEC_ODRVSTR_MASK << MCHP_XEC_ODRVSTR_POS);
+	uint32_t slew = (conf >> MCHP_XEC_OSPEEDR_POS) & MCHP_XEC_OSPEEDR_MASK;
+	uint32_t drvstr = (conf >> MCHP_XEC_ODRVSTR_POS) & MCHP_XEC_ODRVSTR_MASK;
 	uint32_t val = 0;
 	uint32_t mask = 0;
 

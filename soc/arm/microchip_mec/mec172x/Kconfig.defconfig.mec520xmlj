@@ -1,0 +1,14 @@
+# Microchip MEC520XMSZ MCU
+
+# Copyright (c) 2022 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+if SOC_MEC520X_MLJ
+
+config SOC
+	default "mec520xmlj"
+
+config GPIO
+	default y
+
+endif # SOC_MEC520X_MLJ

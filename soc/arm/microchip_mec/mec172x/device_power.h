@@ -71,7 +71,7 @@ struct ds_dev_info {
 #ifdef CONFIG_PECI
 	struct ds_peci_info peci_info;
 #endif
-#ifdef CONFIG_I2C
+#if defined(CONFIG_I2C) && !defined(CONFIG_PM_DEVICE) && !defined(CONFIG_PM_DEVICE_RUNTIME)
 	uint32_t smb_info[MCHP_I2C_SMB_INSTANCES];
 #endif
 	uint32_t slwclk_info;
