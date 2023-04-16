@@ -18,6 +18,10 @@
 #ifdef CONFIG_PINCTRL
 #include <zephyr/drivers/pinctrl.h>
 #endif
+#ifdef CONFIG_PM_DEVICE
+#include <zephyr/pm/device.h>
+#include <zephyr/pm/policy.h>
+#endif
 #include <zephyr/drivers/ps2.h>
 #include <soc.h>
 #include <zephyr/logging/log.h>
@@ -42,10 +46,39 @@ struct ps2_xec_config {
 #endif
 };
 
+#ifdef CONFIG_PM_DEVICE
+enum ps2_pm_policy_state_flag {
+	PS2_PM_POLICY_TX_FLAG,
+	PS2_PM_POLICY_RX_FLAG,
+	PS2_PM_POLICY_FLAG_COUNT,
+};
+#endif
+
 struct ps2_xec_data {
 	ps2_callback_t callback_isr;
 	struct k_sem tx_lock;
+#ifdef CONFIG_PM_DEVICE
+	ATOMIC_DEFINE(pm_policy_state_flag, PS2_PM_POLICY_FLAG_COUNT);
+#endif
 };
+
+#ifdef CONFIG_PM_DEVICE
+static void ps2_xec_pm_policy_state_lock_get(struct ps2_xec_data *data,
+					       enum ps2_pm_policy_state_flag flag)
+{
+	if (atomic_test_and_set_bit(data->pm_policy_state_flag, flag) == 0) {
+		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+	}
+}
+
+static void ps2_xec_pm_policy_state_lock_put(struct ps2_xec_data *data,
+					    enum ps2_pm_policy_state_flag flag)
+{
+	if (atomic_test_and_clear_bit(data->pm_policy_state_flag, flag) == 1) {
+		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+	}
+}
+#endif
 
 #ifdef CONFIG_SOC_SERIES_MEC172X
 static inline void ps2_xec_slp_en_clr(const struct device *dev)
@@ -112,8 +145,8 @@ static int ps2_xec_configure(const struct device *dev,
 
 	/* In case the self test for a PS2 device already finished and
 	 * set the SOURCE bit to 1 we clear it before enabling the
-	 * interrupts. Instances must be allocated before the BAT or
-	 * the host may time out.
+	 * interrupts. Instances must be allocated before the BAT
+	 * (Basic Assurance Test) or the host may time out.
 	 */
 	temp = regs->TRX_BUFF;
 	regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
@@ -163,12 +196,14 @@ static int ps2_xec_write(const struct device *dev, uint8_t value)
 		LOG_DBG("PS2 write timed out");
 		return -ETIMEDOUT;
 	}
-
+#ifdef CONFIG_PM_DEVICE
+	ps2_xec_pm_policy_state_lock_get(data, PS2_PM_POLICY_TX_FLAG);
+#endif
 	/* Inhibit ps2 controller and clear status register */
 	regs->CTRL = 0x00;
 
 	/* Read to clear data ready bit in the status register*/
-	temp = regs->TRX_BUFF;
+	temp = regs->TRX_BUFF;//should not this be RX_BUFF?
 	k_sleep(K_MSEC(1));
 	regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
 
@@ -217,6 +252,58 @@ static int ps2_xec_enable_interface(const struct device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_DEVICE
+static int ps2_xec_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct ps2_xec_config *const devcfg = dev->config;
+	struct ps2_regs * const regs = devcfg->regs;
+	struct ecia_named_regs *ecia_regs = (struct ecia_named_regs *)(DT_REG_ADDR(DT_NODELABEL(ecia)));
+	int ret=0;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_RESUME:
+
+#ifdef CONFIG_PINCTRL
+		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
+#endif
+		/* Enable PS2_0A_WK */
+		ecia_regs->GIRQ21.EN_CLR = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
+		ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
+
+		/* Enable PS2_0B_WK */
+		//ecia_regs->GIRQ21.EN_CLR = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
+		//ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
+		regs->CTRL |= MCHP_PS2_CTRL_EN;
+		break;
+	case PM_DEVICE_ACTION_SUSPEND:
+
+		/* Enable PS2_0A_WK */
+		ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
+		ecia_regs->GIRQ21.EN_SET = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
+
+		/* Enable PS2_0B_WK */
+		//ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
+		//ecia_regs->GIRQ21.EN_SET = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
+
+		regs->CTRL &= ~MCHP_PS2_CTRL_EN;
+		/* If application does not want to turn off PS2 pins it will
+		 * not define pinctrl-1 for this node.
+		 */
+#ifdef CONFIG_PINCTRL
+		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
+		if (ret == -ENOENT) { /* pinctrl-1 does not exist.  */
+			ret = 0;
+		}
+#endif
+		break;
+	default:
+		ret = -ENOTSUP;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_PM_DEVICE */
+
 static void ps2_xec_isr(const struct device *dev)
 {
 	const struct ps2_xec_config * const config = dev->config;
@@ -231,15 +318,33 @@ static void ps2_xec_isr(const struct device *dev)
 	ps2_xec_girq_clr(dev);
 
 	if (status & MCHP_PS2_STATUS_RXD_RDY) {
+#ifdef CONFIG_PM_DEVICE
+		ps2_xec_pm_policy_state_lock_get(data, PS2_PM_POLICY_RX_FLAG);
+#endif
 		regs->CTRL = 0x00;
 		if (data->callback_isr) {
 			data->callback_isr(dev, regs->TRX_BUFF);
 		}
+#ifdef CONFIG_PM_DEVICE
+		ps2_xec_pm_policy_state_lock_put(data, PS2_PM_POLICY_RX_FLAG);
+#endif
 	} else if (status &
 		    (MCHP_PS2_STATUS_TX_TMOUT | MCHP_PS2_STATUS_TX_ST_TMOUT)) {
 		/* Clear sticky bits and go to read mode */
 		regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
 		LOG_ERR("TX time out: %0x", status);
+#ifdef CONFIG_PM_DEVICE
+		ps2_xec_pm_policy_state_lock_put(data, PS2_PM_POLICY_TX_FLAG);
+#endif
+	} else if (status &
+			(MCHP_PS2_STATUS_RX_TMOUT | MCHP_PS2_STATUS_PE | MCHP_PS2_STATUS_FE)) {
+		/* catch and clear rx error if any */
+		regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
+	} else if (status & MCHP_PS2_STATUS_TX_IDLE) {
+		/* Transfer completed, release the lock to enter low per mode */
+#ifdef CONFIG_PM_DEVICE
+		ps2_xec_pm_policy_state_lock_put(data, PS2_PM_POLICY_TX_FLAG);
+#endif
 	}
 
 	/* The control register reverts to RX automatically after
@@ -323,8 +428,10 @@ static int ps2_xec_init(const struct device *dev)
 									\
 	XEC_PS2_CONFIG(i);						\
 									\
+	PM_DEVICE_DT_INST_DEFINE(i, ps2_xec_pm_action);		\
+									\
 	DEVICE_DT_INST_DEFINE(i, &ps2_xec_init,				\
-		NULL,				\
+		PM_DEVICE_DT_INST_GET(i),				\
 		&ps2_xec_port_data_##i, &ps2_xec_config_##i,		\
 		POST_KERNEL, CONFIG_PS2_INIT_PRIORITY,			\
 		&ps2_xec_driver_api);

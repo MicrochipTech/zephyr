@@ -59,16 +59,19 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 	uint32_t port = MCHP_XEC_PINMUX_PORT(portpin);
 	uint32_t pin = (uint32_t)MCHP_XEC_PINMUX_PIN(portpin);
 	uint32_t msk = MCHP_GPIO_CTRL_AOD_MASK;
-	uint32_t val = MCHP_GPIO_CTRL_AOD_DIS;
+uint32_t val = MCHP_GPIO_CTRL_AOD_DIS;
 	uint32_t idx = 0u;
 	uint32_t temp = 0u;
 
+	//printk("In xec_config_pin\n");
+	//printk("conf = %X\n",conf);
 	if (port >= NUM_MCHP_GPIO_PORTS) {
 		return -EINVAL;
 	}
 
 	/* MCHP XEC family is 32 pins per port */
 	idx = (port * 32U) + pin;
+	//printk("idx = %X\n",idx);
 
 	config_drive_slew(regs, idx, conf);
 
@@ -79,12 +82,19 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 			MCHP_GPIO_CTRL_PUD_MASK | MCHP_GPIO_CTRL_MUX_MASK
 			| BIT(MCHP_GPIO_CTRL_POL_POS));
 
+
+	//printk("MCHP_XEC_PIN_LOW_POWER_POS = %X\n",MCHP_XEC_PIN_LOW_POWER_POS);
 	if (conf & BIT(MCHP_XEC_PIN_LOW_POWER_POS)) {
 		msk |= MCHP_GPIO_CTRL_PWRG_MASK;
 		val |= MCHP_GPIO_CTRL_PWRG_OFF;
 	}
+	else {
+		msk |= MCHP_GPIO_CTRL_PWRG_MASK;
+		val |= MCHP_GPIO_CTRL_PWRG_VTR_IO;
+	}
 
 	temp = (conf & MCHP_XEC_PUPDR_MASK) >> MCHP_XEC_PUPDR_POS;
+	//printk("temp = %X\n",temp);
 	switch (temp) {
 	case MCHP_XEC_PULL_UP:
 		val |= MCHP_GPIO_CTRL_PUD_PU;
@@ -108,7 +118,9 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 		val |= BIT(MCHP_GPIO_CTRL_POL_POS);
 	}
 
+	//printk("Init val regs->CTRL[idx] = %X\n",regs->CTRL[idx]);
 	regs->CTRL[idx] = (regs->CTRL[idx] & ~msk) | val;
+	//printk("regs->CTRL[idx] = %X\n",regs->CTRL[idx]);
 
 	temp = (conf >> MCHP_XEC_OVAL_POS) & MCHP_XEC_OVAL_MASK;
 	if (temp) {
@@ -123,6 +135,8 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 
 	val = (uint32_t)((altf & MCHP_GPIO_CTRL_MUX_MASK0) << MCHP_GPIO_CTRL_MUX_POS);
 	regs->CTRL[idx] |= val;
+	//printk("regs->CTRL[idx] = %X\n",regs->CTRL[idx]);
+	//printk("out xec_config_pin\n");
 
 	return 0;
 }

@@ -39,6 +39,7 @@ static const struct device *const ps2_0_dev =
 static void saturate_ps2(struct k_timer *timer)
 {
 	LOG_DBG("block host\n");
+	printk("block host\n");
 	host_blocked = true;
 	ps2_disable_callback(ps2_0_dev);
 	k_sleep(K_MSEC(500));
@@ -74,27 +75,35 @@ static void to_port_60_thread(void *dummy1, void *dummy2, void *dummy3)
 void initialize_mouse(void)
 {
 	LOG_DBG("mouse->f4\n");
+	printk("mouse->f4\n");
 	ps2_write(ps2_0_dev, 0xf4);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Reset mouse->ff\n");
+	printk("Reset mouse->ff\n");
 	ps2_write(ps2_0_dev, 0xff);
 	k_msleep(MS_BETWEEN_RESET_CALLS);
 	LOG_DBG("Reset mouse->ff\n");
+	printk("Reset mouse->ff\n");
 	ps2_write(ps2_0_dev, 0xff);
 	k_msleep(MS_BETWEEN_RESET_CALLS);
 	LOG_DBG("Read ID mouse->f2\n");
+	printk("Read ID mouse->f2\n");
 	ps2_write(ps2_0_dev, 0xf2);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set resolution mouse->e8\n");
+	printk("Set resolution mouse->e8\n");
 	ps2_write(ps2_0_dev, 0xe8);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("mouse->00\n");
+	printk("mouse->00\n");
 	ps2_write(ps2_0_dev, 0x00);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
+	printk("Set scaling 1:1 mouse->e6\n");
 	ps2_write(ps2_0_dev, 0xe6);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
+	printk("Set scaling 1:1 mouse->e6\n");
 	ps2_write(ps2_0_dev, 0xe6);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
@@ -165,6 +174,7 @@ void initialize_mouse(void)
 	LOG_DBG("mouse->f4\n");
 	ps2_write(ps2_0_dev, 0xf4);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
+	LOG_DBG("init done \n");
 }
 
 void main(void)
