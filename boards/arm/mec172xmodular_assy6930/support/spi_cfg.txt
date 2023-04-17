@@ -14,7 +14,7 @@ TagAddr1 = 0
 BoardID = 0
 
 [IMAGE "0"]
-ImageLocation = 0x1000
+ImageLocation = 0x100
 SpiFreqMHz = 24
 SpiReadCommand = Dual
 SpiDriveStrength = 4
@@ -40,13 +40,13 @@ FwEncrypt = false
 AesGenECPubKeyFile = ec384_crt.pem
 SHA256andECDSA = false
 TagBuildNumber= 0x1156
-Comp0ProgDrvStrenEN = true
+Comp0ProgDrvStrenEN = false
 Comp0WritCmdTotByts = 1
 Comp0ReadCmdByte = 0x15
 Comp0WritCmdByte = 0x11
 Comp0DrvValue = 0x40
 Comp0DrvMask = 0x60
-Comp1ProgDrvStrenEN = true
+Comp1ProgDrvStrenEN = false
 Comp1WritCmdTotByts = 1
 Comp1ReadCmdByte = 0x15
 Comp1WritCmdByte = 0x11
