@@ -38,6 +38,8 @@ struct ps2_xec_config {
 	int isr_nvic;
 	uint8_t girq_id;
 	uint8_t girq_bit;
+	uint8_t girq_id_wk;
+	uint8_t girq_bit_wk;
 	uint8_t pcr_idx;
 	uint8_t pcr_pos;
 	void (*irq_config_func)(void);
@@ -88,18 +90,19 @@ static inline void ps2_xec_slp_en_clr(const struct device *dev)
 	z_mchp_xec_pcr_periph_sleep(cfg->pcr_idx, cfg->pcr_pos, 0);
 }
 
-static inline void ps2_xec_girq_clr(const struct device *dev)
+static inline void ps2_xec_girq_clr(uint8_t girq_idx, uint8_t girq_posn)
 {
-	const struct ps2_xec_config * const cfg = dev->config;
-
-	mchp_soc_ecia_girq_src_clr(cfg->girq_id, cfg->girq_bit);
+	mchp_soc_ecia_girq_src_clr(girq_idx, girq_posn);
 }
 
-static inline void ps2_xec_girq_en(const struct device *dev)
+static inline void ps2_xec_girq_en(uint8_t girq_idx, uint8_t girq_posn)
 {
-	const struct ps2_xec_config * const cfg = dev->config;
+	mchp_xec_ecia_girq_src_en(girq_idx, girq_posn);
+}
 
-	mchp_xec_ecia_girq_src_en(cfg->girq_id, cfg->girq_bit);
+static inline void ps2_xec_girq_dis(uint8_t girq_idx, uint8_t girq_posn)
+{
+	mchp_xec_ecia_girq_src_dis(girq_idx, girq_posn);
 }
 #else
 static inline void ps2_xec_slp_en_clr(const struct device *dev)
@@ -113,18 +116,19 @@ static inline void ps2_xec_slp_en_clr(const struct device *dev)
 	}
 }
 
-static inline void ps2_xec_girq_clr(const struct device *dev)
+static inline void ps2_xec_girq_clr(uint8_t girq_idx, uint8_t girq_posn)
 {
-	const struct ps2_xec_config * const cfg = dev->config;
-
-	MCHP_GIRQ_SRC(cfg->girq_id) = BIT(cfg->girq_bit);
+	MCHP_GIRQ_SRC(girq_idx) = BIT(girq_posn);
 }
 
-static inline void ps2_xec_girq_en(const struct device *dev)
+static inline void ps2_xec_girq_en(uint8_t girq_idx, uint8_t girq_posn)
 {
-	const struct ps2_xec_config * const cfg = dev->config;
+	MCHP_GIRQ_ENSET(girq_idx) = BIT(girq_posn);
+}
 
-	MCHP_GIRQ_ENSET(cfg->girq_id) = BIT(cfg->girq_bit);
+static inline void ps2_xec_girq_dis(uint8_t girq_idx, uint8_t girq_posn)
+{
+	MCHP_GIRQ_ENCLR(girq_idx) = MCHP_KBC_IBF_GIRQ;
 }
 #endif /* CONFIG_SOC_SERIES_MEC172X */
 
@@ -151,7 +155,7 @@ static int ps2_xec_configure(const struct device *dev,
 	temp = regs->TRX_BUFF;
 	regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
 	/* clear next higher level */
-	ps2_xec_girq_clr(dev);
+	ps2_xec_girq_clr(config->girq_id, config->girq_bit);
 
 	/* Enable FSM and init instance in rx mode*/
 	regs->CTRL = MCHP_PS2_CTRL_EN_POS;
@@ -159,7 +163,7 @@ static int ps2_xec_configure(const struct device *dev,
 	/* We enable the interrupts in the EC aggregator so that the
 	 * result  can be forwarded to the ARM NVIC
 	 */
-	ps2_xec_girq_en(dev);
+	ps2_xec_girq_en(config->girq_id, config->girq_bit);
 
 	k_sem_give(&data->tx_lock);
 
@@ -230,7 +234,7 @@ static int ps2_xec_inhibit_interface(const struct device *dev)
 
 	regs->CTRL = 0x00;
 	regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
-	ps2_xec_girq_clr(dev);
+	ps2_xec_girq_clr(config->girq_id, config->girq_bit);
 	NVIC_ClearPendingIRQ(config->isr_nvic);
 
 	k_sem_give(&data->tx_lock);
@@ -244,7 +248,7 @@ static int ps2_xec_enable_interface(const struct device *dev)
 	struct ps2_xec_data * const data = dev->data;
 	struct ps2_regs * const regs = config->regs;
 
-	ps2_xec_girq_clr(dev);
+	ps2_xec_girq_clr(config->girq_id, config->girq_bit);
 	regs->CTRL = MCHP_PS2_CTRL_EN;
 
 	k_sem_give(&data->tx_lock);
@@ -257,8 +261,7 @@ static int ps2_xec_pm_action(const struct device *dev, enum pm_device_action act
 {
 	const struct ps2_xec_config *const devcfg = dev->config;
 	struct ps2_regs * const regs = devcfg->regs;
-	struct ecia_named_regs *ecia_regs = (struct ecia_named_regs *)(DT_REG_ADDR(DT_NODELABEL(ecia)));
-	int ret=0;
+	int ret = 0;
 
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
@@ -266,24 +269,16 @@ static int ps2_xec_pm_action(const struct device *dev, enum pm_device_action act
 #ifdef CONFIG_PINCTRL
 		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
 #endif
-		/* Enable PS2_0A_WK */
-		ecia_regs->GIRQ21.EN_CLR = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
-		ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
+		/* Disable PS2 WK */
+		ps2_xec_girq_dis(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+		ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
 
-		/* Enable PS2_0B_WK */
-		//ecia_regs->GIRQ21.EN_CLR = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
-		//ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
 		regs->CTRL |= MCHP_PS2_CTRL_EN;
 		break;
 	case PM_DEVICE_ACTION_SUSPEND:
-
-		/* Enable PS2_0A_WK */
-		ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
-		ecia_regs->GIRQ21.EN_SET = MCHP_PS2_0_PORT0A_WK_GIRQ_BIT;
-
-		/* Enable PS2_0B_WK */
-		//ecia_regs->GIRQ21.SRC = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
-		//ecia_regs->GIRQ21.EN_SET = MCHP_PS2_0_PORT0B_WK_GIRQ_BIT;
+		/* Enable PS2 WK */
+		ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+		ps2_xec_girq_en(devcfg->girq_id_wk, devcfg->girq_bit_wk);
 
 		regs->CTRL &= ~MCHP_PS2_CTRL_EN;
 		/* If application does not want to turn off PS2 pins it will
@@ -315,7 +310,7 @@ static void ps2_xec_isr(const struct device *dev)
 	status = regs->STATUS;
 
 	/* clear next higher level the GIRQ */
-	ps2_xec_girq_clr(dev);
+	ps2_xec_girq_clr(config->girq_id, config->girq_bit);
 
 	if (status & MCHP_PS2_STATUS_RXD_RDY) {
 #ifdef CONFIG_PM_DEVICE
@@ -392,6 +387,8 @@ static int ps2_xec_init(const struct device *dev)
 		.isr_nvic = DT_INST_IRQN(inst),					\
 		.girq_id = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 0)),	\
 		.girq_bit = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 1)),	\
+		.girq_id_wk = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 2)),	\
+		.girq_bit_wk = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 3)),	\
 		.pcr_idx = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 0)),	\
 		.pcr_pos = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 1)),	\
 		.irq_config_func = ps2_xec_irq_config_func_##inst,		\
@@ -405,6 +402,8 @@ static int ps2_xec_init(const struct device *dev)
 		.isr_nvic = DT_INST_IRQN(inst),					\
 		.girq_id = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 0)),	\
 		.girq_bit = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 1)),	\
+		.girq_id_wk = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 2)),	\
+		.girq_bit_wk = (uint8_t)(DT_INST_PROP_BY_IDX(inst, girqs, 3)),	\
 		.pcr_idx = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 0)),	\
 		.pcr_pos = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 1)),	\
 		.irq_config_func = ps2_xec_irq_config_func_##inst,		\

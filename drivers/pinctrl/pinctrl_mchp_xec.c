@@ -87,8 +87,7 @@ uint32_t val = MCHP_GPIO_CTRL_AOD_DIS;
 	if (conf & BIT(MCHP_XEC_PIN_LOW_POWER_POS)) {
 		msk |= MCHP_GPIO_CTRL_PWRG_MASK;
 		val |= MCHP_GPIO_CTRL_PWRG_OFF;
-	}
-	else {
+	} else {
 		msk |= MCHP_GPIO_CTRL_PWRG_MASK;
 		val |= MCHP_GPIO_CTRL_PWRG_VTR_IO;
 	}
