@@ -8,6 +8,7 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/drivers/ps2.h>
 #include <soc.h>
+#include <zephyr/drivers/gpio.h> //For Debug
 #define LOG_LEVEL LOG_LEVEL_DBG
 #include <zephyr/logging/log.h>
 #define LOG_MODULE_NAME main
@@ -36,10 +37,14 @@ K_TIMER_DEFINE(block_ps2_timer, saturate_ps2, NULL);
 static const struct device *const ps2_0_dev =
 	DEVICE_DT_GET_ONE(microchip_xec_ps2);
 
+//For Debug
+#define LED0_NODE DT_ALIAS(led1)
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
+//For Debug
+
 static void saturate_ps2(struct k_timer *timer)
 {
 	LOG_DBG("block host\n");
-	printk("block host\n");
 	host_blocked = true;
 	ps2_disable_callback(ps2_0_dev);
 	k_sleep(K_MSEC(500));
@@ -49,6 +54,7 @@ static void saturate_ps2(struct k_timer *timer)
 
 static void mb_callback(const struct device *dev, uint8_t value)
 {
+	gpio_pin_toggle_dt(&led);//For Debug
 	if (k_msgq_put(&aux_to_host_queue, &value, K_NO_WAIT) != 0) {
 		ps2_disable_callback(ps2_0_dev);
 	}
@@ -75,35 +81,27 @@ static void to_port_60_thread(void *dummy1, void *dummy2, void *dummy3)
 void initialize_mouse(void)
 {
 	LOG_DBG("mouse->f4\n");
-	printk("mouse->f4\n");
 	ps2_write(ps2_0_dev, 0xf4);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Reset mouse->ff\n");
-	printk("Reset mouse->ff\n");
 	ps2_write(ps2_0_dev, 0xff);
 	k_msleep(MS_BETWEEN_RESET_CALLS);
 	LOG_DBG("Reset mouse->ff\n");
-	printk("Reset mouse->ff\n");
 	ps2_write(ps2_0_dev, 0xff);
 	k_msleep(MS_BETWEEN_RESET_CALLS);
 	LOG_DBG("Read ID mouse->f2\n");
-	printk("Read ID mouse->f2\n");
 	ps2_write(ps2_0_dev, 0xf2);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set resolution mouse->e8\n");
-	printk("Set resolution mouse->e8\n");
 	ps2_write(ps2_0_dev, 0xe8);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("mouse->00\n");
-	printk("mouse->00\n");
 	ps2_write(ps2_0_dev, 0x00);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
-	printk("Set scaling 1:1 mouse->e6\n");
 	ps2_write(ps2_0_dev, 0xe6);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
-	printk("Set scaling 1:1 mouse->e6\n");
 	ps2_write(ps2_0_dev, 0xe6);
 	k_msleep(MS_BETWEEN_REGULAR_CALLS);
 	LOG_DBG("Set scaling 1:1 mouse->e6\n");
@@ -194,5 +192,13 @@ void main(void)
 	/*Make sure there is a PS/2 device connected */
 	initialize_mouse();
 
-	k_timer_start(&block_ps2_timer, K_SECONDS(2), K_SECONDS(1));
+	//For Debug
+if (!gpio_is_ready_dt(&led)) {
+                return;
+        }
+
+        gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
+	//For Debug
+
+	k_timer_start(&block_ps2_timer, K_SECONDS(2), K_SECONDS(3));
 }

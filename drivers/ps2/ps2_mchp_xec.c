@@ -26,6 +26,7 @@
 #include <soc.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/irq.h>
+#include <zephyr/drivers/gpio.h>
 
 #define LOG_LEVEL CONFIG_PS2_LOG_LEVEL
 LOG_MODULE_REGISTER(ps2_mchp_xec);
@@ -45,6 +46,10 @@ struct ps2_xec_config {
 	void (*irq_config_func)(void);
 #ifdef CONFIG_PINCTRL
 	const struct pinctrl_dev_config *pcfg;
+#endif
+#ifdef CONFIG_PM_DEVICE
+	struct gpio_dt_spec wakerx_gpio;
+	bool wakeup_source;
 #endif
 };
 
@@ -207,7 +212,7 @@ static int ps2_xec_write(const struct device *dev, uint8_t value)
 	regs->CTRL = 0x00;
 
 	/* Read to clear data ready bit in the status register*/
-	temp = regs->TRX_BUFF;//should not this be RX_BUFF?
+	temp = regs->TRX_BUFF;
 	k_sleep(K_MSEC(1));
 	regs->STATUS = MCHP_PS2_STATUS_RW1C_MASK;
 
@@ -257,40 +262,79 @@ static int ps2_xec_enable_interface(const struct device *dev)
 }
 
 #ifdef CONFIG_PM_DEVICE
+/*static void adc_xec_wake_handler(const struct device *gpio, struct gpio_callback *cb,
+		   uint32_t pins)
+{
+	// Disable interrupts on PS2 DAT pin to avoid repeated interrupts.
+	(void)gpio_pin_interrupt_configure(gpio, (find_msb_set(pins) - 1),
+					   GPIO_INT_DISABLE);
+}*/
+
 static int ps2_xec_pm_action(const struct device *dev, enum pm_device_action action)
 {
 	const struct ps2_xec_config *const devcfg = dev->config;
 	struct ps2_regs * const regs = devcfg->regs;
 	int ret = 0;
 
+//	volatile uint32_t *ps2Dat0A_reg = (uint32_t*)0x40081134;
+//	uint32_t ps2_reg = *ps2Dat0A_reg;
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
-
+		if (devcfg->wakeup_source) {
+			/* Disable PS2 wake interrupt
+			 * Disable interrupt on PS2DAT pin
+			 */
+			if (devcfg->wakerx_gpio.port != NULL) {
+				ret = gpio_pin_interrupt_configure_dt(
+						&devcfg->wakerx_gpio,
+						GPIO_INT_DISABLE);
+				if (ret < 0) {
+					LOG_ERR("Failed to configure PS2 wake	\
+						interrupt (ret %d)", ret);
+					return ret;
+				}
+			}
+			//ps2_reg = *ps2Dat0A_reg;
+			ps2_xec_girq_dis(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+			ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+		} else {
 #ifdef CONFIG_PINCTRL
-		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
+			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
 #endif
-		/* Disable PS2 WK */
-		ps2_xec_girq_dis(devcfg->girq_id_wk, devcfg->girq_bit_wk);
-		ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
-
-		regs->CTRL |= MCHP_PS2_CTRL_EN;
-		break;
-	case PM_DEVICE_ACTION_SUSPEND:
-		/* Enable PS2 WK */
-		ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
-		ps2_xec_girq_en(devcfg->girq_id_wk, devcfg->girq_bit_wk);
-
-		regs->CTRL &= ~MCHP_PS2_CTRL_EN;
-		/* If application does not want to turn off PS2 pins it will
-		 * not define pinctrl-1 for this node.
-		 */
-#ifdef CONFIG_PINCTRL
-		ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
-		if (ret == -ENOENT) { /* pinctrl-1 does not exist.  */
-			ret = 0;
+			regs->CTRL |= MCHP_PS2_CTRL_EN;
 		}
+	break;
+	case PM_DEVICE_ACTION_SUSPEND:
+		if (devcfg->wakeup_source) {
+			/* Enable PS2 wake interrupt
+			 * Configure Falling Edge Trigger interrupt on PS2DAT pin
+			 */
+			ps2_xec_girq_clr(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+			ps2_xec_girq_en(devcfg->girq_id_wk, devcfg->girq_bit_wk);
+			if (devcfg->wakerx_gpio.port != NULL) {
+				ret = gpio_pin_interrupt_configure_dt(
+					&devcfg->wakerx_gpio,
+					GPIO_INT_MODE_EDGE | GPIO_INT_TRIG_LOW);
+				if (ret < 0) {
+					LOG_ERR("Failed to configure PS2 wake	\
+						interrupt (ret %d)", ret);
+					return ret;
+				}
+				//ps2_reg = *ps2Dat0A_reg;
+			}
+		} else {
+			regs->CTRL &= ~MCHP_PS2_CTRL_EN;
+#ifdef CONFIG_PINCTRL
+			/* If application does not want to turn off PS2 pins it will
+			 * not define pinctrl-1 for this node.
+			 */
+			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
+			if (ret == -ENOENT) { /* pinctrl-1 does not exist.  */
+				ret = 0;
+			}
 #endif
-		break;
+		}
+	break;
 	default:
 		ret = -ENOTSUP;
 	}
@@ -376,8 +420,38 @@ static int ps2_xec_init(const struct device *dev)
 
 	cfg->irq_config_func();
 
+#ifdef CONFIG_PM_DEVICE
+/*	if ((cfg->wakeup_source) && (cfg->wakerx_gpio.port != NULL)) {
+		static struct gpio_callback ps2_xec_wake_cb;
+
+		gpio_init_callback(&ps2_xec_wake_cb, adc_xec_wake_handler,
+				   BIT(cfg->wakerx_gpio.pin));
+
+		ret = gpio_add_callback(cfg->wakerx_gpio.port, &ps2_xec_wake_cb);
+		if (ret < 0) {
+			LOG_ERR("Failed to add UART wake callback (err %d)", ret);
+			return ret;
+		}
+	}*/
+#endif
+
 	return 0;
 }
+
+/* To enable wakeup on the PS2, the DTS needs to have two entries defined
+ * in the corresponding PS2 node in the DTS specifying it as a wake source
+ * and specifying the PS2DAT GPIO; example as below
+ *
+ *	wakerx-gpios = <MCHP_GPIO_DECODE_115 GPIO_ACTIVE_HIGH>
+ *	wakeup-source;
+ */
+#ifdef CONFIG_PM_DEVICE
+#define XEC_PS2_PM_WAKEUP(n)						\
+		.wakeup_source = (uint8_t)DT_INST_PROP_OR(n, wakeup_source, 0),	\
+		.wakerx_gpio = GPIO_DT_SPEC_INST_GET_OR(n, wakerx_gpios, {0}),
+#else
+#define XEC_PS2_PM_WAKEUP(index) /* Not used */
+#endif
 
 #ifdef CONFIG_PINCTRL
 #define XEC_PS2_PINCTRL_CFG(inst) PINCTRL_DT_INST_DEFINE(inst)
@@ -393,6 +467,7 @@ static int ps2_xec_init(const struct device *dev)
 		.pcr_pos = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 1)),	\
 		.irq_config_func = ps2_xec_irq_config_func_##inst,		\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),			\
+		XEC_PS2_PM_WAKEUP(inst)						\
 	}
 #else
 #define XEC_PS2_PINCTRL_CFG(inst)
@@ -407,6 +482,7 @@ static int ps2_xec_init(const struct device *dev)
 		.pcr_idx = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 0)),	\
 		.pcr_pos = (uint8_t)(DT_INST_PROP_BY_IDX(inst, pcrs, 1)),	\
 		.irq_config_func = ps2_xec_irq_config_func_##inst,		\
+		XEC_PS2_PM_WAKEUP(inst)						\
 	}
 #endif
 
