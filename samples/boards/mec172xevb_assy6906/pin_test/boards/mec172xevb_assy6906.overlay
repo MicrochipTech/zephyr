@@ -1,0 +1,109 @@
+/*
+ * Copyright (c) 2020 Intel Corporation
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/* MEC172x EVB
+ * JP7 2-3 GPIO055 pulled-down via 10K to ground.
+ * JP23 14-15 selects GPIO055 as SHD_nCS0
+ * JP42 1-2 connects 1.8V
+ * JP60 2-3 VTR2 is powered by 1.8V
+ * NOTE: VTR3 is always 1.8V
+ *
+ * Boot-ROM GPIO055 as RSMRST#
+ * GPIO Control register value = 0x0200
+ * Output, push-pull, driver low, no internal pulls,
+ * interrupt detection = level low, alternate out enabled.
+ * ROM drives pin high(inactive) using alternate out (bit[16] of control register)
+ * Control register = 0x10200
+ */
+
+/ {
+	zephyr,user {
+		/* Pins used for testing I2C. Inject faults, etc */
+		i2c-sda-gpios = <MCHP_GPIO_DECODE_141 GPIO_ACTIVE_HIGH >;
+		i2c-scl-gpios = <MCHP_GPIO_DECODE_142 GPIO_ACTIVE_HIGH >;
+
+		/* eSPI MAF Boot-ROM uses GPIO055 (SHD_CS0#) as RSMRST# */
+		rsmrst-gpios = <MCHP_GPIO_DECODE_055 GPIO_ACTIVE_HIGH>;
+
+		/* user PINCTRL */
+		pinctrl-0 = < &vci_in2_n_gpio161 &vci_in3_n_gpio000 >;
+		pinctrl-names = "default";
+	};
+};
+
+&pinctrl {
+	vci_in2_n_gpio161: vci_in2_n_gpio161 {
+		pinmux = < MCHP_XEC_PINMUX(0161, MCHP_AF0) >;
+	};
+	vci_in3_n_gpio000: vci_in3_n_gpio000 {
+		pinmux = < MCHP_XEC_PINMUX(00, MCHP_AF0) >;
+	};
+};
+
+/* use default silicon OSC for everything
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_XTAL>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_XTAL_XTAL>;
+	xtal-single-ended;
+};
+*/
+
+/* Make sure driver does not load and touch pins */
+&spi0 {
+	status = "disabled";
+};
+
+&i2c_smb_0 {
+	status = "okay";
+	port_sel = <0>;
+
+	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-names = "default";
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_1 {
+	status = "okay";
+	port_sel = <7>;
+
+	pinctrl-0 = < &i2c07_sda_gpio012 &i2c07_scl_gpio013 >;
+	pinctrl-names = "default";
+};
+
+&i2c07_sda_gpio012 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c07_scl_gpio013 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_2 {
+	status = "disabled";
+};

@@ -1,0 +1,4 @@
+tests:
+  boards.mec172xevb_assy6906.pin_test:
+    platform_allow: mec172xevb_assy6906
+    tags: drivers gpio pinctrl
