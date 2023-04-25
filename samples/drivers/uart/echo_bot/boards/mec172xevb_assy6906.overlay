@@ -4,12 +4,13 @@
  * Copyright (c) 2022 Intel Corporation
  */
 
-/ {
-	zephyr,shell-uart {
-		io-channels =  <&uart1 0>;
-	};
-};
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>;
 
-&uart1 { /* PS2DAT0A */
-	#io-channel-cells = <0>;
+	/* debug only, not using 32KHZ_IN pin */
+	pinctrl-0 = <&tst_clk_out_gpio060>;
+
+	pinctrl-names = "default";
 };
