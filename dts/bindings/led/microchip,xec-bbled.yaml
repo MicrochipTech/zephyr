@@ -23,3 +23,8 @@ properties:
     type: array
     required: true
     description: BBLED PCR register index and bit position
+
+  enable-low-power:
+    type: boolean
+    required: false
+    description: BBLED gates off clock and turn off LEDs

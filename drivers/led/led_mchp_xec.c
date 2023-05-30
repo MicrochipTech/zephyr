@@ -22,6 +22,7 @@
 #include <zephyr/kernel.h>
 
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/device.h>
 LOG_MODULE_REGISTER(led_xec, CONFIG_LED_LOG_LEVEL);
 
 /* Same BBLED hardware block in MEC15xx and MEC172x families
@@ -91,6 +92,7 @@ struct xec_bbled_config {
 	const struct pinctrl_dev_config *pcfg;
 	uint8_t pcr_id;
 	uint8_t pcr_pos;
+	bool enable_low_power;
 };
 
 /* delay_on and delay_off are in milliseconds
@@ -236,7 +238,54 @@ static inline void xec_bbled_slp_en_clr(const struct device *dev)
 
 	z_mchp_xec_pcr_periph_sleep(cfg->pcr_id, cfg->pcr_pos, 0);
 }
+
+static inline void xec_bbled_slp_en_set(const struct device *dev)
+{
+        const struct xec_bbled_config * const cfg = dev->config;
+
+        z_mchp_xec_pcr_periph_sleep(cfg->pcr_id, cfg->pcr_pos, 1);
+}
 #endif
+
+
+#ifdef CONFIG_PM_DEVICE
+static int xec_bbled_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct xec_bbled_config *const devcfg = dev->config;
+	struct xec_bbled_regs * const regs = devcfg->regs;
+	int ret = 0;
+
+	if (!devcfg->enable_low_power) {
+		return ret;
+	}
+
+	switch (action) {
+		case PM_DEVICE_ACTION_RESUME:
+			// Do Down clock
+			regs->config &= ~BIT(XEC_BBLED_CFG_CLK_SRC_48M_POS);
+			xec_bbled_slp_en_clr(dev);
+			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
+			if (ret != 0) {
+				LOG_ERR("XEC BBLED pinctrl setup failed (%d)", ret);
+			}	
+		break;
+		case PM_DEVICE_ACTION_SUSPEND:
+			// Do Up clock
+			regs->config |= BIT(XEC_BBLED_CFG_CLK_SRC_48M_POS);
+			xec_bbled_slp_en_set(dev);
+
+			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
+			if (ret == -ENOENT) { // pinctrl-1 does not exist.
+				ret = 0;
+			}
+		break;
+            default:
+                ret = -ENOTSUP;
+	}
+
+        return ret;
+}
+#endif /* CONFIG_PM_DEVICE */
 
 static int xec_bbled_init(const struct device *dev)
 {
@@ -264,7 +313,11 @@ static const struct led_driver_api xec_bbled_api = {
 	.blink		= xec_bbled_blink,
 };
 
-#define XEC_BBLED_PINCTRL_DEF(i) PINCTRL_DT_INST_DEFINE(i)
+#ifdef CONFIG_PM_DEVICE
+#define XEC_BBLED_PM_DEV_DEFINE(i) PM_DEVICE_DT_INST_DEFINE(i, xec_bbled_pm_action);
+#else
+#define XEC_BBLED_PM_DEV_DEFINE(i) /* Not used */
+#endif
 
 #define XEC_BBLED_CONFIG(i)						\
 static struct xec_bbled_config xec_bbled_config_##i = {			\
@@ -272,15 +325,19 @@ static struct xec_bbled_config xec_bbled_config_##i = {			\
 	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),			\
 	.pcr_id = (uint8_t)DT_INST_PROP_BY_IDX(i, pcrs, 0),		\
 	.pcr_pos = (uint8_t)DT_INST_PROP_BY_IDX(i, pcrs, 1),		\
+	.enable_low_power = DT_INST_PROP(i, enable_low_power),		\
 }
 
 #define XEC_BBLED_DEVICE(i)						\
 									\
-XEC_BBLED_PINCTRL_DEF(i);						\
+PINCTRL_DT_INST_DEFINE(i);						\
 									\
 XEC_BBLED_CONFIG(i);							\
 									\
-DEVICE_DT_INST_DEFINE(i, &xec_bbled_init, NULL,				\
+XEC_BBLED_PM_DEV_DEFINE(i)						\
+									\
+DEVICE_DT_INST_DEFINE(i, &xec_bbled_init,				\
+		      PM_DEVICE_DT_INST_GET(i),				\
 		      NULL, &xec_bbled_config_##i,			\
 		      POST_KERNEL, CONFIG_LED_INIT_PRIORITY,		\
 		      &xec_bbled_api);
