@@ -261,17 +261,16 @@ static int xec_bbled_pm_action(const struct device *dev, enum pm_device_action a
 
 	switch (action) {
 		case PM_DEVICE_ACTION_RESUME:
-			// Do Down clock
-			regs->config &= ~BIT(XEC_BBLED_CFG_CLK_SRC_48M_POS);
 			xec_bbled_slp_en_clr(dev);
 			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
 			if (ret != 0) {
 				LOG_ERR("XEC BBLED pinctrl setup failed (%d)", ret);
-			}	
+			}
+			regs->config |= XEC_BBLED_CFG_MODE_PWM;	
 		break;
 		case PM_DEVICE_ACTION_SUSPEND:
-			// Do Up clock
-			regs->config |= BIT(XEC_BBLED_CFG_CLK_SRC_48M_POS);
+			regs->config = (regs->config & ~(XEC_BBLED_CFG_MODE_MSK))
+						| XEC_BBLED_CFG_MODE_OFF;
 			xec_bbled_slp_en_set(dev);
 
 			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
