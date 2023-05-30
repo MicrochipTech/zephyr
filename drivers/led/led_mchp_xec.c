@@ -78,6 +78,8 @@ LOG_MODULE_REGISTER(led_xec, CONFIG_LED_LOG_LEVEL);
 #define XEC_BBLED_BLINK_PERIOD_MAX_MS	32000u
 #define XEC_BBLED_BLINK_PERIOD_MIN_MS	8u
 
+#define XEC_BBLED_MAX_INSTANCE DT_NUM_INST_STATUS_OKAY(microchip_xec_bbled)
+
 struct xec_bbled_regs {
 	volatile uint32_t config;
 	volatile uint32_t limits;
@@ -93,6 +95,11 @@ struct xec_bbled_config {
 	uint8_t pcr_id;
 	uint8_t pcr_pos;
 	bool enable_low_power;
+};
+
+struct bkup_xec_bbled_regs {
+	struct xec_bbled_regs regs;
+	void*  base_addr;
 };
 
 /* delay_on and delay_off are in milliseconds
@@ -253,7 +260,10 @@ static int xec_bbled_pm_action(const struct device *dev, enum pm_device_action a
 {
 	const struct xec_bbled_config *const devcfg = dev->config;
 	struct xec_bbled_regs * const regs = devcfg->regs;
+	static struct bkup_xec_bbled_regs bkup[XEC_BBLED_MAX_INSTANCE];
+	static uint8_t bkup_size = 0;
 	int ret = 0;
+	uint8_t index;
 
 	if (!devcfg->enable_low_power) {
 		return ret;
@@ -266,11 +276,40 @@ static int xec_bbled_pm_action(const struct device *dev, enum pm_device_action a
 			if (ret != 0) {
 				LOG_ERR("XEC BBLED pinctrl setup failed (%d)", ret);
 			}
-			regs->config |= XEC_BBLED_CFG_MODE_PWM;	
+
+			for(index = 0; index < bkup_size; index++) {
+				if(bkup[index].base_addr == regs) {
+					memcpy(regs, &bkup[index].regs, sizeof(devcfg->regs));
+					// Turn On BBLED module
+					regs->config |= XEC_BBLED_CFG_MODE_PWM;
+					regs->config |= BIT(XEC_BBLED_CFG_EN_UPDATE_POS);
+					bkup_size--;
+					// If both same, match occur in last index
+					if (index != bkup_size) {
+						memcpy(&bkup[index].regs, &bkup[index+1].regs, 
+							sizeof(devcfg->regs)*bkup_size);
+					}
+					break;
+				}
+			}	
 		break;
 		case PM_DEVICE_ACTION_SUSPEND:
-			regs->config = (regs->config & ~(XEC_BBLED_CFG_MODE_MSK))
+
+			// Do backup only when module active
+			if ((regs->config & XEC_BBLED_CFG_MODE_MSK) != XEC_BBLED_CFG_MODE_OFF) {
+				bkup[bkup_size].base_addr = regs;
+				// Do copy first, then clear mode.
+				// As per spec., clear mode will reset reg. val
+				memcpy(&bkup[bkup_size].regs, regs, sizeof(devcfg->regs));
+				// Turn Off BBLED module
+				bkup[bkup_size].regs.config =
+					(bkup[bkup_size].regs.config & ~(XEC_BBLED_CFG_MODE_MSK))
 						| XEC_BBLED_CFG_MODE_OFF;
+				regs->config = (regs->config & ~(XEC_BBLED_CFG_MODE_MSK))
+						| XEC_BBLED_CFG_MODE_OFF;
+				bkup_size++;
+			}
+
 			xec_bbled_slp_en_set(dev);
 
 			ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_SLEEP);
