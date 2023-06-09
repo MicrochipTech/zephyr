@@ -1,0 +1,60 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		gpspi = &spi1;
+	};
+};
+
+&pinctrl {
+	spi0_cs0_n_gpio003_sleep: spi0_cs0_n_gpio003_sleep {
+		pinmux = < MCHP_XEC_PINMUX(03, MCHP_AF4) >;
+		low-power-enable;
+	};
+	spi0_clk_gpio034_sleep: spi0_clk_gpio034_sleep {
+		pinmux = < MCHP_XEC_PINMUX(034, MCHP_AF4) >;
+		low-power-enable;
+	};
+	spi0_mosi_gpio004_sleep: spi0_mosi_gpio004_sleep {
+		pinmux = < MCHP_XEC_PINMUX(04, MCHP_AF4) >;
+		low-power-enable;
+	};
+	spi0_miso_gpio036_sleep: spi0_miso_gpio036_sleep {
+		pinmux = < MCHP_XEC_PINMUX(036, MCHP_AF3) >;
+		low-power-enable;
+	};
+};
+
+/* Controller drives chip select */
+&spi1 {
+	status = "okay";
+	pinctrl-0 = <&spi0_cs0_n_gpio003 &spi0_clk_gpio034
+		     &spi0_mosi_gpio004 &spi0_miso_gpio036>;
+	pinctrl-1 = <&spi0_cs0_n_gpio003_sleep &spi0_clk_gpio034_sleep
+		     &spi0_mosi_gpio004_sleep &spi0_miso_gpio036_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&spi0_cs0_n_gpio003 {
+	drive-open-drain;
+	output-high;
+};
+
+/* Example using GPIO driver for SPI chip select control.
+ * Requires application to create a struct spi_cs_control
+ * instance and pass a pointer to it in struct spi_config.
+ * NOTE: GPSPI driver PM code will not touch chip select!
+ *
+&spi1 {
+	status = "okay";
+	cs-gpios = <&gpio_000_036 3 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&spi0_clk_gpio034 &spi0_mosi_gpio004 &spi0_miso_gpio036>;
+	pinctrl-1 = <&spi0_clk_gpio034_sleep &spi0_mosi_gpio004_sleep
+		     &spi0_miso_gpio036_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+*/
