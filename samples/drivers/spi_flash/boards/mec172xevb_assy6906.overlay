@@ -36,6 +36,27 @@
 	};
 };
 
+&spi1 {
+	pinctrl-0 = <&spi0_cs0_n_gpio003 &spi0_clk_gpio034
+		     &spi0_mosi_gpio004 &spi0_miso_gpio036>;
+	pinctrl-names = "default";
+	status = "okay";
+	spi1_cs0_flash: w25q128@0 {
+		compatible = "jedec,spi-nor";
+		/* 134217728 bits = 16 Mbytes */
+		size = <0x8000000>;
+		reg = <0>;
+		spi-max-frequency = <24000000>;
+		jedec-id = [ef 70 18];
+		status = "okay";
+	};
+};
+
+&spi0_cs0_n_gpio003 {
+	drive-open-drain;
+	output-high;
+};
+
 &shd_cs0_n_gpio055 {
 	drive-open-drain;
 	output-high;
