@@ -426,13 +426,13 @@ static int pwm_bbled_xec_init(const struct device *dev)
 		.pcr_idx = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 0),		\
 		.pcr_pos = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 1),		\
 		.clk_sel = UTIL_CAT(XEC_PWM_BBLED_CLKSEL_, XEC_PWM_BBLED_CLKSEL(n)),	\
-		.enable_low_power_32K = (uint8_t)DT_INST_PROP_OR(inst, enable_low_power_32K, 0),\
+		.enable_low_power_32K = (uint8_t)DT_INST_PROP_OR(inst, enable_low_power_32k, 0),\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),			\
 	};
 
 #define XEC_PWM_BBLED_DEVICE_INIT(index)				\
 									\
-	static struct bbled_xec_data bbled_xec_config_##index;	\
+	static struct bbled_xec_data bbled_xec_data_##index;	\
 									\
 	PINCTRL_DT_INST_DEFINE(index);					\
 									\
@@ -442,7 +442,7 @@ static int pwm_bbled_xec_init(const struct device *dev)
 									\
 	DEVICE_DT_INST_DEFINE(index, &pwm_bbled_xec_init,		\
 			      PM_DEVICE_DT_INST_GET(index),		\
-			      &bbled_xec_config_##i,			\
+			      &bbled_xec_data_##index,			\
 			      &pwm_bbled_xec_config_##index, POST_KERNEL,	\
 			      CONFIG_PWM_INIT_PRIORITY,			\
 			      &pwm_bbled_xec_driver_api);

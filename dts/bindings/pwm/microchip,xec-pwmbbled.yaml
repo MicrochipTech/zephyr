@@ -46,12 +46,12 @@ properties:
   "#pwm-cells":
     const: 2
 
-  enable-low-power-32K:
+  enable-low-power-32k:
     type: boolean
     description: |
       Used to gates off 32K clock and turn off LEDs during sleep.
       This applicable only to 32K clock, because in 48MHz clock
-      the block will be always turned off in low power.
+      will be always turned off in low power by PCR.
 
 pwm-cells:
   - channel

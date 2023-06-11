@@ -1,0 +1,52 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	board_power: resources {
+		compatible = "microchip,mec172x-board-power";
+		/* MCHP_GPIO_0054 */
+		rsm-gpios = <&gpio_040_076 12 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_gpio053>;
+	pinctrl-names = "default";
+};
+
+&tach0 {
+	status = "okay";
+	pinctrl-0 = <&tach0_gpio050>;
+	pinctrl-names = "default";
+};
+
+&bbled0 {
+	compatible = "microchip,xec-pwmbbled";
+	pinctrl-0 = <&led0_gpio156>;
+	pinctrl-1 = <&led0_gpio156_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-select = "PWM_BBLED_CLK_48M";
+	status = "okay";
+	#pwm-cells = <2>;
+};
+
+&tach1 {
+	status = "okay";
+	pinctrl-0 = <&tach1_gpio051>;
+	pinctrl-names = "default";
+};
+
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>;
+
+	/* debug only, not using 32KHZ_IN pin */
+	pinctrl-0 = <&tst_clk_out_gpio060>;
+
+	pinctrl-names = "default";
+};
