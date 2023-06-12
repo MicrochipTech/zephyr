@@ -15,7 +15,6 @@ LOG_MODULE_REGISTER(spi_xec_gpspi, CONFIG_SPI_LOG_LEVEL);
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/interrupt_controller/intc_mchp_xec_ecia.h>
 #include <zephyr/drivers/pinctrl.h>
-#include <zephyr/drivers/pinmux.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/pm/device.h>
@@ -256,8 +255,8 @@ static int gpspi_check_unsupported_features(const struct spi_config *spi_conf)
 	}
 
 	if (IS_ENABLED(CONFIG_SPI_EXTENDED_MODES)) {
-		if ((lines != SPI_LINES_SINGLE) && (lines != SPI_LINES_DUAL)) {
-			LOG_ERR("Supports single(full-duples) and dual only");
+		if (lines != SPI_LINES_SINGLE) {
+			LOG_ERR("Supports single(full-duples) mode only");
 			return -ENOTSUP;
 		}
 	}
