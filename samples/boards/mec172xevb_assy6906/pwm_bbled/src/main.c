@@ -166,7 +166,7 @@ int pwm_test(void)
 	 * Scale by 1000
 	 * period_cycles = 1280, pulse_cycles = 640
 	 */
-	pwm_period_cycles = (uint32_t)(pwm_reported_cycles_per_sec / 2U);
+	pwm_period_cycles = (uint32_t)(pwm_reported_cycles_per_sec / 48U);
 	pwm_pulse_width_cycles = pwm_period_cycles / 2U;
 	pwm_flags = 0;
 
@@ -184,8 +184,8 @@ int pwm_test(void)
 
 	LOG_INF("Try PWM Set");
 
-	pwm_period_ns = 100000000U; /* 10 Hz */
-	pwm_pulse_width_ns = (100000000U / 5U); /* 20% duty */
+	pwm_period_ns = 100000U; /* 10 Hz */
+	pwm_pulse_width_ns = (100000U / 5U); /* 20% duty */
 
 	LOG_INF("Choose PWM period ns = %u", pwm_period_ns);
 	LOG_INF("Choose PWM pulse width ns = %u", pwm_pulse_width_ns);
@@ -197,8 +197,8 @@ int pwm_test(void)
 	}
 	while(1){
 		for(ret=0;ret<255;ret++)
-	print_bbled_regs(PWM_INST1_BASE_ADDR);
-
+{	print_bbled_regs(PWM_INST1_BASE_ADDR);
+}
 	k_sleep(K_SECONDS(3));
 	}
 	LOG_INF("PWM BBLED sample completed");
