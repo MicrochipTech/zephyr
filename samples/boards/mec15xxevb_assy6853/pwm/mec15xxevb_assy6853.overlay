@@ -1,0 +1,19 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_gpio053>;
+	pinctrl-1 = <&pwm0_gpio053_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&pwm1 {
+        status = "okay";
+        pinctrl-0 = <&pwm1_gpio054>;
+        pinctrl-1 = <&pwm1_gpio054_sleep>;
+        pinctrl-names = "default", "sleep";
+};
