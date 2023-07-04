@@ -1,0 +1,29 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_gpio053>;
+	pinctrl-1 = <&pwm0_gpio053_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&pwm1 {
+        status = "okay";
+        pinctrl-0 = <&pwm1_gpio054>;
+        pinctrl-1 = <&pwm1_gpio054_sleep>;
+        pinctrl-names = "default", "sleep";
+};
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>;
+
+	/* debug only, not using 32KHZ_IN pin */
+	pinctrl-0 = <&tst_clk_out_gpio060>;
+
+	pinctrl-names = "default";
+};
