@@ -1,0 +1,29 @@
+/*
+ * Copyright (c) 2023 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/ {
+     aliases {
+             eeprom-0 = &eeprom;
+     };
+};
+&eeprom{
+status="okay";
+	pinctrl-0 = <&eeprom_cs_gpio116
+		      &eeprom_clk_gpio117
+		      &eeprom_mosi_gpio074
+		      &eeprom_miso_gpio075>;
+	pinctrl-names = "default";
+};
+
+&pcr {
+	status = "okay";
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>;
+
+	/* debug only, not using 32KHZ_IN pin */
+	pinctrl-0 = <&tst_clk_out_gpio060>;
+
+	pinctrl-names = "default";
+};

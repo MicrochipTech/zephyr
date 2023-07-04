@@ -70,5 +70,12 @@ int main(void)
 	}
 
 	printk("Reset the MCU to see the increasing boot counter.\n\n");
+	while(1)
+	{
+		for(rc=0;rc<255;rc++)
+			printk("Reset the MCU to see the increasing boot counter.\n\n");
+k_sleep(K_MSEC(3000));	
+
+	}
 	return 0;
 }
