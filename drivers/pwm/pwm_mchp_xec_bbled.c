@@ -120,13 +120,13 @@ struct bbled_regs {
 
 struct pwm_bbled_xec_config {
 	struct bbled_regs * const regs;
+	const struct pinctrl_dev_config *pcfg;
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint8_t pcr_idx;
 	uint8_t pcr_pos;
 	uint8_t clk_sel;
-	uint8_t enable_low_power_32K;
-	const struct pinctrl_dev_config *pcfg;
+	bool enable_low_power_32K;
 };
 
 struct bbled_xec_data {
@@ -426,7 +426,7 @@ static int pwm_bbled_xec_init(const struct device *dev)
 		.pcr_idx = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 0),		\
 		.pcr_pos = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 1),		\
 		.clk_sel = UTIL_CAT(XEC_PWM_BBLED_CLKSEL_, XEC_PWM_BBLED_CLKSEL(inst)),	\
-		.enable_low_power_32K = (uint8_t)DT_INST_PROP_OR(inst, enable_low_power_32k, 0),\
+		.enable_low_power_32K = DT_INST_PROP(inst, enable_low_power_32k),\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),			\
 	};
 

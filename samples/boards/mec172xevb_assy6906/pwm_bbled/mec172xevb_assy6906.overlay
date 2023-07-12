@@ -29,9 +29,10 @@
 	pinctrl-0 = <&led0_gpio156>;
 	pinctrl-1 = <&led0_gpio156_sleep>;
 	pinctrl-names = "default", "sleep";
-	clock-select = "PWM_BBLED_CLK_48M";
+	clock-select = "PWM_BBLED_CLK_32K";
 	status = "okay";
 	#pwm-cells = <2>;
+	enable-low-power-32k;
 };
 
 &tach1 {
