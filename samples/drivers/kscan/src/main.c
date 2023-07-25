@@ -161,7 +161,7 @@ int main(void)
 	kscan_config(kscan_dev, kb_callback);
 	k_timer_init(&typematic_timer, typematic_callback, NULL);
 	k_timer_init(&block_matrix_timer, block_matrix_callback, NULL);
-	k_timer_start(&block_matrix_timer, K_SECONDS(1), K_SECONDS(3));
+	k_timer_start(&block_matrix_timer, K_SECONDS(1), K_SECONDS(5));
 
 	return 0;
 }
