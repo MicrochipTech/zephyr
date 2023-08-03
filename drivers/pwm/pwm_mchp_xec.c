@@ -333,8 +333,9 @@ static int pwm_xec_set_cycles(const struct device *dev, uint32_t channel,
 	on = pulse_cycles;
 	off = period_cycles - pulse_cycles;
 
-	target_freq = xec_compute_frequency(MCHP_PWM_INPUT_FREQ_HI, on, off);
-	if (target_freq < XEC_PWM_FREQ_LIMIT) {
+	//target_freq = xec_compute_frequency(MCHP_PWM_INPUT_FREQ_HI, on, off);
+target_freq = 100;	
+if (target_freq < XEC_PWM_FREQ_LIMIT) {
 		LOG_DBG("Target frequency below limit");
 		return -EINVAL;
 	}

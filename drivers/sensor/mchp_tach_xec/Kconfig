@@ -16,7 +16,7 @@ if TACH_XEC
 
 choice
 	prompt "Number of tach edges"
-	default TACH_XEC_5_TACH_EDGES
+	default TACH_XEC_3_TACH_EDGES
 	help
 	 This value represents the number of Tach edges that
 	 will be used to determine the interval for which the number of

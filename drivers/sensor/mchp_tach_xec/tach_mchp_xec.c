@@ -35,6 +35,7 @@ struct tach_xec_config {
 	uint8_t pcr_idx;
 	uint8_t pcr_pos;
 	const struct pinctrl_dev_config *pcfg;
+void (*irq_config_func)(void);
 };
 
 struct tach_xec_data {
@@ -61,11 +62,19 @@ int tach_xec_sample_fetch(const struct device *dev, enum sensor_channel chan)
 #ifdef CONFIG_PM_DEVICE
 	pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
 #endif
+/*do{
+poll_count++;
+}while((tach->STATUS & 0x4)==0);*/
+poll_count=0;
+
 	while (poll_count < PIN_STS_TIMEOUT) {
 		/* See whether internal counter is already latched */
 		if (tach->STATUS & MCHP_TACH_STS_CNT_RDY) {
 			data->count =
 				tach->CONTROL >> MCHP_TACH_CTRL_COUNTER_POS;
+/*if(tach->STATUS & MCHP_TACH_STS_CNT_RDY){
+tach->STATUS |= (MCHP_TACH_STS_CNT_RDY );
+}*/
 			break;
 		}
 
@@ -171,11 +180,19 @@ static int tach_xec_init(const struct device *dev)
 	}
 
 	tach_xec_sleep_clr(dev);
-
+/*cfg->irq_config_func();
+mchp_soc_ecia_girq_src_clr(cfg->girq, cfg->girq_pos);
+mchp_xec_ecia_girq_src_en(cfg->girq, cfg->girq_pos);
+*/
 	tach->CONTROL = MCHP_TACH_CTRL_READ_MODE_100K_CLOCK	|
+	//tach->CONTROL = 
 			TACH_CTRL_EDGES	                        |
 			MCHP_TACH_CTRL_FILTER_EN		|
-			MCHP_TACH_CTRL_EN;
+			//MCHP_TACH_CTRL_EN | MCHP_TACH_CTRL_TOGGLE_INT_EN | MCHP_TACH_CTRL_CNT_RDY_INT_EN;
+MCHP_TACH_CTRL_EN ;
+do{
+ret++;
+}while((tach->STATUS & 0x8)==0x0);
 
 	return 0;
 }
@@ -185,6 +202,29 @@ static const struct sensor_driver_api tach_xec_driver_api = {
 	.channel_get = tach_xec_channel_get,
 };
 
+static void tach_xec_isr(const struct device *dev)
+{
+  const struct tach_xec_config * const cfg = dev->config;
+  struct tach_regs * const tach = cfg->regs;
+
+static uint8_t cnt = 0;
+static uint32_t arra[20];
+arra[cnt] = tach->STATUS;
+cnt++;
+if(cnt==20)
+cnt=0;
+
+/*if(tach->STATUS & MCHP_TACH_STS_TOGGLE){
+tach->STATUS |= MCHP_TACH_STS_TOGGLE;
+}*/
+
+if(tach->STATUS & MCHP_TACH_STS_CNT_RDY){
+tach->STATUS |= (MCHP_TACH_STS_CNT_RDY );
+}
+
+//mchp_soc_ecia_girq_src_clr(cfg->girq, cfg->girq_pos);
+}
+
 #define XEC_TACH_CONFIG(inst)						\
 	static const struct tach_xec_config tach_xec_config_##inst = {	\
 		.regs = (struct tach_regs * const)DT_INST_REG_ADDR(inst),	\
@@ -193,9 +233,18 @@ static const struct sensor_driver_api tach_xec_driver_api = {
 		.pcr_idx = DT_INST_PROP_BY_IDX(inst, pcrs, 0),		\
 		.pcr_pos = DT_INST_PROP_BY_IDX(inst, pcrs, 1),		\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),		\
+	.irq_config_func = tach_xec_irq_config_func_##inst,\
 	}
 
 #define TACH_XEC_DEVICE(id)						\
+	static void tach_xec_irq_config_func_##id(void)			\
+	{								\
+		IRQ_CONNECT(DT_INST_IRQN(id),				\
+			    DT_INST_IRQ(id, priority),			\
+			    tach_xec_isr,				\
+			    DEVICE_DT_INST_GET(id), 0);			\
+		irq_enable(DT_INST_IRQN(id));				\
+	}								\
 	static struct tach_xec_data tach_xec_data_##id;			\
 									\
 	PINCTRL_DT_INST_DEFINE(id);					\
