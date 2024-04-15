@@ -90,57 +90,36 @@ static int tgt0_stop_cb(struct i3c_target_config *config)
 }
 #endif
 
+void print_buf(uint8_t *buf, uint32_t len)
+{
+    uint32_t j, k;
+
+    printk("0x00000000: ");
+    for (j=0;j<len;j++)
+    {
+        printk("%02x ", buf[j]);
+        k = j+1;
+
+        if ((k<len) && !(k % 16)) printk("\r\n0x%08x: ", k);
+    }
+    printk("\r\n");
+}
+
 #if defined(I3C0) || defined(I3C1)
-static void transfer_data(const struct device *dev)
+static int target_ibi_cb(struct i3c_device_desc *target, struct i3c_ibi_payload *payload)
 {
-    uint8_t txData[10] = {0,1,2,3,4,5,6,7,8,9};
-
-    printf("Tx:\n ");
-    for(uint8_t i=0; i < 10; i++)
-        printf("%x ", txData[i]);
-    printf("\n");
-
-    if (i3c_set_data(dev, &txData[0], 10) < 0) {
-	printf("Cannot write\n");
-	return;
-    }
-}
-
-static void receive_data(const struct device *dev)
-{
-    uint8_t rxData[10];
-    if (i3c_get_data(dev, &rxData[0], 10) < 0) {
-	printf("Cannot read\n");
-	return;
-    }
-    printf("Rx:\n ");
-    for(uint8_t i=0; i < 10; i++)
-        printf("%x ", rxData[i]);
-    printf("\n");
-}
-
-static void transceive_data(const struct device *dev)
-{
-    uint8_t txData[10] = {10,11,12,13,14,15,16,17,18,19};
-    uint8_t rxData[10];
-
-    printf("TxRx\n ");
-    printf("tx ");
-    for(uint8_t i=0; i < 10; i++)
-        printf("%x ", txData[i]);
-    printf("\n");
-
-    if (i3c_set_get_data(dev, &txData[0], 10, &rxData[0], 10) < 0) {
-        printf("Cannot write read\n");
-        return;
+    if(payload == NULL)
+    {
+	return 1;
     }
 
-    printf(" rx ");
-    for(uint8_t i=0; i < 10; i++)
-        printf("%x ", rxData[i]);
-    printf("\n");
-}
+    printk("Enter [%s] - RxD %d bytes of payload", __FUNCTION__, payload->payload_len);
+    if(payload->payload_len) {
+        print_buf(&payload->payload[0], payload->payload_len);
+    }
 
+    return 0;
+}
 #endif
 
 int main(void)
@@ -166,9 +145,7 @@ ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 88);
                 return 0;
         }
 
-    transfer_data(dev_i3c_h);
-    receive_data(dev_i3c_h);
-    transceive_data(dev_i3c_h);
+    i3c_ibi(dev_i3c_h, &target_ibi_cb);
 #endif
 
 	k_sleep(K_FOREVER);
