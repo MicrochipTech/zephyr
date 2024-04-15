@@ -45,11 +45,23 @@ int ret;
 	return ret;
 }
 
+static int i3c_data_set_get(const struct device *dev,
+          uint8_t *set_val, uint32_t slen,
+          uint8_t *get_val, uint32_t glen)
+{
+    struct introspect_data *data = dev->data;
+  int ret;
+
+  ret = i3c_write_read(data->i3c_dev, set_val, slen, get_val, glen);
+  return ret;
+}
+
 static const struct introspect_driver_api intro_driver_api = {
 #ifdef DT_DRV_COMPAT
 	/* Introspect as Target */
 	.set_data = i3c_data_set,
  	.get_data = i3c_data_get,
+ 	.set_get_data = i3c_data_set_get,
 #else
 	/* Introspect as Master */
 #endif

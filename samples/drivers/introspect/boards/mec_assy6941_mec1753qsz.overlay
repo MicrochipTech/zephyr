@@ -5,7 +5,6 @@
  */
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
-#include <zephyr/dt-bindings/gpio/microchip-mec5-gpio.h>
 #include <microchip/mec5/mec1753qsz-a0-pinctrl.dtsi>
 / {
         chosen {
@@ -34,9 +33,10 @@
 		compatible = "microchip,introspect";
 
 		reg = < 0x6A 0xA012 0x3456789A >;
+                /* Dynamic Address To Be Assigned To The Device */
 		assigned-address = <0x5C>;
 
-		status = "disabled";
+		status = "okay";
 	};
 
 	i3c0_dev1: dev1@6B0000B0123456789B {
@@ -45,7 +45,7 @@
 		reg = < 0x6B 0xB012 0x3456789B >;
 		/*assigned-address = <0x6B>;*/
 
-		status = "okay";
+		status = "disabled";
 	};
 
 	/*i3c0_dev2: dev2@000000C0123456789C {
@@ -75,7 +75,7 @@
 };
 
 &i3c1 {
-        status = "okay";
+        status = "disabled";
 
         pinctrl-0 = <&i3c00_sda_target_gpio132 &i3c00_scl_target_gpio140>;
         pinctrl-names = "default";

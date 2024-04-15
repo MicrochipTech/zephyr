@@ -50,9 +50,20 @@ typedef int (*set_data_t)(const struct device *dev,
 typedef int (*get_data_t)(const struct device *dev,
 				 uint8_t *val, uint32_t len);
 
+/**
+ * @typedef set_get_data_t
+ * @brief Callback API upon getting a sensor's attributes
+ *
+ * See i3c_set_get_data() for argument description
+ */
+typedef int (*set_get_data_t)(const struct device *dev,
+         uint8_t *set_val, uint32_t slen,
+         uint8_t *get_val, uint32_t glen);
+
 __subsystem struct introspect_driver_api {
 	set_data_t set_data;
 	get_data_t get_data;
+        set_get_data_t set_get_data;
 };
 
 /**
@@ -108,6 +119,34 @@ static inline int z_impl_i3c_get_data(const struct device *dev,
 	}
 
 	return api->get_data(dev, val, len);
+}
+
+/**
+ * @brief Get an attribute for a sensor
+ *
+ * @param dev Pointer to the sensor device
+ * @param chan The channel the attribute belongs to, if any.  Some
+ * attributes may only be set for all channels of a device, depending on
+ * device capabilities.
+ * @param attr The attribute to get
+ * @param val Pointer to where to store the attribute
+ *
+ * @return 0 if successful, negative errno code if failure.
+ */
+__syscall int i3c_set_get_data(const struct device *dev, uint8_t *set_val, uint32_t slen, uint8_t *get_val, uint32_t glen);
+
+static inline int z_impl_i3c_set_get_data(const struct device *dev,
+         uint8_t *set_val, uint32_t slen,
+         uint8_t *get_val, uint32_t glen)
+{
+  const struct introspect_driver_api *api =
+    (const struct introspect_driver_api *)dev->api;
+
+  if (api->set_get_data == NULL) {
+    return -ENOSYS;
+  }
+
+  return api->set_get_data(dev, set_val, slen, get_val, glen);
 }
 
 /**
