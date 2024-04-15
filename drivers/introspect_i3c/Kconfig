@@ -1,0 +1,33 @@
+# Introspect configuration options
+
+# Copyright (c) 2024 Microchip Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig INTROSPECT
+	bool "I3C Introspect driver"
+	help
+	  Include Introspect drivers in system config.
+
+if INTROSPECT
+
+source "drivers/introspect_i3c/Kconfig.xec"
+
+module = INTROSPECT
+module-str = introspect
+#source "subsys/logging/Kconfig.template.log_config"
+
+config INTROSPECT_INIT_PRIORITY
+	int "PECI driver init priority"
+	default 90
+	help
+	  PECI device driver initialization priority.
+	  There isn't any critical component relying on this priority at
+	  the moment.
+
+#config PECI_INTERRUPT_DRIVEN
+#	bool "PECI driver interrupt support"
+#	help
+#	  This is an option to be enabled by individual peci driver
+#	  to indicate that the driver and hardware supports interrupts.
+
+endif # INTROSPECT
