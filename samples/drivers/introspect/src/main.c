@@ -90,6 +90,34 @@ static int tgt0_stop_cb(struct i3c_target_config *config)
 }
 #endif
 
+#if defined(I3C0) || defined(I3C1)
+static void transfer_data(const struct device *dev)
+{
+    uint8_t txData[32];
+
+    for (int i = 0; i<32; i++) {
+        txData[i] = i;
+    }
+
+    if (i3c_set_data(dev, &txData[0], 32) < 0) {
+	printf("Cannot write\n");
+	return;
+    }
+}
+
+static void receive_data(const struct device *dev)
+{
+    uint8_t rxData[32];
+    if (i3c_get_data(dev, &rxData[0], 32) < 0) {
+	printf("Cannot read\n");
+	return;
+    }
+    printf("rxData: ");
+    for(uint8_t i=0; i < 32; i++)
+    printf("%x ", rxData[i]);
+}
+#endif
+
 void print_buf(uint8_t *buf, uint32_t len)
 {
     uint32_t j, k;
@@ -113,7 +141,7 @@ static int target_ibi_cb(struct i3c_device_desc *target, struct i3c_ibi_payload 
 	return 1;
     }
 
-    printk("Enter [%s] - RxD %d bytes of payload", __FUNCTION__, payload->payload_len);
+    printk("Enter [%s] - RxD %d bytes of payload\n", __FUNCTION__, payload->payload_len);
     if(payload->payload_len) {
         print_buf(&payload->payload[0], payload->payload_len);
     }
@@ -145,7 +173,12 @@ ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 88);
                 return 0;
         }
 
-    i3c_ibi(dev_i3c_h, &target_ibi_cb);
+    //i3c_ibi(dev_i3c_h, &target_ibi_cb);
+    transfer_data(dev_i3c_h);
+    receive_data(dev_i3c_h);
+
+    //i3c_ibi(dev_i3c_h, &target_ibi_cb);
+
 #endif
 
 	k_sleep(K_FOREVER);

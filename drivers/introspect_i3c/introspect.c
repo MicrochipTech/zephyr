@@ -65,6 +65,8 @@ void i3c_test_ibi(const struct device *dev, tgt_cb_t tgt_cb)
 
         target->ibi_cb = tgt_cb;
 
+        printk("i3c_test_ibi: Enable IBI on target\n");
+
         i3c_ibi_enable(target);
 }
 

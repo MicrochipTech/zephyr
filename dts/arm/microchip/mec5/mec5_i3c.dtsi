@@ -13,7 +13,7 @@ i3c0: i3c@40010800 {
     #size-cells = <0>;
     reg = <0x40010800 0x800>;
     interrupts = <181 2>;
-    input-clock-frequency = <125000000>;
+    input-clock-frequency = <192000000>;
     i3c-scl-hz = <12500000>;
     i2c-scl-hz = <400000>;
     status = "disabled";
@@ -25,7 +25,7 @@ i3c1: i3c@40010000 {
     #size-cells = <0>;
     reg = <0x40010000 0x800>;
     interrupts = <182 2>;
-    input-clock-frequency = <125000000>;
+    input-clock-frequency = <192000000>;
     i3c-scl-hz = <12500000>;
     i2c-scl-hz = <400000>;
     status = "disabled";

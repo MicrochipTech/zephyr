@@ -536,8 +536,6 @@ struct i3c_config_controller {
 	 * supported by the hardware at runtime.
 	 */
 	uint8_t supported_hdr;
-
-	enum i3c_config_type secondary_mode;
 };
 
 /**

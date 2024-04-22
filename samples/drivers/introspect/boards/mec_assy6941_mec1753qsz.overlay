@@ -39,16 +39,16 @@
 		status = "okay";
 	};
 
-	i3c0_dev1: dev1@6B0000B0123456789B {
+	/*i3c0_dev1: dev1@6B0000B0123456789B {
 		compatible = "microchip,introspect";
 
 		reg = < 0x6B 0xB012 0x3456789B >;
-		/*assigned-address = <0x6B>;*/
+		//assigned-address = <0x6B>;
 
 		status = "disabled";
 	};
 
-	/*i3c0_dev2: dev2@000000C0123456789C {
+	i3c0_dev2: dev2@000000C0123456789C {
 		compatible = "st,lps22hh";
 
 		reg = < 0x00 0xC012 0x3456789C >;
