@@ -82,18 +82,14 @@ static int tgt0_stop_cb(struct i3c_target_config *config)
 #if defined(I3C0) || defined(I3C1)
 static void transfer_data(const struct device *dev)
 {
-    uint8_t txData[8];
+    uint8_t txData[10] = {0,1,2,3,4,5,6,7,8,9};
 
-    txData[0] =  0x55;
-    txData[1] =  0x55;
-    txData[2] =  0x55;
-    txData[3] =  0x55;
-    txData[4] =  0x5A;
-    txData[5] =  0xAA;
-    txData[6] =  0xAA;
-    txData[7] =  0xAA;
+    printf("Tx:\n ");
+    for(uint8_t i=0; i < 10; i++)
+        printf("%x ", txData[i]);
+    printf("\n");
 
-    if (i3c_set_data(dev, &txData[0], 8) < 0) {
+    if (i3c_set_data(dev, &txData[0], 10) < 0) {
 	printf("Cannot write\n");
 	return;
     }
@@ -101,15 +97,39 @@ static void transfer_data(const struct device *dev)
 
 static void receive_data(const struct device *dev)
 {
-    uint8_t rxData[8];
-    if (i3c_get_data(dev, &rxData[0], 8) < 0) {
+    uint8_t rxData[10];
+    if (i3c_get_data(dev, &rxData[0], 10) < 0) {
 	printf("Cannot read\n");
 	return;
     }
-    printf("rxData: ");
-    for(uint8_t i=0; i < 8; i++)
-    printf("%x ", rxData[i]);
+    printf("Rx:\n ");
+    for(uint8_t i=0; i < 10; i++)
+        printf("%x ", rxData[i]);
+    printf("\n");
 }
+
+static void transceive_data(const struct device *dev)
+{
+    uint8_t txData[10] = {10,11,12,13,14,15,16,17,18,19};
+    uint8_t rxData[10];
+
+    printf("TxRx\n ");
+    printf("tx ");
+    for(uint8_t i=0; i < 10; i++)
+        printf("%x ", txData[i]);
+    printf("\n");
+
+    if (i3c_set_get_data(dev, &txData[0], 10, &rxData[0], 10) < 0) {
+        printf("Cannot write read\n");
+        return;
+    }
+
+    printf(" rx ");
+    for(uint8_t i=0; i < 10; i++)
+        printf("%x ", rxData[i]);
+    printf("\n");
+}
+
 #endif
 
 int main(void)
@@ -128,7 +148,7 @@ ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 10);
 #endif
 
 #ifdef I3C0
-        const struct device *const dev_i3c_h = DEVICE_DT_GET(DT_NODELABEL(i3c0_dev1));
+        const struct device *const dev_i3c_h = DEVICE_DT_GET(DT_NODELABEL(i3c0_dev0));
 
         if (!device_is_ready(dev_i3c_h)) {
                 printk("sensor: device not ready.\n");
@@ -137,6 +157,7 @@ ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 10);
 
     transfer_data(dev_i3c_h);
     receive_data(dev_i3c_h);
+    transceive_data(dev_i3c_h);
 #endif
 
 	k_sleep(K_FOREVER);
