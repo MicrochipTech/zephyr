@@ -1,0 +1,88 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-mec5-gpio.h>
+#include <microchip/mec5/mec1753qsz-a0-pinctrl.dtsi>
+/ {
+        chosen {
+                zephyr,console = &uart1;
+        };
+
+        aliases {
+                led0 = &led4;
+        };
+
+        leds {
+                compatible = "gpio-leds";
+                led4: led_0 {
+                        gpios = <MCHP_GPIO_DECODE_175 GPIO_ACTIVE_HIGH>;
+                };
+        };
+};
+
+&i3c0 {
+	status = "okay";
+
+	pinctrl-0 = <&i3c01_sda_host_gpio012 &i3c01_scl_host_gpio013>;
+	pinctrl-names = "default";
+
+	i3c0_dev0: dev0@6A0000A0123456789A {
+		compatible = "microchip,introspect";
+
+		reg = < 0x6A 0xA012 0x3456789A >;
+		assigned-address = <0x5C>;
+
+		status = "disabled";
+	};
+
+	i3c0_dev1: dev1@6B0000B0123456789B {
+		compatible = "microchip,introspect";
+
+		reg = < 0x6B 0xB012 0x3456789B >;
+		/*assigned-address = <0x6B>;*/
+
+		status = "okay";
+	};
+
+	/*i3c0_dev2: dev2@000000C0123456789C {
+		compatible = "st,lps22hh";
+
+		reg = < 0x00 0xC012 0x3456789C >;
+		assigned-address = 0x5A;
+
+		status = "okay";
+	};
+
+
+	lps22hh: lps22hh@690000046A00000000 {
+		compatible = "st,lps22hh";
+		reg = <0x69 0x046A 0x00000000>;
+		assigned-address = 0x5B;
+
+		status = "okay";
+	};
+	i2c-dev0: i2c-dev0@380000000000000050 {
+		compatible = "vendor-i2c-dev";
+
+		reg = < 0x38 0x0 0x50 >;
+
+		status = "okay";
+	};*/
+};
+
+&i3c1 {
+        status = "okay";
+
+        pinctrl-0 = <&i3c00_sda_target_gpio132 &i3c00_scl_target_gpio140>;
+        pinctrl-names = "default";
+        i3c1-as-tgt-pid = < 0xB012 0x3456789B >;
+        /* false if absent */
+        /*i3c1-as-tgt-pid-random;*/
+        i3c1-as-tgt-static-addr= < 0x6B >;
+        i3c1-as-tgt-mrl = < 8 >;
+        i3c1-as-tgt-mwl = < 8 >;
+};
