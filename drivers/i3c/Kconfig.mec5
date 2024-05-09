@@ -5,6 +5,7 @@
 
 config I3C_MCHP_MEC5
 	bool "Microchip MEC5 family I3C driver"
+	select I3C_IBI_WORKQUEUE if I3C_USE_IBI
 	default y
 	depends on DT_HAS_MICROCHIP_MEC5_I3C_ENABLED
 	help
