@@ -104,6 +104,7 @@ void espi_debug_print_io_bars(void)
 
 	for (n = 0; n < 32u; n++) {
 		if (BIT(n) & MEC5_ESPI_IOBAR_MSK_LO) {
+			// EC_LDN_MSK
 			iobar = ESPI_IO->HOST_BAR[n];
 			LOG_INF("IOBAR[%u] (%s) = 0x%08x", n, iobar_names[n], iobar);
 		}
@@ -116,13 +117,9 @@ void espi_debug_print_mem_bars(void)
 
 	for (n = 0; n < 32u; n++) {
 		if (BIT(n) & MEC5_ESPI_MEMBAR_MSK_LO) {
-			volatile struct espi_mem_host_mem_bar_regs *m =
-				&ESPI_MEM->HOST_MEM_BAR[n];
-
-			membar = m->HOST_MEM_ADDR_B15_0 +
-				((uint32_t)m->HOST_MEM_ADDR_B31_16 << 16);
-			LOG_INF("MEMBAR[%u] (%s) = 0x%08x valid = %u",
-				n, membar_names[n], membar, m->VALID);
+			volatile struct espi_mem_host_mem_bar_regs *m = &ESPI_MEM->HOST_MEM_BAR[n];
+			membar = m->HOST_MEM_ADDR_B15_0 + ((uint32_t)m->HOST_MEM_ADDR_B31_16 << 16);
+			LOG_INF("MEMBAR[%u] (%s) = 0x%08x valid = %u", n, membar_names[n], membar, m->VALID);
 		}
 	}
 }
@@ -212,7 +209,7 @@ static void pr_cap_8(uint32_t cap)
 	LOG_INF("  b[18:16] max supported freq (MHz) = 0x%02x is %u MHz",
 		((cap >> 16) & 0x7u), temp);
 	LOG_INF("  b[19] = Open drain alert supported = %u", (cap >> 19) & 0x1u);
-	temp = lookup_espi_freq((cap >> 20));
+	temp = lookup_espi_freq((cap >>20));
 	LOG_INF("  b[22:20] selected frequency (MHz) = 0x%02x", temp);
 	LOG_INF("  b[19] = Open drain alert selected = %u", (cap >> 23) & 0x1u);
 	temp = (cap >> 24) & 0x3u;

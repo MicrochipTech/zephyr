@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <soc.h>
-#include <mec_acpi_ec_api.h>
 #include <mec_espi_api.h>
 #include <mec_pcr_api.h>
 
@@ -27,27 +26,15 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "espi_debug.h"
 
-/* #define APP_ESPI_EVENT_CAPTURE */
+PINCTRL_DT_DEFINE(DT_PATH(zephyr_user));
 
-#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
-#define ESPI0_NODE       DT_NODELABEL(espi0)
+const struct pinctrl_dev_config *app_pinctrl_cfg = PINCTRL_DT_DEV_CONFIG_GET(DT_PATH(zephyr_user));
 
-PINCTRL_DT_DEFINE(ZEPHYR_USER_NODE);
+static const struct device *espi_dev = DEVICE_DT_GET(DT_NODELABEL(espi0));
 
-const struct pinctrl_dev_config *app_pinctrl_cfg = PINCTRL_DT_DEV_CONFIG_GET(ZEPHYR_USER_NODE);
-
-const struct gpio_dt_spec target_n_ready_out_dt =
-	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 0);
-
-const struct gpio_dt_spec vcc_pwrgd_alt_in_dt =
-	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 1);
-
-static const struct device *espi_dev = DEVICE_DT_GET(ESPI0_NODE);
+#define ESPI0_NODE DT_NODELABEL(espi0)
 
 struct espi_io_regs *const espi_iobase = (struct espi_io_regs *)DT_REG_ADDR_BY_NAME(ESPI0_NODE, io);
-
-#define OS_ACPI_EC_NODE DT_CHOSEN(espi_os_acpi)
-struct acpi_ec_regs *const os_acpi_ec_regs = (struct acpi_ec_regs *)DT_REG_ADDR(OS_ACPI_EC_NODE);
 
 static volatile uint32_t spin_val;
 static volatile int ret_val;
@@ -57,8 +44,6 @@ struct espi_cfg ecfg;
 struct espi_callback espi_cb_reset;
 struct espi_callback espi_cb_chan_ready;
 struct espi_callback espi_cb_vw;
-struct espi_callback espi_cb_periph;
-struct gpio_callback gpio_cb_vcc_pwrgd;
 
 #define ESPI_CHAN_READY_PC_IDX 0
 #define ESPI_CHAN_READY_VW_IDX 1
@@ -66,31 +51,13 @@ struct gpio_callback gpio_cb_vcc_pwrgd;
 #define ESPI_CHAN_READY_FC_IDX 3
 volatile uint8_t chan_ready[4];
 
-#ifdef APP_ESPI_EVENT_CAPTURE
-/* Use Zephyr FIFO for eSPI events */
-struct espi_ev_data {
-	void *fifo_reserved;
-	struct espi_event ev;
-};
-
-BUILD_ASSERT(((sizeof(struct espi_ev_data) % 4) == 0),
-	"!!! struct espi_ev_data size is not a multiple of 4 !!!");
-
-struct k_fifo espi_ev_fifo;
-
 #define MAX_ESPI_EVENTS 64
-atomic_t espi_ev_count = ATOMIC_INIT(0);
-static struct espi_ev_data espi_evs[MAX_ESPI_EVENTS];
-
-static struct espi_ev_data *get_espi_ev_data(void);
-static int init_espi_events(struct espi_ev_data *evs, size_t nevents);
-static int push_espi_event(struct k_fifo *the_fifo, struct espi_ev_data *evd);
-/* Not used static int pop_espi_event(struct k_fifo *the_fifo, struct espi_event *ev); */
-/* Not used static void print_espi_event(struct espi_event *ev); */
-static void print_espi_events(struct k_fifo *the_fifo);
-#endif /* APP_ESPI_EVENT_CAPTURE */
+static size_t espi_ev_idx;
+static struct espi_event espi_evs[MAX_ESPI_EVENTS];
 
 static void spin_on(uint32_t id, int rval);
+
+static int init_espi_events(struct espi_event *evs, size_t nevents);
 
 static void espi_reset_cb(const struct device *dev,
 			  struct espi_callback *cb,
@@ -101,79 +68,91 @@ static void espi_chan_ready_cb(const struct device *dev,
 			       struct espi_event ev);
 
 static void espi_vw_received_cb(const struct device *dev,
-				struct espi_callback *cb,
+			        struct espi_callback *cb,
 				struct espi_event ev);
 
-static void espi_periph_cb(const struct device *dev,
-			   struct espi_callback *cb,
-			   struct espi_event ev);
+//static void print_espi_events(void);
+//static void print_last_espi_events(uint32_t last_n_events);
 
-#define GPIO_0242_PIN_MASK BIT(2)
-static void gpio_cb(const struct device *port,
-		    struct gpio_callback *cb,
-		    gpio_port_pins_t pins);
+#if 1
+#include <mec_gpio_api.h>
+#define MCHP_XEC_GPIO_BASE DT_REG_ADDR(DT_NODELABEL(gpio_000_036))
+#define MCHP_XEC_GPIO_CTRL_REG_ADDR(pin) ((uint32_t)MCHP_XEC_GPIO_BASE + ((uint32_t)(pin) * 4u))
+#endif
+
+#if 1
+/* PC call back */
+struct espi_callback espi_cb_pc;
+static void espi_pc_received_cb(const struct device *dev,
+			    struct espi_callback *cb,
+				struct espi_event ev);
+
+#include "ESPI_PC_Hal.h"
+#include "ESPI_KBC_Hal.h"
+
+extern unsigned char espi_acpi_ec_space[]; 
+#endif 
 
 int main(void)
 {
 	int ret = 0;
-	bool vw_en = false;
-	bool oob_en = false;
-	bool fc_en = false;
-	bool pc_en = false;
-	uint8_t vw_state = 0;
+//	size_t n = 0;
+//	unsigned short int i;
 
 	LOG_INF("MEC5 eSPI Target sample application for board: %s", DT_N_COMPAT_MODEL_IDX_0);
-#ifdef APP_ESPI_EVENT_CAPTURE
-	k_fifo_init(&espi_ev_fifo);
-	init_espi_events(espi_evs, MAX_ESPI_EVENTS);
-#endif
+
+#if 0
+// init space[]
+	/* clear ACPI EC space */
+	for(i = 0; i < 256; i++)
+	{
+		espi_acpi_ec_space[i] = 0x00;
+	}
+#endif 
+
 	ret = pinctrl_apply_state(app_pinctrl_cfg, PINCTRL_STATE_DEFAULT);
 	if (ret) {
 		LOG_ERR("App pin control state apply: %d", ret);
-		spin_on((uint32_t)__LINE__, 1);
-	}
-
-	ret = gpio_pin_configure_dt(&target_n_ready_out_dt, GPIO_OUTPUT_HIGH);
-	if (ret) {
-		LOG_ERR("Configure Target_nReady GPIO as output hi (%d)", ret);
-		spin_on((uint32_t)__LINE__, 2);
-	}
-
-	gpio_init_callback(&gpio_cb_vcc_pwrgd, gpio_cb, GPIO_0242_PIN_MASK);
-	ret = gpio_add_callback_dt(&vcc_pwrgd_alt_in_dt, &gpio_cb_vcc_pwrgd);
-	if (ret) {
-		LOG_ERR("GPIO add callback for VCC_PWRGD error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	ret = gpio_pin_configure_dt(&vcc_pwrgd_alt_in_dt, GPIO_INPUT);
-	if (ret) {
-		LOG_ERR("Configure Target_nReady GPIO as output hi (%d)", ret);
-		spin_on((uint32_t)__LINE__, 2);
-	}
-
-	ret =  gpio_pin_interrupt_configure_dt(&vcc_pwrgd_alt_in_dt,
-					       (GPIO_INPUT | GPIO_INT_EDGE_BOTH));
-	if (ret) {
-		LOG_ERR("GPIO interrupt config for VCC_PWRGD error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		spin_on(1, ret);
 	}
 
 	/* let pins settle */
 	k_sleep(K_MSEC(10));
-
-	if (!device_is_ready(espi_dev)) {
-		LOG_ERR("eSPI device is not ready! (%d)", -1);
-		spin_on((uint32_t)__LINE__, 3);
-	}
-
-	LOG_INF("eSPI driver is ready");
 
 	LOG_INF("Releasing SoC internal RESET_VCC. Unblocks VCC_PWRGD input");
 	mec_pcr_release_reset_vcc(1);
 
 	LOG_INF("Platform configuration: Select nPLTRST = eSPI nPLTRST VWire");
 	mec_pcr_host_reset_select(MEC_PCR_PLATFORM_RST_IS_ESPI_PLTRST);
+
+#if 0
+	LOG_INF("Poll VCC_PWRGD");
+	n = 1000u;
+	ret = mec_pcr_is_vcc_pwrgd();
+	while (!ret) {
+		if (n == 0) {
+			LOG_ERR("VCC_PWRGD not present!");
+			spin_on(1u, -1);
+			goto app_exit;
+		}
+		--n;
+		k_sleep(K_MSEC(2));
+		ret = mec_pcr_is_vcc_pwrgd();
+	}
+#endif
+
+	LOG_INF("VCC_PWRGD OK");
+	mec_pcr_release_reset_vcc(1);
+
+	init_espi_events(espi_evs, MAX_ESPI_EVENTS);
+
+	if (!device_is_ready(espi_dev)) {
+		LOG_ERR("eSPI device is not ready! (%d)", -1);
+		spin_on(3u, -1);
+		goto app_exit;
+	}
+
+	LOG_INF("eSPI driver is ready");
 
 	LOG_INF("Call eSPI driver config API");
 	ecfg.io_caps = ESPI_IO_MODE_SINGLE_LINE;
@@ -184,126 +163,107 @@ int main(void)
 	ret = espi_config(espi_dev, &ecfg);
 	if (ret) {
 		LOG_ERR("eSPI configuration API error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		spin_on(5u, ret);
+		goto app_exit;
 	}
 
-	LOG_INF("eSPI Target after config");
+	LOG_INF("eSPI after config");
 	espi_debug_print_config();
+	/* espi_debug_print_io_bars(); */
+	/* espi_debug_print_mem_bars(); */
 
-	LOG_INF("Target eSPI: register event callbacks");
 	espi_cb_reset.handler = espi_reset_cb;
 	espi_cb_reset.evt_type = ESPI_BUS_RESET;
 	ret = espi_add_callback(espi_dev, &espi_cb_reset);
 	if (ret) {
-		LOG_ERR("Add callback for eSPI Reset error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		LOG_ERR("API error add callback for eSPI Reset (%d)", ret);
+		spin_on(6u, ret);
+		goto app_exit;
 	}
 
 	espi_cb_chan_ready.handler = espi_chan_ready_cb;
 	espi_cb_chan_ready.evt_type = ESPI_BUS_EVENT_CHANNEL_READY;
 	ret = espi_add_callback(espi_dev, &espi_cb_chan_ready);
 	if (ret) {
-		LOG_ERR("Add callback for VW ChanEn error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		LOG_ERR("API error add callback for VW ChanEn (%d)", ret);
+		spin_on(7u, ret);
+		goto app_exit;
 	}
 
 	espi_cb_vw.handler = espi_vw_received_cb;
 	espi_cb_vw.evt_type = ESPI_BUS_EVENT_VWIRE_RECEIVED;
 	ret = espi_add_callback(espi_dev, &espi_cb_vw);
 	if (ret) {
-		LOG_ERR("Add callback for VW received error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		LOG_ERR("API error add callback for VW received (%d)", ret);
+		spin_on(8u, ret);
+		goto app_exit;
 	}
 
-	espi_cb_periph.handler = espi_periph_cb;
-	espi_cb_periph.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION;
-	ret = espi_add_callback(espi_dev, &espi_cb_periph);
+#if 1
+/* PC call back */
+	espi_cb_pc.handler = espi_pc_received_cb;
+	espi_cb_pc.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION;
+	ret = espi_add_callback(espi_dev, &espi_cb_pc);
 	if (ret) {
-		LOG_ERR("Add callback for peripheral channel error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		LOG_ERR("API error add callback for PC received (%d)", ret);
+		spin_on(8u, ret);
+		goto app_exit;
 	}
+#endif 
+	/* Release board RSMRST# allowing Host eSPI controller to exit reset state
+	 * and begin eSPI link training.
+	 * TODO - we need pin uses as RSMRST#
+	 */
 
-	LOG_INF("Signal Host emulator Target is Ready");
-	ret = gpio_pin_set_dt(&target_n_ready_out_dt, 0);
-
-	/* poll channel enables */
-	LOG_INF("Poll driver for VW channel enable");
-	do {
-		vw_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_VWIRE);
-	} while (!vw_en);
-	LOG_INF("VW channel is enabled");
-
-	LOG_INF("Poll driver for OOB channel enable");
-	do {
-		oob_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_OOB);
-	} while (!oob_en);
-	LOG_INF("OOB channel is enabled");
-
-	LOG_INF("Poll driver for Flash channel enable");
-	do {
-		fc_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_FLASH);
-	} while (!fc_en);
-	LOG_INF("Flash channel is enabled");
-
-	LOG_INF("Call eSPI driver to send VW TARGET_BOOT_LOAD_DONE/STATUS = 1");
-	ret = espi_send_vwire(espi_dev, ESPI_VWIRE_SIGNAL_TARGET_BOOT_STS, 1);
-	if (ret) {
-		LOG_ERR("eSPI driver send ESPI_VWIRE_SIGNAL_TARGET_BOOT_STS=1 error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-	ret = espi_send_vwire(espi_dev, ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE, 1);
-	if (ret) {
-		LOG_ERR("eSPI driver send ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE=1 error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	LOG_INF("Poll driver for Peripheral channel enable");
-	do {
-		pc_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_PERIPHERAL);
-	} while (!pc_en);
-	LOG_INF("Peripheral channel is enabled");
-
-	k_sleep(K_MSEC(1000));
-
-	LOG_INF("Send EC_IRQ=7 Serial IRQ to the Host");
-	mec_espi_ld_sirq_set(espi_iobase, MEC_ESPI_LDN_EC, 0, 7u);
-	mec_espi_gen_ec_sirq(espi_iobase);
-
-	k_sleep(K_MSEC(500));
-
-	LOG_INF("Toggle nSCI VWire");
-	vw_state = 0;
-	ret = espi_receive_vwire(espi_dev, ESPI_VWIRE_SIGNAL_SCI, &vw_state);
-	if (ret) {
-		LOG_ERR("Driver receive VWire error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	vw_state ^= BIT(0);
-	ret = espi_send_vwire(espi_dev, ESPI_VWIRE_SIGNAL_SCI, vw_state);
-	if (ret) {
-		LOG_ERR("Driver receive VWire error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	k_sleep(K_MSEC(500)); /* delay due to Host eSPI emulator polling */
-
-	vw_state ^= BIT(0);
-	ret = espi_send_vwire(espi_dev, ESPI_VWIRE_SIGNAL_SCI, vw_state);
-	if (ret) {
-		LOG_ERR("Driver receive VWire error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-#ifdef APP_ESPI_EVENT_CAPTURE
-	LOG_INF("Print events");
-	while (run) {
-		print_espi_events(&espi_ev_fifo);
-	}
+#if 1
+/* KF support */
+	LOG_INF("main: eSPI init done, and cfg gpio0242 as PWRGD input##");
+	uint32_t temp = 0;
+	temp = 0x3041;
+	sys_write32(temp, MEC_GPIO_CTRL_REG_ADDR(MEC_PIN_0242));
 #endif
 
-	LOG_INF("Application Done");
+#if 1
+	LOG_INF("main: eSPI init done, and release RSMRST# high####");
+	//uint32_t temp = 0;
+	temp = 0x10240;
+	sys_write32(temp, MEC_GPIO_CTRL_REG_ADDR(MEC_PIN_0054));
+#endif
+
+	/* TODO - Poll driver for channel enables or use callbacks to know when channels
+	 * are enabled.
+	 */
+
+//	LOG_INF("Print all eSPI events");
+//	print_espi_events();
+
+do{
+	temp = sys_read32(MEC_GPIO_CTRL_REG_ADDR(MEC_PIN_0242));
+}
+while((temp & 0x01000000) == 0);
+//k_busy_wait(5000);
+
+#if 1
+/* KF support */
+	LOG_INF("main: RSMRST# high, then VR_ON high####");
+	temp = 0x10240;
+	sys_write32(temp, MEC_GPIO_CTRL_REG_ADDR(MEC_PIN_0106));
+#endif
+
+	LOG_INF("ADone");
+#if 1
+/* support kbcec cmd process */
+	while(1)
+	{
+		;
+	}
+#endif 
+
 	spin_on(256, 0);
+
+app_exit:
+	LOG_INF("App Exit");
+	log_panic();
 	app_main_exit = 1;
 
 	return 0;
@@ -314,7 +274,7 @@ static void spin_on(uint32_t id, int rval)
 	spin_val = id;
 	ret_val = rval;
 
-	LOG_INF("spin id = %u", id);
+	LOG_INF("spin_on %u", id);
 	log_panic(); /* flush log buffers */
 
 	while (spin_val) {
@@ -322,18 +282,16 @@ static void spin_on(uint32_t id, int rval)
 	}
 }
 
-/* GPIO callbacks */
-static void gpio_cb(const struct device *port,
-		    struct gpio_callback *cb,
-		    gpio_port_pins_t pins)
+static int init_espi_events(struct espi_event *evs, size_t nevents)
 {
-	if (pins & GPIO_0242_PIN_MASK) {
-		int state = gpio_pin_get_dt(&vcc_pwrgd_alt_in_dt);
-
-		LOG_INF("GPIO CB: VCC_PWRGD_ALT = %d", state);
-	} else {
-		LOG_ERR("GPIO CB: unknown pin 0x%08x", pins);
+	if (!evs) {
+		return -EINVAL;
 	}
+
+	espi_ev_idx = 0;
+	memset(evs, 0, sizeof(struct espi_event) * nevents);
+
+	return 0;
 }
 
 /* eSPI driver callbacks */
@@ -341,37 +299,16 @@ static void espi_reset_cb(const struct device *dev,
 			  struct espi_callback *cb,
 			  struct espi_event ev)
 {
-#ifdef APP_ESPI_EVENT_CAPTURE
-	struct espi_ev_data *pevd = get_espi_ev_data();
-
-	if (pevd) {
-		pevd->ev.evt_type = ev.evt_type;
-		pevd->ev.evt_details = ev.evt_details;
-		pevd->ev.evt_data = ev.evt_data;
-		push_espi_event(&espi_ev_fifo, pevd);
-	}
-#endif
-	LOG_INF("eSPI CB: eSPI_nReset");
+//	LOG_INF("eSPI CB: eSPI_nReset");
+//	LOG_INF("eSPI RESET# ISR CallBack: eSPI_nReset#");
 }
 
 static void espi_chan_ready_cb(const struct device *dev,
 			       struct espi_callback *cb,
 			       struct espi_event ev)
 {
-#ifdef APP_ESPI_EVENT_CAPTURE
-	struct espi_ev_data *pevd = NULL;
-
-	pevd = get_espi_ev_data();
-	if (pevd) {
-		pevd->ev.evt_type = ev.evt_type;
-		pevd->ev.evt_details = ev.evt_details;
-		pevd->ev.evt_data = ev.evt_data;
-		push_espi_event(&espi_ev_fifo, pevd);
-	}
-#endif
-
-	LOG_INF("eSPI CB: channel ready: %u 0x%x 0x%x",
-		ev.evt_type, ev.evt_data, ev.evt_details);
+//	LOG_INF("espi_chan_ready_cb: eSPI CB: channel ready: %u 0x%x 0x%x",
+//		ev.evt_type, ev.evt_data, ev.evt_details);
 
 	if (ev.evt_details == ESPI_CHANNEL_VWIRE) {
 		if (ev.evt_data == 1) {
@@ -410,90 +347,27 @@ static void espi_vw_received_cb(const struct device *dev,
 			       struct espi_callback *cb,
 			       struct espi_event ev)
 {
-#ifdef APP_ESPI_EVENT_CAPTURE
-	struct espi_ev_data *pevd = NULL;
+//	LOG_INF("eSPI CB: VW received: type= data= detail(vw enum)=: %u 0x%x 0x%x",
+//		ev.evt_type, ev.evt_data, ev.evt_details);
 
-	pevd = get_espi_ev_data();
-	if (pevd) {
-		pevd->ev.evt_type = ev.evt_type;
-		pevd->ev.evt_details = ev.evt_details;
-		pevd->ev.evt_data = ev.evt_data;
-		push_espi_event(&espi_ev_fifo, pevd);
+	if (espi_ev_idx < MAX_ESPI_EVENTS) {
+		espi_evs[espi_ev_idx].evt_type = ev.evt_type;
+		espi_evs[espi_ev_idx].evt_data = ev.evt_data;
+		espi_evs[espi_ev_idx].evt_details = ev.evt_details;
+		espi_ev_idx++;
+	}
+
+#if 1
+	/* dispatch individual VW ISR */
+	if(ev.evt_details == ESPI_VWIRE_SIGNAL_SUS_WARN)
+	{
+		//LOG_INF("eSPI Event: Host-to-Target VW ESPI_VWIRE_SIGNAL_SUS_WARN##");
+		/* ACK SUS_WARN# */
+		espi_send_vwire(dev, ESPI_VWIRE_SIGNAL_SUS_ACK, ev.evt_data);
 	}
 #endif
-	LOG_INF("eSPI CB: VW received: %u 0x%x 0x%x",
-		ev.evt_type, ev.evt_data, ev.evt_details);
 }
 
-static void app_handle_acpi_ec(struct acpi_ec_regs *os_acpi_ec_regs)
-{
-	uint32_t data;
-	uint8_t four_byte_mode, status;
-
-	status = mec_acpi_ec_status(os_acpi_ec_regs);
-	four_byte_mode = mec_acpi_ec_is_4byte_mode(os_acpi_ec_regs);
-
-	if (status & MEC_ACPI_EC_STS_CMD) {
-		data = mec_acpi_ec_host_to_ec_data_rd8(os_acpi_ec_regs, 0);
-		LOG_INF("App ACPI_EC Clear IBF: Command received: 0x%02x", data & 0xffu);
-	} else {
-		if (four_byte_mode) {
-			data = mec_acpi_ec_host_to_ec_data_rd32(os_acpi_ec_regs);
-			LOG_INF("App ACPI_EC Clear IBF: 4-byte Data: 0x%04x", data);
-		} else {
-			data = mec_acpi_ec_host_to_ec_data_rd32(os_acpi_ec_regs);
-			LOG_INF("App ACPI_EC Clear IBF: Data: 0x%02x", data & 0xffu);
-		}
-	}
-	mec_acpi_ec_girq_clr(os_acpi_ec_regs, MEC_ACPI_EC_IBF_IRQ | MEC_ACPI_EC_OBE_IRQ);
-}
-
-static void espi_periph_cb(const struct device *dev,
-			   struct espi_callback *cb,
-			   struct espi_event ev)
-{
-	uint32_t details;
-#ifdef APP_ESPI_EVENT_CAPTURE
-	struct espi_ev_data *pevd = NULL;
-
-	pevd = get_espi_ev_data();
-	if (pevd) {
-		pevd->ev.evt_type = ev.evt_type;
-		pevd->ev.evt_details = ev.evt_details;
-		pevd->ev.evt_data = ev.evt_data;
-		push_espi_event(&espi_ev_fifo, pevd);
-	}
-#endif
-	LOG_INF("eSPI CB: PC: %u 0x%x 0x%x", ev.evt_type, ev.evt_data, ev.evt_details);
-
-	details = ev.evt_details & 0xffu;
-	if (details == ESPI_PERIPHERAL_UART) {
-		LOG_INF("  PC Host UART");
-	} else if (details == ESPI_PERIPHERAL_8042_KBC) {
-		LOG_INF("  PC 8042-KBC IBF");
-	} else if (details == ESPI_PERIPHERAL_HOST_IO) {
-		LOG_INF("  PC Host I/O");
-#ifndef CONFIG_ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA
-	/* if not defined the driver ISR does not clear ACPI_EC IBF status
-	 * resulting in the interrupt not being cleared! Application must handle it.
-	 * This means application must know which hardware ACPI_EC instance is being
-	 * used. ACPI_EC definition requires reading data OS wrote to clear HW input
-	 * buffer full (IBF) status.
-	 */
-		app_handle_acpi_ec(os_acpi_ec_regs);
-#endif
-	} else if (details == ESPI_PERIPHERAL_DEBUG_PORT80) {
-		LOG_INF("  PC BIOS Debug I/O capture");
-	} else if (details == ESPI_PERIPHERAL_HOST_IO_PVT) {
-		LOG_INF("  PC Host PVT I/O");
-	} else if (details == ESPI_PERIPHERAL_EC_HOST_CMD) {
-		LOG_INF("  PC Host EC Cmd");
-	} else if (details == ESPI_PERIPHERAL_HOST_MAILBOX) {
-		LOG_INF("  PC Mailbox");
-	}
-}
-
-#ifdef APP_ESPI_EVENT_CAPTURE
 struct espi_vw_znames {
 	enum espi_vwire_signal signal;
 	const char *name_cstr;
@@ -543,9 +417,10 @@ const struct espi_vw_znames vw_names[] = {
 	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_11, "TARGET_GPIO_11" },
 };
 
-const char *unknown_vwire = "Unknown VWire";
+const char *unkown_vwire = "Unknown VWire";
 
-static const char *get_vw_name(uint32_t vwire_enum_val)
+#if 0
+static const char * get_vw_name(uint32_t vwire_enum_val)
 {
 	for (size_t n = 0; n < ARRAY_SIZE(vw_names); n++) {
 		const struct espi_vw_znames *vwn = &vw_names[n];
@@ -555,67 +430,7 @@ static const char *get_vw_name(uint32_t vwire_enum_val)
 		}
 	}
 
-	return unknown_vwire;
-}
-
-static int init_espi_events(struct espi_ev_data *evs, size_t nevents)
-{
-	if (!evs) {
-		return -EINVAL;
-	}
-
-	memset(evs, 0, sizeof(struct espi_ev_data) * nevents);
-
-	return 0;
-}
-
-static struct espi_ev_data *get_espi_ev_data(void)
-{
-	struct espi_ev_data *p = NULL;
-	atomic_val_t evcnt = atomic_get(&espi_ev_count);
-
-	if (evcnt >= MAX_ESPI_EVENTS) {
-		return NULL;
-	}
-
-	p = &espi_evs[evcnt];
-	atomic_inc(&espi_ev_count);
-
-	return p;
-}
-
-static int push_espi_event(struct k_fifo *the_fifo, struct espi_ev_data *evd)
-{
-	if (!the_fifo || !evd) {
-		return -EINVAL;
-	}
-
-	/* safe for ISRs */
-	k_fifo_put(the_fifo, evd);
-
-	return 0;
-}
-
-static int pop_espi_event(struct k_fifo *the_fifo, struct espi_event *ev)
-{
-	struct espi_ev_data *p = NULL;
-	struct espi_event *pev = NULL;
-
-	if (!the_fifo || !ev) {
-		return -EINVAL;
-	}
-
-	if (k_fifo_is_empty(the_fifo)) {
-		return -EAGAIN;
-	}
-
-	p = k_fifo_get(the_fifo, K_NO_WAIT);
-	pev = &p->ev;
-	ev->evt_type = pev->evt_type;
-	ev->evt_data = pev->evt_data;
-	ev->evt_details = pev->evt_details;
-
-	return 0;
+	return unkown_vwire;
 }
 
 static void pr_decode_espi_event(uint32_t evt_type, uint32_t evt_data, uint32_t evt_details)
@@ -630,7 +445,6 @@ static void pr_decode_espi_event(uint32_t evt_type, uint32_t evt_data, uint32_t 
 		break;
 	case ESPI_BUS_EVENT_VWIRE_RECEIVED:
 		const char *vwname = get_vw_name(evt_details);
-
 		LOG_INF("eSPI Event: Host-to-Target VW Received: data=0x%0x details=0x%0x VW=%s",
 			evt_data, evt_details, vwname);
 		break;
@@ -653,36 +467,82 @@ static void pr_decode_espi_event(uint32_t evt_type, uint32_t evt_data, uint32_t 
 	}
 }
 
-static void print_espi_event(struct espi_event *ev)
+static void print_espi_events(void)
 {
-	uint32_t t, dat, det;
+	if (espi_ev_idx) {
+		for (size_t n = 0; n < espi_ev_idx; n++) {
+			uint32_t t = espi_evs[n].evt_type;
+			uint32_t dat = espi_evs[n].evt_data;
+			uint32_t det = espi_evs[n].evt_details;
 
-	if (!ev) {
-		return;
+			LOG_INF("eSPI event number %u", n);
+			pr_decode_espi_event(t, dat, det);
+		}
+	} else {
+		LOG_INF("No eSPI Event have been received");
 	}
-
-	t = ev->evt_type;
-	dat = ev->evt_data;
-	det = ev->evt_details;
-	pr_decode_espi_event(t, dat, det);
 }
 
-/* Print out the remaining events in the FIFO */
-static void print_espi_events(struct k_fifo *the_fifo)
+static void print_last_espi_events(uint32_t last_n_events)
 {
-	struct espi_ev_data *p = NULL;
-	uint32_t t = 0, dat = 0, det = 0;
+	if (last_n_events && espi_ev_idx) {
+		for (size_t n = espi_ev_idx; n >= 1; n--) {
+			struct espi_event *ev = &espi_evs[n-1];
 
-	if (!the_fifo) {
-		return;
-	}
-
-	p = k_fifo_get(the_fifo, K_NO_WAIT);
-	while (p) {
-		t = p->ev.evt_type;
-		dat = p->ev.evt_data;
-		det = p->ev.evt_details;
-		pr_decode_espi_event(t, dat, det);
+			LOG_INF("eSPI event %u", n);
+			pr_decode_espi_event(ev->evt_type, ev->evt_data, ev->evt_details);
+			if (--last_n_events == 0) {
+				break;
+			}
+		}
 	}
 }
-#endif /* APP_ESPI_EVENT_CAPTURE */
+#endif
+
+#if 1
+/* PC call back */
+static void espi_pc_received_cb(const struct device *dev,
+			    struct espi_callback *cb,
+				struct espi_event ev)
+{
+	unsigned char ec_rx;
+//	LOG_INF("eSPI CB: PC received: type= data= detail=: %u 0x%x 0x%x",
+//		ev.evt_type, ev.evt_data, ev.evt_details);
+
+	/* 1: process ACPI EC0 */
+	if(ev.evt_type == ESPI_BUS_PERIPHERAL_NOTIFICATION)
+	{	/* PC event */
+		if(ev.evt_details == ESPI_PERIPHERAL_HOST_IO)
+		{	/* ACPI EC0 */
+			ec_rx = (unsigned char)((ev.evt_data >> 8) & 0xFF);
+			if((ev.evt_data & 0xFF) == 0)
+			{	/* cmd */
+				LOG_INF("ACPIEC0 C=0x%02x", ec_rx);
+				ESPI_ACPI_Cmd(ec_rx);
+			} else if((ev.evt_data & 0xFF) == 1)
+			{	/* data */
+				LOG_INF("ACPIEC0 D#=0x%02x", ec_rx);
+				ESPI_Srvc_Pcdat2(ec_rx);
+			} else
+			{	/* 4-bye mode */
+				LOG_ERR("espi_pc_received_cb: ACPI 4-byte mode??? (0x%08x)", ev.evt_data);
+			}
+		} else if(ev.evt_details == ESPI_PERIPHERAL_8042_KBC)
+		{	/* KBC 8042 */
+			ec_rx = (unsigned char)((ev.evt_data >> 8) & 0xFF);
+			if((ev.evt_data & 0xFF) == 1)
+			{	/* cmd */
+				LOG_INF("KBC C=0x%02x", ec_rx);
+				ESPI_KBC_Cmd(ec_rx);
+			} else if((ev.evt_data & 0xFF) == 0)
+			{	/* data */
+				LOG_INF("KBC D#=0x%02x", ec_rx);
+				ESPI_Srvc_Kbcdat1(ec_rx);
+			} else
+			{	/* 4-bye mode */
+				LOG_ERR("espi_pc_received_cb: ACPI 4-byte mode??? (0x%08x)", ev.evt_data);
+			}
+		}
+	}
+}
+#endif 
