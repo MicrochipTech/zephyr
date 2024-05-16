@@ -1,0 +1,11 @@
+tests:
+  boards.mchp_mec.pwm:
+    build_only: true
+    platform_allow:
+      - mec_assy6906_mech1723nsz
+      - mec_assy6906_mech1723nlj
+      - mec_assy6941_mec1743qlj
+      - mec_assy6941_mec1743qsz
+      - mec_assy6941_mec1753qlj
+      - mec_assy6941_mec1753qsz
+    tags: drivers pwm
