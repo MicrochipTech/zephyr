@@ -81,6 +81,13 @@ struct xec_i3c_config {
 	/** Pointer to controller registers. */
 	struct i3c_host_regs *regs;
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+    /** Pointer to dma registers. */
+	void *dma_regs_tx;
+
+    void *dma_regs_rx;
+#endif
+
 	/** I3C Core Input Clock */
 	uint32_t clock;
 
@@ -279,6 +286,25 @@ static struct ibi_node *_drv_i3c_free_ibi_node_get_isr(struct xec_i3c_data *xec_
 
 #endif
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+
+struct i3c_tgt_pvt_receive_node * _drv_i3c_dma_in_use_tgt_rx_node_get_isr(struct xec_i3c_data *xec_data)
+{
+    uint8_t idx;
+    struct i3c_tgt_pvt_receive_node *ret = NULL;
+
+    for (idx = 0; idx < MAX_TGT_RX_LIST_COUNT; idx++) {
+
+        if (TGT_RX_NODE_STATE_IN_USE_DMA == xec_data->tgt_pvt_rx[idx].state) {
+
+            ret = &xec_data->tgt_pvt_rx[idx];
+            break;
+        }
+    }
+    return ret;
+}
+#endif
+
 static struct i3c_tgt_pvt_receive_node *_drv_i3c_free_tgt_rx_node_get_isr(
 						struct xec_i3c_data *xec_data, bool dma_flag)
 {
@@ -430,6 +456,31 @@ static int _drv_i3c_DAT_idx_get(const struct xec_i3c_data *xec_data, const uint8
 	}
 	return ret;
 }
+
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+static void _drv_i3c_dma_target_rx_enable(const struct device *dev)
+{
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    //struct i3c_xec_regs *regs = config->regs;
+    void *dma_regs_rx = config->dma_regs_rx;
+    struct i3c_tgt_pvt_receive_node *tgt_rx_node;
+    uint32_t dataAHBAddress = 0;
+    uint8_t device = 0;
+
+    tgt_rx_node = _drv_i3c_free_tgt_rx_node_get_isr(data, true);
+
+    if (tgt_rx_node) {
+
+        //DMA: TBD
+        //dataAHBAddress = (uint32_t)&regs->rx_tx_port;
+        //device = dma_get_device_id(I3C_SEC_HOST_RX, 0);
+        dma_setup_rx(dma_regs_rx, device, dataAHBAddress,(uint32_t)&tgt_rx_node->data_buf[0],
+                                          TGT_RX_DATA_BUF_SIZE, true, true);
+        dma_start(dma_regs_rx);
+    }
+}
+#endif
 
 static int i3c_mec5_attach_device(const struct device *dev, struct i3c_device_desc *desc,
 				  uint8_t addr)
@@ -882,6 +933,12 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 	struct xec_i3c_data *xec_data = dev->data;
 	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
 	struct i3c_XFER do_xfer_instance;
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+    void *dma_regs_tx = config->dma_regs_tx;
+    void *dma_regs_rx = config->dma_regs_rx;
+    uint32_t dataAHBAddress = 0;
+    uint8_t device = 0;
+#endif
 	uint8_t i = 0;
 	int ret = 0;
 	uint8_t DAT_idx; /* Index of the device in Device Address Table */
@@ -935,6 +992,29 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 		pending_xfer_ctxt.node[i].read = do_xfer_instance.cmds[i].read;
 		pending_xfer_ctxt.node[i].data_buf = do_xfer_instance.cmds[i].data_buf;
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+        if (pending_xfer_ctxt.node[i].read) {
+
+            //DMA: TBD
+            //dataAHBAddress = (uint32_t)&regs->rx_tx_port;
+            //device = dma_get_device_id(I3C_HOST_RX, 0);
+            dma_setup_rx(dma_regs_rx, device, dataAHBAddress,
+                    (uint32_t)do_xfer_instance.cmds[i].data_buf, do_xfer_instance.cmds[i].data_len,
+                    true, true);
+            dma_start(dma_regs_rx);
+
+        } else {
+
+            //DMA: TBD
+            //dataAHBAddress = (uint32_t)&regs->rx_tx_port;
+            //device = dma_get_device_id(I3C_HOST_TX, 0);
+            dma_setup_tx(dma_regs_tx, device, dataAHBAddress,
+                     (uint32_t)do_xfer_instance.cmds[i].data_buf, do_xfer_instance.cmds[i].data_len,
+                     true);
+            dma_start(dma_regs_tx);
+        }
+#endif
+
 		I3C_DO_Xfer_Prep(hwctx, &do_xfer_instance.cmds[i], &pending_xfer_ctxt.node[i].tid);
 	}
 
@@ -958,6 +1038,31 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 	return ret;
 }
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+static int _drv_i3c_xfers_iter(const struct device *dev, struct i3c_msg *msgs,
+                            uint8_t num_msgs, uint8_t tgt_addr, uint8_t *response)
+{
+    struct xec_i3c_data *data = dev->data;
+    int ret;
+
+    if(num_msgs == 0) {
+        return 0;
+    }
+
+    k_mutex_lock(&data->xfer_lock, K_FOREVER);
+    ret = _drv_i3c_xfers(dev, msgs, num_msgs, tgt_addr, response);
+    k_mutex_unlock(&data->xfer_lock);
+
+    if ((!ret) && response) {
+        /* Error in Response */
+        LOG_ERR("!!Error - 0x%02x - %d!!", *response, ret);
+        return ret;
+    }
+
+    return 0;
+}
+#endif
+
 /**
  * @brief Transfer messages in I3C mode
  *
@@ -974,8 +1079,9 @@ static int i3c_mec5_Xfers(const struct device *dev, struct i3c_device_desc *targ
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
+#ifndef CONFIG_I3C_MEC5_USE_DMA
 	uint32_t nrxwords = 0, ntxwords = 0;
-
+#endif
 	uint8_t response = 0;
 	int ret = 0, i = 0;
 
@@ -1002,6 +1108,20 @@ static int i3c_mec5_Xfers(const struct device *dev, struct i3c_device_desc *targ
 		goto exit_xfer;
 	}
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+
+    /* We will send one message at a time using DMA
+     * We are going to point the DMA to the application buffers */
+
+    for (i = 0; i < num_msgs; i++) {
+
+        ret = _drv_i3c_xfers_iter(dev, &msgs[i], 1, target->dynamic_addr, &response);
+        if (ret) {
+            goto exit_xfer;
+        }
+    }
+
+#else
 
 	for (i = 0; i < num_msgs; i++) {
 		if (I3C_MSG_READ == (msgs[i].flags & I3C_MSG_RW_MASK)) {
@@ -1025,6 +1145,7 @@ static int i3c_mec5_Xfers(const struct device *dev, struct i3c_device_desc *targ
 	if ((!ret) && response) { /* Error in Response */
 		LOG_ERR("!!Error - 0x%08x - %d!!", response, ret);
 	}
+#endif
 
 exit_xfer:
 	return ret;
@@ -1464,6 +1585,11 @@ static int i3c_mec5_target_tx_write(const struct device *dev, uint8_t *buf, uint
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *xec_data = dev->data;
 	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+    void *dma_regs_tx = config->dma_regs_tx;
+    uint32_t dataAHBAddress = 0;
+    uint8_t device = 0;
+#endif
 
 	hwctx->base = (uintptr_t)config->regs;
 
@@ -1480,6 +1606,19 @@ static int i3c_mec5_target_tx_write(const struct device *dev, uint8_t *buf, uint
 		len = xec_data->i3c_cfg_as_tgt.max_write_len;
 	}
 
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+
+    k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
+
+    //dataAHBAddress = (uint32_t)&regs->rx_tx_port;
+    //device = dma_get_device_id(I3C_SEC_HOST_TX, 0);
+    //dma_setup_tx(dma_regs_tx, device, dataAHBAddress, (uint32_t)buf, len, true);
+    dma_start(dma_regs_tx);
+    I3C_DO_TGT_Xfer(hwctx, buf, len);
+
+    k_mutex_unlock(&xec_data->xfer_lock);
+#else
+
 	if (len > xec_data->fifo_depths.tx_fifo_depth) {
 		len = 0;
 		goto exit_tgt_xfer;
@@ -1488,6 +1627,7 @@ static int i3c_mec5_target_tx_write(const struct device *dev, uint8_t *buf, uint
 	k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
 	I3C_DO_TGT_Xfer(hwctx, buf, len);
 	k_mutex_unlock(&xec_data->xfer_lock);
+#endif
 
 exit_tgt_xfer:
 	return len;
@@ -1709,6 +1849,10 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 	struct mec_i3c_ctx *hwctx = &data->ctx;
 	struct i3c_host_regs *regs = config->regs;
 	struct i3c_tgt_pvt_receive_node *tgt_rx_node;
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+    void *dma_regs_rx = config->dma_regs_rx;
+    void *dma_regs_tx = config->dma_regs_tx;
+#endif
 	uint16_t data_len = 0;
 	uint8_t resp_sts = 0;
 	uint8_t tid = 0;
@@ -1726,6 +1870,10 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 			__func__, tid, resp_sts, data_len);
 
 		if (tgt_receive) {
+
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+            dma_stop(dma_regs_rx);
+#endif
 			if (tid == RESPONSE_TID_DEFTGTS)  { /* Response for DEFSLVS */
 				if (data_len <= data->DAT_depth) {
 					LOG_DBG("[%s] - DEFSLVS response: no of targets %d",
@@ -1738,8 +1886,11 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 						data->DAT_depth);
 				}
 			} else { /* Private Receive Transfer - Controller Write */
-				tgt_rx_node = _drv_i3c_free_tgt_rx_node_get_isr(data, false);
-
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+                tgt_rx_node = _drv_i3c_dma_in_use_tgt_rx_node_get_isr(data);
+#else
+                tgt_rx_node = _drv_i3c_free_tgt_rx_node_get_isr(data, false);
+#endif
 				if (tgt_rx_node) {
 					tgt_rx_node->error_status = resp_sts;
 					tgt_rx_node->data_len = data_len;
@@ -1750,6 +1901,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 							data_len,
 							data->i3c_cfg_as_tgt.max_read_len);
 					}
+#ifndef CONFIG_I3C_MEC5_USE_DMA
 					/* Read response bytes from Fifo */
 					if ((!resp_sts) && data_len) {
 						LOG_DBG("[%s] - Reading [%d] bytes into [0x%08x]",
@@ -1759,7 +1911,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 						_i3c_fifo_read(regs, tgt_rx_node->data_buf,
 							       data_len);
 					}
-
+#endif
 					tgt_rx_node->state = TGT_RX_NODE_ISR_UPDATED;
 					notify_app = true;
 					LOG_DBG("Node updated");
@@ -1770,13 +1922,25 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 						 * to clear error status from CCC_DEVICE_STATUS
 						 * register.
 						 */
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+                        _drv_i3c_dma_target_rx_enable(dev);
+#endif
 						break; /* break out of the for loop */
 					}
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+                    else {
+                        _drv_i3c_dma_target_rx_enable(dev);
+                    }
+#endif
 				} else {
 					LOG_ERR("Target RX Node Unavailable");
 				}
 			}
-		} else { /* Private Write Transfer - Controller Read */
+		} else {
+#if CONFIG_I3C_MEC5_USE_DMA
+            dma_stop(dma_regs_tx);
+#endif
+            /* Private Write Transfer - Controller Read */
 			data->tgt_pvt_tx_rem_data_len = data_len;
 			data->tgt_pvt_tx_sts = resp_sts;
 
@@ -2053,6 +2217,10 @@ static int i3c_mec5_Init(const struct device *dev)
 	enable_config |= sbit_HOTJOIN_DISABLE;
 #endif
 
+#if I3C_ENABLE_DMA
+     enable_config |= sbit_DMA_MODE;
+#endif
+
 	I3C_Enable(hwctx, config->address, enable_config);
 
 #ifdef CONFIG_I3C_USE_IBI
@@ -2094,6 +2262,9 @@ static int i3c_mec5_Init(const struct device *dev)
 	if (ctrl_config->is_secondary) {
 		/* Call only for Target mode */
 		i3c_mec5_configure(dev, I3C_CONFIG_TARGET, &data->i3c_cfg_as_tgt);
+#ifdef CONFIG_I3C_MEC5_USE_DMA
+        _drv_i3c_dma_target_rx_enable(dev);
+#endif
 	} else {
 		ret = i3c_addr_slots_init(dev);
 		if (ret != 0) {

@@ -10,3 +10,10 @@ config I3C_MCHP_MEC5
 	depends on DT_HAS_MICROCHIP_MEC5_I3C_ENABLED
 	help
 	  Enable the Microchip MEC5 family I3C driver.
+
+config I3C_MEC5_USE_DMA
+	bool "Enable DMA for Microchip MEC5 family I3C driver"
+	default n
+	depends on DT_HAS_MICROCHIP_MEC5_I3C_ENABLED
+	help
+	  Enable DMA for the Microchip MEC5 family I3C driver.
