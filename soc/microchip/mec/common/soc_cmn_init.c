@@ -35,7 +35,7 @@ static void mec5_soc_init_debug_interface(void)
 int mec5_soc_common_init(void)
 {
 	mec5_soc_init_debug_interface();
-	mec_ecia_init(MEC5_ECIA_DIRECT_BITMAP, 1, 0);
+	mec_hal_ecia_init(MEC5_ECIA_DIRECT_BITMAP, 1, 0);
 
 	return 0;
 }
