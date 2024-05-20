@@ -52,3 +52,4 @@ zephyr_library_sources_ifdef(CONFIG_COUNTER_TIMER_RPI_PICO      counter_rpi_pico
 zephyr_library_sources_ifdef(CONFIG_COUNTER_TIMER_MAX32         counter_max32_timer.c)
 zephyr_library_sources_ifdef(CONFIG_COUNTER_NXP_MRT             counter_nxp_mrt.c)
 zephyr_library_sources_ifdef(CONFIG_COUNTER_MEC5_BTMR           counter_mchp_mec5_btmr.c)
+zephyr_library_sources_ifdef(CONFIG_COUNTER_MEC5_RTMR           counter_mchp_mec5_rtmr.c)
