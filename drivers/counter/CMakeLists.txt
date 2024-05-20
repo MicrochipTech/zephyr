@@ -54,3 +54,4 @@ zephyr_library_sources_ifdef(CONFIG_COUNTER_RTC_MAX32           counter_max32_rt
 zephyr_library_sources_ifdef(CONFIG_COUNTER_NXP_MRT             counter_nxp_mrt.c)
 zephyr_library_sources_ifdef(CONFIG_COUNTER_RA_AGT              counter_renesas_ra_agt.c)
 zephyr_library_sources_ifdef(CONFIG_COUNTER_MEC5_BTMR           counter_mchp_mec5_btmr.c)
+zephyr_library_sources_ifdef(CONFIG_COUNTER_MEC5_RTMR           counter_mchp_mec5_rtmr.c)
