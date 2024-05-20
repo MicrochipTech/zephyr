@@ -158,4 +158,6 @@ source "drivers/spi/Kconfig.grlib_spimctrl"
 
 source "drivers/spi/Kconfig.max32"
 
+source "drivers/spi/Kconfig.mec5"
+
 endif # SPI
