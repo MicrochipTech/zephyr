@@ -97,9 +97,7 @@ child-binding:
 
     slew-rate:
       type: string
-      default: "no-change"
       enum:
-        - "no-change"
         - "low-speed"
         - "high-speed"
       description: |
@@ -110,9 +108,7 @@ child-binding:
 
     drive-strength:
       type: string
-      default: "no-change"
       enum:
-        - "no-change"
         - "1x"
         - "2x"
         - "4x"
