@@ -8,6 +8,14 @@ zephyr_library_sources_ifdef(CONFIG_HAS_MEC5_HAL
   soc_cmn_init.c
 )
 
+if(CONFIG_HAS_MEC5_HAL)
+if(CONFIG_PM_DEVICE)
+  zephyr_library_sources(soc_power.c)
+else()
+  zephyr_library_sources(soc_power.c soc_device_power.c)
+endif()
+endif()
+
 if (DEFINED CONFIG_MCHP_HEADER_VERBOSE_OUTPUT)
     set(MCHP_HEADER_VERBOSE_OPTION "-v")
 endif()

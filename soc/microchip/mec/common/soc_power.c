@@ -1,0 +1,153 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <cmsis_core.h>
+#include <soc.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/kernel.h>
+#include <zephyr/pm/pm.h>
+#include <zephyr/sys/sys_io.h>
+
+/* MEC5 HAL */
+#include <mec_pcr_api.h>
+
+/* local */
+#include "soc_device_power.h"
+#include "soc_power_debug.h"
+
+/*
+ * Deep Sleep
+ * Pros:
+ * PLL is off resulting in lower power dissipation.
+ * Cons:
+ * PLL takes up to 3 ms to lock. While PLL is not locked the EC is running on the
+ * ring oscillator which can vary from xx to yy MHz.
+ *
+ * Implementation Notes:
+ * We can block entering an ISR immediately after wake by adjusting the Cortex-M's primary
+ * mask and base priority registers before entering sleep.
+ * NOTE 1: if a wake source(s) interrupt priorities numeric value are >= masked priority value then
+ * the NVIC will not wake the Cortex-M.
+ *
+ * NOTE 2: Certain peripherals will prevent the MEC HW from turning off the PLL during deep sleep.
+ * The processor will still halt in WFI but the PLL will remain on if these peripherals are not
+ * disabled or idled.
+ * JTAG/SWD debug. If an external debugger is periodically polling or has enabled breakpoints or
+ * other Cortex-M debug features the Cortex-M will keep its CLK_REQ signal active preventing the
+ * PLL from being turn off.
+ *
+ * UART, I2C, SPI, GP-SPI, eSPI: any peripheral which can transmit data off chip and has data
+ * in a TX FIFO will keep CLK_REQ asserted until all data is transmitted.
+ *
+ * Basic Timers: if running they will assert their CLK_REQ ignoring SLP_EN signal from PCR block.
+ *
+ * ADC: will keep its CLK_REQ asserted until the current reading is done. If the ADC is configured
+ * to convert multiple channels CLK_REQ will de-assert between channel conversions. If the chip
+ * enters deep sleep upon wake the ADC will start conversion of the next channel before the PLL
+ * has locked resulting in an incorrect reading.
+ *
+ */
+
+/* NOTE: Zephyr masks interrupts using BASEPRI before calling PM subsystem */
+static void z_power_soc_deep_sleep(void)
+{
+	uint32_t basepri = 0U;
+
+	PM_DP_ENTER();
+
+	__disable_irq();
+	basepri = __get_BASEPRI();
+
+	soc_deep_sleep_periph_save();
+	soc_deep_sleep_wake_en();
+	soc_deep_sleep_non_wake_en();
+
+	/*
+	 * Enable deep sleep mode in the MEC and Cortex-M.
+	 * Set PRIMASK = 1 so on wake the CPU will not vector to any ISR.
+	 * Set BASEPRI = 0 to allow any priority to wake.
+	 */
+	mec_hal_pcr_deep_sleep();
+#ifdef DEBUG_DEEP_SLEEP_CLK_REQ
+	soc_debug_sleep_clk_req();
+#endif
+	__set_BASEPRI(0);
+	__WFI();	/* triggers sleep hardware */
+	__NOP();
+	__NOP();
+
+	/*
+	 * Clear SLEEP_ALL manually since we are not vectoring to an ISR until
+	 * PM post ops. This de-asserts peripheral SLP_EN signals.
+	 */
+	mec_hal_pcr_sleep_disable();
+
+	__set_BASEPRI(basepri);
+
+	soc_deep_sleep_non_wake_dis();
+	soc_deep_sleep_wake_dis();
+	soc_deep_sleep_periph_restore();
+
+	PM_DP_EXIT();
+}
+
+/*
+ * Light Sleep
+ * Pros:
+ * Fast wake response:
+ * Cons:
+ * Higher power dissipation, 48MHz PLL remains on.
+ *
+ * When the kernel calls this it has masked interrupt by setting NVIC BASEPRI
+ * equal to a value equal to the highest Zephyr ISR priority. Only NVIC
+ * exceptions will be served.
+ */
+static void z_power_soc_sleep(void)
+{
+	__disable_irq();
+
+	mec_hal_pcr_lite_sleep();
+	__set_BASEPRI(0);
+	__WFI();	/* triggers sleep hardware */
+	__NOP();
+	__NOP();
+	mec_hal_pcr_sleep_disable();
+}
+
+/*
+ * Called from pm_system_suspend(int32_t ticks) in subsys/power.c
+ * For deep sleep pm_system_suspend has executed all the driver
+ * power management call backs.
+ */
+void pm_state_set(enum pm_state state, uint8_t substate_id)
+{
+	ARG_UNUSED(substate_id);
+
+	switch (state) {
+	case PM_STATE_SUSPEND_TO_IDLE:
+		z_power_soc_sleep();
+		break;
+	case PM_STATE_SUSPEND_TO_RAM:
+		z_power_soc_deep_sleep();
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * Zephyr PM code expects us to enabled interrupt at post op exit. Zephyr used
+ * arch_irq_lock() which sets BASEPRI to a non-zero value masking interrupts at
+ * >= numerical priority. MCHP z_power_soc_(deep)_sleep sets PRIMASK=1 and BASEPRI=0
+ * allowing wake from any enabled interrupt and prevents the CPU from entering any
+ * ISR on wake except for faults. We re-enable interrupts by undoing global disable
+ * and alling irq_unlock with the same value, 0 zephyr core uses.
+ */
+void pm_state_exit_post_ops(enum pm_state state, uint8_t substate_id)
+{
+	__enable_irq();
+	irq_unlock(0);
+}
