@@ -278,4 +278,6 @@ rsource "Kconfig.ene"
 
 rsource "Kconfig.rzt2m"
 
+source "drivers/serial/Kconfig.mec5"
+
 endif # SERIAL
