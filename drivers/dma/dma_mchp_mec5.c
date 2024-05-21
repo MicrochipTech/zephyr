@@ -933,4 +933,3 @@ DEVICE_DT_INST_DEFINE(0, &dma_mec5_init,
 		     &dma_mec5_data0, &dma_mec5_cfg0,
 		     PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY,
 		     &dma_mec5_api);
-
