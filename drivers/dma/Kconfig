@@ -82,4 +82,6 @@ source "drivers/dma/Kconfig.nxp_edma"
 
 source "drivers/dma/Kconfig.dw_axi_dmac"
 
+source "drivers/dma/Kconfig.mec5"
+
 endif # DMA
