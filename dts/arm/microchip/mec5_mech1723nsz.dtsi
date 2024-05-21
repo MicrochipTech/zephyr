@@ -5,6 +5,7 @@
  */
 
 #include <arm/armv7-m.dtsi>
+#include "mec5/mec5_mech172xsz-espi-host-dev.dtsi"
 
 #include "mec5.dtsi"
 
