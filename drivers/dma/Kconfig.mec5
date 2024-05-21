@@ -1,0 +1,10 @@
+# Microchip MEC5 DMAC configuration options
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config DMA_MCHP_MEC5
+	bool "Microchip MEC5 series DMAC driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_DMAC_ENABLED
+	help
+	  DMA driver for Microchip MEC5 series MCUs.
