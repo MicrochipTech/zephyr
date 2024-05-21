@@ -8,6 +8,7 @@
  * Include this file in the soc {} section in the relevant chip DTSI files.
  */
 i3c0: i3c@40010800 {
+	compatible = "microchip,mec5-i3c";
 	#address-cells = <3>;
 	#size-cells = <0>;
 	reg = <0x40010800 0x800>;
@@ -19,6 +20,7 @@ i3c0: i3c@40010800 {
 };
 
 i3c1: i3c@40010000 {
+	compatible = "microchip,mec5-i3c";
 	#address-cells = <3>;
 	#size-cells = <0>;
 	reg = <0x40010000 0x800>;
