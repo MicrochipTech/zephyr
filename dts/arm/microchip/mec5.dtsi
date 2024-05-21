@@ -11,6 +11,10 @@
 #include <freq.h>
 #include <mem.h>
 
+#include "mec5/mec5-vw-map.dtsi"
+#include "mec5/mec5-vwires.dtsi"
+#include "mec5/mec5-espi-sram-bars.dtsi"
+
 / {
 	cpus {
 		#address-cells = <1>;
@@ -542,6 +546,10 @@
 			status = "disabled";
 		};
 		espi0: espi@400f3400 {
+			compatible = "microchip,mec5-espi";
+			/* reg tuple contains one 32-bit address cell and one
+			 * 32-bit length(size) cell.
+			 */
 			#address-cells = <1>;
 			#size-cells = <1>;
 			reg = < 0x400f3400 0x400
@@ -554,6 +562,17 @@
 			interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_up",
 					  "oob_dn", "fc", "erst", "vw_chan_en",
 					  "vwct_0_6", "vwct_7_10";
+
+			config-io-addr = <0x2e>;
+
+			sirqs = <0xff>;
+			sirq-names = "ec_irq";
+			/* These two properties specify bits[47:32] of the Host address
+			 * for Host logical device memory BARs and the SRAM BARs.
+			 */
+			host-memmap-addr-high = <0>;
+			sram-bar-addr-high = <0>;
+
 			status = "disabled";
 
 			/* Devices accessible to the Host via Logical Device mechanism.
