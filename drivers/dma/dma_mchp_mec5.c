@@ -589,8 +589,6 @@ static const struct dma_driver_api dma_mec5_api = {
 static int dma_mec5_pm_action(const struct device *dev,
 			      enum pm_device_action action)
 {
-	const struct dma_mec5_config *const devcfg = dev->config;
-	struct mec_dmac_regs *const regs = devcfg->regs;
 	int ret = 0;
 
 	switch (action) {
@@ -933,4 +931,3 @@ DEVICE_DT_INST_DEFINE(0, &dma_mec5_init,
 		     &dma_mec5_data0, &dma_mec5_cfg0,
 		     PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY,
 		     &dma_mec5_api);
-
