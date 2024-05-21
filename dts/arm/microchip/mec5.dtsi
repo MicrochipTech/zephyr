@@ -11,6 +11,10 @@
 #include <freq.h>
 #include <mem.h>
 
+#include "mec5/mec5-vw-map.dtsi"
+#include "mec5/mec5-vwires.dtsi"
+#include "mec5/mec5-espi-sram-bars.dtsi"
+
 / {
 	cpus {
 		#address-cells = <1>;
@@ -542,6 +546,7 @@
 			status = "disabled";
 		};
 		espi0: espi@400f3400 {
+			compatible = "microchip,mec5-espi";
 			/* reg tuple contains one 32-bit address cell and one
 			 * 32-bit length(size) cell.
 			 */
