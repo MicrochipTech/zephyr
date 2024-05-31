@@ -1,0 +1,10 @@
+# Introspect configuration options
+
+# Copyright (c) 2024 Microchip Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MICROCHIP_INTROSPECT
+	bool "XEC Microchip Introspect driver"
+	default y
+	help
+	  Enable the Microchip Introspect driver.

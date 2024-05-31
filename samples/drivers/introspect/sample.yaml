@@ -1,0 +1,9 @@
+sample:
+  name: Test file to interact with Intrispect
+tests:
+  sample.drivers.introspect:
+    harness: console
+    tags: drivers
+    depends_on: i3c
+    filter: dt_compat_enabled("microchip,introspect")
+    build_only: true
