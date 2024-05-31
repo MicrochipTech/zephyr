@@ -79,7 +79,7 @@ struct xec_i3c_config {
 	struct i3c_driver_config common;
 
 	/** Pointer to controller registers. */
-	struct i3c_host_regs *regs;
+	struct mec_i3c_host_regs *regs;
 
 	/** I3C Core Input Clock */
 	uint32_t clock;
@@ -377,7 +377,7 @@ static void _drv_i3c_targets_DAA_done(const struct device *dev, bool DAA_success
 			} else {
 
 				/* Invalidate the DAT entry */
-				I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, dat_idx, 0);
+				MEC_HAL_I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, dat_idx, 0);
 
 				/* Mark the DAT position as free */
 				data->DAT_free_positions |= (1U << dat_idx);
@@ -474,7 +474,7 @@ static int i3c_mec5_attach_device(const struct device *dev, struct i3c_device_de
 	}
 
 	if (program_dyn_addr) {
-		I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, free_posn_DAT, addr);
+		MEC_HAL_I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, free_posn_DAT, addr);
 		data->targets[target_info_idx].dat_idx = free_posn_DAT;
 		/* Mark the free position as used */
 		data->DAT_free_positions &= ~(1U << free_posn_DAT);
@@ -500,7 +500,7 @@ static int i3c_mec5_detach_device(const struct device *dev, struct i3c_device_de
 	}
 
 	/* Invalidate the DAT entry */
-	I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, target_info->dat_idx, 0);
+	MEC_HAL_I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, target_info->dat_idx, 0);
 
 	/* Mark the DAT position as free */
 	data->DAT_free_positions |= (1U << target_info->dat_idx);
@@ -537,7 +537,7 @@ static int i3c_mec5_reattach_device(const struct device *dev, struct i3c_device_
 	}
 
 	/* Update the DAT entry */
-	I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, target_info->dat_idx,
+	MEC_HAL_I3C_DAT_DynamicAddr_write(hwctx, data->DAT_start_addr, target_info->dat_idx,
 				  desc->dynamic_addr);
 
 	/* Update the target info node with new address */
@@ -561,7 +561,7 @@ static void _drv_pending_xfer_ctxt_init(void)
 	}
 }
 
-static void _drv_dct_info_init(struct i3c_DCT_info *info)
+static void _drv_dct_info_init(struct mec_i3c_DCT_info *info)
 {
 	info->bcr = 0x0;
 	info->dcr = 0x0;
@@ -575,7 +575,7 @@ static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payloa
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data   *xec_data = dev->data;
 	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct i3c_DO_CCC do_ccc_instance;
+	struct mec_i3c_DO_CCC do_ccc_instance;
 	struct i3c_ccc_target_payload *target;
 	int ret = 0;
 	int n;
@@ -610,10 +610,10 @@ static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payloa
 		pending_xfer_ctxt.xfer_type = XFER_TYPE_CCC;
 		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
 
-		I3C_DO_CCC(hwctx, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
+		MEC_HAL_I3C_DO_CCC(hwctx, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
 
 		if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			I3C_Xfer_Reset(hwctx);
+			MEC_HAL_I3C_Xfer_Reset(hwctx);
 			ret = -EBUSY;
 		} else if (pending_xfer_ctxt.xfer_status) {
 			*response = pending_xfer_ctxt.xfer_status;
@@ -663,10 +663,10 @@ static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payloa
 				pending_xfer_ctxt.node[0].read = true;
 			}
 
-			I3C_DO_CCC(hwctx, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
+			MEC_HAL_I3C_DO_CCC(hwctx, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
 
 			if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-				I3C_Xfer_Reset(hwctx);
+				MEC_HAL_I3C_Xfer_Reset(hwctx);
 				ret = -EBUSY;
 				break;
 			} else if (pending_xfer_ctxt.xfer_status) {
@@ -701,7 +701,7 @@ static int i3c_mec5_do_CCC(const struct device *dev, struct i3c_ccc_payload *pay
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* Make sure we are currently the active controller */
-	if (false == I3C_Is_Current_Role_Master(hwctx) && I3C_Is_Current_Role_BusMaster(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx) && MEC_HAL_I3C_Is_Current_Role_BusMaster(hwctx)) {
 		ret = -EACCES;
 		goto exit_ccc;
 	}
@@ -738,13 +738,13 @@ static int i3c_mec5_do_DAA(const struct device *dev)
 	uint16_t DAA_entries_count = 0;
 	uint16_t DAA_success_count = 0;
 	uint16_t DAT_first_free_posn = 0;
-	struct i3c_DCT_info dct_info;
+	struct mec_i3c_DCT_info dct_info;
 	int ret = 0, idx;
 
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* DAA should not be done by secondary controllers */
-	if (false == I3C_Is_Current_Role_Master(hwctx) && I3C_Is_Current_Role_BusMaster(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx) && MEC_HAL_I3C_Is_Current_Role_BusMaster(hwctx)) {
 		ret = -EACCES;
 		goto exit_da;
 	}
@@ -774,7 +774,7 @@ static int i3c_mec5_do_DAA(const struct device *dev)
 			 */
 		} else if (NULL != target_needs_DAA) {
 			target_needs_DAA->dat_idx = idx;
-			I3C_DAT_DynamicAddrAssign_write(hwctx, data->DAT_start_addr, idx,
+			MEC_HAL_I3C_DAT_DynamicAddrAssign_write(hwctx, data->DAT_start_addr, idx,
 							target_needs_DAA->address);
 			/* Mark the free position as used */
 			data->DAT_free_positions &= ~(1U << idx);
@@ -793,11 +793,11 @@ static int i3c_mec5_do_DAA(const struct device *dev)
 		pending_xfer_ctxt.xfer_sem = &data->xfer_sem;
 
 		/* Start the DAA process */
-		I3C_DO_DAA(hwctx, DAT_first_free_posn, DAA_entries_count,
+		MEC_HAL_I3C_DO_DAA(hwctx, DAT_first_free_posn, DAA_entries_count,
 			   &pending_xfer_ctxt.node[0].tid);
 
 		if (k_sem_take(&data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			I3C_Xfer_Reset(hwctx);
+			MEC_HAL_I3C_Xfer_Reset(hwctx);
 			ret = -EBUSY;
 		} else if (pending_xfer_ctxt.xfer_status) {
 			LOG_ERR("DAA status error - 0x%x", pending_xfer_ctxt.xfer_status);
@@ -821,7 +821,7 @@ static int i3c_mec5_do_DAA(const struct device *dev)
 			 */
 			for (idx = 0; idx < DAA_success_count; idx++) {
 				_drv_dct_info_init(&dct_info);
-				I3C_DCT_read(hwctx, data->DCT_start_addr, idx, &dct_info);
+				MEC_HAL_I3C_DCT_read(hwctx, data->DCT_start_addr, idx, &dct_info);
 				pid = dct_info.pid;
 
 				const struct i3c_device_id i3c_id = I3C_DEVICE_ID(pid);
@@ -881,7 +881,7 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *xec_data = dev->data;
 	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct i3c_XFER do_xfer_instance;
+	struct mec_i3c_XFER do_xfer_instance;
 	uint8_t i = 0;
 	int ret = 0;
 	uint8_t DAT_idx; /* Index of the device in Device Address Table */
@@ -913,10 +913,10 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 
 		if (I3C_MSG_HDR == (msgs[i].flags & I3C_MSG_HDR)) {
 			/* Only DDR supported */
-			do_xfer_instance.cmds[i].xfer_speed = XFER_SPEED_HDR_DDR;
+			do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_HDR_DDR;
 		} else {
 			/* Use SDR0 for fast xfer */
-			do_xfer_instance.cmds[i].xfer_speed = XFER_SPEED_SDR0;
+			do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_SDR0;
 		}
 
 		do_xfer_instance.cmds[i].pec_en = false;
@@ -935,19 +935,19 @@ static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_
 		pending_xfer_ctxt.node[i].read = do_xfer_instance.cmds[i].read;
 		pending_xfer_ctxt.node[i].data_buf = do_xfer_instance.cmds[i].data_buf;
 
-		I3C_DO_Xfer_Prep(hwctx, &do_xfer_instance.cmds[i], &pending_xfer_ctxt.node[i].tid);
+		MEC_HAL_I3C_DO_Xfer_Prep(hwctx, &do_xfer_instance.cmds[i], &pending_xfer_ctxt.node[i].tid);
 	}
 
 	/* Set the number of responses threshold to trigger interrupt */
-	I3C_Thresholds_Response_buf_set(hwctx, num_msgs - 1);
+	MEC_HAL_I3C_Thresholds_Response_buf_set(hwctx, num_msgs - 1);
 
 	for (i = 0; i < num_msgs; i++) {
-		I3C_DO_Xfer(hwctx, &do_xfer_instance.cmds[i]);
+		MEC_HAL_I3C_DO_Xfer(hwctx, &do_xfer_instance.cmds[i]);
 	}
 
 	if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
 		ret = -EBUSY;
-		I3C_Xfer_Reset(hwctx);
+		MEC_HAL_I3C_Xfer_Reset(hwctx);
 	} else {
 		if (pending_xfer_ctxt.xfer_status) {
 			*response = pending_xfer_ctxt.xfer_status;
@@ -982,7 +982,7 @@ static int i3c_mec5_Xfers(const struct device *dev, struct i3c_device_desc *targ
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* Check to ensure i3c instance is in controller mode */
-	if (false == I3C_Is_Current_Role_Master(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 		ret = -EACCES;
 		goto exit_xfer;
 	}
@@ -1037,14 +1037,14 @@ static int i3c_mec5_IBI_enable(const struct device *dev, struct i3c_device_desc 
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
 	struct i3c_ccc_events i3c_events;
-	struct i3c_IBI_SIR enable_ibi_instance;
+	struct mec_i3c_IBI_SIR enable_ibi_instance;
 	uint8_t DAT_idx = 0; /* Index of the device in Device Address Table */
 	int ret = 0;
 
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* Check to ensure i3c instance is in controller mode */
-	if (false == I3C_Is_Current_Role_Master(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 		return -EACCES;
 	}
 
@@ -1078,7 +1078,7 @@ static int i3c_mec5_IBI_enable(const struct device *dev, struct i3c_device_desc 
 	enable_ibi_instance.tgt_dat_idx = DAT_idx;
 	enable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
 
-	I3C_IBI_SIR_Enable(hwctx, &enable_ibi_instance, !data->ibi_intr_enabled_init);
+	MEC_HAL_I3C_IBI_SIR_Enable(hwctx, &enable_ibi_instance, !data->ibi_intr_enabled_init);
 
 	return 0;
 }
@@ -1089,14 +1089,14 @@ static int i3c_mec5_IBI_disable(const struct device *dev, struct i3c_device_desc
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
 	struct i3c_ccc_events i3c_events;
-	struct i3c_IBI_SIR disable_ibi_instance;
+	struct mec_i3c_IBI_SIR disable_ibi_instance;
 	uint8_t DAT_idx = 0; /* Index of the device in Device Address Table */
 	int ret = 0;
 
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* Check to ensure i3c instance is in controller mode */
-	if (false == I3C_Is_Current_Role_Master(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 		return -EACCES;
 	}
 
@@ -1130,7 +1130,7 @@ static int i3c_mec5_IBI_disable(const struct device *dev, struct i3c_device_desc
 	disable_ibi_instance.tgt_dat_idx = DAT_idx;
 	disable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
 
-	I3C_IBI_SIR_Disable(hwctx, &disable_ibi_instance, !data->ibi_intr_enabled_init);
+	MEC_HAL_I3C_IBI_SIR_Disable(hwctx, &disable_ibi_instance, !data->ibi_intr_enabled_init);
 
 	return 0;
 }
@@ -1140,7 +1140,7 @@ static int i3c_mec5_target_IBI_raise(const struct device *dev, struct i3c_ibi *r
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *xec_data = dev->data;
 	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct i3c_raise_IBI_SIR ibi_sir_request;
+	struct mec_i3c_raise_IBI_SIR ibi_sir_request;
 	int ret = 0;
 
 	hwctx->base = (uintptr_t)config->regs;
@@ -1168,7 +1168,7 @@ static int i3c_mec5_target_IBI_raise(const struct device *dev, struct i3c_ibi *r
 		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
 
 		LOG_DBG("[%s] - Raise IBI SIR", __func__);
-		I3C_TGT_IBI_SIR_Raise(hwctx, &ibi_sir_request);
+		MEC_HAL_I3C_TGT_IBI_SIR_Raise(hwctx, &ibi_sir_request);
 
 		k_mutex_unlock(&xec_data->xfer_lock);
 
@@ -1193,7 +1193,7 @@ static int i3c_mec5_target_IBI_raise(const struct device *dev, struct i3c_ibi *r
 		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
 
 		LOG_DBG("[%s] - Raise IBI MR", __func__);
-		I3C_TGT_IBI_MR_Raise(hwctx);
+		MEC_HAL_I3C_TGT_IBI_MR_Raise(hwctx);
 
 		k_mutex_unlock(&xec_data->xfer_lock);
 
@@ -1308,7 +1308,7 @@ static void _drv_tgt_rx_handler(const struct device *dev)
 	hwctx->base = (uintptr_t)config->regs;
 
 	target_cbks = xec_data->target_config->callbacks;
-	xec_data->target_config->address = I3C_TGT_dyn_addr_get(hwctx);
+	xec_data->target_config->address = MEC_HAL_I3C_TGT_dyn_addr_get(hwctx);
 
 	for (idx = 0; idx < MAX_TGT_RX_LIST_COUNT; idx++) {
 		tgt_rx_node = &xec_data->tgt_pvt_rx[idx];
@@ -1357,7 +1357,7 @@ static void _drv_tgt_tx_done_handler(const struct device *dev)
 	/* Keeping this function for possible enhancements later */
 }
 
-static bool _drv_i3c_ibi_isr(struct i3c_host_regs *regs, struct xec_i3c_data *data)
+static bool _drv_i3c_ibi_isr(struct mec_i3c_host_regs *regs, struct xec_i3c_data *data)
 {
 	uint8_t num_ibis = 0;
 	uint8_t i = 0;
@@ -1486,7 +1486,7 @@ static int i3c_mec5_target_tx_write(const struct device *dev, uint8_t *buf, uint
 	}
 
 	k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
-	I3C_DO_TGT_Xfer(hwctx, buf, len);
+	MEC_HAL_I3C_DO_TGT_Xfer(hwctx, buf, len);
 	k_mutex_unlock(&xec_data->xfer_lock);
 
 exit_tgt_xfer:
@@ -1585,16 +1585,16 @@ static int i3c_mec5_configure(const struct device *dev, enum i3c_config_type typ
 
 	if (type == I3C_CONFIG_TARGET) {
 		/* Ensure i3c instance is not in controller mode */
-		if (true == I3C_Is_Current_Role_Master(hwctx)) {
+		if (true == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 			return -EINVAL;
 		}
 
 		tgt_cfg = (struct i3c_config_target *)config;
-		I3C_TGT_PID_set(hwctx, tgt_cfg->pid, tgt_cfg->pid_random);
+		MEC_HAL_I3C_TGT_PID_set(hwctx, tgt_cfg->pid, tgt_cfg->pid_random);
 
 	} else if (type == I3C_CONFIG_CONTROLLER) {
 		/* Ensure i3c instance is controller mode */
-		if (false == I3C_Is_Current_Role_Master(hwctx)) {
+		if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 			return -EINVAL;
 		}
 
@@ -1607,7 +1607,7 @@ static int i3c_mec5_configure(const struct device *dev, enum i3c_config_type typ
 		/* Save the config */
 		(void)memcpy(&xec_data->common.ctrl_config, ctrl_cfg, sizeof(*ctrl_cfg));
 
-		I3C_Controller_Clk_Cfg(hwctx, core_clock, xec_data->common.ctrl_config.scl.i3c);
+		MEC_HAL_I3C_Controller_Clk_Cfg(hwctx, core_clock, xec_data->common.ctrl_config.scl.i3c);
 	}
 
 	return 0;
@@ -1618,7 +1618,7 @@ static void _drv_i3c_isr_xfers(const struct device *dev, uint16_t num_responses)
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
-	struct i3c_host_regs *regs = config->regs;
+	struct mec_i3c_host_regs *regs = config->regs;
 	uint16_t data_len = 0;
 	uint8_t resp_sts = 0;
 	uint8_t tid = 0;
@@ -1696,7 +1696,7 @@ static void _drv_i3c_isr_xfers(const struct device *dev, uint16_t num_responses)
 	} /* end for */
 
 	if (pending_xfer_ctxt.xfer_status) { /* Error Handling */
-		I3C_Xfer_Error_Resume(hwctx);
+		MEC_HAL_I3C_Xfer_Error_Resume(hwctx);
 	}
 
 	k_sem_give(pending_xfer_ctxt.xfer_sem);
@@ -1707,7 +1707,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
-	struct i3c_host_regs *regs = config->regs;
+	struct mec_i3c_host_regs *regs = config->regs;
 	struct i3c_tgt_pvt_receive_node *tgt_rx_node;
 	uint16_t data_len = 0;
 	uint8_t resp_sts = 0;
@@ -1719,7 +1719,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 
 	/*Note: We are expecting only one response in the ISR */
 	for (int i = 0; i < num_responses; i++) {
-		resp_sts = _i3c_tgt_response_sts_get((struct i3c_sec_regs *)regs, &data_len,
+		resp_sts = _i3c_tgt_response_sts_get((struct mec_i3c_sec_regs *)regs, &data_len,
 						     &tid, &tgt_receive);
 
 		LOG_DBG("[%s] - tid = %d, resp_sts = 0x%08x data_len = %d",
@@ -1730,7 +1730,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 				if (data_len <= data->DAT_depth) {
 					LOG_DBG("[%s] - DEFSLVS response: no of targets %d",
 						__func__, data_len);
-					I3C_TGT_DEFTGTS_DAT_write(hwctx, data->DCT_start_addr,
+					MEC_HAL_I3C_TGT_DEFTGTS_DAT_write(hwctx, data->DCT_start_addr,
 								  data->DAT_start_addr, data_len);
 				} else {
 					LOG_DBG("[%s] - DEFSLVS response: no of targets "
@@ -1765,7 +1765,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 					LOG_DBG("Node updated");
 
 					if (resp_sts) {
-						I3C_TGT_Error_Recovery(hwctx, resp_sts);
+						MEC_HAL_I3C_TGT_Error_Recovery(hwctx, resp_sts);
 						/* Controller is expected to issue GETSTATUS CCC
 						 * to clear error status from CCC_DEVICE_STATUS
 						 * register.
@@ -1784,7 +1784,7 @@ static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_res
 			_drv_tgt_tx_done_handler(dev);
 
 			if ((resp_sts) || (data_len != 0)) {
-				I3C_TGT_Error_Recovery(hwctx, resp_sts);
+				MEC_HAL_I3C_TGT_Error_Recovery(hwctx, resp_sts);
 				/* Controller is expected to issue GETSTATUS CCC to clear
 				 * error status from CCC_DEVICE_STATUS register
 				 */
@@ -1801,7 +1801,7 @@ static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
-	struct i3c_host_regs *regs = config->regs;
+	struct mec_i3c_host_regs *regs = config->regs;
 	uint8_t ibi_sir_rem_datalen = 0;
 	uint16_t num_responses = 0;
 	bool notify_app = false;
@@ -1824,7 +1824,7 @@ static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 		    || (XFER_TYPE_TGT_RAISE_IBI_MR == pending_xfer_ctxt.xfer_type)) {
 
 			pending_xfer_ctxt.xfer_status = 1;
-			if (_i3c_tgt_ibi_resp_get((struct i3c_sec_regs *)regs,
+			if (_i3c_tgt_ibi_resp_get((struct mec_i3c_sec_regs *)regs,
 						  &ibi_sir_rem_datalen)) {
 				pending_xfer_ctxt.xfer_status = 0;
 			} else {
@@ -1836,7 +1836,7 @@ static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 			if (pending_xfer_ctxt.xfer_status && ibi_sir_rem_datalen) {
 				LOG_DBG("[%s] Handle Target Raise IBI SIR Residual data",
 					__func__);
-				I3C_TGT_IBI_SIR_Residual_handle(hwctx);
+				MEC_HAL_I3C_TGT_IBI_SIR_Residual_handle(hwctx);
 			}
 
 			if (XFER_TYPE_TGT_RAISE_IBI == pending_xfer_ctxt.xfer_type) {
@@ -1853,12 +1853,12 @@ static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 	if (intr_sts & sbit_CCC_UPDATED_STS) {
 		LOG_DBG("[%s] CCC updated by master", __func__);
 		/* Check and update MRL, MWL */
-		I3C_Target_MRL_MWL_update(hwctx, &data->i3c_cfg_as_tgt.max_read_len,
+		MEC_HAL_I3C_Target_MRL_MWL_update(hwctx, &data->i3c_cfg_as_tgt.max_read_len,
 					  &data->i3c_cfg_as_tgt.max_write_len);
 	}
 
 	if (intr_sts & sbit_DYN_ADDR_ASSIGN_STS) {
-		if (true == I3C_TGT_is_dyn_addr_valid(hwctx)) {
+		if (true == MEC_HAL_I3C_TGT_is_dyn_addr_valid(hwctx)) {
 			LOG_DBG("[%s] DA assigned by master", __func__);
 		} else {
 			LOG_DBG("[%s] DA reset by master", __func__);
@@ -1877,7 +1877,7 @@ static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 		LOG_DBG("[%s] TGT: Bus owner was changed", __func__);
 
 		/* Bus Owner has changed; flush all fifos and queues and program resume bit */
-		I3C_TGT_RoleSwitch_Resume(hwctx);
+		MEC_HAL_I3C_TGT_RoleSwitch_Resume(hwctx);
 
 		/* Ensure there is corresponding pending context to inform the raise IBI API */
 		if ((XFER_TYPE_TGT_RAISE_IBI_MR == pending_xfer_ctxt.xfer_type)
@@ -1893,7 +1893,7 @@ static void _drv_i3c_isr_controller(const struct device *dev, uint32_t intr_sts)
 {
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
-	struct i3c_host_regs *regs = config->regs;
+	struct mec_i3c_host_regs *regs = config->regs;
 	uint16_t num_responses = 0;
 
 	/* Get the number of responses in Response Queue */
@@ -1933,7 +1933,7 @@ static void i3c_mec5_isr(const struct device *dev)
 {
 	const struct xec_i3c_config *config = dev->config;
 	struct xec_i3c_data *data = dev->data;
-	struct i3c_host_regs *regs = config->regs;
+	struct mec_i3c_host_regs *regs = config->regs;
 	struct mec_i3c_ctx *hwctx = &data->ctx;
 	uint32_t intr_sts = 0;
 	bool notify_app = false;
@@ -1943,7 +1943,7 @@ static void i3c_mec5_isr(const struct device *dev)
 	intr_sts = _i3c_intr_sts_get(regs);
 
 	/* Invoke target ISR function if we are acting as target */
-	if (false == I3C_Is_Current_Role_Master(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Master(hwctx)) {
 		notify_app = _drv_i3c_isr_target(dev, intr_sts);
 		if (notify_app) {
 			_drv_tgt_rx_handler(dev);
@@ -1954,7 +1954,7 @@ static void i3c_mec5_isr(const struct device *dev)
 
 	_i3c_intr_sts_clear(regs, intr_sts);
 
-	I3C_GIRQ_Status_Clr(hwctx);
+	MEC_HAL_I3C_GIRQ_Status_Clr(hwctx);
 }
 
 
@@ -1983,25 +1983,25 @@ static int i3c_mec5_Init(const struct device *dev)
 	hwctx->base = (uintptr_t)config->regs;
 
 	/* Soft reset before configuration */
-	I3C_Soft_Reset(hwctx);
+	MEC_HAL_I3C_Soft_Reset(hwctx);
 
 	ctrl_config->is_secondary = false;
-	if (false == I3C_Is_Current_Role_Primary(hwctx)) {
+	if (false == MEC_HAL_I3C_Is_Current_Role_Primary(hwctx)) {
 		ctrl_config->is_secondary = true;
 	}
 
 	if (ctrl_config->is_secondary) {
-		I3C_Target_Init(hwctx, core_clock, &data->i3c_cfg_as_tgt.max_read_len,
+		MEC_HAL_I3C_Target_Init(hwctx, core_clock, &data->i3c_cfg_as_tgt.max_read_len,
 				&data->i3c_cfg_as_tgt.max_write_len);
 		data->tgt_tx_queued = false;
 	} else {
 		switch (i3c_bus_mode) {
 		case I3C_BUS_MODE_MIXED_FAST:
 		case I3C_BUS_MODE_MIXED_LIMITED:
-			I3C_Controller_Clk_I2C_Init(hwctx, core_clock);
+			MEC_HAL_I3C_Controller_Clk_I2C_Init(hwctx, core_clock);
 			__fallthrough;
 		case I3C_BUS_MODE_PURE:
-			I3C_Controller_Clk_Init(hwctx, core_clock,
+			MEC_HAL_I3C_Controller_Clk_Init(hwctx, core_clock,
 						data->common.ctrl_config.scl.i3c);
 			break;
 		default:
@@ -2024,20 +2024,20 @@ static int i3c_mec5_Init(const struct device *dev)
 	}
 
 	if (ctrl_config->is_secondary) {
-		I3C_Sec_Host_Config(hwctx);
+		MEC_HAL_I3C_Sec_Host_Config(hwctx);
 	} else {
-		I3C_Host_Config(hwctx);
+		MEC_HAL_I3C_Host_Config(hwctx);
 	}
 
 	/* Initialize the Queues and FIFO thresholds */
-	I3C_Thresholds_Init(hwctx);
+	MEC_HAL_I3C_Thresholds_Init(hwctx);
 
 	if (ctrl_config->is_secondary) {
 		/* Enable the i3c target interrupts */
-		I3C_Target_Interrupts_Init(hwctx);
+		MEC_HAL_I3C_Target_Interrupts_Init(hwctx);
 	} else {
 		/* Enable the i3c controller interrupts */
-		I3C_Controller_Interrupts_Init(hwctx);
+		MEC_HAL_I3C_Controller_Interrupts_Init(hwctx);
 	}
 
 	if (config->irq_config_func) {
@@ -2053,7 +2053,7 @@ static int i3c_mec5_Init(const struct device *dev)
 	enable_config |= sbit_HOTJOIN_DISABLE;
 #endif
 
-	I3C_Enable(hwctx, config->address, enable_config);
+	MEC_HAL_I3C_Enable(hwctx, config->address, enable_config);
 
 #ifdef CONFIG_I3C_USE_IBI
 	data->ibi_intr_enabled_init = false;
@@ -2063,7 +2063,7 @@ static int i3c_mec5_Init(const struct device *dev)
 	}
 #endif
 
-	I3C_queue_depths_get(hwctx,
+	MEC_HAL_I3C_queue_depths_get(hwctx,
 			     &data->fifo_depths.tx_fifo_depth,
 			     &data->fifo_depths.rx_fifo_depth,
 			     &data->fifo_depths.cmd_fifo_depth,
@@ -2072,11 +2072,11 @@ static int i3c_mec5_Init(const struct device *dev)
 
 	data->DAT_start_addr = 0;
 	data->DAT_depth = 0;
-	I3C_DAT_info_get(hwctx, &data->DAT_start_addr, &data->DAT_depth);
+	MEC_HAL_I3C_DAT_info_get(hwctx, &data->DAT_start_addr, &data->DAT_depth);
 
 	data->DCT_start_addr = 0;
 	data->DCT_depth = 0;
-	I3C_DCT_info_get(hwctx, &data->DCT_start_addr, &data->DCT_depth);
+	MEC_HAL_I3C_DCT_info_get(hwctx, &data->DCT_start_addr, &data->DCT_depth);
 
 	for (i = 0; i < MAX_TARGETS; i++) {
 		data->targets[i].state = TGT_STATE_NOT_PRESENT;
@@ -2151,7 +2151,7 @@ static const struct i3c_driver_api i3c_mec5_driver_api = {
 		I3C_I2C_DEVICE_ARRAY_DT_INST(id);						\
 												\
 	static const struct xec_i3c_config xec_i3c_config_##id = {				\
-		.regs = (struct i3c_host_regs *) DT_INST_REG_ADDR(id),				\
+		.regs = (struct mec_i3c_host_regs *) DT_INST_REG_ADDR(id),				\
 		.clock = DT_INST_PROP(id, input_clock_frequency),				\
 		.common.dev_list.i3c = xec_i3c_device_list_##id,				\
 		.common.dev_list.num_i3c = ARRAY_SIZE(xec_i3c_device_list_##id),		\
