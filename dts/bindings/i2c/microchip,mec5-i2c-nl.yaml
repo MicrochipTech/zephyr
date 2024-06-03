@@ -1,0 +1,67 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 HAL based I2C/SMB with Network Layer controller
+
+compatible: "microchip,mec5-i2c-nl"
+
+include: [i2c-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  port_sel:
+    type: int
+    description: Port mux number matching pinctrl-0 pins.
+    required: true
+
+  scl-gpios:
+    type: phandle-array
+    required: true
+    description: I2C clock line gpio info
+
+  sda-gpios:
+    type: phandle-array
+    required: true
+    description: I2C data line gpio handle
+
+  dmas:
+    required: true
+    description: |
+      TX & RX dma specifiers. Each specifier will have a phandle
+      reference to the dmac controller, the channel number, and peripheral
+      trigger source.
+
+      For example dmas using DMA channels 2 and 3 for controller/target modes on I2C01
+        dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
+
+  dma-names:
+    required: true
+    description: |
+      Required if the dmas property exists. This should be "cm" for controller mode or "tm"
+      for target mode to match the dmas property.
+
+      For example
+        dma-names = "cm", "tm";
+
+  init-pin-wait:
+    type: int
+    default: 100
+    description: |
+      Amount of time in microseconds allowing the controller to sample
+      pins during driver initialization. If not present default is 100.
+
+  config-pin-wait:
+    type: int
+    default: 35000
+    description: |
+      Amount of time in microseconds allowing the controller to sample
+      pins after controller is enabled during configuration. If not
+      present the default is 35000 (the SMBus bus timeout).
