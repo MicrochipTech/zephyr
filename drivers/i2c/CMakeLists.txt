@@ -81,6 +81,7 @@ zephyr_library_sources_ifdef(CONFIG_GPIO_I2C_SWITCH	gpio_i2c_switch.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_NUMAKER		i2c_numaker.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_MAX32		i2c_max32.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_MCHP_MEC5	i2c_mchp_mec5.c)
+zephyr_library_sources_ifdef(CONFIG_I2C_MCHP_MEC5_NL	i2c_mchp_mec5_nl.c)
 
 zephyr_library_sources_ifdef(CONFIG_I2C_STM32_V1
 	i2c_ll_stm32_v1.c
