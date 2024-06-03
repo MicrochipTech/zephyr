@@ -9,3 +9,28 @@ config I2C_MCHP_MEC5
 	depends on DT_HAS_MICROCHIP_MEC5_I2C_ENABLED
 	help
 	  Enable the Microchip MEC5 family I2C driver.
+
+config I2C_MCHP_MEC5_NL
+	bool "Microchip MEC5 HAL I2C with Network Layer driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_I2C_NL_ENABLED
+	select EVENTS
+	help
+	  Enable the Microchip MEC5 I2C Network Layer driver.
+
+if I2C_MCHP_MEC5_NL
+
+config I2C_MCHP_MEC5_NL_BUFFER_SIZE
+	int "TX/RX buffer size in bytes"
+	default 64
+	help
+	  Buffer used for Controller-Mode and Target-Mode.
+	  For Controller-Mode TX this buffer is used to transmit
+	  START, target address, and data via Network-Layer DMA.
+	  When the driver is in Target-Mode this buffer is used
+	  for transmit/receive to/from the external Controller.
+	  If the amount of data exceed the buffer size the hardware
+	  will clock stretch until the driver restarts DMA for
+	  next chunk of data.
+
+endif # I2C_MCHP_MEC5_NL
