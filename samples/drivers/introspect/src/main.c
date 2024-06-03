@@ -46,7 +46,19 @@ struct i3c_target_callbacks tgt0_cbs= {
 };
 
 struct i3c_target_config tgt0_cfg;
-uint8_t tgt_tx_buff[10] = {0x4b, 0x7f, 0x73, 0x66, 0x7d, 0x13, 0x69, 0x25, 0xb4, 0xbf};
+//uint8_t tgt_tx_buff[10] = {0x4b, 0x7f, 0x73, 0x66, 0x7d, 0x13, 0x69, 0x25, 0xb4, 0xbf};
+uint8_t tgt_tx_buff[88] = {
+                           0x1,  0x2,  0x3,  0x4,  0x5,  0x6,  0x7,  0x8,
+                           0x9,  0xa,  0xb,  0xc,  0xd,  0xe,  0xf,  0x10,
+                           0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                           0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+                           0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+                           0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+                           0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+                           0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+                           0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
+                           0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8,
+                           0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8};
 
 static int tgt0_write_requested_cb(struct i3c_target_config *config)
 {
@@ -130,6 +142,30 @@ static void transceive_data(const struct device *dev)
     printf("\n");
 }
 
+void print_buf(uint8_t *buf, uint32_t len)
+{
+    uint32_t j, k;
+    printk("0x00000000: ");
+    for (j=0;j<len;j++)
+    {
+        printk("%02x ", buf[j]);
+        k = j+1;
+        if ((k<len) && !(k % 16)) printk("\r\n0x%08x: ", k);
+    }
+    printk("\r\n");
+}
+static int target_ibi_cb(struct i3c_device_desc *target, struct i3c_ibi_payload *payload)
+{
+    if(payload == NULL)
+    {
+	return 1;
+    }
+    printk("Enter [%s] - RxD %d bytes of payload\n", __FUNCTION__, payload->payload_len);
+    if(payload->payload_len) {
+        print_buf(&payload->payload[0], payload->payload_len);
+    }
+    return 0;
+}
 #endif
 
 int main(void)
@@ -144,7 +180,7 @@ int main(void)
 
 tgt0_cfg.callbacks = &tgt0_cbs;
 int ret = i3c_target_register(dev, &tgt0_cfg);
-ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 10);
+ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 64);
 #endif
 
 #ifdef I3C0
@@ -155,9 +191,10 @@ ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 10);
                 return 0;
         }
 
-    transfer_data(dev_i3c_h);
-    receive_data(dev_i3c_h);
-    transceive_data(dev_i3c_h);
+ //   transfer_data(dev_i3c_h);
+   // receive_data(dev_i3c_h);
+   // transceive_data(dev_i3c_h);
+i3c_ibi(dev_i3c_h, &target_ibi_cb);
 #endif
 
 	k_sleep(K_FOREVER);

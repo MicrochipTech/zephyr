@@ -24,6 +24,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/dsp/types.h>
+#include <zephyr/drivers/i3c/ibi.h>
 //#include <zephyr/rtio/rtio.h>
 //#include <zephyr/sys/iterable_sections.h>
 //#include <zephyr/types.h>
@@ -60,11 +61,38 @@ typedef int (*set_get_data_t)(const struct device *dev,
          uint8_t *set_val, uint32_t slen,
          uint8_t *get_val, uint32_t glen);
 
+typedef int (*tgt_cb_t)(struct i3c_device_desc *target, struct i3c_ibi_payload *payload);
+
+/**
+ * @typedef get_data_t
+ * @brief Callback API upon getting a sensor's attributes
+ *
+ * See i3c_get_data() for argument description
+ */
+typedef void (*test_ibi_t)(const struct device *dev, tgt_cb_t tgt_cb);
+
+
 __subsystem struct introspect_driver_api {
 	set_data_t set_data;
 	get_data_t get_data;
         set_get_data_t set_get_data;
+	test_ibi_t test_ibi;
 };
+
+__syscall int i3c_ibi(const struct device *dev, tgt_cb_t tgt_cb);
+
+static inline int z_impl_i3c_ibi(const struct device *dev, tgt_cb_t tgt_cb)
+{
+        const struct introspect_driver_api *api =
+                (const struct introspect_driver_api *)dev->api;
+
+        if (api->test_ibi == NULL) {
+                return -ENOSYS;
+        }
+
+	api->test_ibi(dev, tgt_cb);
+        return 0;
+}
 
 /**
  * @brief Set an attribute for a sensor

@@ -24,7 +24,7 @@
 };
 
 &i3c0 {
-	status = "okay";
+	status = "disabled";
 
 	pinctrl-0 = <&i3c01_sda_host_gpio012 &i3c01_scl_host_gpio013>;
 	pinctrl-names = "default";
@@ -36,7 +36,7 @@
                 /* Dynamic Address To Be Assigned To The Device */
 		assigned-address = <0x5C>;
 
-		status = "okay";
+		status = "disabled";
 	};
 
 	i3c0_dev1: dev1@6B0000B0123456789B {
@@ -75,7 +75,7 @@
 };
 
 &i3c1 {
-        status = "disabled";
+        status = "okay";
 
         pinctrl-0 = <&i3c00_sda_target_gpio132 &i3c00_scl_target_gpio140>;
         pinctrl-names = "default";

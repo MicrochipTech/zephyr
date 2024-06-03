@@ -56,12 +56,26 @@ static int i3c_data_set_get(const struct device *dev,
   return ret;
 }
 
+void i3c_test_ibi(const struct device *dev, tgt_cb_t tgt_cb)
+{
+    struct i3c_device_desc *target = NULL;
+		struct introspect_data *data = dev->data;
+
+        target = data->i3c_dev;
+
+        target->ibi_cb = tgt_cb;
+
+        i3c_ibi_enable(target);
+}
+
+
 static const struct introspect_driver_api intro_driver_api = {
 #ifdef DT_DRV_COMPAT
 	/* Introspect as Target */
 	.set_data = i3c_data_set,
  	.get_data = i3c_data_get,
  	.set_get_data = i3c_data_set_get,
+	.test_ibi = i3c_test_ibi,
 #else
 	/* Introspect as Master */
 #endif
