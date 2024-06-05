@@ -1,0 +1,31 @@
+# Copyright (c) 2024
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip EC Hibernate VCI pins
+
+compatible: "microchip,ec-hibernate-vci"
+
+child-binding:
+  description: VCI child node
+  properties:
+    gpios:
+      required: true
+      type: phandle-array
+      description: Reference to a VCI instance.
+
+    vci-pos:
+      required: true
+      type: int
+      description: Bit position in VCI registers
+    
+    vci-polarity:
+      required: true
+      type: string
+      description: VCI input polarity (0=active low)
+      enum:
+        - "Active_Low"
+        - "Active_High"
+
+    vci-latch-enable:
+      type: boolean
+      description: If present enable latching of VCI input
