@@ -39,6 +39,13 @@ config ESPI_MEC5_ACPI_EC_HCMD
 	help
 	  Enable the Microchip MEC5 family ACPI_EC host command device driver
 
+config ESPI_MEC5_ACPI_EC_GENERIC
+	bool "Microchip MEC5 family eSPI generic ACPI_EC host driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_ESPI_ACPI_EC_GENERIC_ENABLED
+	help
+	  Enable the Microchip MEC5 family ACPI_EC generic device driver
+
 config ESPI_MEC5_SHM_EMI
 	bool "Microchip MEC5 family eSPI EMI host driver"
 	default y
@@ -98,3 +105,18 @@ config ESPI_MEC5_BDP_CALLBACK
 	  use its parent (eSPI) driver callbacks.
 
 endif # ESPI_MEC5_BDP
+
+if ESPI_MEC5_KBC
+
+config ESPI_MEC5_KBC_CALLBACK
+	bool "KBC driver implements its own callbacks"
+	default n
+	help
+	  Selects whether the KBC driver manages/implements
+	  its own callbacks. If not defined the KBC driver will
+	  use its parent (eSPI) driver callbacks.
+	  If enabled KBC driver implements a callback management
+	  API for the application to register one callback for
+	  each EC interrupt event (IBF and OBE).
+
+endif # ESPI_MEC5_KBC
