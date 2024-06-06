@@ -230,11 +230,24 @@ static inline int mchp_espi_pc_bdp_set_callback(const struct device *dev,
 #define ESPI_MCHP_LPC_REQ_FLAG_RD 0
 #define ESPI_MCHP_LPC_REQ_FLAG_WR BIT(ESPI_MCHP_LPC_REQ_FLAG_DIR_POS)
 
+#ifdef CONFIG_ESPI_MEC5_KBC_CALLBACK
+#define ESPI_MCHP_KBC_CALLBACK_IBF 0
+#define ESPI_MCHP_KBC_CALLBACK_OBE 1
+
+typedef void (*mchp_espi_pc_kbc_callback_t)(const struct device *dev,
+					    struct host_io_data *hiod,
+					    void *user_data);
+#endif
+
 struct mchp_espi_pc_kbc_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
+#ifdef CONFIG_ESPI_MEC5_KBC_CALLBACK
+	int (*set_callback)(const struct device *dev, mchp_espi_pc_kbc_callback_t cb,
+			    void *user_data, uint8_t cb_event);
+#endif
 };
 
 static inline int mchp_espi_pc_kbc_intr_enable(const struct device *dev,
@@ -264,12 +277,59 @@ static inline int mchp_espi_pc_kbc_lpc_request(const struct device *dev,
 	return api->lpc_request(dev, op, data, flags);
 }
 
+#ifdef CONFIG_ESPI_MEC5_KBC_CALLBACK
+static inline int mchp_espi_pc_kbc_set_callback(const struct device *dev,
+						mchp_espi_pc_kbc_callback_t cb,
+						void *user_data, uint8_t cb_event)
+{
+	const struct mchp_espi_pc_kbc_driver_api *api =
+		(const struct mchp_espi_pc_kbc_driver_api *)dev->api;
+
+	if (!api->set_callback) {
+		return -ENOTSUP;
+	}
+
+	return api->set_callback(dev, cb, user_data, cb_event);
+}
+#endif
+
 /* -------- ACPI EC -------- */
+
+#define MCHP_ESPI_AEC_EV_FLAG_4BYTE	BIT(0)
+
+#define MCHP_ESPI_AEC_EV_NONE		0
+#define MCHP_ESPI_AEC_EV_CMD		1
+#define MCHP_ESPI_AEC_EV_DATA		2
+#define MCHP_ESPI_AEC_EV_HOBE		3
+
+enum mchp_espi_pc_acpi_ec_op {
+	MCHP_ESPI_AEC_OP_GET_RXDATA = 0,
+	MCHP_ESPI_AEC_OP_SEND_DATA,
+	MCHP_ESPI_AEC_OP_UD_SET, /* data(0) specifies UD0A or (1) UD1A */
+	MCHP_ESPI_AEC_OP_UD_CLR,
+	MCHP_ESPI_AEC_OP_GEN_SCI, /* data(1) set and generate SCI else clear SCI status */
+	MCHP_ESPI_AEC_OP_GEN_SMI, /* data(1) set and generate SMI else clear SMI status */
+};
+
+struct mchp_espi_acpi_ec_event {
+	uint32_t cmd_data;
+	uint8_t ev_type;
+	uint8_t flags;
+};
+
+typedef void (*mchp_espi_pc_aec_callback_t)(const struct device *dev,
+					    struct mchp_espi_acpi_ec_event *ev,
+					    void *user_data);
+
 struct mchp_espi_pc_aec_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
+	int (*set_callback)(const struct device *dev, mchp_espi_pc_aec_callback_t,
+			    void *userdata);
+	int (*operation)(const struct device *dev, enum mchp_espi_pc_acpi_ec_op op,
+			 uint32_t opdata, uint32_t *rxdata);
 };
 
 static inline int mchp_espi_pc_aec_intr_enable(const struct device *dev,
@@ -297,6 +357,34 @@ static inline int mchp_espi_pc_aec_lpc_request(const struct device *dev,
 	}
 
 	return api->lpc_request(dev, op, data, flags);
+}
+
+static inline int mchp_espi_pc_aec_set_callback(const struct device *dev,
+						mchp_espi_pc_aec_callback_t cb,
+						void *userdata)
+{
+	const struct mchp_espi_pc_aec_driver_api *api =
+		(const struct mchp_espi_pc_aec_driver_api *)dev->api;
+
+	if (!api->set_callback) {
+		return -ENOTSUP;
+	}
+
+	return api->set_callback(dev, cb, userdata);
+}
+
+static inline int mchp_espi_pc_aec_operation(const struct device *dev,
+					     enum mchp_espi_pc_acpi_ec_op op,
+					     uint32_t opdata, uint32_t *rxdata)
+{
+	const struct mchp_espi_pc_aec_driver_api *api =
+		(const struct mchp_espi_pc_aec_driver_api *)dev->api;
+
+	if (!api->operation) {
+		return -ENOTSUP;
+	}
+
+	return api->operation(dev, op, opdata, rxdata);
 }
 
 /* -------- EMI -------- */
