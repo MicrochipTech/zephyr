@@ -89,6 +89,57 @@ static int tgt0_stop_cb(struct i3c_target_config *config)
     printf("[%s]\n", __FUNCTION__);
     return 0;
 }
+
+//I3C1 as Target
+//struct k_timer timer0;
+//void tgt_test_sir_ibi_cb(struct k_timer *timer)
+void tgt_test_sir_ibi(const struct device *dev)
+{
+	uint8_t sir_ibi_payload[3] = {0x2E, 0x01, 0x02};
+	struct i3c_ibi sir_ibi;
+
+//	struct device *dev = (struct device *)k_timer_user_data_get(timer);
+
+	//SIR IBI with MDB only
+	sir_ibi.ibi_type = I3C_IBI_TARGET_INTR;
+	sir_ibi.payload = &sir_ibi_payload[0];
+	sir_ibi.payload_len = 1;
+	if (0 != i3c_ibi_raise(dev, &sir_ibi))
+	{
+		printf("SIR IBI with MDB only failed!!\n");
+	}
+
+        //SIR IBI with MDB + 1 byte
+        sir_ibi.ibi_type = I3C_IBI_TARGET_INTR;
+        sir_ibi.payload = &sir_ibi_payload[0];
+        sir_ibi.payload_len = 2; 
+	if (0 != i3c_ibi_raise(dev, &sir_ibi))
+	{
+		printf("SIR IBI with MDB + 1 byte of payload failed!!\n");
+	}
+
+        //SIR IBI with MDB + 2 byte
+        sir_ibi.ibi_type = I3C_IBI_TARGET_INTR;
+        sir_ibi.payload = &sir_ibi_payload[0];
+        sir_ibi.payload_len = 3;
+	if (0 != i3c_ibi_raise(dev, &sir_ibi))
+	{
+		printf("SIR IBI with MDB + 2 bytes of payload failed!!\n");
+	}
+}
+
+void tgt_test_mr_ibi(const struct device *dev)
+{
+	struct i3c_ibi mr_ibi = {
+	    .ibi_type = I3C_IBI_CONTROLLER_ROLE_REQUEST,
+	    .payload = NULL,
+	};
+
+	if (0 != i3c_ibi_raise(dev, &mr_ibi))
+	{
+		printf("MR IBI failed!!\n");
+	}
+}
 #endif
 
 #if defined(I3C0) || defined(I3C1)
@@ -172,15 +223,20 @@ int main(void)
 {
 #ifdef I3C1_AS_TARGET
 	const struct device *const dev = DEVICE_DT_GET(DT_NODELABEL(i3c1));
+	//struct device *dev = DEVICE_DT_GET(DT_NODELABEL(i3c1));
 
         if (!device_is_ready(dev)) {
                 printk("I3C1_AS_TARGET not ready.\n");
                 return 0;
         }
+//For private transfer
+//tgt0_cfg.callbacks = &tgt0_cbs;
+//int ret = i3c_target_register(dev, &tgt0_cfg);
+//ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 64);
 
-tgt0_cfg.callbacks = &tgt0_cbs;
-int ret = i3c_target_register(dev, &tgt0_cfg);
-ret = i3c_target_tx_write(dev, &tgt_tx_buff[0], 64);
+k_sleep(K_MSEC(10000));
+tgt_test_sir_ibi(dev);
+//tgt_test_mr_ibi(dev);
 #endif
 
 #ifdef I3C0
