@@ -120,15 +120,43 @@ static int mec5_kbc_lpc_request(const struct device *dev,
 	return ret;
 }
 
-static int mec5_kbc_intr_enable(const struct device *dev, uint8_t enable)
+static int mec5_kbc_intr_enable(const struct device *dev, uint8_t enable, uint32_t flags)
 {
 	const struct mec5_kbc_devcfg *const devcfg = dev->config;
 	struct mec_kbc_regs *const regs = devcfg->regs;
+	uint32_t iflags = 0;
+	uint8_t slot = 0xffu;
+
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_K) {
+		if (enable) {
+			slot = devcfg->kirq;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 0, slot);
+	}
+
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_M) {
+		slot = 0xffu;
+		if (enable) {
+			slot = devcfg->mirq;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 1, slot);
+	}
+
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_IBF) {
+		iflags |= MEC_KBC_IBF_IRQ;
+	}
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_OBE) {
+		iflags |= MEC_KBC_OBE_IRQ;
+	}
+
+	if (!iflags) {
+		return 0;
+	}
 
 	if (enable) {
-		mec_hal_kbc_girq_en(regs, MEC_KBC_IBF_IRQ | MEC_KBC_OBE_IRQ);
+		mec_hal_kbc_girq_en(regs, iflags);
 	} else {
-		mec_hal_kbc_girq_dis(regs, MEC_KBC_IBF_IRQ | MEC_KBC_OBE_IRQ);
+		mec_hal_kbc_girq_dis(regs, iflags);
 	}
 
 	return 0;
