@@ -117,13 +117,14 @@ const struct mec5_espi_hd_dev mec5_espi_hd_dev_tbl[] = {
  */
 static int mec5_hd_intr_ctrl(const struct device *dev, uint8_t en)
 {
+	uint32_t iflags = MCHP_ESPI_PC_AEC_IEN_FLAG_IBF;
 	int ret = 0;
 
 	for (size_t n = 0; n < ARRAY_SIZE(mec5_espi_hd_dev_tbl); n++) {
 		const struct mec5_espi_hd_dev *p = &mec5_espi_hd_dev_tbl[n];
 
 		if (p && p->dev) {
-			if (!espi_pc_intr_enable(p->dev, en)) {
+			if (!espi_pc_intr_enable(p->dev, en, iflags)) {
 				ret = -EIO;
 			}
 		}
@@ -342,17 +343,36 @@ static int mec5_hcmd_aec_host_access_en(const struct device *dev, uint8_t enable
 	return ret;
 }
 
-/* TODO - OBE interrupt */
-static int mec5_hcmd_aec_intr_enable(const struct device *dev, uint8_t enable)
+static int mec5_hcmd_aec_intr_enable(const struct device *dev, uint8_t enable, uint32_t flags)
 {
 	const struct mec5_aec_hcmd_devcfg *devcfg = dev->config;
 	struct mec_acpi_ec_regs *regs = devcfg->regs;
+	uint32_t iflags = 0;
 	int ret = 0;
+	uint8_t slot = 0xffu;
+
+	if (flags & MCHP_ESPI_PC_AEC_IEN_FLAG_SIRQ_OBE) {
+		if (enable) {
+			slot = devcfg->sirq_obf;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 0, slot);
+	}
+
+	if (flags & MCHP_ESPI_PC_AEC_IEN_FLAG_IBF) {
+		iflags |= MEC_ACPI_EC_IBF_IRQ;
+	}
+	if (flags & MCHP_ESPI_PC_AEC_IEN_FLAG_OBE) {
+		iflags |= MEC_ACPI_EC_OBE_IRQ;
+	}
+
+	if (!iflags) {
+		return 0;
+	}
 
 	if (enable) {
-		ret = mec_hal_acpi_ec_girq_en(regs, MEC_ACPI_EC_IBF_IRQ);
+		ret = mec_hal_acpi_ec_girq_en(regs, iflags);
 	} else {
-		ret = mec_hal_acpi_ec_girq_dis(regs, MEC_ACPI_EC_IBF_IRQ);
+		ret = mec_hal_acpi_ec_girq_dis(regs, iflags);
 	}
 
 	if (ret) {

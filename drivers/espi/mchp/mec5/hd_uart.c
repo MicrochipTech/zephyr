@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/espi.h>
+#include <zephyr/drivers/espi/espi_mchp_mec5.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/sys_io.h>
@@ -34,10 +36,7 @@ struct mec5_host_uart_devcfg {
 	uint16_t host_io_addr;
 	uint8_t ldn;
 	uint8_t sirq;
-};
-
-struct mec5_host_uart_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
+	uint8_t irqn;
 };
 
 /* Called by eSPI parent driver when platform reset has de-asserted.
@@ -69,11 +68,45 @@ static int mec5_uart_host_access_en(const struct device *dev, uint8_t enable, ui
 	return ret;
 }
 
-/* We are not supporting the interrupt enable API. Host owns this UART
- * and controls interrupts through the UART registers exposed to it.
+/* Issue1: UART has one interrupt signal to EC and one SIRQ to the Host.
+ * These signals are asserted by one or more interrupt enables in the
+ * UART interrupt enable register.
+ *   ERDAI - interrupt on received data available
+ *   ETHREI - interrupt on transmit holding register empty
+ *   ELSI - interrupt on receive line status: overrun, parity, framing and break
+ *   EMSI - interrupt on any modem status active.
+ * NOTE: This UART is mapped into x86 Host I/O space. A HOST 16550 UART driver
+ *       knows how to control these interrupts.
+ * Issue2: HAL does not have a public UART API to clear UART's GIRQ interrupt enable.
+ * We will disable UART interrupt in the NVIC since DT provides the NVIC interrupt
+ * input number for direct mode connected UART.
  */
+static int mec5_uart_intr_enable(const struct device *dev, uint8_t enable, uint32_t flags)
+{
+	const struct mec5_host_uart_devcfg *const devcfg = dev->config;
+	uint8_t slot = 0xffu;
+
+	if (flags & MCHP_ESPI_PC_HUART_IEN_FLAG_SIRQ) {
+		if (enable) {
+			slot = devcfg->sirq;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 0, slot);
+	}
+
+	if (flags & MCHP_ESPI_EC_HUART_IEN_EC) {
+		if (enable) {
+			irq_enable(devcfg->irqn);
+		} else {
+			irq_disable(devcfg->irqn);
+		}
+	}
+
+	return 0;
+}
+
 static const struct mec5_host_uart_driver_api mec5_host_uart_drv_api = {
 	.host_access_enable = mec5_uart_host_access_en,
+	.intr_enable = mec5_uart_intr_enable,
 };
 
 static int mec5_host_uart_init(const struct device *dev)
@@ -94,6 +127,7 @@ static int mec5_host_uart_init(const struct device *dev)
 
 #define MEC5_DT_UART_HW_NODE(inst) DT_PHANDLE(MEC5_DT_UART_NODE(inst), hwdev)
 #define MEC5_DT_UART_HW_REGS(inst) DT_REG_ADDR(MEC5_DT_UART_HW_NODE(inst))
+#define MEC5_DT_UART_HW_IRQN(inst) DT_IRQN(MEC5_DT_UART_HW_NODE(inst))
 
 #define MEC5_DT_UART_HA(inst) \
 	DT_PROP_BY_PHANDLE_IDX(MEC5_DT_UART_NODE(inst), host_infos, 0, host_address)
@@ -111,12 +145,13 @@ static int mec5_host_uart_init(const struct device *dev)
 	PINCTRL_DT_INST_DEFINE(inst);							\
 											\
 	static const struct mec5_host_uart_devcfg mec5_host_uart_dcfg_##inst = {	\
-		.regs = (struct mec_uart_regs *)MEC5_DT_UART_HW_REGS(inst),			\
+		.regs = (struct mec_uart_regs *)MEC5_DT_UART_HW_REGS(inst),		\
 		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),				\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),				\
 		.host_io_addr = MEC5_DT_UART_HA(inst),					\
 		.ldn = MEC5_DT_UART_LDN(inst),						\
 		.sirq = MEC5_DT_UART_SIRQ(inst),					\
+		.irqn = MEC5_DT_UART_HW_IRQN(inst),					\
 	};										\
 	DEVICE_DT_INST_DEFINE(inst, mec5_host_uart_init, NULL, NULL,			\
 			&mec5_host_uart_dcfg_##inst,					\
