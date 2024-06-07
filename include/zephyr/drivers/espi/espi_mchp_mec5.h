@@ -48,6 +48,40 @@ struct mec5_espi_sram_bar_cfg {
 	uint8_t access;
 };
 
+enum mchp_espi_pc_aec_ien_flags {
+	MCHP_ESPI_PC_AEC_IEN_FLAG_IBF = BIT(0),
+	MCHP_ESPI_PC_AEC_IEN_FLAG_OBE = BIT(1),
+	MCHP_ESPI_PC_AEC_IEN_FLAG_SIRQ_OBE = BIT(2),
+};
+
+enum mchp_espi_pc_kbc_ien_flags {
+	MCHP_ESPI_PC_KBC_IEN_FLAG_IBF = BIT(0),
+	MCHP_ESPI_PC_KBC_IEN_FLAG_OBE = BIT(1),
+	MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_K = BIT(2),
+	MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_M = BIT(3),
+};
+
+enum mchp_espi_pc_emi_ien_flags {
+	MCHP_ESPI_PC_KBC_IEN_FLAG_H2EC = BIT(0),
+	MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_SWI = BIT(1),
+	MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_EC2H = BIT(2),
+};
+
+enum mchp_espi_pc_bdp_ien_flags {
+	MCHP_ESPI_PC_BDP_IEN_FLAG_FIFO_THRH = BIT(0),
+};
+
+enum mchp_espi_pc_mbox_ien_flags {
+	MCHP_ESPI_PC_MBOX_IEN_FLAG_H2EC = BIT(0),
+	MCHP_ESPI_PC_MBOX_IEN_FLAG_SIRQ_EC_WR = BIT(1),
+	MCHP_ESPI_PC_MBOX_IEN_FLAG_SIRQ_SMI = BIT(2),
+};
+
+enum mchp_espi_pc_host_uart_ien_flags {
+	MCHP_ESPI_EC_HUART_IEN_EC = BIT(0),
+	MCHP_ESPI_PC_HUART_IEN_FLAG_SIRQ = BIT(1),
+};
+
 /**
  * @brief Configure Microchip MEC5 eSPI SRAM BAR
  *
@@ -84,7 +118,7 @@ int mec5_espi_sram_bar_configure(const struct device *dev, uint8_t bar_id,
  */
 struct espi_pc_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, uint8_t enable);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 };
 
 static inline int espi_pc_host_access(const struct device *dev, uint8_t en, uint32_t cfg)
@@ -98,8 +132,7 @@ static inline int espi_pc_host_access(const struct device *dev, uint8_t en, uint
 	return api->host_access_enable(dev, en, cfg);
 }
 
-/* !!! TODO - Add uint32_t flags parameter with defines for all enable and all disable */
-static inline int espi_pc_intr_enable(const struct device *dev, uint8_t en)
+static inline int espi_pc_intr_enable(const struct device *dev, uint8_t en, uint32_t flags)
 {
 	const struct espi_pc_driver_api *api = (const struct espi_pc_driver_api *)dev->api;
 
@@ -107,7 +140,7 @@ static inline int espi_pc_intr_enable(const struct device *dev, uint8_t en)
 		return -ENOTSUP;
 	}
 
-	return api->intr_enable(dev, en);
+	return api->intr_enable(dev, en, flags);
 }
 
 /* ---- Host Device BDP ---- */
@@ -129,7 +162,7 @@ typedef void (*mchp_espi_pc_bdp_callback_t)(const struct device *dev,
 
 struct mchp_espi_pc_bdp_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, int intr_en);
+	int (*intr_enable)(const struct device *dev, int intr_en, uint32_t flags);
 	int (*has_data)(const struct device *dev);
 	int (*get_data)(const struct device *dev, struct host_io_data *data);
 #ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
@@ -138,7 +171,20 @@ struct mchp_espi_pc_bdp_driver_api {
 #endif
 };
 
-static inline int mchp_espi_ec_bdp_has_data(const struct device *dev)
+static inline int mchp_espi_pc_bdp_intr_enable(const struct device *dev, int intr_en,
+					       uint32_t flags)
+{
+	const struct mchp_espi_pc_bdp_driver_api *api =
+		(const struct mchp_espi_pc_bdp_driver_api *)dev->api;
+
+	if (!api->intr_enable) {
+		return -ENOTSUP;
+	}
+
+	return api->intr_enable(dev, intr_en, flags);
+}
+
+static inline int mchp_espi_pc_bdp_has_data(const struct device *dev)
 {
 	const struct mchp_espi_pc_bdp_driver_api *api =
 		(const struct mchp_espi_pc_bdp_driver_api *)dev->api;
@@ -150,7 +196,7 @@ static inline int mchp_espi_ec_bdp_has_data(const struct device *dev)
 	return api->has_data(dev);
 }
 
-static inline int mchp_espi_ec_bdp_get_data(const struct device *dev, struct host_io_data *hiod)
+static inline int mchp_espi_pc_bdp_get_data(const struct device *dev, struct host_io_data *hiod)
 {
 	const struct mchp_espi_pc_bdp_driver_api *api =
 		(const struct mchp_espi_pc_bdp_driver_api *)dev->api;
@@ -186,10 +232,23 @@ static inline int mchp_espi_pc_bdp_set_callback(const struct device *dev,
 
 struct mchp_espi_pc_kbc_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, uint8_t enable);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
 };
+
+static inline int mchp_espi_pc_kbc_intr_enable(const struct device *dev,
+					       uint8_t enable, uint32_t flags)
+{
+	const struct mchp_espi_pc_kbc_driver_api *api =
+		(const struct mchp_espi_pc_kbc_driver_api *)dev->api;
+
+	if (!api->intr_enable) {
+		return -ENOTSUP;
+	}
+
+	return api->intr_enable(dev, enable, flags);
+}
 
 static inline int mchp_espi_pc_kbc_lpc_request(const struct device *dev,
 					       enum lpc_peripheral_opcode op,
@@ -205,13 +264,26 @@ static inline int mchp_espi_pc_kbc_lpc_request(const struct device *dev,
 	return api->lpc_request(dev, op, data, flags);
 }
 
-/* -------- OS ACPI EC -------- */
+/* -------- ACPI EC -------- */
 struct mchp_espi_pc_aec_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, uint8_t enable);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
 };
+
+static inline int mchp_espi_pc_aec_intr_enable(const struct device *dev,
+					       uint8_t enable, uint32_t flags)
+{
+	const struct mchp_espi_pc_aec_driver_api *api =
+		(const struct mchp_espi_pc_aec_driver_api *)dev->api;
+
+	if (!api->intr_enable) {
+		return -ENOTSUP;
+	}
+
+	return api->intr_enable(dev, enable, flags);
+}
 
 static inline int mchp_espi_pc_aec_lpc_request(const struct device *dev,
 					       enum lpc_peripheral_opcode op,
@@ -226,9 +298,6 @@ static inline int mchp_espi_pc_aec_lpc_request(const struct device *dev,
 
 	return api->lpc_request(dev, op, data, flags);
 }
-
-/* -------- Host Command ACPI EC -------- */
-
 
 /* -------- EMI -------- */
 enum mchp_emi_region_id {
@@ -255,13 +324,26 @@ typedef void (*mchp_espi_pc_emi_callback_t)(const struct device *dev,
 
 struct mchp_espi_pc_emi_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, uint8_t enable);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*configure_mem_region)(const struct device *dev, struct mchp_emi_mem_region *mr,
 				    uint8_t region_id);
 	int (*set_callback)(const struct device *dev, mchp_espi_pc_emi_callback_t callback,
 			    void *user_data);
 	int (*request)(const struct device *dev, enum mchp_emi_opcode op, uint32_t *data);
 };
+
+static inline int mchp_espi_pc_emi_intr_enable(const struct device *dev,
+					       uint8_t enable, uint32_t flags)
+{
+	const struct mchp_espi_pc_aec_driver_api *api =
+		(const struct mchp_espi_pc_aec_driver_api *)dev->api;
+
+	if (!api->intr_enable) {
+		return -ENOTSUP;
+	}
+
+	return api->intr_enable(dev, enable, flags);
+}
 
 static inline int mchp_espi_pc_emi_config_mem_region(const struct device *dev,
 						     struct mchp_emi_mem_region *mr,
@@ -308,12 +390,25 @@ static inline int mchp_espi_pc_emi_request(const struct device *dev,
 
 struct mchp_espi_pc_mbox_driver_api {
 	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
-	int (*intr_enable)(const struct device *dev, uint8_t enable);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
 	int (*set_callback)(const struct device *dev, mchp_espi_pc_mbox_callback_t callback,
 			    void *user_data)
 #endif
 };
+
+static inline int mchp_espi_pc_mbox_intr_enable(const struct device *dev,
+						uint8_t enable, uint32_t flags)
+{
+	const struct mchp_espi_pc_mbox_driver_api *api =
+		(const struct mchp_espi_pc_mbox_driver_api *)dev->api;
+
+	if (!api->intr_enable) {
+		return -ENOTSUP;
+	}
+
+	return api->intr_enable(dev, enable, flags);
+}
 
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
 
@@ -339,5 +434,11 @@ static inline int mchp_espi_pc_mbox_set_callback(const struct device *dev,
 	return api->set_callback(dev, callback, user_data);
 }
 #endif
+
+/* -------- Host visible UART -------- */
+struct mec5_host_uart_driver_api {
+	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
+	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
+};
 
 #endif /* ZEPHYR_INCLUDE_DRIVERS_ESPI_ESPI_MCHP_MEC5_H_ */
