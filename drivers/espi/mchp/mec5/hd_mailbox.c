@@ -51,15 +51,33 @@ struct mec5_mbox_data {
 #endif
 };
 
-static int mec5_mbox_intr_enable(const struct device *dev, uint8_t enable)
+static int mec5_mbox_intr_enable(const struct device *dev, uint8_t enable, uint32_t flags)
 {
 	const struct mec5_mbox_devcfg *const devcfg = dev->config;
 	struct mec_mbox_regs *const regs = devcfg->regs;
+	int ret = 0;
+	uint8_t slot = 0xffu;
 
-	int ret = mec_hal_mbox_girq_ctrl(regs, enable);
+	if (flags & MCHP_ESPI_PC_MBOX_IEN_FLAG_SIRQ_EC_WR) {
+		if (enable) {
+			slot = devcfg->hev_sirq;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 0, slot);
+	}
 
-	if (ret != MEC_RET_OK) {
-		ret = -EIO;
+	if (flags & MCHP_ESPI_PC_MBOX_IEN_FLAG_SIRQ_SMI) {
+		slot = 0xffu;
+		if (enable) {
+			slot = devcfg->hsmi_sirq;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 1, slot);
+	}
+
+	if (flags & MCHP_ESPI_PC_MBOX_IEN_FLAG_H2EC) {
+		ret = mec_hal_mbox_girq_ctrl(regs, enable);
+		if (ret != MEC_RET_OK) {
+			ret = -EIO;
+		}
 	}
 
 	return ret;

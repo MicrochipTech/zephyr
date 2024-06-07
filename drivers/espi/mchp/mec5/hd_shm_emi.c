@@ -65,18 +65,33 @@ struct mec5_shm_emi_data {
 	void *cb_data;
 };
 
-/* TODO - Does this API only affect device interrupts to the EC or
- * interrupts to the Host?
- */
-static int mec5_shm_emi_intr_en(const struct device *dev, uint8_t enable)
+static int mec5_shm_emi_intr_en(const struct device *dev, uint8_t enable, uint32_t flags)
 {
 	const struct mec5_shm_emi_devcfg *devcfg = dev->config;
 	struct mec_emi_regs *const regs = devcfg->regs;
+	int ret = 0;
+	uint8_t slot = 0xffu;
 
-	int ret = mec_hal_emi_girq_ctrl(regs, enable);
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_SWI) {
+		if (enable) {
+			slot = devcfg->sirq_hev;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 0, slot);
+	}
 
-	if (ret != MEC_RET_OK) {
-		return -EIO;
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_SIRQ_EC2H) {
+		slot = 0xffu;
+		if (enable) {
+			slot = devcfg->sirq_e2h;
+		}
+		mec_hal_espi_ld_sirq_set(MEC_ESPI_IO, devcfg->ldn, 1, slot);
+	}
+
+	if (flags & MCHP_ESPI_PC_KBC_IEN_FLAG_H2EC) {
+		ret = mec_hal_emi_girq_ctrl(regs, enable);
+		if (ret != MEC_RET_OK) {
+			return -EIO;
+		}
 	}
 
 	return 0;
