@@ -78,7 +78,7 @@ static int mec5_bdp_set_callback(const struct device *dev,
 }
 #endif
 
-static int mec5_bdp_intr_enable(const struct device *dev, int intr_en)
+static int mec5_bdp_intr_enable(const struct device *dev, int intr_en, uint32_t flags)
 {
 	const struct mec5_bdp_devcfg *const devcfg = dev->config;
 	struct mec_bdp_regs *const regs = devcfg->regs;
