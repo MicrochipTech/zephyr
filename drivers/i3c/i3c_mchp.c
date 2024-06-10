@@ -17,7 +17,7 @@
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/irq.h>
-LOG_MODULE_REGISTER(i3c_mchp, CONFIG_I3C_LOG_LEVEL);
+LOG_MODULE_REGISTER(i3c_mchp, LOG_LEVEL_DBG);
 
 /* MEC5 HAL */
 #include <device_mec5.h>
@@ -1209,7 +1209,7 @@ static int i3c_mec5_target_IBI_raise(const struct device *dev, struct i3c_ibi *r
 		break;
 	case I3C_IBI_HOTJOIN:
 		return -ENOTSUP;
-		/* return _drv_i3c_target_ibi_raise_hj(dev); */
+		/*return _drv_i3c_target_ibi_raise_hj(dev);*/
 	default:
 		return -EINVAL;
 	}
@@ -1353,8 +1353,7 @@ static void _drv_tgt_tx_done_handler(const struct device *dev)
 	 * target tx
 	 */
 	xec_data->tgt_tx_queued = false;
-
-	/* Keeping this function for possible enhancements later */
+	LOG_DBG("_drv_tgt_tx_done_handler\n"); 
 }
 
 static bool _drv_i3c_ibi_isr(struct mec_i3c_host_regs *regs, struct xec_i3c_data *data)
