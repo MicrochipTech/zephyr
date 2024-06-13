@@ -677,6 +677,45 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
+	io_addr_len = 0x10320u;
+	io_data = 0x22u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10330u;
+	io_data = 0x33u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10340u;
+	io_data = 0x33u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	
+	k_sleep(K_MSEC(50));
+
 	app_flags |= APP_FLAG_GET_STATUS_LOOP;
 	if (app_flags & APP_FLAG_GET_STATUS_LOOP) {
 		LOG_INF("Application loop issuing eSPI GET_STATUS");
