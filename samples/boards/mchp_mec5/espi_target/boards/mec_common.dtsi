@@ -244,6 +244,46 @@
 	status = "okay";
 };
 
+/* eSPI Host generic ACPI_EC devices */
+&acpi_ec2 {
+	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	host-infos = <&espi_acpi_ec2>;
+	status = "okay";
+};
+
+&espi_acpi_ec2 {
+	host-address = <0x320>;
+	sirqs = <0xff>;
+	sirq-names = "ec_obf";
+	status = "okay";
+};
+
+&acpi_ec3 {
+	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	host-infos = <&espi_acpi_ec3>;
+	status = "okay";
+};
+
+&espi_acpi_ec3 {
+	host-address = <0x330>;
+	sirqs = <0xff>;
+	sirq-names = "ec_obf";
+	status = "okay";
+};
+
+&acpi_ec4 {
+	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	host-infos = <&espi_acpi_ec4>;
+	status = "okay";
+};
+
+&espi_acpi_ec4 {
+	host-address = <0x340>;
+	sirqs = <0xff>;
+	sirq-names = "ec_obf";
+	status = "okay";
+};
+
 /* Use eSPI Host KBC driver and map KBC0 and KB Port92h to Host I/O space */
 &kbc0 {
 	compatible = "microchip,mec5-espi-kbc";
