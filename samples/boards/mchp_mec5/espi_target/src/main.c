@@ -16,6 +16,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/espi.h>
+#include <zephyr/drivers/espi/espi_mchp_mec5.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/led.h>
 #include <zephyr/drivers/pinctrl.h>
@@ -28,6 +29,16 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #include "espi_debug.h"
 
 /* #define APP_ESPI_EVENT_CAPTURE */
+
+#define ACPI_EC2_NODE DT_NODELABEL(acpi_ec2)
+#define ACPI_EC3_NODE DT_NODELABEL(acpi_ec3)
+#define ACPI_EC4_NODE DT_NODELABEL(acpi_ec4)
+
+struct gen_acpi_ec_info {
+	const struct device *dev;
+	uint16_t iobase;
+	mchp_espi_pc_aec_callback_t cb;
+};
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 #define ESPI0_NODE       DT_NODELABEL(espi0)
@@ -115,6 +126,31 @@ static void gpio_cb(const struct device *port,
 		    struct gpio_callback *cb,
 		    gpio_port_pins_t pins);
 
+static void acpi_ec2_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data);
+static void acpi_ec3_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data);
+static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data);
+
+const struct gen_acpi_ec_info gen_acpi_ec_tbl[] = {
+	{
+		.dev = DEVICE_DT_GET(ACPI_EC2_NODE),
+		.iobase = (uint16_t)DT_PROP(DT_PHANDLE_BY_IDX(ACPI_EC2_NODE, host_infos, 0), host_address),
+		.cb = acpi_ec2_cb,
+	},
+	{
+		.dev = DEVICE_DT_GET(ACPI_EC3_NODE),
+		.iobase = (uint16_t)DT_PROP(DT_PHANDLE_BY_IDX(ACPI_EC3_NODE, host_infos, 0), host_address),
+		.cb = acpi_ec3_cb,
+	},
+	{
+		.dev = DEVICE_DT_GET(ACPI_EC4_NODE),
+		.iobase = (uint16_t)DT_PROP(DT_PHANDLE_BY_IDX(ACPI_EC4_NODE, host_infos, 0), host_address),
+		.cb = acpi_ec4_cb,
+	},
+};
+
 int main(void)
 {
 	int ret = 0;
@@ -122,6 +158,7 @@ int main(void)
 	bool oob_en = false;
 	bool fc_en = false;
 	bool pc_en = false;
+	bool generic_acpi_ec_en[3] = { false, false ,false };
 	uint8_t vw_state = 0;
 
 	LOG_INF("MEC5 eSPI Target sample application for board: %s", DT_N_COMPAT_MODEL_IDX_0);
@@ -129,6 +166,23 @@ int main(void)
 	k_fifo_init(&espi_ev_fifo);
 	init_espi_events(espi_evs, MAX_ESPI_EVENTS);
 #endif
+
+	for (size_t n = 0; n < ARRAY_SIZE(gen_acpi_ec_tbl); n++) {
+		const struct gen_acpi_ec_info *info = &gen_acpi_ec_tbl[n];
+
+		if (device_is_ready(info->dev)) {
+			LOG_INF("Device %s has I/O base 0x%0u", info->dev->name, info->iobase);
+			ret = mchp_espi_pc_aec_set_callback(info->dev, info->cb, NULL);
+			if (ret) {
+				LOG_ERR("Device %s cb set error (%d)", info->dev->name, ret);
+			} else {
+				generic_acpi_ec_en[n] = true;
+			}
+		} else {
+			LOG_INF("ERROR: Device %s is not ready", info->dev->name);
+		}
+	}
+
 	ret = pinctrl_apply_state(app_pinctrl_cfg, PINCTRL_STATE_DEFAULT);
 	if (ret) {
 		LOG_ERR("App pin control state apply: %d", ret);
@@ -493,6 +547,28 @@ static void espi_periph_cb(const struct device *dev,
 	} else if (details == ESPI_PERIPHERAL_HOST_MAILBOX) {
 		LOG_INF("  PC Mailbox");
 	}
+}
+
+static void acpi_ec2_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data)
+{
+	LOG_INF("ACPI_EC2 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
+		ev->flags, ev->ev_type, ev->cmd_data);
+
+}
+
+static void acpi_ec3_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data)
+{
+	LOG_INF("ACPI_EC3 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
+		ev->flags, ev->ev_type, ev->cmd_data);
+}
+
+static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
+			void *user_data)
+{
+	LOG_INF("ACPI_EC3 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
+		ev->flags, ev->ev_type, ev->cmd_data);
 }
 
 #ifdef APP_ESPI_EVENT_CAPTURE
