@@ -1,0 +1,12 @@
+# Microchip MEC5 HAL based Watchdog Timer configuration
+
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config WDT_MCHP_MEC5
+	bool "Microchip MEC5 SoC series Watchdog Timer (WDT) driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_WATCHDOG_ENABLED
+	select HAS_WDT_DISABLE_AT_BOOT
+	help
+	  Enable WDT driver for Microchip MEC5 HAL based SoC series.
