@@ -6,3 +6,6 @@ project(wdt_basic_api)
 
 FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources})
+
+zephyr_linker_sources_ifdef(CONFIG_DT_HAS_MICROCHIP_MEC5_WATCHDOG_ENABLED
+	SECTIONS microchip_mec5_noinit.ld)
