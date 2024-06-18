@@ -96,6 +96,8 @@
 #define WDT_NODE DT_INST(0, gd_gd32_wwdgt)
 #elif DT_HAS_COMPAT_STATUS_OKAY(gd_gd32_fwdgt)
 #define WDT_NODE DT_INST(0, gd_gd32_fwdgt)
+#elif DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_watchdog)
+#define WDT_NODE DT_INST(0, microchip_mec5_watchdog)
 #elif DT_HAS_COMPAT_STATUS_OKAY(zephyr_counter_watchdog)
 #define WDT_NODE DT_COMPAT_GET_ANY_STATUS_OKAY(zephyr_counter_watchdog)
 #elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_wwdt)
@@ -150,6 +152,8 @@ static struct wdt_timeout_cfg m_cfg_wdt1;
 
 #if DT_NODE_HAS_STATUS(DT_CHOSEN(zephyr_dtcm), okay)
 #define NOINIT_SECTION ".dtcm_noinit.test_wdt"
+#elif DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_watchdog)
+#define NOINIT_SECTION ".mec5_bootrom_noinit"
 #else
 #define NOINIT_SECTION ".noinit.test_wdt"
 #endif
