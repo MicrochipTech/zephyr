@@ -1,0 +1,15 @@
+# Copyright (c) 2019, Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 HAL based watchdog timer
+
+include: base.yaml
+
+compatible: "microchip,mec5-watchdog"
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
