@@ -9,7 +9,8 @@ TagAddr1 = 0
 ; is disabled. If PlatformID is enabled in OTP Boot-ROM will check the image
 ; BoardID value with an OTP PlatformID value. Load is aborted if the ID's do
 ; not match.
-BoardID = 0
+BoardID = 0x316
+ChipStr = MEC174x
 
 [IMAGE "0"]
 ImageLocation = 0x2000
