@@ -1118,7 +1118,7 @@ static void i2c_mec5_nl_isr(const struct device *dev)
 	struct mec_i2c_smb_regs *regs = devcfg->regs;
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
-	uint32_t i2c_hw_sts = 0, cm_event = 0, kev = 0;
+	uint32_t i2c_hw_sts = 0, cm_event = 0, kev = 0, kevm = 0;
 	int idle_active = 0;
 #ifdef CONFIG_I2C_CALLBACK
 	int result = 0;
@@ -1174,7 +1174,8 @@ static void i2c_mec5_nl_isr(const struct device *dev)
 #ifdef CONFIG_I2C_CALLBACK
 			k_sem_give(&data->lock);
 			if (data->i2c_cb) {
-				if (kev & I2C_NL_ERRORS) {
+				kevm = k_event_test(&data->events, I2C_NL_ERRORS);
+				if (kevm) {
 					result = -EIO;
 				}
 				data->i2c_cb(dev, result, data->i2c_cb_udata);
