@@ -154,18 +154,25 @@ struct i2c_mec5_nl_data {
 	struct k_event events;
 	uint32_t uconfig;
 	uint32_t i2c_status;
-#ifdef CONFIG_I2C_TARGET
-	sys_slist_t target_cfgs;
-#endif
+	struct i2c_msg *msgs;
+	uint8_t *rem_buf;
+	uint8_t nmsgs;
+	uint8_t rsvd1[1];
+	uint16_t rem_len;
+	uint16_t msgs_ntx;
+	uint16_t msgs_nrx;
+	uint16_t nl_ntxb;
+	uint16_t nl_nrxb;
 	uint8_t cm_target_wr_i2c_addr;
 	uint8_t speed_id;
 	uint8_t state;
 	uint8_t mdone;
-	uint16_t nl_ntxb;
-	uint16_t nl_nrxb;
 #ifdef CONFIG_I2C_CALLBACK
 	i2c_callback_t i2c_cb;
 	void *i2c_cb_udata;
+#endif
+#ifdef CONFIG_I2C_TARGET
+	struct i2c_target_config *target_cfgs[I2C_NL_MAX_TARGET_ADDRS];
 #endif
 	struct dma_config dma_tx_cfg;
 	struct dma_config dma_rx_cfg;
@@ -535,6 +542,7 @@ static int do_stop(const struct device *dev)
 	return 0;
 }
 
+#if 0
 /* Due to the nature of the I2C network layer HW design we limit acceptable
  * I2C messages to: I2C Read, I2C Write, and I2C combined write-read where
  * The last struct i2c_msg must have the I2C_MSG_STOP flag set.
@@ -605,6 +613,72 @@ static int i2c_mec5_nl_check_msgs(struct i2c_msg *msgs, uint8_t num_msgs)
 
 	return 0;
 }
+#else
+static int i2c_mec5_nl_check_msgs(struct i2c_mec5_nl_data *data, struct i2c_msg *msgs,
+				  uint8_t num_msgs)
+{
+	uint32_t txlen = 0, rxlen = 0;
+	bool ovfl = false;
+
+	data->msgs = NULL;
+	data->nmsgs = 0;
+	data->msgs_ntx = 0;
+	data->msgs_nrx = 0;
+
+	for (uint8_t n = 0u; n < num_msgs; n++) {
+		struct i2c_msg *m = &msgs[n];
+
+		if (m->buf == NULL) {
+			printf("Msg %u buffer is NULL\n", n);
+			return -EINVAL;
+		}
+
+		if (m->len == 0) {
+			printf("Msg %u length is 0\n", n);
+			return -EINVAL;
+		}
+
+		if (m->flags & I2C_MSG_ADDR_10_BITS) {
+			printf("Msg %u HW does not support 10-bit addresses\n", n);
+			return -EINVAL;
+		}
+
+		if (m->flags & I2C_MSG_READ) {
+			ovfl = u32_add_overflow(m->len, rxlen, &rxlen);
+		} else {
+			ovfl = u32_add_overflow(m->len, txlen, &txlen);
+		}
+		if (ovfl) {
+			printf("At Msg %u sizes overflowed 32-bits\n", n);
+			return -EINVAL;
+		}
+
+		if (n == (num_msgs - 1u)) {
+			if (!(m->flags & I2C_MSG_STOP)) {
+				printf("Msg %u: Last message does not have STOP flag set\n", n);
+				return -EINVAL;
+			}
+		} else {
+			if (m->flags & I2C_MSG_READ) {
+				printf("Msg %u: Read phase only allowed on last message\n", n);
+			}
+		}
+	}
+
+	if ((txlen > I2C_NL_MAX_XFR_LEN) || (rxlen > I2C_NL_MAX_XFR_LEN)) {
+		printf("TX and/or RX total msg len exceed HW capabilites\n");
+		return -EINVAL;
+	}
+
+	data->msgs = msgs;
+	data->nmsgs = num_msgs;
+	data->msgs_ntx = (uint16_t)txlen;
+	data->msgs_nrx = (uint16_t)rxlen;
+
+	return 0;
+}
+
+#endif
 
 /* DMA channel callbacks
  * dev = pointer central DMA device structure
@@ -853,6 +927,91 @@ static int mec5_nl_i2c_xfr(const struct device *dev, struct i2c_msg *wrmsg,
 	return 0;
 }
 
+/* I2C-NL config is the easy part since we have total tx and rx from check messages
+ * stored in driver data.
+ * Ndw = number of data bytes written to target
+ * Nrd = number of data bytes read from target
+ * I2C requires a formatted target address to be transmitted after START
+ * formatted address is 8-bits: b[7:1]=target address, b[0]=0(write),1(read)
+ * items in [] are transmitted by the target
+ * I2C_WRITE:
+ * i2c_addr = (target_addr << 1) | 0
+ * START i2c_addr [ACK] wrData1 [ACK] wrData2 [ACK] ... wrDataNwr [ACK] STOP
+ *
+ * I2C_READ: Controller issues NACK on last data it is willing to accept and then issues STOP.
+ * i2c_addr = (target_addr << 1) | 1
+ * START i2c_addr [ACK] [rdData1] ACK rdData2 [ACK] ... rdDataNrd NACK STOP
+ *
+ * I2C_COMBINED_WRITE_READ:
+ * i2c_addr_wr = (target_addr << 1) | 0
+ * i2c_addr_rd = (target_addr << 1) | 1
+ * START i2c_addr_wr [ACK] wrData1 [ACK] wrData2 [ACK] ... wrDataNwr [ACK]
+ * Rpt-START i2c_addr_rd [ACK] [rdData1] ACK [rdData2] ACK ... [rdDataNrd] NACK STOP
+ *
+ * The message array and number of messages has been checked by the caller and a
+ * pointer to the message and number of messages stored in driver data.
+ * The message array will be one of:
+ * A. One write message. We enforce STOP at message end.
+ * B. One read message. We enforce STOP at message end.
+ * C. (num_msgs - 1) write messages and last message is read.
+ *    We do Rpt-START at end of last write message and STOP at end of read message.
+ *
+ * I2C-NL hardware requires transmit data to be in memory as:
+ * byte offsets           description
+ * 0                      target address
+ * 1 through Nwr          write data
+ * Nwr+1                  optional Rpt-START address if I2C_COMBINED
+ *
+ * I2C-NL hardware has 16-bit write and read counts. When these counts are
+ * decremented to 0 the HW FSM changes state. There's no going back.
+ *
+ * Driver implements a write buffer of size XFRBUF_DATA_LEN_MAX + 4 leaving
+ * room for START and Rpt-START addresses.
+ * XFR_BUF_DATA_LEN_MAX = CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE (default = 64)
+ * The target address, up to XFR_BUF_DATA_LEN_MAX of write data is copied
+ * into driver data transfer buffer. Any remaining write data is not copied
+ * into this buffer. We point the DMA channel to remaining data.
+ * One corner case is I2C_COMBINED protocol and write data length > XFR_BUF_DATA_LEN_MAX.
+ *
+ *
+ * DMA has more corner cases:
+ *
+ */
+static int mec5_nl_i2c_xfr_mwr(const struct device *dev, uint32_t xflags)
+{
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
+	struct mec_i2c_smb_regs *regs = devcfg->regs;
+	struct i2c_mec5_nl_data *data = dev->data;
+	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	struct dma_config *dma_tx_cfg = &data->dma_tx_cfg;
+	struct dma_config *dma_rx_cfg = &data->dma_rx_cfg;
+	struct dma_block_config *tx_dma_blk1 = &data->dblk[0];
+	struct dma_block_config *tx_dma_blk2 = &data->dblk[1];
+	struct dma_block_config *tx_dma_blk3 = &data->dblk[3];
+	struct dma_block_config *rx_dma_blk1 = &data->dblk[2];
+	uint8_t *xbuf = data->xfrbuf;
+	int err = 0;
+	uint32_t cm_cmd = 0, extlen = 0, nrx = 0, ntx_rem = 0;
+	uint32_t ntx = 1u;
+	uint32_t hal_flags = (MEC_I2C_NL_FLAG_START | MEC_I2C_NL_FLAG_STOP
+			      | MEC_I2C_NL_FLAG_CM_DONE_IEN);
+
+	mec5_nl_hw_prep(dev);
+
+	ntx += (data->msgs_ntx + ((data->msgs_ntx && data->msgs_nrx) ? 1 : 0));
+	nrx = data->msgs_nrx;
+	if (nrx && (ntx > 1u)) {
+		hal_flags |= MEC_I2C_NL_FLAG_RPT_START;
+	}
+
+
+
+
+	err = mec_hal_i2c_nl_cm_cfg_start(hwctx, ntx, nrx, hal_flags);
+
+	return 0;
+}
+
 #define I2C_NL_ERRORS \
 	(BIT(I2C_NL_KEV_DMA_A_ERR_POS) | BIT(I2C_NL_KEV_DMA_B_ERR_POS) \
 	 | BIT(I2C_NL_KEV_BERR_POS) | BIT(I2C_NL_KEV_LAB_ERR_POS) \
@@ -885,7 +1044,11 @@ static int i2c_mec5_nl_transfer_cmn(const struct device *dev, struct i2c_msg *ms
 	data->i2c_cb_udata = userdata;
 #endif
 
+#if 0
 	ret = i2c_mec5_nl_check_msgs(msgs, num_msgs);
+#else
+	ret = i2c_mec5_nl_check_msgs(data, msgs, num_msgs);
+#endif
 	if (ret) {
 		goto mec5_unlock;
 	}
@@ -908,6 +1071,14 @@ static int i2c_mec5_nl_transfer_cmn(const struct device *dev, struct i2c_msg *ms
 	data->state = I2C_NL_STATE_OPEN;
 	data->cm_target_wr_i2c_addr = fmt_addr(addr, I2C_NL_FMT_ADDR_WR);
 
+#if 0
+	/* TODO - Only supports
+	 * If one message must be write or read
+	 * If two messages must be write followed by read
+	 * Is it possible to support:
+	 *  Nwr write messages where total wr length < HW limit
+	 *  followed by optional single read message?
+	 */
 	if (num_msgs == 1) {
 		wrmsg = &msgs[0];
 		if (msgs[0].flags & I2C_MSG_READ) {
@@ -920,6 +1091,9 @@ static int i2c_mec5_nl_transfer_cmn(const struct device *dev, struct i2c_msg *ms
 
 	xflags = MEC5_I2C_NL_XFLAG_START;
 	ret = mec5_nl_i2c_xfr(dev, wrmsg, rdmsg, xflags);
+#else
+	ret = mec5_nl_i2c_xfr_mwr(dev, xflags);
+#endif
 	if (ret) { /* if error issue STOP if bus is still owned by controller */
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x7);
 		do_stop(dev);
@@ -1007,24 +1181,29 @@ static int i2c_mec5_nl_target_register(const struct device *dev, struct i2c_targ
 	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct mec_i2c_smb_regs *regs = devcfg->regs;
 	struct i2c_mec5_nl_data *data = dev->data;
-	struct i2c_target_config *head = data->target_cfg_head;
+	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
 
 	if (!cfg || (cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS)) {
 		return -EINVAL;
 	}
 
-	/* TODO check if controller is busy */
+	k_sem_take(&data->lock, K_FOREVER); /* decrements count */
+
+	if (mec_hal_i2c_smb_is_bus_owned(hwctx)) {
+		k_sem_give(&data->lock);
+		return -EBUSY;
+	}
 
 	for (uint8_t n = 0; n < I2C_NL_MAX_TARGET_ADDRS; n++) {
-		
-
 		if (data->target_cfgs[n] == NULL) {
-			data->target_cfg[n] = cfg;
 			set_mec5_target_addr(regs, n, (uint8_t)(cfg->address & 0x7fu));
+			data->target_cfgs[n] = cfg;
 		}
 	}
 
-	return -EBUSY
+	k_sem_give(&data->lock);
+
+	return 0;
 #else
 	return -ENOTSUP;
 #endif
@@ -1036,22 +1215,31 @@ static int i2c_mec5_nl_target_unregister(const struct device *dev, struct i2c_ta
 	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct mec_i2c_smb_regs *regs = devcfg->regs;
 	struct i2c_mec5_nl_data *data = dev->data;
+	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
 
 	if (!cfg || (cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS)) {
 		return -EINVAL;
 	}
 
-	/* TODO check if controller is busy */
+	k_sem_take(&data->lock, K_FOREVER); /* decrements count */
+
+	if (mec_hal_i2c_smb_is_bus_owned(hwctx)) {
+		k_sem_give(&data->lock);
+		return -EBUSY;
+	}
 
 	for (uint8_t n = 0; n < I2C_NL_MAX_TARGET_ADDRS; n++) {
 		if (data->target_cfgs[n] != NULL) {
-			data->target_cfg[n].address == cfg->address
-			data->target_cfg[n] = cfg;
-			set_mec5_target_addr(regs, n, (uint8_t)(cfg->address & 0x7fu));
+			if (data->target_cfgs[n]->address == cfg->address) {
+				data->target_cfgs[n] = NULL;
+				set_mec5_target_addr(regs, n, 0);
+			}
 		}
 	}
 
-	return -EBUSY
+	k_sem_give(&data->lock);
+
+	return 0;
 #else
 	return -ENOTSUP;
 #endif
@@ -1086,9 +1274,7 @@ static int i2c_m5nl_stop(struct i2c_target_config *config)
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 static void i2c_m5nl_targ_buf_wr_received(struct i2c_target_config *config,
 					  uint8_t *ptr, uint32_t len)
-{
-	return -ENOTSUP;
-}
+{ }
 
 static int i2c_m5nl_targ_buf_rd_requested(struct i2c_target_config *config,
 					  uint8_t **ptr, uint32_t *len)
@@ -1239,9 +1425,6 @@ static int i2c_mec5_nl_init(const struct device *dev)
 	data->i2c_status = 0;
 	data->mdone = 0;
 
-#ifdef CONFIG_I2C_TARGET
-	sys_slist_init(&data->target_cfgs);
-#endif
 	ret = i2c_mec5_nl_init_dma(dev);
 	if (ret) {
 		return ret;
