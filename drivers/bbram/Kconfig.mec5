@@ -1,0 +1,11 @@
+# Copyright (c) 2021 Google Inc
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config BBRAM_MCHP_MEC5
+	bool "Microchip MEC5 Battery-backed RAM drivers"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_BBRAM_ENABLED
+	help
+	  This option enables the BBRAM driver for Microchip MEC5 family of
+	  processors.
