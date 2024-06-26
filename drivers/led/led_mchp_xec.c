@@ -41,6 +41,7 @@ LOG_MODULE_REGISTER(led_xec, CONFIG_LED_LOG_LEVEL);
 #define XEC_BBLED_CFG_WDT_RLD_MSK0	0xffu
 #define XEC_BBLED_CFG_WDT_RLD_MSK	0xff00u
 #define XEC_BBLED_CFG_WDT_RLD_DFLT	0x1400u
+#define XEC_BBLED_CFG_EN_ASSYM_POS	16
 
 /* Limits register */
 #define XEC_BBLED_LIM_MSK		0xffffu
@@ -92,6 +93,70 @@ struct xec_bbled_config {
 	uint8_t pcr_id;
 	uint8_t pcr_pos;
 };
+
+/* Enable HW breathing of the LED.
+ * limits = MSB is MAXIMUM, the highest duty cycle in breathing
+ *          LSB is MINIMUM, the least duty cycle in breathing
+ * high_delay = in ms, hold the highest duty cycle (MAXIMUM) for this periods
+ * low_delay = in ms, hold the least duty cycle (MINIMUM) for this periods
+ * stepsize_interval: 
+ *          high 4-bit nibble is for step size, the adjusted duty cycles for next step
+ *          low 4-bit nubble is for interval, the nubmer of PWM periods to hold each step
+ * This API supports 
+ * 		-- Symmetric mode
+ *		-- PWM is configured as an 8-bit PWM
+ *		-- Clock source is the 32.768 KHz clock
+ */
+static int xec_bbled_breath(const struct device *dev, uint32_t led, uint16_t limits, uint32_t high_delay,
+                uint32_t low_delay, uint8_t stepsize_interval)
+{
+	const struct xec_bbled_config * const config = dev->config;
+	struct xec_bbled_regs * const regs = config->regs;
+	uint32_t stepsize, interval;
+
+	if (led) {
+		return 0xff;
+	}
+
+	/* insure period will not overflow uin32_t */
+	if ((high_delay > XEC_BBLED_BLINK_PERIOD_MAX_MS)
+	    || (low_delay > XEC_BBLED_BLINK_PERIOD_MAX_MS)) {
+		return 0xff;
+	}
+
+	regs->limits = limits;
+   	regs->delay = ((high_delay >> 3) << XEC_BBLED_DLY_HI_POS) |
+                  ((low_delay >> 3) << XEC_BBLED_DLY_LO_POS);
+
+    stepsize = (stepsize_interval >> 4) & 0x0F;
+    interval = stepsize_interval & 0x0F;
+    regs->update_step_size = (stepsize << XEC_BBLED_UPD_SSI_POS(7)) |
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(6)) |
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(5)) |                 
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(4)) |                 
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(3)) |                 
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(2)) |                  
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(1)) |                 
+                             (stepsize << XEC_BBLED_UPD_SSI_POS(0));
+    regs->update_interval = (interval << XEC_BBLED_UPD_SSI_POS(7)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(6)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(5)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(4)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(3)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(2)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(1)) |
+                            (interval << XEC_BBLED_UPD_SSI_POS(0));
+
+    /* config symmetic mode */
+	regs->config &= ~BIT(XEC_BBLED_CFG_EN_ASSYM_POS);
+    /* config breathing behavior */
+	regs->config = (regs->config & ~(XEC_BBLED_CFG_MODE_MSK))
+		           | XEC_BBLED_CFG_MODE_BREATHING;
+    /* update to new config */                                                  
+	regs->config |= BIT(XEC_BBLED_CFG_EN_UPDATE_POS);
+
+	return 0;
+}
 
 /* delay_on and delay_off are in milliseconds
  * (prescale+1) = (32768 * Tblink_ms) / (256 * 1000)
@@ -262,6 +327,7 @@ static const struct led_driver_api xec_bbled_api = {
 	.on		= xec_bbled_on,
 	.off		= xec_bbled_off,
 	.blink		= xec_bbled_blink,
+	.breath		= xec_bbled_breath,	
 };
 
 #define XEC_BBLED_PINCTRL_DEF(i) PINCTRL_DT_INST_DEFINE(i)

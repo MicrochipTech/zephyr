@@ -118,8 +118,15 @@ int led_test(void)
 		}
 		print_bbled_regs(base);
 
+		/* test LED breathing API */
+		LOG_INF("Breathing: max 400ms, min 3000ms, stepsize 10, interval 4");
+		ret = led_breath(dev, 0x00, 0xff00, 400, 3000, 0xa4);
+		if (ret) {
+			LOG_ERR("LED Breathing API returned error %d", ret);
+		}
 		LOG_INF("Delay 2 seconds");
 		k_sleep(K_SECONDS(2));
+		print_bbled_regs(base);
 	}
 
 	LOG_INF("LED test done");

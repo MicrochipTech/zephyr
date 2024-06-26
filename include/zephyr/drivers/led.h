@@ -56,6 +56,15 @@ typedef int (*led_api_blink)(const struct device *dev, uint32_t led,
 			     uint32_t delay_on, uint32_t delay_off);
 
 /**
+ * @typedef led_api_breath()
+ * @brief Callback API for breathing an LED
+ *
+ * @see led_breath() for argument descriptions.
+ */
+typedef int (*led_api_breath)(const struct device *dev, uint32_t led, uint16_t limits, uint32_t high_delay,
+                uint32_t low_delay, uint8_t stepsize_interval);
+
+/**
  * @typedef led_api_get_info()
  * @brief Optional API callback to get LED information
  *
@@ -121,6 +130,7 @@ __subsystem struct led_driver_api {
 	led_api_set_brightness set_brightness;
 	led_api_set_color set_color;
 	led_api_write_channels write_channels;
+	led_api_breath breath;
 };
 
 /**
@@ -148,6 +158,37 @@ static inline int z_impl_led_blink(const struct device *dev, uint32_t led,
 		return -ENOSYS;
 	}
 	return api->blink(dev, led, delay_on, delay_off);
+}
+
+/**
+ * @brief Breath an LED
+ *
+ * This optional routine starts breathing a LED forever with the given time
+ * period.
+ *
+ * @param dev LED device
+ * @param led LED number
+ * @param limits highest and least duty cycles in breathing
+ * @param high_delay hold the highest duty cycle (MAXIMUM) for this periods
+ * @param low_delay hold the least duty cycle (MINIMUM) for this periods
+ * @param stepsize_interval
+ *          high 4-bit nibble is for step size, the adjusted duty cycles for next step
+ *          low 4-bit nubble is for interval, the nubmer of PWM periods to hold each step
+ * @return 0 on success, negative on error
+ */
+__syscall int led_breath(const struct device *dev, uint32_t led, uint16_t limits, uint32_t high_delay,
+                uint32_t low_delay, uint8_t stepsize_interval);
+
+static inline int z_impl_led_breath(const struct device *dev, uint32_t led, uint16_t limits, uint32_t high_delay,
+                uint32_t low_delay, uint8_t stepsize_interval)
+{
+	const struct led_driver_api *api =
+		(const struct led_driver_api *)dev->api;
+
+	if (api->breath == NULL) {
+		return -ENOSYS;
+	}
+	return api->breath(dev, led, limits, high_delay, low_delay, stepsize_interval);
 }
 
 /**
