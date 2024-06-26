@@ -1,0 +1,49 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 HAL based on-chip EEPROM
+
+compatible: "microchip,mec5-eeprom"
+
+include: [eeprom-base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  page-size:
+    type: int
+    default: 32
+    description: |
+      Internal EEPROM page size in bytes. Reads may cross page boundaries.
+      Writes can be up to a page size but cannot cross a page boundary.
+
+  page-read-time-ms:
+    type: int
+    default: 1
+    description: |
+      Page read time in microseconds.
+
+  write-time-ms:
+    type: int
+    default: 5
+    description: |
+      Write (erase-program) timing of any size(1 byte to page size)
+      in milliseconds.
+
+  lock-password:
+    type: int
+    description: |
+      Optional 31-bit password used to lock/unlock the EEPROM.
+      If property is present the driver will write this value
+      to the EEPROM controller lock register during driver
+      initialization.
+
+  lock-jtag-active:
+    type: boolean
+    description: |
+      Lock the EEPROM controller if JTAG/SWD debug interface is active.
+      This overrides the normal lock/unlock feature.
