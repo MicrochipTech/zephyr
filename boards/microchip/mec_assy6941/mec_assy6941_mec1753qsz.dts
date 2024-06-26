@@ -57,6 +57,11 @@
 	status = "okay";
 };
 
+&bbram {
+	compatible = "microchip,mec5-bbram";
+	status = "okay";
+};
+
 &uart1 {
 	compatible = "microchip,mec5-uart";
 	status = "okay";
