@@ -8,3 +8,18 @@ config DMA_MCHP_MEC5
 	depends on DT_HAS_MICROCHIP_MEC5_DMAC_ENABLED
 	help
 	  DMA driver for Microchip MEC5 series MCUs.
+
+if DMA_MCHP_MEC5
+
+config DMA_MCHP_MEC5_AGGREGATED_IRQ
+	bool "Use single aggregated interrupt not per channel"
+	default n
+	help
+	  DMA driver will use a single interrupt (aggregated mode)
+	  for all channels instead of an individual interrupt per
+	  channel. Aggregated mode is smaller driver code size and
+	  one interrupts. Non-aggregated allows each channel to have
+	  an interrupt priority since each channel has an interrupt
+	  signal to the interrupt controller.
+
+endif # DMA_MCHP_MEC5

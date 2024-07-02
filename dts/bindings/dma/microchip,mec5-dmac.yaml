@@ -14,6 +14,23 @@ properties:
   interrupts:
     required: true
 
+  aggregated-interrupts:
+    type: array
+    description: |
+      A single interger pair specifying the DMA controller aggregated
+      NVIC interrupt and priority.
+
+  chan-isr-order:
+    type: array
+    description: |
+      Order the channnels are processed in the aggregated
+      interrupt handler. The values are in the range zero
+      to the number of channels - 1. This property is not applicable
+      if driver aggregated interrupt mode is not configured
+      at build time. Non-aggregated mode maps each channel to
+      an individual interrupt line to the interrupt controller.
+      Channel processing order is then set by interrupt priorities.
+
   "#dma-cells":
     const: 2
 
