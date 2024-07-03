@@ -476,7 +476,8 @@ static bool dma_mec5_chan_filter(const struct device *dev, int ch, void *filter_
 	enum dma_channel_filter *filter = (enum dma_channel_filter *)filter_param;
 	uint32_t mask = 0u;
 
-	if ((ch >= 0) && filter && (*filter == DMA_CHANNEL_NORMAL)) {
+	if ((ch >= 0) && (ch < (int)devcfg->dma_channels) && filter
+	    && (*filter == DMA_CHANNEL_NORMAL)) {
 		mask = GENMASK(devcfg->dma_channels - 1u, 0);
 		if (mask & BIT(ch)) {
 			return true;
