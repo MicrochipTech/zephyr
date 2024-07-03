@@ -10,6 +10,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/dma.h>
+#include <zephyr/pm/pm.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/pm/policy.h>
 #include <zephyr/sys/util_macro.h>
@@ -52,7 +53,79 @@ struct dma_mec5_data {
 	struct dma_context ctx;
 	struct dma_mec5_channel *channels;
 	atomic_t *channels_atomic;
+#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
+	atomic_t *channels_pm_atomic;
+#endif
+#if defined(CONFIG_PM) || !defined(CONFIG_PM_DEVICE)
+	const struct pm_state_info *pm_states;
+	uint8_t num_pm_states;
+#endif
 };
+
+/* We have multiple DMA channels, all channels must become idle before
+ * we allow deep sleep entry.
+ */
+#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
+static void dma_mec5_device_busy_set(const struct device *dev, uint8_t chan)
+{
+	struct dma_mec5_data *const data = dev->data;
+
+	atomic_set_bit(data->channels_pm_atomic, chan);
+
+#if defined(CONFIG_PM_DEVICE)
+	pm_device_busy_set(dev);
+#elif defined(CONFIG_PM)
+	for (uint8_t n = 0; n < data->num_pm_states; n++) {
+		if (data->pm_states[n].state >= PM_STATE_STANDBY) {
+			pm_policy_state_lock_put(data->pm_states[n].state, PM_ALL_SUBSTATES);
+		}
+	}
+#endif
+}
+
+/* Clear the channel's atomic pm bit.
+ * If all atomic bits are clear then clear the PM busy flag the kernel looks at.
+ */
+static void dma_mec5_device_busy_clear(const struct device *dev, uint8_t chan)
+{
+	struct dma_mec5_data *const data = dev->data;
+	uint8_t ch = MEC5_DMAC_NUM_CHANNELS;
+
+	atomic_clear_bit(data->channels_pm_atomic, chan);
+
+	for (ch = 0; ch < MEC5_DMAC_NUM_CHANNELS; ch++) {
+		if (atomic_test_bit(data->channels_pm_atomic, ch)) {
+			break;
+		}
+	}
+
+	if (ch != MEC5_DMAC_NUM_CHANNELS) {
+		return;
+	}
+
+#if defined(CONFIG_PM_DEVICE)
+	pm_device_busy_clear(dev);
+#elif defined(CONFIG_PM)
+	for (uint8_t n = 0; n < data->num_pm_states; n++) {
+		if (data->pm_states[n].state >= PM_STATE_STANDBY) {
+			pm_policy_state_lock_get(data->pm_states[n].state, PM_ALL_SUBSTATES);
+		}
+	}
+#endif
+}
+#else
+static void dma_mec5_device_busy_set(const struct device *dev, uint8_t chan)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(chan);
+}
+
+static void dma_mec5_device_busy_clear(const struct device *dev, uint8_t chan)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(chan);
+}
+#endif /* #if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE) */
 
 static int is_dma_data_size_valid(uint32_t datasz)
 {
@@ -362,12 +435,12 @@ static int dma_mec5_start(const struct device *dev, uint32_t channel)
 	}
 
 	/* Block PM transition until DMA completes */
-	pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+	dma_mec5_device_busy_set(dev, channel);
 
 	ret = mec_hal_dma_chan_start(regs, (enum mec_dmac_channel)channel);
 	if (ret != MEC_RET_OK) {
 		/* Release PM lock */
-		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+		dma_mec5_device_busy_clear(dev, channel);
 		return -EINVAL;
 	}
 
@@ -393,8 +466,7 @@ static int dma_mec5_stop(const struct device *dev, uint32_t channel)
 		ret = -EINVAL;
 	}
 
-	/* Release PM lock */
-	pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+	dma_mec5_device_busy_clear(dev, channel);
 
 	return ret;
 }
@@ -498,7 +570,7 @@ static const struct dma_driver_api dma_mec5_api = {
 	.get_attribute = dma_mec5_get_attribute,
 };
 
-#ifdef CONFIG_PM_DEVICE
+#if defined(CONFIG_PM_DEVICE)
 /* When PM policy allows suspend or resume this function will be called
  * by the kernel PM subsystem. On suspend we clear the DMA block activate
  * bit which clock gates the block and should cause its CLK_REQ signal to
@@ -530,23 +602,33 @@ static int dma_mec5_pm_action(const struct device *dev,
 }
 #endif /* CONFIG_PM_DEVICE */
 
-static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan_id)
+static void do_callback(const struct device *dev, enum mec_dmac_channel chan,
+			struct dma_mec5_channel *chan_data, int status)
+{
+	if (chan_data->cb) {
+		chan_data->cb(dev, chan_data->user_data, chan, status);
+	}
+}
+
+static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 {
 	struct dma_mec5_data *const data = dev->data;
 	const struct dma_mec5_config *const devcfg = dev->config;
 	struct mec_dmac_regs *const regs = devcfg->regs;
-	struct dma_mec5_channel *chan_data = &data->channels[chan_id];
+	struct dma_mec5_channel *chan_data = &data->channels[chan];
 	struct dma_block_config *block = chan_data->curr;
 	uint32_t istatus = 0u;
 
-	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)chan_id, 0);
-	mec_hal_dma_chan_halt(regs, (enum mec_dmac_channel)chan_id);
-	mec_hal_dma_chan_intr_status(regs, (enum mec_dmac_channel)chan_id, &istatus);
-	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)chan_id);
+	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)chan, 0);
+	mec_hal_dma_chan_halt(regs, (enum mec_dmac_channel)chan);
+	mec_hal_dma_chan_intr_status(regs, (enum mec_dmac_channel)chan, &istatus);
+	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)chan);
 
 	if (istatus & BIT(MEC_DMA_CHAN_STS_BUS_ERR_POS)) {
+		dma_mec5_device_busy_clear(dev, chan);
 		if (!(chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_ERR_DIS_POS))) {
-			chan_data->cb(dev, chan_data->user_data, chan_id, -EIO);
+			do_callback(dev, chan, chan_data, -EIO);
+			/* chan_data->cb(dev, chan_data->user_data, chan, -EIO); */
 		}
 		return;
 	}
@@ -554,21 +636,19 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan_id)
 	chan_data->block_count--;
 	if (chan_data->block_count) {
 		if ((chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_EOB_POS)) && chan_data->cb) {
-			chan_data->cb(dev, chan_data->user_data, chan_id, DMA_STATUS_BLOCK);
+			do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
+			/* chan_data->cb(dev, chan_data->user_data, chan, DMA_STATUS_BLOCK); */
 		}
 		block = block->next_block;
 		if (block) {
 			chan_data->curr = block;
-			dma_mec5_reload(dev, chan_id, block->source_address,
+			dma_mec5_reload(dev, chan, block->source_address,
 					block->dest_address, block->block_size);
-			dma_mec5_start(dev, chan_id);
+			dma_mec5_start(dev, chan);
 		}
 	} else {
-		if (chan_data->cb) {
-			chan_data->cb(dev, chan_data->user_data, chan_id, DMA_STATUS_COMPLETE);
-		}
-		/* Release PM lock */
-		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+		dma_mec5_device_busy_clear(dev, chan);
+		do_callback(dev, chan, chan_data, DMA_STATUS_COMPLETE);
 	}
 }
 
@@ -590,6 +670,10 @@ static int dma_mec5_init(const struct device *dev)
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
+
+#if defined(CONFIG_PM) || !defined(CONFIG_PM_DEVICE)
+	data->num_pm_states = pm_state_cpu_get_all(0, &data->pm_states);
+#endif
 
 	if (devcfg->irq_connect) {
 		devcfg->irq_connect();
