@@ -31,9 +31,8 @@ LOG_MODULE_REGISTER(i2c_nl_mchp, CONFIG_I2C_LOG_LEVEL);
 #include <mec_ecia_api.h>
 #include <mec_i2c_api.h>
 
-/* #define I2C_NL_DEBUG_USE_SPIN_LOOP */
 /* #define I2C_NL_DEBUG_ISR */
-#define I2C_NL_DEBUG_STATE
+/* #define I2C_NL_DEBUG_STATE */
 #define I2C_NL_DEBUG_STATE_ENTRIES	64
 
 #define I2C_NL_USE_DMA_DRIVER
@@ -114,6 +113,10 @@ enum i2c_mec5_nl_kevents {
 	I2C_NL_KEV_DMA_A_ERR_POS,
 	I2C_NL_KEV_DMA_B_ERR_POS,
 };
+
+#define I2C_NL_WAIT_EVENTS_MSK (BIT(I2C_NL_KEV_IDLE_POS) | BIT(I2C_NL_KEV_CM_NAK_POS) \
+				| BIT(I2C_NL_KEV_DMA_A_ERR_POS) \
+				| BIT(I2C_NL_KEV_DMA_B_ERR_POS))
 
 struct i2c_mec5_nl_config {
 	struct mec_i2c_smb_regs *regs;
@@ -534,6 +537,7 @@ static int do_stop(const struct device *dev)
 {
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	uint32_t ev, evw;
 
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0x20);
 
@@ -545,18 +549,14 @@ static int do_stop(const struct device *dev)
 		mec_hal_i2c_smb_girq_status_clr(hwctx);
 		mec_hal_i2c_smb_idle_intr_enable(hwctx, 1);
 		mec_hal_i2c_smb_girq_ctrl(hwctx, MEC_I2C_SMB_GIRQ_EN);
-#ifdef I2C_NL_DEBUG_USE_SPIN_LOOP
-		while (!data->mdone) {
-			;
-		}
-#else
-		uint32_t evw = (BIT(I2C_NL_KEV_IDLE_POS) | BIT(I2C_NL_KEV_BERR_POS)
-				| BIT(I2C_NL_KEV_LAB_ERR_POS));
-		uint32_t ev = k_event_wait(&data->events, evw, false, K_MSEC(100));
+
+		evw = (BIT(I2C_NL_KEV_IDLE_POS) | BIT(I2C_NL_KEV_BERR_POS)
+			| BIT(I2C_NL_KEV_LAB_ERR_POS));
+		ev = k_event_wait(&data->events, evw, false, K_MSEC(100));
 		if (!ev) {
 			LOG_ERR("Gen STOP timeout");
 		}
-#endif
+
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x22);
 	}
 
@@ -586,10 +586,8 @@ static int do_stop(const struct device *dev)
  * Transmit to target I2C (DMA memory to device). DMA will finish before I2C.
  * Receive from target I2C (DMA device to memory). I2C will finish before DMA.
  *
- * TODO if a DMA error occurs we need to signal the I2C driver.
- * Currently the driver waits on a semaphore set by the I2C ISR.
- * Implementation will be changed to use Zephyr k_event flags and I2C transfer
- * routine will wait on multiple event flags: I2C ISR event(s) and DMA error event.
+ * If a DMA error occurs we set a kevent DMA error flag. Driver waits for
+ * I2C controller IDLE, I2C error, and DMA error event flags.
  */
 static void i2c_mec5_nl_dma_cb(const struct device *dev, void *user_data,
 			       uint32_t chan, int status)
@@ -603,6 +601,7 @@ static void i2c_mec5_nl_dma_cb(const struct device *dev, void *user_data,
 
 	if (status < 0) {
 		LOG_ERR("I2C-NL DMA CB error (%d): drv data at (%p) ",status, data);
+		dma_stop(devcfg->dma_dev_a, devcfg->dma_a_chan);
 		k_event_post(&data->events, BIT(I2C_NL_KEV_DMA_A_ERR_POS));
 	}
 
@@ -627,9 +626,11 @@ static void i2c_mec5_nl_dma_cb2(const struct device *dev, void *user_data,
 				uint32_t chan, int status)
 {
 	struct i2c_mec5_nl_data *data = (struct i2c_mec5_nl_data *)user_data;
+	const struct i2c_mec5_nl_config *devcfg = data->devcfg;
 
 	if (status < 0) {
 		LOG_ERR("I2C-NL DMA CB2 error (%d): drv data at (%p)", status, data);
+		dma_stop(devcfg->dma_dev_b, devcfg->dma_b_chan);
 		k_event_post(&data->events, BIT(I2C_NL_KEV_DMA_B_ERR_POS));
 	}
 }
@@ -918,14 +919,18 @@ static void msg_grp_compute_timeout(const struct device *dev)
 
 static int i2c_mec5_nl_wait_events(const struct device *dev, uint32_t evmask)
 {
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct i2c_mec5_nl_data *data = dev->data;
-	uint32_t ev = k_event_wait(&data->events, evmask, false, K_MSEC(data->xfr_tmout));
-	/* uint32_t ev = k_event_wait(&data->events, evmask, false, K_FOREVER); */
 	int ret = 0;
+	uint32_t ev = 0;
+
+	ev = k_event_wait(&data->events, evmask, false, K_MSEC(data->xfr_tmout));
 
 	if (!ev) {
 		LOG_ERR("I2C-NL CM event timeout");
 		do_stop(dev);
+		dma_stop(devcfg->dma_dev_a, devcfg->dma_a_chan);
+		dma_stop(devcfg->dma_dev_a, devcfg->dma_a_chan);
 		ret = -ETIMEDOUT;
 	} else if (ev & I2C_NL_ERRORS) {
 		LOG_ERR("CM event errors = 0x%08x", ev);
@@ -935,29 +940,10 @@ static int i2c_mec5_nl_wait_events(const struct device *dev, uint32_t evmask)
 	return ret;
 }
 
-/* b[24]=CM_NAK, b[14]=LAB, b[13]=BER */
-#define I2C_NL_HW_ERR (BIT(24) | BIT(14) | BIT(13))
-
-#define I2C_NL_WAIT_EVENTS_MSK (BIT(I2C_NL_KEV_IDLE_POS) | BIT(I2C_NL_KEV_CM_NAK_POS) \
-				| BIT(I2C_NL_KEV_DMA_A_ERR_POS) \
-				| BIT(I2C_NL_KEV_DMA_B_ERR_POS))
-
 /* Process I2C messages into a I2C-NL HW message group and start transfer.
- * Input state:
- * data->mgrp initialized to all 0
- * data->msgs points to array of struct i2c_msg passed by application.
- * data->nmsgs is number of entries in data->msgs[]
- * data->msgidx = message index to start processing at
- * data->xfrflags processing flags. Currently sync vs async
- * data->state = I2C_NL_STATE_OPEN
- * data->cm_target_wr_i2c_addr = target device I2C address formatted
- * as 8-bit I2C write address: b[7:1] = target address, b[0]=0(write).
+ * Concantenate as much of the write messages into driver transfer buffer
+ * before starting.
  */
-/* !!! TODO: DRIVER MOD !!!
- * If total TX length <= driver data buffer
- * then concatenate all TX data into driver buffer.
- */
-
 static int process_i2c_msgs(const struct device *dev)
 {
 	struct i2c_mec5_nl_data *data = dev->data;
@@ -992,19 +978,7 @@ static int process_i2c_msgs(const struct device *dev)
 				return 0;
 			}
 
-#ifdef I2C_NL_DEBUG_USE_SPIN_LOOP
-			while (!data->mdone) {
-				;
-			}
-			/* b[7:0]=I2C.Status, b[31:8]=I2C.Completion[31:8]
-			 * CM_NAK is b[24]
-			 */
-			if (data->i2c_status & I2C_NL_HW_ERR) {
-				return -EIO;
-			}
-#else
 			ret = i2c_mec5_nl_wait_events(dev, I2C_NL_WAIT_EVENTS_MSK);
-#endif
 			if (ret) {
 				LOG_ERR("wait events returned (%d)", ret);
 				break;
@@ -1143,23 +1117,29 @@ static int i2c_mec5_nl_target_register(const struct device *dev, struct i2c_targ
 	struct mec_i2c_smb_regs *regs = devcfg->regs;
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct i2c_target_config *head = data->target_cfg_head;
+	int ret;
 
 	if (!cfg || (cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS)) {
 		return -EINVAL;
 	}
 
-	/* TODO check if controller is busy */
+	ret = k_sem_take(&data->lock, 0);
+	if (ret) {
+		return ret;
+	}
 
 	for (uint8_t n = 0; n < I2C_NL_MAX_TARGET_ADDRS; n++) {
-		
-
 		if (data->target_cfgs[n] == NULL) {
 			data->target_cfg[n] = cfg;
 			set_mec5_target_addr(regs, n, (uint8_t)(cfg->address & 0x7fu));
+			ret = 0;
+			break;
 		}
 	}
 
-	return -EBUSY
+	k_sem_give(&data->lock);
+
+	return ret;
 #else
 	return -ENOTSUP;
 #endif
@@ -1171,22 +1151,31 @@ static int i2c_mec5_nl_target_unregister(const struct device *dev, struct i2c_ta
 	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct mec_i2c_smb_regs *regs = devcfg->regs;
 	struct i2c_mec5_nl_data *data = dev->data;
+	int ret;
 
 	if (!cfg || (cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS)) {
 		return -EINVAL;
 	}
 
-	/* TODO check if controller is busy */
+	ret = k_sem_take(&data->lock, 0);
+	if (ret) {
+		return ret;
+	}
 
 	for (uint8_t n = 0; n < I2C_NL_MAX_TARGET_ADDRS; n++) {
 		if (data->target_cfgs[n] != NULL) {
-			data->target_cfg[n].address == cfg->address
-			data->target_cfg[n] = cfg;
-			set_mec5_target_addr(regs, n, (uint8_t)(cfg->address & 0x7fu));
+			if (data->target_cfg[n].address == cfg->address) {
+				data->target_cfg[n] = NULL;
+				set_mec5_target_addr(regs, n, 0);
+				ret = 0;
+				break;
+			}
 		}
 	}
 
-	return -EBUSY
+	k_sem_give(&data->lock);
+
+	return ret;
 #else
 	return -ENOTSUP;
 #endif

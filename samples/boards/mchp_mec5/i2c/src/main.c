@@ -39,7 +39,6 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define I2C_NL0_NODE	DT_ALIAS(i2c_nl_0)
 
 static const struct device *i2c_dev = DEVICE_DT_GET(I2C0_NODE);
-static const struct device *i2c_nl_dev = DEVICE_DT_GET(I2C_NL0_NODE);
 
 /* Access devices on an I2C bus using Device Tree child nodes of the I2C controller */
 static const struct i2c_dt_spec pca9555_dts = I2C_DT_SPEC_GET(DT_NODELABEL(pca9555_evb));
