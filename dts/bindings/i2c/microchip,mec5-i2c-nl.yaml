@@ -65,3 +65,29 @@ properties:
       Amount of time in microseconds allowing the controller to sample
       pins after controller is enabled during configuration. If not
       present the default is 35000 (the SMBus bus timeout).
+
+  cm-tx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Controller mode driver buffer size in bytes. CM buffer used to
+      build transmit data packet for initial I2C start. The driver
+      will buffer as much of the transmit data into this buffer. Remaining
+      data will be handling by TX DMA reload callback.
+
+  tm-tx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Target mode driver transmit buffer size in bytes. TM mode requires
+      a driver buffer to supply data requested by an external I2C controller
+      read. Application fills this buffer via target mode callbacks.
+
+
+  tm-rx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Target mode driver receive buffer size in bytes. TM mode requires
+      a driver buffer to receive data transmitted by an external I2C controller
+      write.

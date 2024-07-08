@@ -24,13 +24,34 @@ config I2C_MCHP_MEC5_NL_BUFFER_SIZE
 	int "TX/RX buffer size in bytes"
 	default 64
 	help
-	  Buffer used for Controller-Mode and Target-Mode.
-	  For Controller-Mode TX this buffer is used to transmit
-	  START, target address, and data via Network-Layer DMA.
-	  When the driver is in Target-Mode this buffer is used
-	  for transmit/receive to/from the external Controller.
+	  Buffer used for Controller-Mode to transmit START,
+	  target address, and data via Network-Layer DMA. Received data
+	  is written to the application's buffer directly by DMA.
 	  If the amount of data exceed the buffer size the hardware
 	  will clock stretch until the driver restarts DMA for
 	  next chunk of data.
 
+if I2C_TARGET
+
+config I2C_MCHP_MEC5_NL_TM_TX_BUFFER_SIZE
+	int "Target mode TX buffer size in bytes"
+	default 64
+	help
+	  The driver implements a TX buffer to hold application
+	  data to be transmitted via DMA when the external I2C
+	  controller reads this controller as target.
+
+config I2C_MCHP_MEC5_NL_TM_RX_BUFFER_SIZE
+	int "Target mode RX buffer size in bytes"
+	default 64
+	help
+	  The driver implements a RX buffer to hold data received
+	  from the external I2C Controller. Received data is copied
+	  to this buffer via DMA. I2C clock will be stretched by
+	  this device when the buffer is full. Driver will call the
+	  register appliction callbacks. Once the buffer has been
+	  cleared, the device will re-enabled data reception from
+	  the external I2C controller.
+
+endif # I2C_TARGET
 endif # I2C_MCHP_MEC5_NL
