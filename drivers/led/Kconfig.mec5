@@ -1,0 +1,11 @@
+# Microchip MEC5 HAL based internal BBLED
+
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config LED_MEC5
+	bool "Microchip MEC5 BB-LED driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_BBLED_ENABLED
+	help
+	  Enable support for Microchip MEC5 BBLED driver.

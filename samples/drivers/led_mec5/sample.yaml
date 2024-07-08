@@ -1,0 +1,14 @@
+sample:
+  description: Demonstration of the Microchip MEC5 LED driver
+  name: MEC5 LED sample
+tests:
+  sample.drivers.led.led_mec5:
+    build_only: true
+    tags: LED
+    platform_allow:
+      - mec_assy6906_mech1723nsz
+      - mec_assy6906_mech1723nlj
+      - mec_assy6941_mec1743qlj
+      - mec_assy6941_mec1743qsz
+      - mec_assy6941_mec1753qlj
+      - mec_assy6941_mec1753qsz

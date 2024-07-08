@@ -1,0 +1,37 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6906 EVB with MEC1723N-SZ daughter card
+ * MEC1723 has 4 BBLED in it.
+ */
+
+&bbled0 {
+	compatible = "microchip,mec5-bbled";
+	pinctrl-0 = <&led0_gpio156>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&bbled1 {
+	compatible = "microchip,mec5-bbled";
+	pinctrl-0 = <&led1_gpio157>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&bbled2 {
+	compatible = "microchip,mec5-bbled";
+	pinctrl-0 = <&led2_gpio153>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&bbled3 {
+	compatible = "microchip,mec5-bbled";
+	pinctrl-0 = <&led3_gpio035>;
+	pinctrl-names = "default";
+	status = "okay";
+};
