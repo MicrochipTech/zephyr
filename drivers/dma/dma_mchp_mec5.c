@@ -368,11 +368,6 @@ static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 		chdata->flags |= BIT(DMA_MEC5_CHAN_FLAGS_CB_ERR_DIS_POS);
 	}
 
-	ret = mec_hal_dma_chan_cfg(regs, (enum mec_dmac_channel)channel, chcfg);
-	if (ret != MEC_RET_OK) {
-		return -EIO;
-	}
-
 	return 0;
 }
 
@@ -423,16 +418,28 @@ static int dma_mec5_start(const struct device *dev, uint32_t channel)
 {
 	const struct dma_mec5_config *const devcfg = dev->config;
 	struct mec_dmac_regs *const regs = devcfg->regs;
+	struct dma_mec5_data * const data = dev->data;
+	int ret = 0;
 
 	if (channel >= (uint32_t)devcfg->dma_channels) {
 		return -EINVAL;
 	}
 
-	int ret = mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)channel, 1u);
+	struct dma_mec5_channel *chdata = &data->channels[channel];
+	struct mec_dma_cfg *chcfg = &chdata->chan_cfg;
 
+	ret = mec_hal_dma_chan_cfg(regs, (enum mec_dmac_channel)channel, chcfg);
+	if (ret != MEC_RET_OK) {
+		return -EIO;
+	}
+
+	ret = mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)channel, 0);
 	if (ret != MEC_RET_OK) {
 		return -EINVAL;
 	}
+
+	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)channel);
+	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)channel, 1u);
 
 	/* Block PM transition until DMA completes */
 	dma_mec5_device_busy_set(dev, channel);
@@ -619,10 +626,16 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 	struct dma_block_config *block = chan_data->curr;
 	uint32_t istatus = 0u;
 
+	/* TODO */
+	chan_data->total_curr_xfr_len += (regs->CHAN[chan].MEND - regs->CHAN[chan].MSTART);
+		/* chan_data->chan_cfg.nbytes */
+
 	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)chan, 0);
 	mec_hal_dma_chan_halt(regs, (enum mec_dmac_channel)chan);
 	mec_hal_dma_chan_intr_status(regs, (enum mec_dmac_channel)chan, &istatus);
 	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)chan);
+
+	chan_data->isr_hw_status = istatus;
 
 	if (istatus & BIT(MEC_DMA_CHAN_STS_BUS_ERR_POS)) {
 		dma_mec5_device_busy_clear(dev, chan);
@@ -637,7 +650,6 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 	if (chan_data->block_count) {
 		if ((chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_EOB_POS)) && chan_data->cb) {
 			do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
-			/* chan_data->cb(dev, chan_data->user_data, chan, DMA_STATUS_BLOCK); */
 		}
 		block = block->next_block;
 		if (block) {
