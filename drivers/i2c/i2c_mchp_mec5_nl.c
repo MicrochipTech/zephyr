@@ -1970,7 +1970,21 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_I2C_TARGET_BUFFER_MODE),
 	     "I2C target is enabled. This driver requires Target Buffer Mode.");
 #endif
 
+#define I2C_NL_INST_IRQ_PRI(i) DT_INST_IRQ(i, priority)
+
+#define I2C_NL_DMA_TM_IRQ_PRI(i) \
+	DT_IRQ_BY_IDX(DT_NODELABEL(dmac), I2C_NL_MEC5_DMA_CHAN(i, 1), priority)
+
+/* Make sure DMA channel for target mode interrupt priority is higher than
+ * I2C controller's interrupt priority. Cortex-Mx NVIC priority numeric values
+ * are reversed: 0 is highest priority.
+ */
+#define I2C_NL_CHECK_IRQ_PRI(i)							\
+	BUILD_ASSERT(I2C_NL_DMA_TM_IRQ_PRI(i) < I2C_NL_INST_IRQ_PRI(i),		\
+		"TM DMA channel IRQ priority must be higher than I2C-NL")
+
 #define I2C_NL_DEVICE(i)							\
+	I2C_NL_CHECK_IRQ_PRI(i);						\
 										\
 	PINCTRL_DT_INST_DEFINE(i);						\
 										\
