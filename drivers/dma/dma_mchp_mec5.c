@@ -294,7 +294,6 @@ static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 			      struct dma_config *config)
 {
 	const struct dma_mec5_config *const devcfg = dev->config;
-	struct mec_dmac_regs *const regs = devcfg->regs;
 	struct dma_mec5_data *const data = dev->data;
 	int ret;
 
@@ -306,7 +305,7 @@ static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 		return -EINVAL;
 	}
 
-	ret = mec_hal_dma_chan_init(regs, (enum mec_dmac_channel)channel);
+	ret = mec_hal_dma_chan_init((enum mec_dmac_channel)channel);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -383,7 +382,6 @@ static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 			   uint32_t src, uint32_t dst, size_t size)
 {
 	const struct dma_mec5_config * const devcfg = dev->config;
-	struct mec_dmac_regs * const regs = devcfg->regs;
 	struct dma_mec5_data * const data = dev->data;
 	int ret = 0;
 
@@ -391,7 +389,7 @@ static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 		return -EINVAL;
 	}
 
-	if (mec_hal_dma_chan_is_busy(regs, (enum mec_dmac_channel)channel)) {
+	if (mec_hal_dma_chan_is_busy((enum mec_dmac_channel)channel)) {
 		return -EBUSY;
 	}
 
@@ -405,7 +403,7 @@ static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 	chdata->total_req_xfr_len = size;
 	chdata->total_curr_xfr_len = 0;
 
-	ret = mec_hal_dma_chan_reload(regs, (enum mec_dmac_channel)channel,
+	ret = mec_hal_dma_chan_reload((enum mec_dmac_channel)channel,
 				      (uintptr_t)src, (uintptr_t)dst, size);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
@@ -417,7 +415,6 @@ static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 static int dma_mec5_start(const struct device *dev, uint32_t channel)
 {
 	const struct dma_mec5_config *const devcfg = dev->config;
-	struct mec_dmac_regs *const regs = devcfg->regs;
 	struct dma_mec5_data * const data = dev->data;
 	int ret = 0;
 
@@ -428,23 +425,23 @@ static int dma_mec5_start(const struct device *dev, uint32_t channel)
 	struct dma_mec5_channel *chdata = &data->channels[channel];
 	struct mec_dma_cfg *chcfg = &chdata->chan_cfg;
 
-	ret = mec_hal_dma_chan_cfg(regs, (enum mec_dmac_channel)channel, chcfg);
+	ret = mec_hal_dma_chan_cfg((enum mec_dmac_channel)channel, chcfg);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
 
-	ret = mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)channel, 0);
+	ret = mec_hal_dma_chan_intr_en((enum mec_dmac_channel)channel, 0);
 	if (ret != MEC_RET_OK) {
 		return -EINVAL;
 	}
 
-	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)channel);
-	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)channel, 1u);
+	mec_hal_dma_chan_intr_status_clr((enum mec_dmac_channel)channel);
+	mec_hal_dma_chan_intr_en((enum mec_dmac_channel)channel, 1u);
 
 	/* Block PM transition until DMA completes */
 	dma_mec5_device_busy_set(dev, channel);
 
-	ret = mec_hal_dma_chan_start(regs, (enum mec_dmac_channel)channel);
+	ret = mec_hal_dma_chan_start((enum mec_dmac_channel)channel);
 	if (ret != MEC_RET_OK) {
 		/* Release PM lock */
 		dma_mec5_device_busy_clear(dev, channel);
@@ -457,14 +454,13 @@ static int dma_mec5_start(const struct device *dev, uint32_t channel)
 static int dma_mec5_stop(const struct device *dev, uint32_t channel)
 {
 	const struct dma_mec5_config * const devcfg = dev->config;
-	struct mec_dmac_regs * const regs = devcfg->regs;
 	int ret = 0;
 
 	if (channel >= (uint32_t)devcfg->dma_channels) {
 		return -EINVAL;
 	}
 
-	ret = mec_hal_dma_chan_stop(regs, (enum mec_dmac_channel)channel);
+	ret = mec_hal_dma_chan_stop((enum mec_dmac_channel)channel);
 	if (ret == MEC_RET_OK) {
 		ret = 0;
 	} else if (ret == MEC_RET_ERR_TIMEOUT) {
@@ -498,7 +494,6 @@ static int dma_mec5_get_status(const struct device *dev, uint32_t channel,
 {
 	const struct dma_mec5_config * const devcfg = dev->config;
 	struct dma_mec5_data * const data = dev->data;
-	struct mec_dmac_regs * const regs = devcfg->regs;
 	int ret = 0;
 	uint32_t rembytes = 0u;
 	struct mec_dma_cfg dmacfg = { 0 };
@@ -508,15 +503,15 @@ static int dma_mec5_get_status(const struct device *dev, uint32_t channel,
 		return -EINVAL;
 	}
 
-	ret =  mec_hal_dma_chan_cfg_get(regs, (enum mec_dmac_channel)channel, &dmacfg);
+	ret =  mec_hal_dma_chan_cfg_get((enum mec_dmac_channel)channel, &dmacfg);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
 
 	struct dma_mec5_channel *chan_data = &data->channels[channel];
 
-	if (mec_hal_dma_chan_is_busy(regs, (enum mec_dmac_channel)channel)) {
-		mec_hal_dma_chan_rem_bytes(regs, (enum mec_dmac_channel)channel, &rembytes);
+	if (mec_hal_dma_chan_is_busy((enum mec_dmac_channel)channel)) {
+		mec_hal_dma_chan_rem_bytes((enum mec_dmac_channel)channel, &rembytes);
 		status->busy = true;
 		status->pending_length = chan_data->total_req_xfr_len - rembytes;
 	} else {
@@ -594,11 +589,11 @@ static int dma_mec5_pm_action(const struct device *dev,
 
 	switch (action) {
 	case PM_DEVICE_ACTION_RESUME:
-		mec_hal_dmac_enable(regs, 1);
+		mec_hal_dmac_enable(1);
 		break;
 
 	case PM_DEVICE_ACTION_SUSPEND:
-		mec_hal_dmac_enable(regs, 0);
+		mec_hal_dmac_enable(0);
 		break;
 
 	default:
@@ -630,10 +625,10 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 	chan_data->total_curr_xfr_len += (regs->CHAN[chan].MEND - regs->CHAN[chan].MSTART);
 		/* chan_data->chan_cfg.nbytes */
 
-	mec_hal_dma_chan_intr_en(regs, (enum mec_dmac_channel)chan, 0);
-	mec_hal_dma_chan_halt(regs, (enum mec_dmac_channel)chan);
-	mec_hal_dma_chan_intr_status(regs, (enum mec_dmac_channel)chan, &istatus);
-	mec_hal_dma_chan_intr_status_clr(regs, (enum mec_dmac_channel)chan);
+	mec_hal_dma_chan_intr_en((enum mec_dmac_channel)chan, 0);
+	mec_hal_dma_chan_halt((enum mec_dmac_channel)chan);
+	mec_hal_dma_chan_intr_status((enum mec_dmac_channel)chan, &istatus);
+	mec_hal_dma_chan_intr_status_clr((enum mec_dmac_channel)chan);
 
 	chan_data->isr_hw_status = istatus;
 
@@ -641,7 +636,6 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 		dma_mec5_device_busy_clear(dev, chan);
 		if (!(chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_ERR_DIS_POS))) {
 			do_callback(dev, chan, chan_data, -EIO);
-			/* chan_data->cb(dev, chan_data->user_data, chan, -EIO); */
 		}
 		return;
 	}
@@ -668,7 +662,6 @@ static int dma_mec5_init(const struct device *dev)
 {
 	struct dma_mec5_data *const data = dev->data;
 	const struct dma_mec5_config * const devcfg = dev->config;
-	struct mec_dmac_regs *regs = devcfg->regs;
 	int ret;
 
 	LOG_DBG("driver init");
@@ -677,7 +670,7 @@ static int dma_mec5_init(const struct device *dev)
 	data->ctx.dma_channels = devcfg->dma_channels;
 	data->ctx.atomic = data->channels_atomic;
 
-	ret = mec_hal_dmac_init(regs, devcfg->chmsk);
+	ret = mec_hal_dmac_init(devcfg->chmsk);
 
 	if (ret != MEC_RET_OK) {
 		return -EIO;
