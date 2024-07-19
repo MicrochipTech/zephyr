@@ -109,6 +109,11 @@
 			gpios = <MCHP_GPIO_DECODE_175 GPIO_ACTIVE_HIGH>;
 		};
 	};
+
+	zephyr,user {
+		gpios = <MCHP_GPIO_DECODE_156 GPIO_ACTIVE_HIGH>,
+			<MCHP_GPIO_DECODE_157 GPIO_ACTIVE_HIGH>;
+	};
 };
 
 &dmac {
@@ -124,6 +129,20 @@
 };
 
 &i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_scl_gpio144 {
 	drive-open-drain;
 	output-enable;
 	output-high;
@@ -161,9 +180,16 @@
 	};
 };
 
+/* Work-around Target mode receive from Host when Host writes enought data to
+ * trigger DMA done interrupt. We configure DMA to be at a higher interrupt
+ * priority than I2C. Since both are at priority 1, we set I2C-NL to priority
+ * 2. ARM NVIC priority numbers are low is higher priority.
+ *
+ */
 &i2c_smb_1 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
+	interrupts = <21 2>;
 	port_sel = < 4 >;
 	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
@@ -171,6 +197,9 @@
 	pinctrl-names = "default";
 	dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
 	dma-names = "cm", "tm";
+
+	/* experiment, set buffer size much larger than 64 byte write transfer test */
+	tm-rx-buffer-size = <12>;
 
 	/* External Fujitsu MB85RC256V 256KB (32K x 8) FRAM */
 	mb85rc256v: mb85rc256v@50 {

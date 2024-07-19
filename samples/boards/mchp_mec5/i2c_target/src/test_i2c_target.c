@@ -14,7 +14,12 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/sys/sys_io.h>
+
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/logging/log.h>
+LOG_MODULE_DECLARE(app);
 
 #include "test_i2c_target.h"
 
@@ -90,6 +95,18 @@ struct i2c_target_config i2c_target1 = {
 }
 #endif
 
+size_t target_test_wr_len;
+size_t target_test_wr_rx_len;
+
+size_t target_test_rd_len;
+size_t target_test_rd_tx_len;
+
+#define TM_TX_BUF_SIZE 256
+uint8_t tm_tx_buf[TM_TX_BUF_SIZE];
+
+#define TM_RX_BUF_SIZE 256
+uint8_t tm_rx_buf[TM_RX_BUF_SIZE];
+
 static int i2c_target0_wr_req_cb(struct i2c_target_config *config)
 {
 	return 0;
@@ -122,6 +139,14 @@ static void i2c_target0_buf_wr_rcvd_cb(struct i2c_target_config *config, uint8_t
 	if (!config || !ptr || !len) {
 		return;
 	}
+
+	target_test_wr_rx_len = len;
+
+	LOG_INF("TM CB Write received: cfg=%p buf=%p len=%u", config, ptr, len);
+
+	if (ptr && len) {
+		memcpy(tm_rx_buf, ptr, len);
+	}
 }
 
 static int i2c_target0_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr,
@@ -130,6 +155,16 @@ static int i2c_target0_buf_rd_req_cb(struct i2c_target_config *config, uint8_t *
 	if (!config || !ptr || !*ptr || !len) {
 		return -EINVAL;
 	}
+
+	LOG_INF("TM CB Read request");
+
+	tm_tx_buf[0] = 0x11;
+	tm_tx_buf[1] = 0x22;
+	tm_tx_buf[2] = 0x33;
+	tm_tx_buf[3] = 0x34;
+
+	*ptr = tm_tx_buf;
+	*len = 4;
 
 	return 0;
 }
@@ -153,10 +188,10 @@ static struct i2c_target_config *get_target_config(uint8_t target_id)
 int test_i2c_target_register(const struct device *i2c_dev, bool register_target,
 			     uint8_t target_id)
 {
-	struct i2c_target_config *tcfg = NULL;
+	struct i2c_target_config *tcfg = get_target_config(target_id);
 	int ret = 0;
 
-	if (!i2c_dev || get_target_config(target_id)) {
+	if (!i2c_dev || !tcfg) {
 		return -EINVAL;
 	}
 
@@ -174,3 +209,59 @@ int test_i2c_target_register(const struct device *i2c_dev, bool register_target,
 
 	return 0;
 }
+
+int test_i2c_target_write(const struct device *i2c_cm_dev, const struct device *i2c_tm_dev,
+			  uint16_t tm_addr, uint8_t *data, size_t datasz)
+{
+	struct i2c_msg msg = {0};
+	int ret = 0;
+
+	LOG_INF("Target Write: %u bytes to I2C address 0x%0x", datasz, tm_addr);
+
+	msg.buf = data;
+	msg.len = datasz;
+	msg.flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	target_test_wr_len = datasz;
+
+	/* synchronous transfer */
+	ret = i2c_transfer(i2c_cm_dev, &msg, 1, tm_addr);
+	if (ret) {
+		LOG_ERR("Target write error (%d)", ret);
+		return ret;
+	}
+
+	if (target_test_wr_rx_len != datasz) {
+		LOG_INF("Target captured only %u bytes of %u from External Controller",
+			target_test_wr_rx_len, datasz);
+	}
+
+	ret = memcmp(tm_rx_buf, data, target_test_wr_rx_len);
+	if (ret) {
+		ret = -EILSEQ;
+		LOG_ERR("Target write data != send data");
+	} else {
+		LOG_INF("Target captured bytes match");
+	}
+
+	return ret;
+}
+
+int test_i2c_target_read(const struct device *i2c_cm_dev, const struct device *i2c_tm_dev,
+			 uint16_t tm_addr, uint8_t *data, size_t datasz)
+{
+	struct i2c_msg msgs[2] = {0};
+	int ret = 0;
+
+	msgs[0].buf = data;
+	msgs[0].len = datasz;
+	msgs[0].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	target_test_rd_len = datasz;
+
+	/* synchronous transfer */
+	ret = i2c_transfer(i2c_cm_dev, msgs, 1, tm_addr);
+
+	return ret;
+}
+

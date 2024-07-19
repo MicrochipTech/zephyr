@@ -20,4 +20,10 @@
 int test_i2c_target_register(const struct device *i2c_dev, bool register_target,
 			     uint8_t target_id);
 
+int test_i2c_target_write(const struct device *i2c_cm_dev, const struct device *i2c_tm_dev,
+			  uint16_t tm_addr, uint8_t *data, size_t datasz);
+
+int test_i2c_target_read(const struct device *i2c_cm_dev, const struct device *i2c_tm_dev,
+			 uint16_t tm_addr, uint8_t *data, size_t datasz);
+
 #endif /* TEST_I2C_TARGET */
