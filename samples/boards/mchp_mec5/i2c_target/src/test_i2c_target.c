@@ -162,9 +162,13 @@ static int i2c_target0_buf_rd_req_cb(struct i2c_target_config *config, uint8_t *
 	tm_tx_buf[1] = 0x22;
 	tm_tx_buf[2] = 0x33;
 	tm_tx_buf[3] = 0x34;
+	tm_tx_buf[4] = 0x35;
+	tm_tx_buf[5] = 0x36;
+	tm_tx_buf[6] = 0x37;
+	tm_tx_buf[7] = 0x38;
 
 	*ptr = tm_tx_buf;
-	*len = 4;
+	*len = 8;
 
 	return 0;
 }

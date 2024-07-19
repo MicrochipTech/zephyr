@@ -93,7 +93,7 @@ int main(void)
 	uint32_t i2c_dev_config = 0;
 	uint32_t adc_retry_count = 0;
 	uint32_t temp = 0;
-	uint32_t i2c_nl_wr_len = 0;
+	uint32_t i2c_nl_rd_len = 0, i2c_nl_wr_len = 0;
 	uint8_t nmsgs = 0;
 	uint8_t target_addr = 0;
 	struct i2c_msg msgs[4];
@@ -380,7 +380,9 @@ int main(void)
 
 	LOG_INF("I2C-NL0 TM RX buffer size is %u bytes", I2C_NL_TM_RX_BUF_SIZE);
 
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 5u;
+	LOG_INF("Target Write tests");
+
+	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 10u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -394,6 +396,7 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
+#if 0
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 4u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
@@ -463,17 +466,29 @@ int main(void)
 		LOG_ERR("Target write error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
+#endif
 
-#if 0
 	/* Target Read tests */
+	LOG_INF("Target Read Tests");
+
+	memset(buf1, 0xff, sizeof(buf1));
+	i2c_nl_rd_len = 3u;
 	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
-				   buf1, 3);
+				   buf1, i2c_nl_rd_len);
+	if (ret) {
+		LOG_ERR("Target read error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+#if 0
+	memset(buf1, 0xff, sizeof(buf1));
+	i2c_nl_rd_len = 8u;
+	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+				   buf1, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Target read error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
 #endif
-
 	LOG_INF("Application Done (%d)", ret);
 	spin_on((uint32_t)__LINE__, 0);
 
