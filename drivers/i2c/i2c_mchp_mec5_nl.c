@@ -711,7 +711,7 @@ static void i2c_mec5_nl_cm_dma_cb(const struct device *dev, void *user_data,
 }
 
 #ifdef CONFIG_I2C_TARGET
-/* TODO */
+/* TODO - We may need more changes for TM transmit direction */
 static void i2c_mec5_nl_tm_dma_cb(const struct device *dev, void *user_data,
 				  uint32_t chan, int status)
 {
@@ -1373,9 +1373,8 @@ static int i2c_mec5_nl_target_unregister(const struct device *dev, struct i2c_ta
  */
 #endif /* CONFIG_I2C_TARGET */
 
-/* Controller Mode ISR  */
+/* ISR helpers */
 
-#if 1
 static uint32_t	check_errors(const struct device *dev)
 {
 	const struct i2c_mec5_nl_config *const devcfg = dev->config;
@@ -1420,7 +1419,6 @@ static uint32_t	check_errors(const struct device *dev)
 
 	return err_ev;
 }
-#endif
 
 static void start_cm_read_phase(const struct device *dev)
 {
@@ -1433,42 +1431,6 @@ static void start_cm_read_phase(const struct device *dev)
 	mec_hal_i2c_nl_cm_proceed(hwctx);
 	k_event_post(&data->events, BIT(I2C_NL_KEV_W2R_POS));
 }
-
-#ifdef CONFIG_I2C_TARGET
-#if 0
-static void start_tm_read_phase(const struct device *dev)
-{
-	struct i2c_mec5_nl_data *data = dev->data;
-/* TODO	struct mec_i2c_smb_ctx *hwctx = &data->ctx; */
-
-	/* TODO */
-
-	k_event_post(&data->events, BIT(I2C_NL_KEV_W2R_POS));
-}
-#endif
-
-#if 0
-static int tm_write_recv(const struct device *dev)
-{
-	struct i2c_mec5_nl_data *data = dev->data;
-
-	if (tcfg && tcfg->callbacks && tcfg->callbacks->buf_write_received) {
-			I2C_NL_DEBUG_STATE_UPDATE(data, 0x92);
-			tcfg->callbacks->buf_write_received(tcfg, data->tm_rx_buf, data_len);
-		}
-		/* we need to restart the RX DMA channel to handle next
-		 * transaction from external Controller. If previous
-		 * transaction ended with read by external Controller(mem2dev)
-		 * we must switch DMA channel direction back to mem2dev.
-		 */
-		I2C_NL_DEBUG_STATE_UPDATE(data, 0x93);
-		i2c_mec5_nl_tm_dma_start(dev, data->tm_rx_buf, data->tm_rx_buf_max,
-					 I2C_NL_DIR_RD, true);
-		/* SPROCEED and SRUN were cleared in I2C.TM_CMD, set them */
-		mec_hal_i2c_nl_tm_proceed(regs);
-}
-#endif
-#endif
 
 #ifdef CONFIG_I2C_TARGET
 
@@ -1491,8 +1453,6 @@ static struct i2c_target_config *find_i2c_target(const struct device *dev, uint1
 
 	return NULL;
 }
-
-volatile int vret1;
 
 /* ISSUES:
  * 1. I2C-NL target mode hardware receive (external Controller write) triggers
@@ -1538,8 +1498,13 @@ static void tm_handle_idle(const struct device *dev, uint8_t target_addr)
 		tcfg->callbacks->buf_write_received(tcfg, pdata, data_len);
 	}
 
+	if (tcfg && tcfg->callbacks && tcfg->callbacks->stop) {
+		tcfg->callbacks->stop(tcfg);
+	}
+
 	k_event_clear(&data->events, UINT32_MAX);
 	i2c_mec5_nl_target_arm(dev);
+
 }
 
 /* ISSUES:
@@ -1568,8 +1533,6 @@ static void tm_process(const struct device *dev)
 	I2C_NL_DEBUG_ISR_TM_COUNT_UPDATE(data);
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0x90);
 
-	/* TODO invoke write received callback at IDLE after STOP */
-
 	if (mec_hal_i2c_smb_is_aat_ien(hwctx)) {
 		I2C_NL_DEBUG_ISR_TM_AAT_COUNT_UPDATE(data);
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x91);
@@ -1579,7 +1542,7 @@ static void tm_process(const struct device *dev)
 		mec_hal_i2c_smb_intr_ctrl(hwctx, BIT(MEC_I2C_IEN_IDLE_POS), 1);
 		data->xfrflags |= I2C_NL_XFR_FLAG_TM_IDLE_REQ;
 		data->active_addr_rw = target_addr;
-		if (target_addr & BIT(0)) {
+		if (target_addr & BIT(0)) { /* Host sent read address invoke callback to get buffer */
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0x92);
 			/* TODO: DMA dev2mem for target address. Reconfigure for mem2dev to send
 			 * data requested by external Controller.
