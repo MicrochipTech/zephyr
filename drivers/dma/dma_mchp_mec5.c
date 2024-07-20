@@ -127,6 +127,17 @@ static void dma_mec5_device_busy_clear(const struct device *dev, uint8_t chan)
 }
 #endif /* #if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE) */
 
+static bool is_chan_valid(const struct device *dev, uint8_t chan)
+{
+	const struct dma_mec5_config *const devcfg = dev->config;
+
+	if (devcfg->chmsk & BIT(chan)) {
+		return true;
+	}
+
+	return false;
+}
+
 static int is_dma_data_size_valid(uint32_t datasz)
 {
 	if ((datasz == 1U) || (datasz == 2U) || (datasz == 4U)) {
@@ -154,7 +165,7 @@ static int is_data_aligned(uint32_t src, uint32_t dest, uint32_t unitsz)
 
 static int is_dma_config_valid(const struct device *dev, struct dma_config *config)
 {
-	const struct dma_mec5_config * const devcfg = dev->config;
+	const struct dma_mec5_config *const devcfg = dev->config;
 
 	if (config->dma_slot >= (uint32_t)devcfg->dma_requests) {
 		LOG_ERR("XEC DMA config dma slot > exceeds number of request lines");
@@ -293,11 +304,10 @@ static int check_blocks(struct dma_mec5_channel *chdata, struct dma_block_config
 static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 			      struct dma_config *config)
 {
-	const struct dma_mec5_config *const devcfg = dev->config;
 	struct dma_mec5_data *const data = dev->data;
 	int ret;
 
-	if (!config || (channel >= (uint32_t)devcfg->dma_channels)) {
+	if (!config || !is_chan_valid(dev, channel)) {
 		return -EINVAL;
 	}
 
@@ -381,11 +391,10 @@ static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 			   uint32_t src, uint32_t dst, size_t size)
 {
-	const struct dma_mec5_config * const devcfg = dev->config;
 	struct dma_mec5_data * const data = dev->data;
 	int ret = 0;
 
-	if (channel >= (uint32_t)devcfg->dma_channels) {
+	if (!is_chan_valid(dev, channel)) {
 		return -EINVAL;
 	}
 
@@ -414,18 +423,16 @@ static int dma_mec5_reload(const struct device *dev, uint32_t channel,
 
 static int dma_mec5_start(const struct device *dev, uint32_t channel)
 {
-	const struct dma_mec5_config *const devcfg = dev->config;
-	struct dma_mec5_data * const data = dev->data;
-	int ret = 0;
 
-	if (channel >= (uint32_t)devcfg->dma_channels) {
+	if (!is_chan_valid(dev, channel)) {
 		return -EINVAL;
 	}
 
+	struct dma_mec5_data *const data = dev->data;
 	struct dma_mec5_channel *chdata = &data->channels[channel];
 	struct mec_dma_cfg *chcfg = &chdata->chan_cfg;
+	int ret = mec_hal_dma_chan_cfg((enum mec_dmac_channel)channel, chcfg);
 
-	ret = mec_hal_dma_chan_cfg((enum mec_dmac_channel)channel, chcfg);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -453,14 +460,12 @@ static int dma_mec5_start(const struct device *dev, uint32_t channel)
 
 static int dma_mec5_stop(const struct device *dev, uint32_t channel)
 {
-	const struct dma_mec5_config * const devcfg = dev->config;
-	int ret = 0;
-
-	if (channel >= (uint32_t)devcfg->dma_channels) {
+	if (!is_chan_valid(dev, channel)) {
 		return -EINVAL;
 	}
 
-	ret = mec_hal_dma_chan_stop((enum mec_dmac_channel)channel);
+	int ret = mec_hal_dma_chan_stop((enum mec_dmac_channel)channel);
+
 	if (ret == MEC_RET_OK) {
 		ret = 0;
 	} else if (ret == MEC_RET_ERR_TIMEOUT) {
@@ -492,13 +497,12 @@ static int dma_mec5_stop(const struct device *dev, uint32_t channel)
 static int dma_mec5_get_status(const struct device *dev, uint32_t channel,
 			       struct dma_status *status)
 {
-	const struct dma_mec5_config * const devcfg = dev->config;
 	struct dma_mec5_data * const data = dev->data;
 	int ret = 0;
 	uint32_t rembytes = 0u;
 	struct mec_dma_cfg dmacfg = { 0 };
 
-	if ((channel >= (uint32_t)devcfg->dma_channels) || (!status)) {
+	if (!is_chan_valid(dev, channel) || (!status)) {
 		LOG_ERR("unsupported channel");
 		return -EINVAL;
 	}
@@ -533,7 +537,7 @@ static int dma_mec5_get_status(const struct device *dev, uint32_t channel,
 	return 0;
 }
 
-int dma_mec5_get_attribute(const struct device *dev, uint32_t type, uint32_t *value)
+static int dma_mec5_get_attribute(const struct device *dev, uint32_t type, uint32_t *value)
 {
 	if ((type == DMA_ATTR_MAX_BLOCK_COUNT) && value) {
 		*value = 1;
@@ -550,8 +554,11 @@ static bool dma_mec5_chan_filter(const struct device *dev, int ch, void *filter_
 	enum dma_channel_filter *filter = (enum dma_channel_filter *)filter_param;
 	uint32_t mask = 0u;
 
-	if ((ch >= 0) && (ch < (int)devcfg->dma_channels) && filter
-	    && (*filter == DMA_CHANNEL_NORMAL)) {
+	if ((ch < 0) || (ch > 32) || !is_chan_valid(dev, (uint8_t)(ch & 0x7fu))) {
+		return false;
+	}
+
+	if (filter && (*filter == DMA_CHANNEL_NORMAL)) {
 		mask = GENMASK(devcfg->dma_channels - 1u, 0);
 		if (mask & BIT(ch)) {
 			return true;
