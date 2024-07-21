@@ -28,7 +28,6 @@ struct dma_mec5_config {
 	uint32_t chmsk;
 	uint8_t dma_channels;
 	uint8_t dma_requests;
-	void (*irq_connect)(void);
 };
 
 struct dma_mec5_channel {
@@ -665,6 +664,161 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 	}
 }
 
+#define DMA_MEC5_NODE_ID(inst) DT_INST(inst, DT_DRV_COMPAT)
+
+#define DMA_MEC5_CHAN_MSK_INST(inst)	\
+	(DT_INST_PROP_OR(inst, dma_channel_mask, MEC_DMAC_ALL_CHAN_MASK))
+
+#define DMA_MEC5_USE_CHAN(inst, chan)	\
+	(DMA_MEC5_CHAN_MSK_INST(inst) & (BIT(chan)))
+
+#define DMA_MEC5_IRQ_CONNECT(inst, chan)					\
+	IRQ_CONNECT(DT_IRQN_BY_IDX(DMA_MEC5_NODE_ID(inst), chan),		\
+		    DT_IRQ_BY_IDX(DMA_MEC5_NODE_ID(inst), chan, priority),	\
+		    dma_mec5_chan_##chan##_isr,					\
+		    DEVICE_DT_INST_GET(inst), 0);				\
+	irq_enable(DT_IRQN_BY_IDX(DMA_MEC5_NODE_ID(inst), chan));
+
+#if DMA_MEC5_USE_CHAN(0, 0)
+static void dma_mec5_chan_0_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 0);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 1)
+static void dma_mec5_chan_1_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 1);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 2)
+static void dma_mec5_chan_2_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 2);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 3)
+static void dma_mec5_chan_3_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 3);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 4)
+static void dma_mec5_chan_4_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 4);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 5)
+static void dma_mec5_chan_5_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 5);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 6)
+static void dma_mec5_chan_6_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 6);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 7)
+static void dma_mec5_chan_7_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 7);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 8)
+static void dma_mec5_chan_8_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 8);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 9)
+static void dma_mec5_chan_9_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 9);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 10)
+static void dma_mec5_chan_10_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 10);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 11)
+static void dma_mec5_chan_11_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 11);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 12)
+static void dma_mec5_chan_12_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 12);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 13)
+static void dma_mec5_chan_13_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 13);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 14)
+static void dma_mec5_chan_14_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 14);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 15)
+static void dma_mec5_chan_15_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 15);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 16)
+static void dma_mec5_chan_16_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 16);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 17)
+static void dma_mec5_chan_17_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 17);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 18)
+static void dma_mec5_chan_18_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 18);
+}
+#endif
+
+#if DMA_MEC5_USE_CHAN(0, 19)
+static void dma_mec5_chan_19_isr(const struct device *dev)
+{
+	dma_mec5_irq_handler(dev, 19);
+}
+#endif
+
 static int dma_mec5_init(const struct device *dev)
 {
 	struct dma_mec5_data *const data = dev->data;
@@ -687,62 +841,96 @@ static int dma_mec5_init(const struct device *dev)
 	data->num_pm_states = pm_state_cpu_get_all(0, &data->pm_states);
 #endif
 
-	if (devcfg->irq_connect) {
-		devcfg->irq_connect();
-	}
+#if DMA_MEC5_USE_CHAN(0, 0)
+	DMA_MEC5_IRQ_CONNECT(0, 0)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 1)
+	DMA_MEC5_IRQ_CONNECT(0, 1)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 2)
+	DMA_MEC5_IRQ_CONNECT(0, 2)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 3)
+	DMA_MEC5_IRQ_CONNECT(0, 3)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 4)
+	DMA_MEC5_IRQ_CONNECT(0, 4)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 5)
+	DMA_MEC5_IRQ_CONNECT(0, 5)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 6)
+	DMA_MEC5_IRQ_CONNECT(0, 6)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 7)
+	DMA_MEC5_IRQ_CONNECT(0, 7)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 8)
+	DMA_MEC5_IRQ_CONNECT(0, 8)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 9)
+	DMA_MEC5_IRQ_CONNECT(0, 9)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 10)
+	DMA_MEC5_IRQ_CONNECT(0, 10)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 11)
+	DMA_MEC5_IRQ_CONNECT(0, 11)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 12)
+	DMA_MEC5_IRQ_CONNECT(0, 12)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 13)
+	DMA_MEC5_IRQ_CONNECT(0, 13)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 14)
+	DMA_MEC5_IRQ_CONNECT(0, 14)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 15)
+	DMA_MEC5_IRQ_CONNECT(0, 15)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 16)
+	DMA_MEC5_IRQ_CONNECT(0, 16)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 17)
+	DMA_MEC5_IRQ_CONNECT(0, 17)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 18)
+	DMA_MEC5_IRQ_CONNECT(0, 18)
+#endif
+#if DMA_MEC5_USE_CHAN(0, 19)
+	DMA_MEC5_IRQ_CONNECT(0, 19)
+#endif
 
 	return 0;
 }
 
 #define DMA_MEC5_NUM_CHAN(inst) DT_INST_PROP(inst, dma_channels)
 
-#define DMA_MEC5_IRQ_DECLARE(idx, p2) \
-	static void dma_mec5_chan_##idx##_isr(const struct device *dev)	\
-	{								\
-		dma_mec5_irq_handler(dev, idx);				\
-	}								\
+static struct dma_mec5_channel dma_mec5_ctrl0_chans[DT_INST_PROP(0, dma_channels)];
 
-#define DMA_MEC5_IRQ_CONNECT_SUB(idx, node_id)					\
-	IRQ_CONNECT(DT_IRQ_BY_IDX(node_id, idx, irq),				\
-		    DT_IRQ_BY_IDX(node_id, idx, priority),			\
-		    dma_mec5_chan_##idx##_isr,					\
-		    DEVICE_DT_GET(node_id), 0);					\
-	irq_enable(DT_IRQ_BY_IDX(node_id, idx, irq));
+static ATOMIC_DEFINE(dma_mec5_atomic0, DT_INST_PROP(0, dma_channels));
 
-#define DMA_MEC5_DEVICE(i)						\
-	static struct dma_mec5_channel							\
-		dma_mec5_ctrl##i##_chans[DT_INST_PROP(i, dma_channels)];		\
-											\
-	static ATOMIC_DEFINE(dma_mec5_atomic##i, DT_INST_PROP(i, dma_channels));	\
-											\
-	static struct dma_mec5_data dma_mec5_data##i = {				\
-		.ctx.magic = DMA_MAGIC,							\
-		.ctx.dma_channels = DT_INST_PROP(i, dma_channels),			\
-		.ctx.atomic = dma_mec5_atomic##i,					\
-		.channels = dma_mec5_ctrl##i##_chans,					\
-		.channels_atomic = dma_mec5_atomic##i,					\
-	};										\
-											\
-	LISTIFY(DMA_MEC5_NUM_CHAN(i), DMA_MEC5_IRQ_DECLARE, (;))			\
-	void dma_mec5_irq_connect_##i(void)						\
-	{										\
-		LISTIFY(DMA_MEC5_NUM_CHAN(i), DMA_MEC5_IRQ_CONNECT_SUB, (;),		\
-			DT_INST(i, DT_DRV_COMPAT))					\
-	}										\
-											\
-	static const struct dma_mec5_config dma_mec5_cfg##i = {				\
-		.regs = (struct mec_dmac_regs *)DT_INST_REG_ADDR(i),				\
-		.chmsk = DT_INST_PROP_OR(i, dma_channel_mask, MEC_DMAC_ALL_CHAN_MASK),	\
-		.dma_channels = DT_INST_PROP(i, dma_channels),				\
-		.dma_requests = DT_INST_PROP(i, dma_requests),				\
-		.irq_connect = dma_mec5_irq_connect_##i,				\
-	};										\
-											\
-	PM_DEVICE_DT_DEFINE(i, dma_mec5_pm_action);					\
-	DEVICE_DT_INST_DEFINE(i, &dma_mec5_init,					\
-		PM_DEVICE_DT_GET(i),							\
-		&dma_mec5_data##i, &dma_mec5_cfg##i,					\
-		PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY,					\
-		&dma_mec5_api);
+static struct dma_mec5_data dma_mec5_data0 = {
+	.ctx.magic = DMA_MAGIC,
+	.ctx.dma_channels = DT_INST_PROP(0, dma_channels),
+	.ctx.atomic = dma_mec5_atomic0,
+	.channels = dma_mec5_ctrl0_chans,
+	.channels_atomic = dma_mec5_atomic0,
+};
 
-DT_INST_FOREACH_STATUS_OKAY(DMA_MEC5_DEVICE)
+static const struct dma_mec5_config dma_mec5_cfg0 = {
+	.regs = (struct mec_dmac_regs *)DT_INST_REG_ADDR(0),
+	.chmsk = DT_INST_PROP_OR(0, dma_channel_mask, MEC_DMAC_ALL_CHAN_MASK),
+	.dma_channels = DT_INST_PROP(0, dma_channels),
+	.dma_requests = DT_INST_PROP(0, dma_requests),
+};
+
+PM_DEVICE_DT_DEFINE(0, dma_mec5_pm_action);
+
+DEVICE_DT_INST_DEFINE(0, &dma_mec5_init,
+		      PM_DEVICE_DT_GET(0),
+		     &dma_mec5_data0, &dma_mec5_cfg0,
+		     PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY,
+		     &dma_mec5_api);
+
