@@ -18,6 +18,7 @@
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/irq.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/math_extras.h>
 #include <zephyr/sys/sys_io.h>
 LOG_MODULE_REGISTER(i2c_nl_mchp, CONFIG_I2C_LOG_LEVEL);
@@ -123,6 +124,7 @@ enum i2c_mec5_nl_kevents {
 
 struct i2c_mec5_nl_config {
 	struct mec_i2c_smb_regs *regs;
+	const struct device *counter_dev;
 	uint32_t clock_freq;
 	uint32_t init_pin_wait_us;
 	uint32_t cfg_pin_wait_us;
@@ -157,6 +159,8 @@ struct i2c_mec5_nl_config {
 struct i2c_mec5_nl_dbg {
 	uint8_t state;
 	uint8_t i2c_status;
+	uint8_t shad_addr;
+	uint8_t shad_data;
 	uint32_t i2c_compl;
 	uint32_t i2c_config;
 	uint32_t i2c_cm_cmd;
@@ -216,6 +220,8 @@ struct i2c_mec5_nl_data {
 	struct dma_block_config dma_blk_tm_tx;
 	struct dma_block_config dma_blk_tm_rx;
 	struct dma_status dsts;
+	atomic_t tm_idle;
+	atomic_t tm_dma_done;
 	uint8_t *tm_tx_buf;
 	size_t tm_tx_buf_max;
 	uint8_t *tm_rx_buf;
@@ -285,6 +291,8 @@ static void i2c_mec5_nl_dbg_state_update(struct i2c_mec5_nl_data *data, uint8_t 
 
 		d->state = state;
 		d->i2c_status = regs->STATUS;
+		d->shad_addr = regs->SHAD_ADDR;
+		d->shad_data = regs->SHAD_DATA;
 		d->i2c_compl = regs->COMPL;
 		d->i2c_config = regs->CONFIG;
 		d->i2c_cm_cmd = regs->CM_CMD;
@@ -711,6 +719,78 @@ static void i2c_mec5_nl_cm_dma_cb(const struct device *dev, void *user_data,
 }
 
 #ifdef CONFIG_I2C_TARGET
+
+static int i2c_mec5_nl_tm_dma_start(const struct device *dev, uint8_t *buf, size_t blen,
+				    uint8_t dir, bool start)
+{
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
+	struct i2c_mec5_nl_data *data = dev->data;
+	struct dma_config *dcfg = NULL;
+	struct dma_block_config *dbcfg = NULL;
+	int ret = 0;
+
+	if (dir == I2C_NL_DIR_WR) {
+		dcfg = &data->dma_cfg_tm_tx;
+		dbcfg = &data->dma_blk_tm_tx;
+		dbcfg->source_address = (uint32_t)buf;
+	} else {
+		dcfg = &data->dma_cfg_tm_rx;
+		dbcfg = &data->dma_blk_tm_rx;
+		dbcfg->dest_address = (uint32_t)buf;
+	}
+
+	dbcfg->block_size = blen;
+
+	ret = dma_config(devcfg->dma_dev_tm, devcfg->dma_tm_chan, dcfg);
+	if (ret) {
+		return ret;
+	}
+
+	if (start) {
+		ret = dma_start(devcfg->dma_dev_tm, devcfg->dma_tm_chan);
+	}
+
+	return ret;
+}
+
+/* Controller supports two 7-bit I2C target addresses.
+ * I2C-NL HW FSM requires target mode read and write counts in the target mode
+ * register to be non-zero and the DMA channel used for target mode to be armed for
+ * device to memory transfer.
+ * We arm target mode DMA channel for peripheral to memory transfer since the external Controller
+ * always writes the target address after START.
+ * NOTE: We must configure I2C-NL write and read counts with non-zero values to ensure the HW FSM
+ * will handle both I2C_WRITE and I2C combined write-read.
+ */
+static int i2c_mec5_nl_target_arm(const struct device *dev)
+{
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
+	struct i2c_mec5_nl_data *data = dev->data;
+	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	/* uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN | MEC_I2C_NL_TM_FLAG_STOP_IEN; */
+	uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN | MEC_I2C_NL_TM_FLAG_AAT_IEN;
+	/* uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN; */
+	uint32_t clrmsk = BIT(MEC_I2C_IEN_IDLE_POS) | BIT(MEC_I2C_NL_IEN_CM_DONE_POS)
+			  | BIT(MEC_I2C_NL_IEN_TM_DONE_POS) | BIT(MEC_I2C_NL_IEN_AAT_POS);
+	uint16_t nrx = data->tm_rx_buf_max + I2C_NL_DRV_XFRBUF_PAD_SIZE;
+	uint16_t ntx = I2C_NL_MAX_XFR_LEN;
+	int ret = 0;
+
+	dma_stop(devcfg->dma_dev_tm, devcfg->dma_tm_chan);
+	mec_hal_i2c_smb_intr_ctrl(hwctx, clrmsk, 0);
+	mec_hal_i2c_nl_cmd_clear(hwctx, MEC_I2C_NL_TM_SEL);
+	mec_hal_i2c_nl_flush_buffers(hwctx->base);
+
+	ret = mec_hal_i2c_nl_tm_config(hwctx, ntx, nrx, tm_flags);
+	if (ret != MEC_RET_OK) {
+		ret = -EIO;
+	}
+
+	ret = i2c_mec5_nl_tm_dma_start(dev, data->tm_rx_buf, nrx, I2C_NL_DIR_RD, true);
+
+	return ret;
+}
+
 /* TODO - We may need more changes for TM transmit direction */
 static void i2c_mec5_nl_tm_dma_cb(const struct device *dev, void *user_data,
 				  uint32_t chan, int status)
@@ -725,7 +805,19 @@ static void i2c_mec5_nl_tm_dma_cb(const struct device *dev, void *user_data,
 		kev = BIT(I2C_NL_KEV_DMA_TM_ERR_POS);
 	}
 
+#if 0
+	atomic_set(&data->tm_dma_done, 1);
+	if (atomic_get(&data->tm_idle)) {
+		atomic_set(&data->tm_dma_done, 0);
+		atomic_set(&data->tm_idle, 0);
+		k_event_clear(&data->events, UINT32_MAX);
+		i2c_mec5_nl_target_arm(dev);
+	} else {
+		k_event_post(&data->events, kev);
+	}
+#else
 	k_event_post(&data->events, kev);
+#endif
 }
 #endif
 
@@ -1163,85 +1255,44 @@ static int i2c_mec5_nl_transfer(const struct device *dev, struct i2c_msg *msgs,
 
 #ifdef CONFIG_I2C_TARGET
 
-static int i2c_mec5_nl_tm_dma_start(const struct device *dev, uint8_t *buf, size_t blen,
-				    uint8_t dir, bool start)
-{
-	const struct i2c_mec5_nl_config *const devcfg = dev->config;
-	struct i2c_mec5_nl_data *data = dev->data;
-	struct dma_config *dcfg = NULL;
-	struct dma_block_config *dbcfg = NULL;
-	int ret = 0;
+#if 0
+/* 10 I2C clocks in microseconds
+ * I2C standard is 100 KHz: 10 us * 10 = 100 us
+ * I2C fast is 400 KHz : 25 us
+ * I2C fast plus is 1 MHz : 10 us
+ * Configure a counter at 1 MHz
+ */
 
-	if (dir == I2C_NL_DIR_WR) {
-		dcfg = &data->dma_cfg_tm_tx;
-		dbcfg = &data->dma_blk_tm_tx;
-		dbcfg->source_address = (uint32_t)buf;
+uint32_t z_impl_counter_us_to_ticks(const struct device *dev,
+					       uint64_t us)
+#endif
+
+static void tm_counter_cb(const struct device *counter_dev, uint8_t chan_id, uint32_t ticks,
+			  void *user_data)
+{
+	struct i2c_mec5_nl_data *data = (struct i2c_mec5_nl_data *)user_data;
+	const struct i2c_mec5_nl_config *const devcfg = data->devcfg;
+	struct dma_status *dma_status = &data->dtst;
+	struct counter_alarm_cfg talarm = {0};
+
+	dma_get_status(devcfg->dma_dev_tm, devcfg->dma_tm_chan, dma_status);
+	if (!dma_status->busy) {
+		k_event_clear(&data->events, UINT32_MAX);
+		i2c_mec5_nl_target_arm(dev);
 	} else {
-		dcfg = &data->dma_cfg_tm_rx;
-		dbcfg = &data->dma_blk_tm_rx;
-		dbcfg->dest_address = (uint32_t)buf;
+		/* TODO set counter alarm to callback in 9-10 I2C clocks? */
+		talarm.callback = tm_counter_cb;
+		talarm.ticks = 3200u;
+		talarm.user_data = data;
+		counter_set_channel_alarm(???const struct device *dev, 0, &talarm);
 	}
-
-	dbcfg->block_size = blen;
-
-	ret = dma_config(devcfg->dma_dev_tm, devcfg->dma_tm_chan, dcfg);
-	if (ret) {
-		return ret;
-	}
-
-	if (start) {
-		ret = dma_start(devcfg->dma_dev_tm, devcfg->dma_tm_chan);
-	}
-
-	return ret;
-}
-
-/* !!!!
- * TODO look at STM32 I2C V2 target implementation. Has two target addresses also.
- * !!!!
- */
-/* Controller supports two 7-bit I2C target addresses.
- * I2C-NL HW FSM requires target mode read and write counts in the target mode
- * register to be non-zero and the DMA channel used for target mode to be armed for
- * device to memory transfer.
- * We arm target mode DMA channel for peripheral to memory transfer since the external Controller
- * always writes the target address after START.
- * NOTE: We must configure I2C-NL write and read counts with non-zero values to ensure the HW FSM
- * will handle both I2C_WRITE and I2C combined write-read.
- */
-static int i2c_mec5_nl_target_arm(const struct device *dev)
-{
-	const struct i2c_mec5_nl_config *const devcfg = dev->config;
-	struct i2c_mec5_nl_data *data = dev->data;
-	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
-	/* uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN | MEC_I2C_NL_TM_FLAG_STOP_IEN; */
-	uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN | MEC_I2C_NL_TM_FLAG_AAT_IEN;
-	/* uint32_t tm_flags = MEC_I2C_NL_TM_FLAG_DONE_IEN; */
-	uint32_t clrmsk = BIT(MEC_I2C_IEN_IDLE_POS) | BIT(MEC_I2C_NL_IEN_CM_DONE_POS)
-			  | BIT(MEC_I2C_NL_IEN_TM_DONE_POS) | BIT(MEC_I2C_NL_IEN_AAT_POS);
-	uint16_t nrx = data->tm_rx_buf_max + I2C_NL_DRV_XFRBUF_PAD_SIZE;
-	uint16_t ntx = I2C_NL_MAX_XFR_LEN;
-	int ret = 0;
-
-	dma_stop(devcfg->dma_dev_tm, devcfg->dma_tm_chan);
-	mec_hal_i2c_smb_intr_ctrl(hwctx, clrmsk, 0);
-	mec_hal_i2c_nl_cmd_clear(hwctx, MEC_I2C_NL_TM_SEL);
-	mec_hal_i2c_nl_flush_buffers(hwctx->base);
-
-	ret = mec_hal_i2c_nl_tm_config(hwctx, ntx, nrx, tm_flags);
-	if (ret != MEC_RET_OK) {
-		ret = -EIO;
-	}
-
-	ret = i2c_mec5_nl_tm_dma_start(dev, data->tm_rx_buf, nrx, I2C_NL_DIR_RD, true);
-
-	return ret;
 }
 
 static int i2c_mec5_nl_target_register(const struct device *dev, struct i2c_target_config *cfg)
 {
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	struct counter_alarm_cfg talarm = {0};
 	bool config_tm = false;
 	int ret;
 
@@ -1284,6 +1335,11 @@ static int i2c_mec5_nl_target_register(const struct device *dev, struct i2c_targ
 		 */
 		data->active_target_cfg = 0;
 		data->active_addr_rw = 0;
+
+		talarm.callback = tm_counter_cb;
+		talarm.ticks = 3200u;
+		talarm.user_data = data;
+		counter_set_channel_alarm(???const struct device *dev, 0, &talarm);
 
 		ret = i2c_mec5_nl_target_arm(dev);
 		if (!ret) {
@@ -1472,9 +1528,12 @@ static struct i2c_target_config *find_i2c_target(const struct device *dev, uint1
  */
 static void tm_handle_idle(const struct device *dev, uint8_t target_addr)
 {
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
 	struct i2c_target_config *tcfg = NULL;
+	struct dma_status *dma_status = &data->dtst;
+	struct counter_alarm_cfg alarm_cfg = {0};
 	uint8_t *pdata = NULL;
 	uint32_t data_len = 0;
 
@@ -1502,9 +1561,104 @@ static void tm_handle_idle(const struct device *dev, uint8_t target_addr)
 		tcfg->callbacks->stop(tcfg);
 	}
 
-	k_event_clear(&data->events, UINT32_MAX);
-	i2c_mec5_nl_target_arm(dev);
+#if 0
+	atomic_set(&data->tm_idle, 1);
+	if (atomic_get(&data->tm_dma_done)) {
+		atomic_set(&data->tm_dma_done, 0);
+		atomic_set(&data->tm_idle, 0);
+		k_event_clear(&data->events, UINT32_MAX);
+		i2c_mec5_nl_target_arm(dev);
+	}
+#else
+	/* TODO how to handle error return? */
+	dma_get_status(devcfg->dma_dev_tm, devcfg->dma_tm_chan, dma_status);
+	if (!dma_status->busy) {
+		k_event_clear(&data->events, UINT32_MAX);
+		i2c_mec5_nl_target_arm(dev);
+	} else {
+		/* TODO set counter alarm to callback in 9-10 I2C clocks? */
+	}
+#endif
+}
 
+#if 0
+struct counter_alarm_cfg {
+	/**
+	 * Callback called on alarm (cannot be NULL).
+	 */
+	counter_alarm_callback_t callback;
+	/**
+	 * Number of ticks that triggers the alarm.
+	 *
+	 * It can be relative (to now) or an absolute value (see @ref
+	 * COUNTER_ALARM_CFG_ABSOLUTE). Both, relative and absolute, alarm
+	 * values can be any value between zero and the current top value (see
+	 * @ref counter_get_top_value). When setting an absolute alarm value
+	 * close to the current counter value there is a risk that the counter
+	 * will have counted past the given absolute value before the driver
+	 * manages to activate the alarm. Therefore a guard period can be
+	 * defined that lets the driver decide unambiguously whether it is late
+	 * or not (see @ref counter_set_guard_period). If the counter is clock
+	 * driven then ticks can be converted to microseconds (see @ref
+	 * counter_ticks_to_us). Alternatively, the counter implementation may
+	 * count asynchronous events.
+	 */
+	uint32_t ticks;
+	/**
+	 * User data returned in callback.
+	 */
+	void *user_data;
+	/**
+	 * Alarm flags (see @ref COUNTER_ALARM_FLAGS).
+	 */
+	uint32_t flags;
+};
+#endif
+
+static int tm_handle_read_req(const struct device *dev, uint8_t target_addr)
+{
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
+	struct mec_i2c_smb_regs *regs = devcfg->regs;
+	struct i2c_mec5_nl_data *data = dev->data;
+	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	struct i2c_target_config *tcfg = NULL;
+	uint8_t *ptr_app_data = NULL;
+	uint32_t app_data_sz = 0;
+	int ret = -EIO;
+
+	I2C_NL_DEBUG_STATE_UPDATE(data, 0xA0);
+
+	tcfg = find_i2c_target(dev, (uint16_t)target_addr);
+	if (tcfg && tcfg->callbacks && tcfg->callbacks->buf_read_requested) {
+		I2C_NL_DEBUG_STATE_UPDATE(data, 0xA1);
+		mec_hal_i2c_nl_flush_buffers(hwctx->base);
+		ret = tcfg->callbacks->buf_read_requested(tcfg, &ptr_app_data, &app_data_sz);
+		if (ret == 0) {
+			I2C_NL_DEBUG_STATE_UPDATE(data, 0xA2);
+			/* re-configure TM DMA using ptr_app_data and app_data_sz */
+			if (app_data_sz > I2C_NL_MAX_XFR_LEN) {
+				app_data_sz = I2C_NL_MAX_XFR_LEN;
+			}
+
+			mec_hal_i2c_nl_cm_xfr_count_set(regs, 0, app_data_sz);
+			ret = i2c_mec5_nl_tm_dma_start(dev, ptr_app_data, app_data_sz,
+						       I2C_NL_DIR_WR, true);
+		} else { /* App did not give us a valid buffer or length! */
+			/* Point to dword in driver data space, set DMA length to 4, and
+			 * I2C-NL wrlen = 4. Let Host read. We need an experiment to discover what
+			 * I2C-NL does when DMA stops and Host continue reading.
+			 * We hope Host will issue STOP.
+			 */
+			I2C_NL_DEBUG_STATE_UPDATE(data, 0xA3);
+			mec_hal_i2c_nl_cm_xfr_count_set(regs, 0, 4);
+			ret = i2c_mec5_nl_tm_dma_start(dev, (uint8_t *)data->xfr_tmout, 4,
+						       I2C_NL_DIR_WR, true);
+		}
+	}
+
+	I2C_NL_DEBUG_STATE_UPDATE(data, 0xA4);
+
+	return ret;
 }
 
 /* ISSUES:
@@ -1527,8 +1681,8 @@ static void tm_process(const struct device *dev)
 	struct i2c_mec5_nl_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
 	uint32_t kev = 0;
+	int ret = 0;
 	uint32_t i2c_hw_sts = data->i2c_status;
-	uint8_t target_addr = regs->SHAD_ADDR;
 
 	I2C_NL_DEBUG_ISR_TM_COUNT_UPDATE(data);
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0x90);
@@ -1541,9 +1695,10 @@ static void tm_process(const struct device *dev)
 		mec_hal_i2c_smb_intr_ctrl(hwctx, BIT(MEC_I2C_NL_IEN_AAT_POS), 0);
 		mec_hal_i2c_smb_intr_ctrl(hwctx, BIT(MEC_I2C_IEN_IDLE_POS), 1);
 		data->xfrflags |= I2C_NL_XFR_FLAG_TM_IDLE_REQ;
-		data->active_addr_rw = target_addr;
-		if (target_addr & BIT(0)) { /* Host sent read address invoke callback to get buffer */
+		data->active_addr_rw = regs->SHAD_ADDR;
+		if (data->active_addr_rw & BIT(0)) { /* Host sent read address invoke callback to get buffer */
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0x92);
+			ret = tm_handle_read_req(dev, data->active_addr_rw);
 			/* TODO: DMA dev2mem for target address. Reconfigure for mem2dev to send
 			 * data requested by external Controller.
 			 * We invoke read requested callback to application which supplies us with
@@ -1565,7 +1720,7 @@ static void tm_process(const struct device *dev)
 		}
 	} else if (i2c_hw_sts & BIT(MEC_I2C_STS_TM_DONE_POS)) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x98);
-		if (target_addr & BIT(0)) { /* External Controller sent target read address */
+		if (data->active_addr_rw & BIT(0)) { /* External Controller sent target read address */
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0x99);
 			/* TODO */
 		} else { /* External Controller sent target write address */
@@ -1574,13 +1729,13 @@ static void tm_process(const struct device *dev)
 			if (i2c_hw_sts & BIT(MEC_I2C_STS_IDLE_POS)) {
 				I2C_NL_DEBUG_STATE_UPDATE(data, 0x9D);
 				kev |= BIT(I2C_NL_KEV_IDLE_POS);
-				tm_handle_idle(dev, target_addr);
+				tm_handle_idle(dev, data->active_addr_rw);
 			}
 		}
 	} else if (i2c_hw_sts & BIT(MEC_I2C_STS_IDLE_POS)) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x9E);
 		kev |= BIT(I2C_NL_KEV_IDLE_POS);
-		tm_handle_idle(dev, target_addr);
+		tm_handle_idle(dev, data->active_addr_rw);
 	}
 
 	if (kev) {
@@ -1958,6 +2113,8 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_I2C_TARGET_BUFFER_MODE),
 	I2C_NL_DT_DEFINE_TM_RX_BUF(i)						\
 										\
 	static struct i2c_mec5_nl_data i2c_mec5_nl_data_##i = {			\
+		.tm_idle = ATOMIC_INIT(0),					\
+		.tm_dma_done = ATOMIC_INIT(0),					\
 		.xfrbuf = i2c_mec5_nl_cm_tx_buf_##i,				\
 		.xfrbuf_max = I2C_NL_DT_CM_TX_BUF_MAX(i),			\
 		I2C_NL_DT_DATA_TM_TX_BUF(i)					\
@@ -1966,6 +2123,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_I2C_TARGET_BUFFER_MODE),
 										\
 	static const struct i2c_mec5_nl_config i2c_mec5_nl_dcfg_##i = {		\
 		.regs = (struct mec_i2c_smb_regs *)DT_INST_REG_ADDR(i),		\
+		.counter_dev = DEVICE_DT_GET(DT_NODELABEL(timer0)),		\
 		.port_sel = DT_INST_PROP(i, port_sel),				\
 		.clock_freq = DT_INST_PROP(i, clock_frequency),			\
 		.init_pin_wait_us = DT_INST_PROP_OR(i, init_pin_wait, 100),	\

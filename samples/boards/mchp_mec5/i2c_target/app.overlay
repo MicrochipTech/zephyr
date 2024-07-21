@@ -118,8 +118,6 @@
 
 &dmac {
 	compatible = "microchip,mec5-dmac";
-	/* reserved channels 2 & 3 for i2c_smb_1 using I2C-NL driver */
-	dma-channel-mask = <0xffff3>;
 	status = "okay";
 };
 
@@ -188,6 +186,12 @@
  * 2. ARM NVIC priority numbers are low is higher priority.
  *
  */
+&timer0 {
+	compatible = "microchip,mec5-btmr-counter";
+	prescaler = <15>;
+	status = "okay";
+};
+
 &i2c_smb_1 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
@@ -198,13 +202,8 @@
 	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
 	pinctrl-names = "default";
 
-	cm-dma-chan = <2>;
-	cm-dma-req-id = <3>;
-	tm-dma-chan = <3>;
-	tm-dma-req-id = <2>;
-
-/*	dmas = <&dmac 2 0x3>, <&dmac 3 0x2>; */
-/*	dma-names = "cm", "tm"; */
+	dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
+	dma-names = "cm", "tm";
 
 	/* experiment, set buffer size much larger than 64 byte write transfer test */
 	tm-rx-buffer-size = <12>;
