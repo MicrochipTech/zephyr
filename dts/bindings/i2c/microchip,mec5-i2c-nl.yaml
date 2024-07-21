@@ -32,25 +32,6 @@ properties:
     required: true
     description: I2C data line gpio handle
 
-  dmas:
-    required: true
-    description: |
-      TX & RX dma specifiers. Each specifier will have a phandle
-      reference to the dmac controller, the channel number, and peripheral
-      trigger source.
-
-      For example dmas using DMA channels 2 and 3 for controller/target modes on I2C01
-        dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
-
-  dma-names:
-    required: true
-    description: |
-      Required if the dmas property exists. This should be "cm" for controller mode or "tm"
-      for target mode to match the dmas property.
-
-      For example
-        dma-names = "cm", "tm";
-
   init-pin-wait:
     type: int
     default: 100
@@ -65,3 +46,52 @@ properties:
       Amount of time in microseconds allowing the controller to sample
       pins after controller is enabled during configuration. If not
       present the default is 35000 (the SMBus bus timeout).
+
+  cm-dma-chan:
+    type: int
+    required: true
+    description: DMA channel used by I2C-NL for Controller mode transfers.
+
+  cm-dma-req-id:
+    type: int
+    required: true
+    description: |
+      I2C Controller mode hardware flow control ID required by DMA channel.
+
+  tm-dma-chan:
+    type: int
+    required: true
+    description: |
+      DMA channel used by I2C-NL for Target mode transfers.
+
+  tm-dma-req-id:
+    type: int
+    required: true
+    description: |
+      I2C Target mode hardware flow control ID required by DMA channel.
+
+  cm-tx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Controller mode driver buffer size in bytes. CM buffer used to
+      build transmit data packet for initial I2C start. The driver
+      will buffer as much of the transmit data into this buffer. Remaining
+      data will be handling by TX DMA reload callback.
+
+  tm-tx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Target mode driver transmit buffer size in bytes. TM mode requires
+      a driver buffer to supply data requested by an external I2C controller
+      read. Application fills this buffer via target mode callbacks.
+
+
+  tm-rx-buffer-size:
+    type: int
+    default: 64
+    description: |
+      Target mode driver receive buffer size in bytes. TM mode requires
+      a driver buffer to receive data transmitted by an external I2C controller
+      write.
