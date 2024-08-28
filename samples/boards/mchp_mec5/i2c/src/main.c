@@ -64,11 +64,6 @@ int main(void)
 	uint32_t i2c_dev_config = 0;
 	uint32_t adc_retry_count = 0;
 	uint32_t temp = 0;
-#if 0
-/* #ifdef APP_BOARD_HAS_FRAM_ATTACHED */
-	uint32_t fram_nbytes = 0;
-	uint16_t fram_mem_addr = 0;
-#endif
 	uint8_t nmsgs = 0;
 	uint8_t target_addr = 0;
 	struct i2c_msg msgs[4];
@@ -263,63 +258,6 @@ int main(void)
 		LOG_INF("LTC2489 reading = 0x%08x", temp);
 	}
 
-#if 0
-/* #ifdef APP_BOARD_HAS_FRAM_ATTACHED */
-	/* I2C FRAM tests */
-	fram_nbytes = 64u;
-	fram_mem_addr = 0x1234u;
-
-	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x", fram_nbytes, fram_mem_addr);
-
-	for (temp = 0; temp < fram_nbytes; temp++) {
-		buf2[temp] = (uint8_t)((temp + 1u) & 0xffu);
-	}
-
-	nmsgs = 2;
-	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
-	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
-
-	msgs[0].buf = buf1;
-	msgs[0].len = 2u;
-	msgs[0].flags = I2C_MSG_WRITE;
-	msgs[1].buf = buf2;
-	msgs[1].len = fram_nbytes;
-	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
-
-	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
-	if (ret) {
-		LOG_ERR("I2C API for FRAM write returned error %d", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	LOG_INF("MB85RC256V FRAM read %u bytes from offset 0x%x", fram_nbytes, fram_mem_addr);
-	memset(buf3, 0x55, sizeof(buf3));
-
-	nmsgs = 2;
-	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
-	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
-
-	msgs[0].buf = buf1;
-	msgs[0].len = 2u;
-	msgs[0].flags = I2C_MSG_WRITE;
-	msgs[1].buf = buf3;
-	msgs[1].len = fram_nbytes;
-	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
-	if (ret) {
-		LOG_ERR("I2C API for FRAM read returned error %d", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	ret = memcmp(buf2, buf3, fram_nbytes);
-	if (ret == 0) {
-		LOG_INF("Compare read of data written to FRAM matches: PASS");
-	} else {
-		LOG_ERR("Compare read of data written to FRAM has mismatch: FAIL");
-	}
-#endif /* APP_BOARD_HAS_FRAM_ATTACHED */
-
 	ret = test_i2c_nl(i2c_nl_dev);
 	if (ret) {
 		LOG_ERR("I2C-NL test failed");
@@ -506,6 +444,7 @@ static int test_i2c_nl(const struct device *idev)
 
 	LOG_INF("MB85RC256V FRAM read %u bytes from offset 0x%x", fram_nbytes, fram_mem_addr);
 
+	/* test I2C write-read sequence */
 	nmsgs = 2;
 	buf2[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
 	buf2[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
@@ -531,9 +470,64 @@ static int test_i2c_nl(const struct device *idev)
 		LOG_ERR("FRAM read back mismatch");
 	}
 
-#ifdef CONFIG_I2C_CALLBACK
-	/*  TODO */
-#endif
-#endif
+
+	memset(buf1, 0, sizeof(buf1));
+	memset(buf2, 0, sizeof(buf2));
+	memset(buf3, 0x55, sizeof(buf3));
+
+	/* odd size larger than driver buffer */
+	fram_nbytes = CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE + 5u;
+	fram_mem_addr = 0x8756u;
+	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
+	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
+
+	for (temp = 0; temp < fram_nbytes; temp++) {
+		buf2[temp] = (uint8_t)(temp & 0xffu);
+	}
+
+	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x: first write msg is offset, "
+		"second is data", fram_nbytes, fram_mem_addr);
+
+	nmsgs = 2;
+	msgs[0].buf = buf1;
+	msgs[0].len = 2u; /* 16-bit offset in FRAM */
+	msgs[0].flags = I2C_MSG_WRITE;
+	msgs[1].buf = buf2;
+	msgs[1].len = fram_nbytes;
+	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
+	if (ret) {
+		LOG_ERR("I2C API for FRAM write returned error %d", ret);
+		return ret;
+	}
+
+	LOG_INF("MB85RC256V FRAM read %u bytes from offset 0x%x", fram_nbytes, fram_mem_addr);
+
+	nmsgs = 2;
+	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
+	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
+
+	msgs[0].buf = buf1;
+	msgs[0].len = 2u;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = buf3;
+	msgs[1].len = fram_nbytes;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
+	if (ret) {
+		LOG_ERR("I2C API for FRAM write returned error %d", ret);
+		return ret;
+	}
+
+	ret = memcmp(buf2, buf3, fram_nbytes);
+	if (ret == 0) {
+		LOG_INF("FRAM read back of %u bytes matches written data", fram_nbytes);
+	} else {
+		LOG_ERR("FRAM read back mismatch");
+	}
+#endif /* APP_BOARD_HAS_FRAM_ATTACHED */
 	return 0;
 }
