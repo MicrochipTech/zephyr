@@ -28,7 +28,7 @@ properties:
 #
 # Example of devicetree dma channel configuration:
 #
-# &sercom3 {
+# &dmac {
 #     /* Configure DMA channels for async operation */
 #     dmas = <&dmac 10 7>, <&dmac 11 8>;
 #     dma-names = "rx", "tx";
