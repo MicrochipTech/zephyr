@@ -65,3 +65,22 @@ properties:
       Amount of time in microseconds allowing the controller to sample
       pins after controller is enabled during configuration. If not
       present the default is 35000 (the SMBus bus timeout).
+
+  cm-tx-buf-size:
+    type: int
+    default: 64
+    description: |
+      Controller mode driver transmit buffer size in bytes.
+      I2C network layer hardware uses DMA to transfer data to/from
+      the controller and memory. The data includes the start and
+      optional repeated start target addresses and optional PEC.
+      The buffer is used by the driver to build a packet consisting
+      of the target address and any data being written to the target
+      and optional repeated start target address.
+
+  tm-rx-buf-size:
+    type: int
+    default: 64
+    description: |
+      Driver buffer for target mode receive data from an external
+      I2C controller.
