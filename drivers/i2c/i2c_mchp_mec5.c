@@ -700,7 +700,7 @@ static int i2c_mec5_next_msg(struct i2c_mec5_data *data)
 	if (m->flags & I2C_MSG_STOP) {
 		xfr->mflags = I2C_MEC5_XFR_FLAG_STOP_REQ;
 	}
-	if (data->cm_dir != xfr->mdir) {
+	if ((m->flags & I2C_MSG_RESTART) || (data->cm_dir != xfr->mdir)) {
 		xfr->mflags |= I2C_MEC5_XFR_FLAG_START_REQ;
 	}
 	data->cm_dir = xfr->mdir;
