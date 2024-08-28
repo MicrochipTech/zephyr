@@ -14,5 +14,6 @@ dmac: dmac@40002400 {
 	#dma-cells = <2>;
 	dma-channels = <16>;
 	dma-requests = <16>;
+	dma-channel-mask = <0xffff>;
 	status = "disabled";
 };
