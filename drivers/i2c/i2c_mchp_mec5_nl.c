@@ -15,6 +15,7 @@
 #include <zephyr/drivers/dma.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c_nl.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/irq.h>
 #include <zephyr/logging/log.h>
@@ -56,9 +57,6 @@ LOG_MODULE_REGISTER(i2c_nl_mchp, CONFIG_I2C_LOG_LEVEL);
  */
 #define I2C_MEC5_NL_CM_TX_BUF_PAD_LEN		8
 #define I2C_MEC5_NL_TM_RX_BUF_PAD_LEN		8
-
-#define I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX		(CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE)
-#define I2C_MEC5_NL_XFRBUF_SIZE			((I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX) + 8u)
 
 #define I2C_MEC5_NL_MISC_CFG_PORT_POS		0
 #define I2C_MEC5_NL_MISC_CFG_PORT_MSK		0xfu
@@ -116,6 +114,7 @@ struct i2c_mec5_nl_config {
 	void (*irq_config_func)(void);
 	const struct pinctrl_dev_config *pcfg;
 	const struct device *dma_dev;
+	size_t xfrbufsz;
 	uint8_t cm_dma_chan;
 	uint8_t cm_dma_trigsrc;
 #ifdef CONFIG_I2C_TARGET
@@ -176,6 +175,8 @@ struct i2c_mec5_nl_data {
 	struct i2c_target_config *target2_cfg;
 	uint8_t *tm_rx_buf;
 	size_t tm_rx_buf_sz;
+	uint8_t *tm_rx_ptr;
+	uint32_t tm_rd_cnt;
 	uint32_t tm_cmd_addr;
 	uint8_t *tm_tx_buf;
 	uint32_t tm_tx_buf_sz;
@@ -555,6 +556,7 @@ static void mec5_nl_hw_prep(const struct device *dev)
  */
 static int msg_grp_start_xfr(const struct device *dev)
 {
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct i2c_mec5_nl_data *const data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
 	struct i2c_msg_group *g = &data->mgrp;
@@ -590,18 +592,18 @@ static int msg_grp_start_xfr(const struct device *dev)
 	while (g->wr_idx < max_idx) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x21u);
 		m = &data->msgs[g->wr_idx];
-		if (m->len <= I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX) {
+		if (m->len <= devcfg->xfrbufsz) {
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0x22u);
 			memcpy(xbuf_end, m->buf, m->len);
 			xbuf_end += m->len;
 			dma_mem2dev_len += m->len;
 		} else {
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0x23u);
-			memcpy(xbuf_end, m->buf, I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX);
+			memcpy(xbuf_end, m->buf, devcfg->xfrbufsz);
 			xbuf_end += m->len;
-			dma_mem2dev_len += I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX;
-			data->rembuf = &m->buf[I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX];
-			data->remlen = m->len - I2C_MEC5_NL_XFRBUF_DATA_LEN_MAX;
+			dma_mem2dev_len += devcfg->xfrbufsz;
+			data->rembuf = &m->buf[devcfg->xfrbufsz];
+			data->remlen = m->len - devcfg->xfrbufsz;
 			break;
 		}
 		g->wr_idx++;
@@ -899,6 +901,9 @@ static int i2c_mec5_nl_target_arm(const struct device *dev)
 	/* clear all events before re-arming TM */
 	k_event_clear(&data->events, UINT32_MAX);
 
+	data->tm_rx_ptr = data->tm_rx_buf;
+	data->tm_rd_cnt = 0;
+
 	ret = mec_hal_i2c_nl_tm_config(hwctx, ntx, nrx, tm_flags);
 	if (ret != MEC_RET_OK) {
 		ret = -EIO;
@@ -951,9 +956,12 @@ static struct i2c_target_config *i2c_target_find(const struct device *dev, uint1
  */
 static void tm_write_cb(const struct device *dev, uint8_t shad_addr)
 {
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
 	struct i2c_mec5_nl_data *const data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
+	struct dma_status dma_sts = {0};
 	uint32_t rdcnt = 0, dlen = 0;
+	uint8_t *dataptr = NULL;
 	struct i2c_target_config *tcfg = i2c_target_find(dev, shad_addr);
 
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0xA0u);
@@ -967,15 +975,35 @@ static void tm_write_cb(const struct device *dev, uint8_t shad_addr)
 
 	if (cb->buf_write_received) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0xA2u);
+		dma_get_status(devcfg->dma_dev, devcfg->tm_dma_chan, &dma_sts);
+		/* current value of TM_CMD.rdCnt which has been decremented by HW */
 		rdcnt = mec_hal_i2c_nl_tm_xfr_count_get(hwctx, 1);
-		if (hwctx->rdcnt > rdcnt) {
+		if (rdcnt < hwctx->rdcnt) {
 			dlen = hwctx->rdcnt - rdcnt;
-			if (dlen) { /* I2C-NL DMA's address and data into buffer */
-				dlen--;
+			dataptr = data->tm_rx_ptr;
+
+			if (data->i2c_status & (BIT(MEC_I2C_SMB_COMPL_RPTRD_Pos)
+						| BIT(MEC_I2C_SMB_COMPL_RPTWR_Pos))) {
+				/* buffer has Rpt-START target address after first data */
+				/* HW anomaly, causes DMA to read empty RX buffer
+				 * after target address resulting in 0 byte in DMA
+				 * buffer. This does not decrement I2C-NL TM_CMD.RdCnt.
+				 */
+				data->tm_rd_cnt = dlen;
+				data->tm_rx_ptr += dlen;
+				dataptr++; /* move past first target address */
+				dlen -= 2u; /* remove both target addresses from data length */
+			} else {
+				dataptr++; /* move past target address or bogus zero byte */
+				if (data->tm_rd_cnt) {
+					dlen -= data->tm_rd_cnt;
+				} else {
+					dlen--;
+				}
 			}
 		}
 
-		cb->buf_write_received(tcfg, &data->tm_rx_buf[1], dlen);
+		cb->buf_write_received(tcfg, dataptr, dlen);
 	}
 
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0xAFu);
@@ -1046,6 +1074,8 @@ static void target_read_config(const struct device *dev, uint8_t shad_addr)
 			 * will get IDLE interrupt when lines are detected idle.
 			 */
 			I2C_NL_DEBUG_STATE_UPDATE(data, 0xB5u);
+			data->tm_rx_ptr = data->tm_rx_buf;
+			data->tm_rd_cnt = 0;
 			i2c_mec5_nl_dma_start(dev, data->tm_rx_buf, 1u, I2C_NL_DIR_WR,
 					      (I2C_MEC5_NL_DMA_START_FLAG_TM
 					       | I2C_MEC5_NL_DMA_START_FLAG_RUN));
@@ -1076,8 +1106,6 @@ static void target_stop_cb(const struct device *dev, uint8_t shad_addr)
 	if (cb->stop) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0xC2u);
 		cb->stop(tcfg);
-		/* DEBUG */
-		memset(data->tm_rx_buf, 0x55, data->tm_rx_buf_sz);
 	}
 
 	I2C_NL_DEBUG_STATE_UPDATE(data, 0xCFu);
@@ -1470,6 +1498,56 @@ static const struct i2c_driver_api i2c_mec5_nl_driver_api = {
 	.target_register = i2c_mec5_nl_target_register,
 	.target_unregister = i2c_mec5_nl_target_unregister,
 };
+
+int i2c_mchp_nl_clr_buffers(const struct device *dev, uint8_t val)
+{
+	const struct i2c_mec5_nl_config *devcfg = dev->config;
+	struct i2c_mec5_nl_data *const data = dev->data;
+
+	if (k_sem_take(&data->lock, K_NO_WAIT) != 0) {
+		return -EBUSY;
+	}
+
+	memset(data->xfrbuf, val, devcfg->xfrbufsz);
+#ifdef CONFIG_I2C_TARGET
+	data->tm_rx_ptr = data->tm_rx_buf;
+	data->tm_rd_cnt = 0;
+	memset(data->tm_rx_buf, val, data->tm_rx_buf_sz);
+#endif
+
+	k_sem_give(&data->lock);
+	return 0;
+}
+
+#if defined(I2C_NL_DEBUG_ISR) || defined(I2C_NL_DEBUG_STATE)
+int i2c_mchp_nl_clr_debug_data(const struct device *dev)
+{
+
+	struct i2c_mec5_nl_data *const data = dev->data;
+
+	if (k_sem_take(&data->lock, K_NO_WAIT) != 0) {
+		return -EBUSY;
+	}
+
+#if defined(I2C_NL_DEBUG_ISR)
+	data->dbg_isr_cnt = 0;
+	data->dbg_isr_idx = 0;
+	memset(data->dbg_isr_data, 0, sizeof(data->dbg_isr_data));
+#endif
+#if defined(I2C_NL_DEBUG_STATE)
+	data->dbg_state_idx = ATOMIC_INIT(0);
+	memset(data->dbg_states, 0, sizeof(data->dbg_states));
+#endif
+	k_sem_give(&data->lock);
+	return 0;
+}
+#else
+int i2c_mchp_nl_clr_debug_data(const struct device *dev)
+{
+	return -ENOTSUP;
+}
+#endif
+
 /* end public API */
 
 static int i2c_mec5_nl_init_dma(const struct device *dev)
@@ -1618,6 +1696,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_I2C_TARGET_BUFFER_MODE),
 		.irq_config_func = i2c_mec5_nl_irq_config_func_##i,		\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),			\
 		.dma_dev = I2C_MEC5_NL_DT_INST_DMA_DEV(i, cm),			\
+		.xfrbufsz = I2C_NL_MEC5_CM_TX_BUF_SIZE(i),			\
 		.cm_dma_chan = I2C_NL_MEC5_DMA_CHAN(i, 0),			\
 		.cm_dma_trigsrc = I2C_NL_MEC5_DMA_TRIGSRC(i, 0),		\
 		I2C_MEC5_NL_TM_DMA(i)						\
