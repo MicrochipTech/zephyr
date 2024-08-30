@@ -34,4 +34,6 @@ int test_i2c_target_combined(const struct device *i2c_cm_dev, const struct devic
 			     uint16_t tm_addr, uint8_t *wdata, size_t wrsz,
 			     uint8_t *rdata, size_t rdsz);
 
+int i2c_test_get_tm_rx_buf(uint8_t **tmbuf, uint32_t *bufsz);
+
 #endif /* TEST_I2C_TARGET */
