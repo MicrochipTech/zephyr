@@ -15,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c_nl.h>
 #include <zephyr/drivers/led.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/spi.h>
@@ -95,6 +96,8 @@ int main(void)
 	uint32_t temp = 0;
 	uint32_t i2c_nl_wr_len = 0;
 	uint32_t i2c_nl_rd_len = 0;
+	uint8_t *tm_rxb = NULL;
+	uint32_t tm_rxb_sz = 0;
 	uint8_t nmsgs = 0;
 	uint8_t target_addr = 0;
 	struct i2c_msg msgs[4];
@@ -329,6 +332,9 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	ret = test_i2c_fram(&mb85rc256v_dts, fram_addr, fram_datasz, i2c_cb_fp, NULL, false);
 	if (ret) {
 		spin_on((uint32_t)__LINE__, ret);
@@ -395,6 +401,9 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 4u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
@@ -409,7 +418,9 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-#if 0
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 3u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
@@ -423,6 +434,9 @@ int main(void)
 		LOG_ERR("Target write error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
+
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
 
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 2u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
@@ -438,6 +452,9 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 1u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
@@ -451,6 +468,9 @@ int main(void)
 		LOG_ERR("Target write error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
+
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
 
 	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
@@ -467,6 +487,9 @@ int main(void)
 	}
 
 	/* Target Read tests */
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_rd_len = 3u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
 
@@ -500,6 +523,9 @@ int main(void)
 	}
 
 	/* read 0xf8(248) bytes */
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_rd_len = 248u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
 
@@ -533,6 +559,9 @@ int main(void)
 	}
 
 	/* read 501 bytes */
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_rd_len = 501u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
 
@@ -566,8 +595,11 @@ int main(void)
 	}
 
 	/* read 5 bytes and intentionally do not supply an application buffer: error path in driver */
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	i2c_nl_rd_len = 5u;
-	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
+	LOG_INF("Target read %u bytes with app returning error on buffer request cb", i2c_nl_rd_len);
 
 	memset(buf1, 0x55, sizeof(buf1));
 	memset(buf2, 0xaa, sizeof(buf1));
@@ -595,10 +627,12 @@ int main(void)
 	if (ret == 0) {
 		LOG_INF("Target read %u bytes data match: PASS", i2c_nl_rd_len);
 	} else {
-		LOG_INF("Target read %u bytes data mismatch: FAIL", i2c_nl_rd_len);
+		LOG_INF("Target read %u bytes data mismatch: EXPECT FAIL", i2c_nl_rd_len);
 	}
-#endif /* 0 */
-#if 1
+
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
 	/* Break the driver: Target START wrAddr wrData1 Rpt-START rdAddr rdData1 */
 	i2c_nl_wr_len = 1u;
 	i2c_nl_rd_len = 3u;
@@ -628,20 +662,34 @@ int main(void)
 	}
 
 	LOG_INF("I2C Combined write-read done");
-#endif
-#if 0
+
+	ret = memcmp(buf2, buf3, i2c_nl_rd_len);
+	if (ret == 0) {
+		LOG_INF("I2C Combined write %u bytes, read %u bytes: PASS",
+			i2c_nl_wr_len, i2c_nl_rd_len);
+	} else {
+		LOG_INF("I2C Combined write %u bytes, read %u bytes: data mismatch FAIL",
+			i2c_nl_wr_len, i2c_nl_rd_len);
+	}
+
+	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
+	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+
+	LOG_INF("Target Combined: Write 2, Write 3");
+
 	test_i2c_target_wr_init();
 
 	memset(buf1, 0x55, sizeof(buf1));
 	memset(buf2, 0xAA, sizeof(buf2));
 
 	buf1[0] = 0x11;
+	buf1[1] = 0x12;
 	buf2[0] = 0x21;
 	buf2[1] = 0x22;
 	buf2[2] = 0x23;
 
 	msgs[0].buf = buf1;
-	msgs[0].len = 1u;
+	msgs[0].len = 2u;
 	msgs[0].flags = I2C_MSG_WRITE;
 	msgs[1].buf = buf2;
 	msgs[1].len = 3u;
@@ -653,7 +701,20 @@ int main(void)
 		LOG_ERR("Target I2C combined error (%d)", ret);
 	}
 
-#endif
+	tm_rxb = NULL;
+	tm_rxb_sz = 0;
+
+	ret = i2c_test_get_tm_rx_buf(&tm_rxb, &tm_rxb_sz);
+	if (ret) {
+		LOG_ERR("Get test app TM RX buffer error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	if ((memcmp(tm_rxb, buf1, 2) == 0) && (memcmp(tm_rxb + 2, buf2, 3) == 0)) {
+		LOG_INF("I2C Combined Write 2, Write 3: PASS");
+	} else {
+		LOG_ERR("I2C Combined Write 2, Write 3 data mismatch: FAIL");
+	}
 
 	LOG_INF("Application Done (%d)", ret);
 	spin_on((uint32_t)__LINE__, 0);
