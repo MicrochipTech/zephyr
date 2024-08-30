@@ -118,7 +118,20 @@ bool target0_stop_cb;
 uint8_t tm_tx_buf[TM_TX_BUF_SIZE];
 
 #define TM_RX_BUF_SIZE 256
+uint8_t *tm_rx_buf_ptr;
 uint8_t tm_rx_buf[TM_RX_BUF_SIZE];
+
+int i2c_test_get_tm_rx_buf(uint8_t **tmbuf, uint32_t *bufsz)
+{
+	if (!tmbuf || !bufsz) {
+		return -EINVAL;
+	}
+
+	*tmbuf = tm_rx_buf;
+	*bufsz = TM_RX_BUF_SIZE;
+
+	return 0;
+}
 
 static int i2c_target0_wr_req_cb(struct i2c_target_config *config)
 {
@@ -169,7 +182,10 @@ static void i2c_target0_buf_wr_rcvd_cb(struct i2c_target_config *config, uint8_t
 #endif
 
 	if (ptr && len) {
-		memcpy(tm_rx_buf, ptr, len);
+		if ((uint32_t)(tm_rx_buf_ptr - tm_rx_buf) < len) {
+			memcpy(tm_rx_buf_ptr, ptr, len);
+			tm_rx_buf_ptr += len;
+		}
 	}
 }
 
@@ -218,7 +234,9 @@ int test_i2c_target_wr_init(void)
 	target0_stop_cb = false;
 	target_write_recv_cb = false;
 	target_test_wr_rx_len = 0;
+	tm_rx_buf_ptr = tm_rx_buf;
 	memset(tm_tx_buf, 0x55, TM_TX_BUF_SIZE);
+	memset(tm_rx_buf, 0x55, TM_RX_BUF_SIZE);
 	return 0;
 }
 
@@ -279,7 +297,7 @@ int test_i2c_target_write(const struct device *i2c_cm_dev, const struct device *
 			ret = -EILSEQ;
 			LOG_ERR("Target write data != send data");
 		} else {
-			LOG_INF("Target captured bytes match");
+			LOG_INF("Target captured bytes match: PASS");
 		}
 	}
 
