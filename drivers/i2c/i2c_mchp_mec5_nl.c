@@ -33,11 +33,11 @@ LOG_MODULE_REGISTER(i2c_nl_mchp, CONFIG_I2C_LOG_LEVEL);
 #include <mec_ecia_api.h>
 #include <mec_i2c_api.h>
 
-#define I2C_NL_DEBUG_ISR
+/* #define I2C_NL_DEBUG_ISR */
 #define I2C_NL_DEBUG_ISR_ENTRIES		64
-#define I2C_NL_DEBUG_STATE
+/* #define I2C_NL_DEBUG_STATE */
 #define I2C_NL_DEBUG_STATE_ENTRIES		256
-#define I2C_NL_DEBUG_NO_KEV_WAIT_TIMEOUT
+/* #define I2C_NL_DEBUG_NO_KEV_WAIT_TIMEOUT */
 
 #define I2C_MEC5_NL_RESET_WAIT_US		20
 
@@ -348,7 +348,7 @@ static inline uint8_t fmt_addr(uint16_t addr, enum i2c_mec5_nl_direction dir)
 /* message group helpers */
 static int msg_check(struct i2c_msg_group *g, struct i2c_msg *m, uint8_t msg_idx)
 {
-	LOG_INF("I2C-NL Msg[%u] check", msg_idx);
+	LOG_DBG("I2C-NL Msg[%u] check", msg_idx);
 
 	if (!m->buf || !m->len) {
 		LOG_ERR("NULL buf or len");
@@ -380,7 +380,7 @@ static int msg_check(struct i2c_msg_group *g, struct i2c_msg *m, uint8_t msg_idx
  */
 static int msg_grp_update(struct i2c_msg_group *g, struct i2c_msg *m, uint8_t msg_idx)
 {
-	LOG_INF("I2C-NL Msg Group Update: msg[%u]", msg_idx);
+	LOG_DBG("I2C-NL Msg Group Update: msg[%u]", msg_idx);
 
 	if (!g || !m) { /* can be removed */
 		LOG_ERR("Bad group or msg pointer!");
@@ -736,7 +736,6 @@ static int i2c_mec5_nl_wait_events(const struct device *dev, uint32_t evmask)
 		ret = -ETIMEDOUT;
 	} else if (ev & I2C_NL_ERRORS) {
 		I2C_NL_DEBUG_STATE_UPDATE(data, 0x33u);
-		LOG_ERR("CM event errors = 0x%08x", ev);
 		ret = -EIO;
 	}
 
@@ -790,7 +789,6 @@ static int process_i2c_msgs(const struct device *dev)
 			ret = i2c_mec5_nl_wait_events(dev, I2C_NL_WAIT_EVENTS_MSK);
 			if (ret) {
 				I2C_NL_DEBUG_STATE_UPDATE(data, 0x16u);
-				LOG_ERR("wait events returned (%d)", ret);
 				break;
 			}
 
