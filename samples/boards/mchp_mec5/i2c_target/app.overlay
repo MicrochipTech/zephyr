@@ -169,6 +169,7 @@
 		/* Zephyr will load NXP PCA9555 driver after MEC5 I2C because it calls MEC5 I2C during init */
 		compatible = "nxp,pca9555";
 		reg = <0x26>;
+		ngpios = <16>;
 		gpio-controller;
 		#gpio-cells = <2>;
 	};
