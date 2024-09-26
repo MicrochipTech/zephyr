@@ -1,0 +1,12 @@
+# Microchip MEC5 HAL PS2 configuration options
+
+# Copyright (c) Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config PS2_MCHP_MEC5
+	bool "Microchip MEC5 HAL based PS2 target interface driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_PS2_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip MEC5 PS/2 target interface.
