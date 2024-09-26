@@ -25,6 +25,14 @@
 		#include "mec5/mec5_gpspi_v2.dtsi"
 		#include "mec5/mec5_i3c.dtsi"
 
+		ps2_1: ps2@40009040 {
+			reg = <0x40009040 0x40>;
+			interrupts = <101 1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		kscan0: kscan@40009c00 {
 			reg = <0x40009c00 0x18>;
 			interrupts = <135 0>;
@@ -33,7 +41,15 @@
 
 		uart2: uart@400f2c00 {
 			reg = <0x400f2c00 0x400>;
-			interrupts = <183 1>;
+			interrupts = <183 2>;
+			clock-frequency = <1843200>;
+			current-speed = <38400>;
+			status = "disabled";
+		};
+
+		uart3: uart@400f3000 {
+			reg = <0x400f3000 0x400>;
+			interrupts = <184 2>;
 			clock-frequency = <1843200>;
 			current-speed = <38400>;
 			status = "disabled";
