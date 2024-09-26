@@ -1,0 +1,27 @@
+# Copyright (c) 2024, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip PS/2 target interface for MEC5 HAL based SoCs
+
+compatible: "microchip,mec5-ps2"
+
+include: [ps2.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  port:
+    type: int
+    description:
+      Represents the clock and data pin pair connected to the PS/2
+      target interface. Data sheet port A is 0 and port B is 1. Only
+      one PS/2 pin pair may be connected to the target interface. Also,
+      not all PS/2 target interface support more than one port.
+
+  wakerx-gpios:
+    type: phandle-array
+    description: PS2 DATA GPIO configured as wake source
