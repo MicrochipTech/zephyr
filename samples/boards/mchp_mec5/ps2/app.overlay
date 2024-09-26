@@ -1,0 +1,71 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/*
+ * MEC5_ASSY6941
+ * Board has three PS/2 connectors.
+ * PS/2 connector P13 is for PS/2 Controller 0 PS2_CLK0A, PS2_DAT0A pins
+ * PS/2 connector P14 is for PS/2 Controller 0 PS2_CLK0B, PS2_DAT0B pins
+ * Only one of P13 or P14 should be used.
+ * PS/2 connector P15 is for PS/2 Controller 1 PS2_CLK1B, PS2_DATA1B pins
+ *
+ * JP141 1-2 connect +5V_STBY to P13, P14, and P15
+ *
+ * P13:
+ * PS2_CLK0A GPIO_0114 Function 1 on VTR1
+ * PS2_DAT0A GPIO_0115 Function 1 on VTR1
+ * JP11 5-6 connects PS2_CLK0A from P13 to GPIO 0114
+ * JP11 2-3 connects PS2_DAT0A from P13 to GPIO 0115
+ *
+ * P15:
+ * PS2_CLK1B GPIO 0154 Function 3 on VTR1
+ * PS2_DAT1B GPIO 0155 Function 3 on VTR1
+ * JP11 17-18 connects PS2_CLK1B from P15 to GPIO 0154
+ * JP11 13-14 connects PS2_DAT1B from P15 to GPIO 0155
+ */
+
+/ {
+	chosen {
+		zephyr,console = &uart1;
+	};
+
+	aliases {
+		led0 = &led4;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led4: led_0 {
+			gpios = <MCHP_GPIO_DECODE_175 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&uart1 {
+	current-speed = <115200>;
+	status = "okay";
+	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
+	pinctrl-names = "default";
+};
+
+&ps2_0 {
+	compatible = "microchip,mec5-ps2";
+	port = <0>;
+	pinctrl-0 = <&ps2_clk0a_gpio114 &ps2_dat0a_gpio115>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&ps2_1 {
+	compatible = "microchip,mec5-ps2";
+	port = <1>;
+	pinctrl-0 = <&ps2_clk1b_gpio154 &ps2_dat1b_gpio155>;
+	pinctrl-names = "default";
+	status = "okay";
+};
