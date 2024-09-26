@@ -24,6 +24,14 @@
 		#include "mec5/mec5_gpspi_v2.dtsi"
 		#include "mec5/mec5_eeprom_8kb.dtsi"
 
+		ps2_1: ps2@40009040 {
+			reg = <0x40009040 0x40>;
+			interrupts = <101 1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		kscan0: kscan@40009c00 {
 			reg = <0x40009c00 0x18>;
 			interrupts = <135 0>;
