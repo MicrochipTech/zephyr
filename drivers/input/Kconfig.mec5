@@ -1,0 +1,14 @@
+# Microchip MEC5 Keyboard Scan Matrix configuration options
+
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config INPUT_KSCAN_MEC5
+	bool "Microchip MEC5 HAL based keyboard matrix driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_INPUT_KSCAN_ENABLED
+	select INPUT_KBD_MATRIX
+	select MULTITHREADING
+	select PINCTRL
+	help
+	  Enable the Microchip MEC5 HAL based key scan matrix IO driver.
