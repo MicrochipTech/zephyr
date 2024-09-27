@@ -1,0 +1,78 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/*
+ * MEC5_ASSY6941
+ * Keyscan matrix keyboard connectors J42 and J43
+ * J42 18-pos 1mm FPC top
+ * 1 = KSO_0   GPIO_0040 F2 MUX: JP24 16-17  Optional 7.5K pull-up: JP75 23-24
+ * 2 = KSO_1   GPIO_0045 F1 MUX: None        Optional 100K pull-up: JP72 7-8    CR_STRAP JP2
+ * 3 = KSO_2   GPIO_0046 F1 MUX: None        Optional 7.5K pull-up: JP72 9-10
+ * 4 = KSO_12  GPIO_0125 F2 MUX: JP16 1-2    Optional 100K pull-up: JP70 13-14
+ *     JP106-1,3
+ * 5 = KSO_13  GPIO_0126 F2 MUX: JP16 7-8    Optional 100K pull-up: JP71 15-16  UART_BSTRAP JP1
+ * 6 = KSO_3   GPIO_0047 F1 MUX: None        Optional 7.5K pull-up: JP72 11-12
+ * 7 = KSO_4   GPIO_0107 F2 MUX: None        Optional 7.5K pull-up: JP73 3-4
+ * 8 = KSO_5   GPIO_0112 F1 MUX: None        Optional 100K pull-up: JP73 19-20
+ * 9 = JP106-2
+ * 10 = KSO_6  GPIO_0113 F1 MUX: None        Optional 100K pull-up: JP73 21-22
+ * 11 = KSO_14 GPIO_0152 F1 MUX: None        Optional 7.5K pull-up: JP74 9-10
+ * 12 = KSO_15 GPIO_0151 F2 MUX: None        Optional 7.5K pull-up: JP74 7-8
+ * 13 = JP106-4
+ * 14 = KSO_7  GPIO_0120 F1 MUX: JP24 22-23  Optional 100K pull-up: JP73 11-12
+ * 15 = KSO_8  GPIO_0121 F2 MUX: JP16 16-17  Optional 100K pull-up: JP71 9-10
+ * 16 = KSO_9  GPIO_0122 F2 MUX: JP16 13-14  Optional 100K pull-up: JP71 11-12
+ * 17 = KSO_10 GPIO_0123 F2 MUX: JP16 10-11  Optional 100K pull-up: JP71 13-14
+ * 18 = KSO_11 GPIO_0124 F2 MUX: JP16 4-5    Optional 100K pull-up: JP70 15-16
+ * All KSO_n are on the VTR1 power rail
+ *
+ * J43 8-pos 1mm FPC bottom
+ * 1 = KSI_0 GPIO_0017 MUX: JP21 34-35  Optional 100K pull-up: JP74 11-12
+ * 2 = KSI_1 GPIO_0020 MUX: JP29 19-20  Optional 100K pull-up: JP74 3-4
+ * 3 = KSI_2 GPIO_0021 MUX: JP29 13-14  Optional 100K pull-up: JP74 5-6
+ * 4 = KSI_3 GPIO_0026 MUX: JP21 22-23  Optional 7.5K pull-up: JP73 5-6
+ * 5 = KSI_4 GPIO_0027 MUX: JP21 28-29  Optional 7.5K pull-up: JP75 29-30
+ * 6 = KSI_5 GPIO_0030 MUX: None        Optional 7.5K pull-up: JP73 1-2
+ * 7 = KSI_6 GPIO_0031 MUX: JP29 10-11  Optional 100K pull-up: JP75 21-22
+ * 8 = KSI_7 GPIO_0032 MUX: JP21 43-44  Optional 100K pull-up: JP75 19-20
+ * All KSI_n are GPIO function 1 and on VTR1 power rail.
+ */
+
+/ {
+	aliases {
+		led0 = &led4;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led4: led_0 {
+			gpios = <MCHP_GPIO_DECODE_175 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&kscan0 {
+	compatible = "microchip,mec5-input-kscan";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	col-size = <16>;
+	row-size = <8>;
+	pinctrl-0 = <&kso00_gpio040 &kso01_gpio045 &kso02_gpio046 &kso03_gpio047
+		     &kso04_gpio107 &kso05_gpio112 &kso06_gpio113 &kso07_gpio120
+		     &kso08_gpio121 &kso09_gpio122 &kso10_gpio123 &kso11_gpio124
+		     &kso12_gpio125 &kso13_gpio126 &kso14_gpio152 &kso15_gpio151
+		     &ksi0_gpio017 &ksi1_gpio020 &ksi2_gpio021 &ksi3_gpio026
+		     &ksi4_gpio027 &ksi5_gpio030 &ksi6_gpio031 &ksi7_gpio032>;
+	pinctrl-names = "default";
+};
+
+&uart1 {
+	zephyr,disabling-power-states = <&suspend_to_ram>;
+};
