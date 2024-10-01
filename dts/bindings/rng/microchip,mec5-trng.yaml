@@ -1,0 +1,15 @@
+# Copyright (c) 2024, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip NDRNG using Boot-ROM API
+
+compatible: "microchip,mec5-trng"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
