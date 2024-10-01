@@ -1,0 +1,14 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Microchip MEC5 SoC's optional hardware TRNG
+ * Include this file in the soc {} section in the relevant chip DTSI files.
+ */
+trng0: trng0@40101000 {
+	reg = <0x40101000 0x80 0x40104000 0x20>;
+	interrupts = <67 2>;
+	status = "disabled";
+};
