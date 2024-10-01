@@ -25,6 +25,7 @@ zephyr_library_sources_ifdef(CONFIG_ENTROPY_GECKO_TRNG          entropy_gecko_tr
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_LITEX_RNG           entropy_litex.c)
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_MAX32_TRNG          entropy_max32.c)
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_MAXQ10XX_RNG        entropy_maxq10xx.c)
+zephyr_library_sources_ifdef(CONFIG_ENTROPY_MCHP_MEC5_RNG       entropy_mchp_mec5.c)
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_MCUX_CAAM           entropy_mcux_caam.c)
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_MCUX_RNG            entropy_mcux_rng.c)
 zephyr_library_sources_ifdef(CONFIG_ENTROPY_MCUX_RNGA           entropy_mcux_rnga.c)
