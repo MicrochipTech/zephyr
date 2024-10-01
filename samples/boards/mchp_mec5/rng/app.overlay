@@ -1,0 +1,42 @@
+/*
+ * Copyright (c) 2024 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/*
+ * MEC5_ASSY6941 or ASSY6906
+ */
+
+/ {
+	chosen {
+		zephyr,console = &uart1;
+		zephyr,entropy = &trng0;
+	};
+
+	aliases {
+		led0 = &led4;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led4: led_0 {
+			gpios = <MCHP_GPIO_DECODE_175 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&uart1 {
+	current-speed = <115200>;
+	status = "okay";
+	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
+	pinctrl-names = "default";
+};
+
+&trng0 {
+	compatible = "microchip,mec5-trng";
+	status = "okay";
+};
