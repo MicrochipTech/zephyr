@@ -18,9 +18,6 @@
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/pm/device.h>
-#include <zephyr/pm/device_runtime.h>
-#include <zephyr/pm/policy.h>
 #include <zephyr/spinlock.h>
 #include <zephyr/sys/byteorder.h>
 
