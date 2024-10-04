@@ -50,7 +50,7 @@ static int mec5_config_pin(uint32_t pinmux, uint32_t altf)
 
 	/* slew rate */
 	temp = (conf >> MCHP_XEC_SLEW_RATE_POS) & MCHP_XEC_SLEW_RATE_MSK0;
-	if (temp) {
+	if (temp != MCHP_XEC_SLEW_RATE_MSK0) {
 		cfg2[idx].prop = MEC_GPIO_SLEW_RATE_ID;
 		cfg2[idx].val = (uint8_t)MEC_GPIO_SLEW_RATE_SLOW;
 		if (temp == MCHP_XEC_SLEW_RATE_FAST0) {
@@ -61,7 +61,7 @@ static int mec5_config_pin(uint32_t pinmux, uint32_t altf)
 
 	/* drive strength */
 	temp = (conf >> MCHP_XEC_DRV_STR_POS) & MCHP_XEC_DRV_STR_MSK0;
-	if (temp) {
+	if (temp != MCHP_XEC_DRV_STR_MSK0) {
 		cfg2[idx].prop = MEC_GPIO_DRV_STR_ID;
 		cfg2[idx].val = (uint8_t)(temp - 1u);
 		idx++;
