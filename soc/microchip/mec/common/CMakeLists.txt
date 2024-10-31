@@ -3,6 +3,7 @@
 zephyr_include_directories(.)
 zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_MEC172X
   soc_i2c.c
+  soc_ecia.c
 )
 zephyr_library_sources_ifdef(CONFIG_HAS_MEC5_HAL
   soc_cmn_init.c

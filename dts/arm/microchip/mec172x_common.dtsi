@@ -811,9 +811,10 @@ espi0: espi@400f3400 {
 	reg-names = "io", "mem", "vw";
 	interrupts = <103 3>, <104 3>, <105 3>, <106 3>,
 		     <107 3>, <108 3>, <109 3>, <110 2>,
-		     <156 3>;
+		     <156 3>, <15 3>, <16 3>;
 	interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_up",
-			  "oob_dn", "fc", "rst", "vw_chan_en";
+			  "oob_dn", "fc", "rst", "vw_chan_en",
+			  "vw_ct_0_6", "vw_ct_7_10";
 	girqs = < MCHP_XEC_ECIA(19, 0, 11, 103)
 		  MCHP_XEC_ECIA(19, 1, 11, 104)
 		  MCHP_XEC_ECIA(19, 2, 11, 105)
