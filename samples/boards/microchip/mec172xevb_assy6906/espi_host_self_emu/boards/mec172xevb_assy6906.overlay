@@ -1,0 +1,32 @@
+/*
+ * Copyright (c) 2023 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec172xevb_assy6906 EVB with MEC1723N-SZ daughter card
+ * MEC1723 does not have an internal SPI flash.
+ * Connect QSPI to external shared SPI flash pins using SHD_nCS1.
+ */
+
+#include "mec_common.dtsi"
+
+&pinctrl {
+	shd_cs0_n_gpio055_sleep: shd_cs0_n_gpio055_sleep {
+		pinmux = < MCHP_XEC_PINMUX(055, MCHP_AF0) >;
+		low-power-enable;
+	};
+};
+
+&spi0 {
+	compatible = "microchip,xec-qmspi-ldma";
+	status = "okay";
+	pinctrl-0 = < &shd_cs0_n_gpio055_sleep
+		      &shd_cs1_n_gpio002
+		      &shd_clk_gpio056
+		      &shd_io0_gpio223
+		      &shd_io1_gpio224
+		      &shd_io2_gpio227
+		      &shd_io3_gpio016 >;
+	pinctrl-names = "default";
+};
