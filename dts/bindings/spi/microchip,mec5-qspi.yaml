@@ -68,3 +68,12 @@ properties:
     description: |
       Allows different frequencies for CS#0 and CS1# devices. This applies
       to ports implementing CS1#.
+
+  ctrl-tap:
+    type: int
+    description: Select control tap point.
+
+  clock-tap:
+    type: int
+    description: |
+      Select clock tap point to offset any off chip delays.
