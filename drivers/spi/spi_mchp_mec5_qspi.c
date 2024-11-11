@@ -403,6 +403,10 @@ static void mec5_qspi_isr(const struct device *dev)
 	uint32_t hwsts = 0u;
 	int status = 0;
 
+#ifdef MEC5_QSPI_DEBUG_ISR
+	data->isr_count++;
+#endif
+
 	hwsts = mec_hal_qspi_hw_status(regs);
 	data->qstatus = hwsts;
 	status = mec_hal_qspi_done(regs);
