@@ -13,6 +13,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/sys/sys_io.h>
@@ -70,6 +71,73 @@ const char *membar_names[] = {
 	"EMI2 MEMB",
 	"T32B MEMB",
 };
+
+struct espi_vw_znames {
+	enum espi_vwire_signal signal;
+	uint8_t host_index;
+	uint8_t source_pos;
+	uint8_t dir; /* 0=C2T, 1=T2C */
+	const char *name_cstr;
+};
+
+const struct espi_vw_znames vw_names[] = {
+	{ ESPI_VWIRE_SIGNAL_SLP_S3,		0x02u, 0, 0, "SLP_S3#" },
+	{ ESPI_VWIRE_SIGNAL_SLP_S4,		0x02u, 1, 0, "SLP_S4#" },
+	{ ESPI_VWIRE_SIGNAL_SLP_S5,		0x02u, 2, 0, "SLP_S5#" },
+	{ ESPI_VWIRE_SIGNAL_OOB_RST_WARN,	0x03u, 2, 0, "OOB_RST_WARN" },
+	{ ESPI_VWIRE_SIGNAL_PLTRST,		0x03u, 1, 0, "PLTRST#" },
+	{ ESPI_VWIRE_SIGNAL_SUS_STAT,		0x03u, 0, 0, "SUS_STAT#" },
+	{ ESPI_VWIRE_SIGNAL_NMIOUT,		0x07u, 2, 0, "NMIOUT#" },
+	{ ESPI_VWIRE_SIGNAL_SMIOUT,		0x07u, 1, 0, "SMIOUT#" },
+	{ ESPI_VWIRE_SIGNAL_HOST_RST_WARN,	0x07u, 0, 0, "HOST_RST_WARN" },
+	{ ESPI_VWIRE_SIGNAL_SLP_A,		0x41u, 3, 0, "SLP_A#" },
+	{ ESPI_VWIRE_SIGNAL_SUS_PWRDN_ACK,	0x41u, 1, 0, "SUS_PWRDN_ACK" },
+	{ ESPI_VWIRE_SIGNAL_SUS_WARN,		0x41u, 0, 0, "SUS_WARN#" },
+	{ ESPI_VWIRE_SIGNAL_SLP_WLAN,		0x42u, 1, 0, "SLP_WLAN#" },
+	{ ESPI_VWIRE_SIGNAL_SLP_LAN,		0x42u, 0, 0, "SLP_LAN#" },
+	{ ESPI_VWIRE_SIGNAL_HOST_C10,		0x47u, 0, 0, "HOST_C10" },
+	{ ESPI_VWIRE_SIGNAL_DNX_WARN,		0x4au, 1, 0, "DNX_WARN" },
+	{ ESPI_VWIRE_SIGNAL_PME,		0x04u, 3, 1, "PME#" },
+	{ ESPI_VWIRE_SIGNAL_WAKE,		0x04u, 2, 1, "WAKE#" },
+	{ ESPI_VWIRE_SIGNAL_OOB_RST_ACK,	0x04u, 0, 1, "OOB_RST_ACK" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_BOOT_STS,	0x05u, 3, 1, "TARGET_BOOT_STS" },
+	{ ESPI_VWIRE_SIGNAL_ERR_NON_FATAL,	0x05u, 2, 1, "ERR_NON_FATAL" },
+	{ ESPI_VWIRE_SIGNAL_ERR_FATAL,		0x05u, 1, 0, "ERR_FATAL" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE,	0x05u, 0, 1, "TARGET_BOOT_DONE" },
+	{ ESPI_VWIRE_SIGNAL_HOST_RST_ACK,	0x06u, 3, 1, "HOST_RST_ACK" },
+	{ ESPI_VWIRE_SIGNAL_RST_CPU_INIT,	0x06u, 2, 1, "RST_CPU_INIT" },
+	{ ESPI_VWIRE_SIGNAL_SMI,		0x06u, 1, 1, "SMI#" },
+	{ ESPI_VWIRE_SIGNAL_SCI,		0x06u, 0, 1, "SCI#" },
+	{ ESPI_VWIRE_SIGNAL_DNX_ACK,		0x40u, 1, 1, "DNX_ACK" },
+	{ ESPI_VWIRE_SIGNAL_SUS_ACK,		0x40u, 0, 1, "SUS_ACK#" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_0,	0x50u, 0, 1, "TARGET_GPIO_0" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_1,	0x50u, 1, 1, "TARGET_GPIO_1" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_2,	0x50u, 2, 1, "TARGET_GPIO_2" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_3,	0x50u, 3, 0, "TARGET_GPIO_3" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_4,	0x51u, 0, 1, "TARGET_GPIO_4" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_5,	0x51u, 1, 1, "TARGET_GPIO_5" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_6,	0x51u, 2, 1, "TARGET_GPIO_6" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_7,	0x51u, 3, 1, "TARGET_GPIO_7" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_8,	0x52u, 0, 1, "TARGET_GPIO_8" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_9,	0x52u, 1, 1, "TARGET_GPIO_9" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_10,	0x52u, 2, 1, "TARGET_GPIO_10" },
+	{ ESPI_VWIRE_SIGNAL_TARGET_GPIO_11,	0x52u, 3, 1, "TARGET_GPIO_11" },
+};
+
+const char *unknown_vwire = "Unknown VWire";
+
+const char *get_vw_name(uint32_t vwire_enum_val)
+{
+	for (size_t n = 0; n < ARRAY_SIZE(vw_names); n++) {
+		const struct espi_vw_znames *vwn = &vw_names[n];
+
+		if (vwn->signal == (enum espi_vwire_signal)vwire_enum_val) {
+			return vwn->name_cstr;
+		}
+	}
+
+	return unknown_vwire;
+}
 
 void espi_debug_print_config(void)
 {
