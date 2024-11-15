@@ -42,6 +42,8 @@ struct gen_acpi_ec_info {
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 #define ESPI0_NODE       DT_NODELABEL(espi0)
+#define EMI0_NODE        DT_NODELABEL(emi0)
+#define EMI1_NODE        DT_NODELABEL(emi1)
 
 PINCTRL_DT_DEFINE(ZEPHYR_USER_NODE);
 
@@ -54,6 +56,16 @@ const struct gpio_dt_spec vcc_pwrgd_alt_in_dt =
 	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 1);
 
 static const struct device *espi_dev = DEVICE_DT_GET(ESPI0_NODE);
+#if DT_NODE_HAS_STATUS(EMI0_NODE, okay)
+static const struct device *emi0_dev = DEVICE_DT_GET(EMI0_NODE);
+#else
+static const struct device *emi0_dev = NULL;
+#endif
+#if DT_NODE_HAS_STATUS(EMI1_NODE, okay)
+static const struct device *emi1_dev = DEVICE_DT_GET(EMI1_NODE);
+#else
+static const struct device *emi1_dev = NULL;
+#endif
 
 struct mec_espi_io_regs *const espi_iobase =
 	(struct mec_espi_io_regs *)DT_REG_ADDR_BY_NAME(ESPI0_NODE, io);
@@ -132,6 +144,9 @@ static void acpi_ec3_cb(const struct device *dev, struct mchp_espi_acpi_ec_event
 			void *user_data);
 static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data);
+
+static void emi0_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data);
+static void emi1_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data);
 
 const struct gen_acpi_ec_info gen_acpi_ec_tbl[] = {
 	{
@@ -279,6 +294,24 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
+	if (device_is_ready(emi0_dev)) {
+		ret = mchp_espi_pc_emi_set_callback(emi0_dev, emi0_cb, NULL);
+		if (ret) {
+			LOG_ERR("Add EMI0 callback error (%d)", ret);
+		}
+	} else {
+		LOG_ERR("eSPI EMI0 PC device driver is Not Ready!");
+	}
+
+	if (device_is_ready(emi1_dev)) {
+		ret = mchp_espi_pc_emi_set_callback(emi1_dev, emi1_cb, NULL);
+		if (ret) {
+			LOG_ERR("Add EMI1 callback error (%d)", ret);
+		}
+	} else {
+		LOG_ERR("eSPI EMI1 PC device driver is Not Ready!");
+	}
+
 	LOG_INF("Signal Host emulator Target is Ready");
 	ret = gpio_pin_set_dt(&target_n_ready_out_dt, 0);
 
@@ -323,7 +356,7 @@ int main(void)
 
 	LOG_INF("Send EC_IRQ=7 Serial IRQ to the Host");
 	mec_hal_espi_ld_sirq_set(espi_iobase, MEC_ESPI_LDN_EC, 0, 7u);
-	mec_hal_espi_gen_ec_sirq(espi_iobase);
+	mec_hal_espi_gen_ec_sirq(espi_iobase, 1);
 
 	k_sleep(K_MSEC(500));
 
@@ -477,8 +510,10 @@ static void espi_vw_received_cb(const struct device *dev,
 		push_espi_event(&espi_ev_fifo, pevd);
 	}
 #endif
-	LOG_INF("eSPI CB: VW received: %u 0x%x 0x%x",
-		ev.evt_type, ev.evt_data, ev.evt_details);
+	const char *vw_name = get_vw_name(ev.evt_details);
+
+	LOG_INF("eSPI CB: VW received: %u 0x%x 0x%x: %s",
+		ev.evt_type, ev.evt_data, ev.evt_details, vw_name);
 }
 
 static void app_handle_acpi_ec(struct mec_acpi_ec_regs *os_acpi_ec_regs)
@@ -569,6 +604,22 @@ static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event
 {
 	LOG_INF("ACPI_EC3 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
 		ev->flags, ev->ev_type, ev->cmd_data);
+}
+
+static void emi0_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data)
+{
+	uint32_t data = 0xA5u;
+
+	LOG_INF("EMI0 CB: Host-to-EC MBox data = 0x%0x", emi_mbox_data);
+	mchp_espi_pc_emi_request(dev, MCHP_EMI_OPC_MBOX_EC_TO_HOST_WR, &data);
+}
+
+static void emi1_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data)
+{
+	uint32_t data = 0xB5u;
+
+	LOG_INF("EMI1 CB: Host-to-EC MBox data = 0x%0x", emi_mbox_data);
+	mchp_espi_pc_emi_request(dev, MCHP_EMI_OPC_MBOX_EC_TO_HOST_WR, &data);
 }
 
 #ifdef APP_ESPI_EVENT_CAPTURE
