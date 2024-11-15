@@ -12,16 +12,14 @@
 		espi_sram_bar0: espi_sram_bar0 {
 			id = <0>;
 			host-address-lsw = <0>;
-			region-base = <0>;
-			region-size = "1B";
+			region-size = "256B";
 			access = "DISABLED";
 			status = "disabled";
 		};
 		espi_sram_bar1: espi_sram_bar1 {
 			id = <1>;
 			host-address-lsw = <0>;
-			region-base = <0>;
-			region-size = "1B";
+			region-size = "256B";
 			access = "DISABLED";
 			status = "disabled";
 		};
