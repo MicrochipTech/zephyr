@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+const char *get_vw_name(uint32_t vwire_enum_val);
+
 void espi_debug_print_config(void);
 void espi_debug_print_io_bars(void);
 void espi_debug_print_mem_bars(void);
