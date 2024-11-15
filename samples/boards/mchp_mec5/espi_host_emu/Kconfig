@@ -1,0 +1,11 @@
+# Copyright (c) 2024 Microchip Technology
+# SPDX-License-Identifier: Apache-2.0
+
+config SAMPLE_USE_ESPI_ALERT_PIN
+	bool "Configure eSPI to use separate ESPI_nALERT pin instead of in-band alert"
+	default n
+	help
+	  Use ESPI_nALERT side band pin as the alert mechanism
+	  instead of the in-band alert on ESPI_IO1 pin.
+
+source "Kconfig.zephyr"

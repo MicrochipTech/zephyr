@@ -9,17 +9,26 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <zephyr/kernel.h>
 
 int espi_hc_emu_init(uint32_t freqhz);
 int espi_hc_emu_espi_reset_n(uint8_t level);
 int espi_hc_emu_vcc_pwrgd(uint8_t level);
 int espi_hc_emu_is_target_ready(void);
 
-int espi_hc_is_alert(void);
 int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t resplen);
+
+uint32_t espi_emu_event_wait(uint32_t events, bool clr_before_wait, k_timeout_t timeout);
+uint32_t espi_emu_event_clear(uint32_t events);
 
 #define ESPI_HC_EMU_MSG_BUFF_LEN		256u
 #define ESPI_HC_EMU_RESP_BUFF_LEN		256u
+
+enum kevents_espi {
+	KEV_ESPI_RESET_ASSERT_POS = 0,
+	KEV_ESPI_RESET_DEASSERT_POS,
+	KEV_ESPI_ALERT_POS,
+};
 
 /* 16-bit GET_CONFIGURATION addresses */
 #define ESPI_GET_CONFIG_DEV_ID			0x04u
@@ -154,5 +163,18 @@ int espi_hc_emu_put_iowr(struct espi_hc_context *hc, uint32_t io_addr_len,
 			 uint32_t data, uint16_t *cmd_status);
 int espi_hc_emu_put_iord(struct espi_hc_context *hc, uint32_t io_addr_len,
 			 uint32_t *data, uint16_t *cmd_status);
+
+/* PC memory read and write 32 */
+int espi_hc_emu_put_pc_mem_wr32(struct espi_hc_context *hc, uint32_t mem_addr,
+				uint8_t tag, uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
+
+int espi_hc_emu_put_pc_mem_rd32(struct espi_hc_context *hc, uint32_t mem_addr, uint8_t tag,
+				uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
+
+int espi_hc_emu_pc_memwr32_short(struct espi_hc_context *hc, uint32_t mem_addr,
+				 uint32_t data, uint8_t datasz, uint16_t *cmd_status);
+
+int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
+				 uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
 
 #endif /* __SAMPLES_BOARDS_MEC_ASSY6941_ESPI_HC_EMU_H_ */
