@@ -149,6 +149,9 @@ const struct gpio_dt_spec vcc_pwrgd_gpio_dt =
 const struct gpio_dt_spec target_ready_n_dt =
 	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 4);
 
+const struct gpio_dt_spec espi_alert_n_dt =
+	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 5);
+
 /* Controller-to-Target Virtual Wire initialization table */
 const struct espi_hc_vw ctvw_init[] = {
 	{ /* Host Index 02h b[0]=nSLP_S3, b[1]=nSLP_S4, b[2]=nSLP_S5, b[3]=rsvd */
@@ -313,6 +316,49 @@ const struct espi_hc_vw tcvw_init[] = {
 	},
 };
 
+K_EVENT_DEFINE(espi_kevents);
+
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+
+static struct gpio_callback espi_alert_pin_cb;
+
+void espi_alert_pin_cb_handler(const struct device *port, struct gpio_callback *cb,
+			       gpio_port_pins_t pins)
+{
+	if ((cb->pin_mask & pins) && (pins & BIT(espi_alert_n_dt.pin))) {
+		LOG_INF("ESPI_nALERT pin CB");
+		k_event_post(&espi_kevents, BIT(KEV_ESPI_ALERT_POS));
+	} else {
+		LOG_ERR("ESPI_nALERT callback invalid pin!");
+	}
+}
+
+#else
+
+static struct gpio_callback espi_alert_inband_cb;
+
+void espi_alert_inband_cb_handler(const struct device *port, struct gpio_callback *cb,
+				  gpio_port_pins_t pins)
+{
+	if ((cb->pin_mask & pins) && (pins & BIT(espi_io1_dt.pin))) {
+		LOG_INF("ESPI Inband Alert CB");
+		k_event_post(&espi_kevents, BIT(KEV_ESPI_ALERT_POS));
+	} else {
+		LOG_ERR("ESPI_nALERT callback invalid pin!");
+	}
+}
+#endif
+
+uint32_t espi_emu_event_wait(uint32_t events, bool reset, k_timeout_t timeout)
+{
+	return k_event_wait(&espi_kevents, events, reset, timeout);
+}
+
+uint32_t espi_emu_event_clear(uint32_t events)
+{
+	return k_event_clear(&espi_kevents, events);
+}
+
 /* eSPI packet PC Memory Write 32
  * byte offset    description
  * 0              cycle type  Begin Header
@@ -435,9 +481,36 @@ int espi_hc_emu_init(uint32_t freqhz)
 		return ret;
 	}
 
+	/* Initialize ESPI_nALERT as GPIO input */
+	ret = gpio_pin_configure_dt(&espi_alert_n_dt, GPIO_INPUT);
+	if (ret) {
+		LOG_ERR("Configure TARGET_nREADY GPIO as input error (%d)", ret);
+		return ret;
+	}
+
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+	espi_alert_pin_cb.handler = espi_alert_pin_cb_handler;
+	espi_alert_pin_cb.pin_mask = BIT(espi_alert_n_dt.pin);
+
+	ret = gpio_add_callback_dt(&espi_alert_n_dt, &espi_alert_pin_cb);
+	if (ret) {
+		LOG_ERR("Configure ESPI_nALERT interrupt callback error (%d)", ret);
+		return ret;
+	}
+#else
+	espi_alert_inband_cb.handler = espi_alert_inband_cb_handler;
+	espi_alert_inband_cb.pin_mask = BIT(espi_io1_dt.pin);
+
+	ret = gpio_add_callback_dt(&espi_io1_dt, &espi_alert_inband_cb);
+	if (ret) {
+		LOG_ERR("Configure ESPI Inband Alert interrupt callback error (%d)", ret);
+		return ret;
+	}
+#endif
+
 	/* Use QSPI SHD_nCS1 because SHD_nCS0 is also a strap and has a pull-down on the EVB */
 	ret = mec_hal_qspi_init(qr, MHZ(4), MEC_SPI_SIGNAL_MODE_0,
-			    MEC_QSPI_IO_FULL_DUPLEX, MEC_QSPI_CS_1);
+				MEC_QSPI_IO_FULL_DUPLEX, MEC_QSPI_CS_1);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -449,21 +522,29 @@ int espi_hc_emu_init(uint32_t freqhz)
  * Pin interrupt should only be enable when eSPI_nCS is de-asserted.
  * espi_io1_dt
  */
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
 int espi_hc_alert_detection_enable(int enable)
 {
-	int ret;
-	gpio_flags_t flags;
+	gpio_flags_t flags = GPIO_INT_DISABLE;
 
 	if (enable) {
 		flags = GPIO_INT_EDGE_FALLING; /* OR GPIO_INT_LEVEL_LOW */
-	} else {
-		flags = GPIO_INT_DISABLE;
 	}
 
-	ret = gpio_pin_interrupt_configure_dt(&espi_io1_dt, flags);
-
-	return ret;
+	return gpio_pin_interrupt_configure_dt(&espi_alert_n_dt, flags);
 }
+#else
+int espi_hc_inband_alert_detction_enable(int enable)
+{
+	gpio_flags_t flags = GPIO_INT_DISABLE;
+
+	if (enable) {
+		flags = GPIO_INT_EDGE_FALLING; /* OR GPIO_INT_LEVEL_LOW */
+	}
+
+	return gpio_pin_interrupt_configure_dt(&espi_io1_dt, flags);
+}
+#endif
 
 int espi_hc_emu_espi_reset_n(uint8_t level)
 {
@@ -478,16 +559,6 @@ int espi_hc_emu_espi_reset_n(uint8_t level)
 	return ret;
 }
 
-int espi_hc_is_alert(void)
-{
-	int pin_level =	gpio_pin_get_dt(&espi_io1_dt);
-
-	if (pin_level == 0) {
-		return 1;
-	}
-
-	return 0;
-}
 
 int espi_hc_emu_vcc_pwrgd(uint8_t level)
 {
@@ -857,6 +928,11 @@ int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t
 
 	pr_qspi_regs(qr);
 
+#ifndef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+	/* turn off falling edge interrupt on ESPI_IO1 data line */
+	espi_hc_inband_alert_detction_enable(0);
+#endif
+
 	/* Start QSPI */
 	qr->EXE = BIT(MEC_QSPI_EXE_START_Pos);
 
@@ -865,6 +941,16 @@ int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t
 	while (!(status & BIT(MEC_QSPI_STATUS_DONE_Pos))) {
 		status = qr->STATUS;
 	}
+
+#ifndef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+	/* turn on falling edge interrupt on ESPI_IO1 data line
+	 * Could there be a race condition where target HW drives ESPI_IO1 low
+	 * after ESPI_nCS de-assertion before we enable interrupt detection?
+	 * Also, could we get a false alert due to ESPI_IO1 toggle as a data pin
+	 * and setting the GPIO interrupt detection logic?
+	 */
+	espi_hc_inband_alert_detction_enable(1);
+#endif
 
 	/* Check for errors */
 	if (status & (BIT(MEC_QSPI_STATUS_TXBERR_Pos)
@@ -904,6 +990,8 @@ int espi_hc_ctx_emu_init(struct espi_hc_context *hc)
 {
 	size_t n;
 
+	k_event_init(&espi_kevents);
+
 	if (!hc) {
 		return -EINVAL;
 	}
@@ -940,6 +1028,11 @@ int espi_hc_ctx_emu_ctrl(struct espi_hc_context *hc, uint8_t enable)
 
 	if (!enable) { /* disable eSPI Target by asserting ESPI_nRESET */
 		LOG_INF("eSPI HC emu: Assert ESPI_nRESET");
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+		espi_hc_alert_detection_enable(0);
+#else
+		espi_hc_inband_alert_detction_enable(0);
+#endif
 		ret = espi_hc_emu_espi_reset_n(0);
 		if (ret) {
 			LOG_ERR("eSPI HC emu: nESPI_RESET drive low error");
@@ -954,6 +1047,12 @@ int espi_hc_ctx_emu_ctrl(struct espi_hc_context *hc, uint8_t enable)
 		LOG_ERR("eSPI HC emu: nESPI_RESET drive high error");
 		return ret;
 	}
+
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+	espi_hc_alert_detection_enable(1);
+#else
+	espi_hc_inband_alert_detction_enable(1);
+#endif
 
 	LOG_INF("eSPI HC emu: nESPI_RESET de-asserted");
 
@@ -2065,6 +2164,547 @@ int espi_hc_emu_put_iord(struct espi_hc_context *hc, uint32_t io_addr_len,
 	*cmd_status = status;
 
 	LOG_INF("eSPI HC EMU PUT_IORD Status 0x%04x", status);
+
+	return 0;
+}
+
+/* Transmit eSPIO PUT_PC MEM32 write packet to target.
+ * MEC5 eSPI target HW limited to 64-byte peripheral channel packet size.
+ * Command Packet is: Opcode | Header | Data | CRC
+ * Response Packet is: ResponseByte | Header(opt) | Data(opt) | 16-bit Status | CRC
+ * Command packet Header:
+ * byte[0] = ESPI_OPCODE_PUT_PC (posted, target can't resond with defer)
+ * byte[1] = ESPI_CYCLE_PC_MEM_WR32
+ * byte[2] b[3:0]=len[11:8], b[7:4]=Tag
+ * byte[3] len[7:0]
+ * byte[4] mem addr[31:24]
+ * byte[5] mem addr[23:16]
+ * byte[6] mem addr[15:8]
+ * byte[7] mem addr[7:0]
+ * byte[8] data 0
+ * byte[9] data 1
+ * ...
+ * byte[n+8] data n
+ * byte[n+9] CRC
+ * Command packet length = data_len + 9
+ *
+ * Response packet (no data)
+ * byte[0] = response code
+ * byte[1] = status_lsb
+ * byte[2] = status_msb
+ * byte[3] = CRC
+ * Reponse packet length = 4
+ */
+int espi_hc_emu_put_pc_mem_wr32(struct espi_hc_context *hc, uint32_t mem_addr,
+				uint8_t tag, uint8_t *data, uint8_t datasz, uint16_t *cmd_status)
+{
+	int ret = 0;
+	uint32_t max_rsp_len = 0;
+	uint16_t status = 0;
+	uint8_t n = 0, pktlen = 0, rsp_pktlen = 0;
+	uint8_t msg_crc = 0;
+	uint8_t rsp_crc = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_PC;
+
+	LOG_INF("eSPI HC EMU PUT_MEM32 tag=0x%0x mem_addr=0x%0x len=0x%0x",
+		tag, mem_addr, datasz);
+
+	if (!hc || !cmd_status || !data || !datasz || (datasz > 64u)) {
+		return -EINVAL;
+	}
+
+	/* Packet size is: 1(opcode) + datasz + 7 + 1(CRC) */
+	pktlen = datasz + 9u;
+	rsp_pktlen = 4u;
+	max_rsp_len = 32u;
+
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	uint8_t *buf = emsg->buf;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	buf[0] = opcode;
+	buf[1] = ESPI_CYCLE_PC_MEM_WR32;
+	buf[2] = (tag & 0xfu) << 4;	/* data_len_msb = 0 for MEC5 */
+	buf[3] = datasz;
+	buf[4] = (uint8_t)(mem_addr >> 24);
+	buf[5] = (uint8_t)(mem_addr >> 16);
+	buf[6] = (uint8_t)(mem_addr >> 8);
+	buf[7] = (uint8_t)mem_addr;
+	/* buf[8..8+datasz] = data */
+	memcpy(&buf[8], data, datasz);
+
+	msg_crc = crc8_init();
+	msg_crc = crc8_update(msg_crc, (const void *)buf, (pktlen - 1u));
+	msg_crc = crc8_finalize(msg_crc);
+	emsg->crc8 = msg_crc;
+	buf[pktlen - 1u] = msg_crc;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)buf, pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_PC MEM32 error received 32 WAIT_STATEs!");
+		return -EIO;
+	}
+
+	rsp_crc = crc8_init();
+	rsp_crc = crc8_update(rsp_crc, (const void *)rbuf, rsp_pktlen - 1u);
+	rsp_crc = crc8_finalize(rsp_crc);
+
+	if (rsp_crc != rbuf[rsp_pktlen - 1u]) {
+		LOG_ERR("PUT_PC MEM32: rsp_crc=0x%02x crc=0x%02x",
+			rsp_crc, rbuf[rsp_pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	status = rbuf[rsp_pktlen - 2u];
+	status <<= 8;
+	status |= rbuf[rsp_pktlen - 3u];
+	*cmd_status = status;
+
+	LOG_INF("eSPI HC EMU PUT_PC MEM32 Status 0x%04x", status);
+
+	return 0;
+}
+
+/* Transmit eSPIO GET_PC MEM32 read packet to target and parse data from response packet
+ * MEC5 eSPI target HW limited to 64-byte peripheral channel packet size.
+ * eSPI specification indicates cycle type memory read32 is non-posted.
+ * We use the PUT_NP command since the cycles type is non-posted.
+ * Command Packet is: Opcode | Header | Data | CRC
+ * Response Packet is: ResponseByte | Header(opt) | Data(opt) | 16-bit Status | CRC
+ * Command packet Header:
+ * byte[0] = ESPI_OPCODE_PUT_NP	(non-posted, defer allowed)	command
+ * byte[1] = ESPI_CYCLE_PC_MEM_RD32_NP				header begin
+ * byte[2] b[3:0]=len[11:8], b[7:4]=Tag
+ * byte[3] len[7:0]						header end
+ * byte[4] mem addr[31:24]					data begin
+ * byte[5] mem addr[23:16]
+ * byte[6] mem addr[15:8]
+ * byte[7] mem addr[7:0]					data end
+ * byte[8] = CRC
+ *
+ * Response Packet with data
+ * byte[0] = response byte b[3:0]=code, b[7:6]=modifier, b[5:4]=00b reserved
+ * byte[1] = Header[0] = cycle type = ESPI_CYCLE_PC_MEM_RD32_NP
+ * byte[2] = Header[1] = tag_len_msb
+ * byte[3] = Header[2] = len_lsb
+ * byte[4] = Data[0]
+ * ...
+ * byte[data_len + 4] = Data n
+ * byte[data_len + 5] = status lsb
+ * byte[data_len + 6] = status msb
+ * byte[data_len + 7] = CRC
+ * packet length = 4 + 2 + 1 + data_len
+ *
+ */
+int espi_hc_emu_put_pc_mem_rd32(struct espi_hc_context *hc, uint32_t mem_addr, uint8_t tag,
+				uint8_t *data, uint8_t datasz, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0u;
+	uint16_t status = 0u;
+	uint16_t rsp_data_len = 0u;
+	uint32_t data_buf_len = 0u;
+	uint8_t cmd_pktlen = 0u, n = 0u;
+	uint8_t pktlen = 0u; /* response packet length */
+	uint8_t rsp_code = 0, rsp_crc8 = 0, rsp_tag = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_NP;
+
+	LOG_INF("eSPI HC emu: PUT_NP Read MEM32: tag=0x%0x mem_addr=0x%0x len=0x%0x",
+		tag, mem_addr, datasz);
+
+	if (!hc || !data || !cmd_status || !data || !datasz || (datasz > 64)) {
+		return -EINVAL;
+	}
+
+	cmd_pktlen = 9u;
+	pktlen = datasz + 7u; /* length of GET_PC response with data packet */
+	max_rsp_len = 96u;
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+	uint8_t *rbuf = ersp->buf;
+
+	emsg->buf[0] = opcode;
+	emsg->buf[1] = ESPI_CYCLE_PC_MEM_RD32_NP; /* Non-posted only */
+	emsg->buf[2] = (tag & 0xfu) << 4;
+	emsg->buf[3] = datasz;
+	emsg->buf[4] = (uint8_t)(mem_addr >> 24);
+	emsg->buf[5] = (uint8_t)(mem_addr >> 16);
+	emsg->buf[6] = (uint8_t)(mem_addr >> 8);
+	emsg->buf[7] = (uint8_t)mem_addr;
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)emsg->buf, cmd_pktlen - 1u);
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	emsg->buf[8] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, cmd_pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf == ESPI_RESP_CODE_NO_RESP) {
+			LOG_ERR("PUT_NP Read MEM32 No Response");
+			return -EIO;
+		}
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_NP Read MEM32 error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (pktlen - 1u));
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[pktlen - 1u]) {
+		LOG_ERR("PUT_NP Read MEM32: CRC error: expected=0x%02x calc=0x%02x",
+			rsp_crc8, rbuf[pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+	rsp_tag = (rbuf[2] & 0xf0u) >> 4;
+	status = ((uint16_t)rbuf[pktlen - 2u] << 8) | rbuf[pktlen - 3u];
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_OK) {
+		/* we have data */
+		data_buf_len = datasz;
+		rsp_data_len = rbuf[2] & 0xfu;
+		rsp_data_len <<= 8;
+		rsp_data_len |= rbuf[3];
+		if (rsp_data_len < datasz) {
+			memcpy(data, &rbuf[4], rsp_data_len);
+		} else {
+			memcpy(data, &rbuf[4], datasz);
+		}
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("PUT_NP Read MEM32 Deferred by Target");
+	}
+
+	*cmd_status = status;
+
+	LOG_INF("eSPI HC EMU PUT_NP Read MEM32 RespCode=0x%0x Status 0x%04x", rsp_code, status);
+
+	return 0;
+}
+
+/* Transmit eSPIO PUT_MEMWR32_SHORT write packet to target.
+ * Command Packet is: Opcode | Header | Data | CRC
+ * Response Packet is: ResponseByte | Header(opt) | Data(opt) | 16-bit Status | CRC
+ * Command packet Header: 1-byte
+ * byte[0] = ESPI_OPCODE_PUT_MWR32_SHORT_1
+ * byte[1] mem addr[31:24]
+ * byte[2] mem addr[23:16]
+ * byte[3] mem addr[15:8]
+ * byte[4] mem addr[7:0]
+ * byte[5] data 0
+ * byte[6] CRC8
+ * packet len = 7
+ *
+ * Command packet Header: 2-bytes
+ * byte[0] = ESPI_OPCODE_PUT_MWR32_SHORT_2
+ * byte[1] mem addr[31:24]
+ * byte[2] mem addr[23:16]
+ * byte[3] mem addr[15:8]
+ * byte[4] mem addr[7:0]
+ * byte[5] data 0
+ * byte[6] data 1
+ * byte[7] CRC8
+ * packet len = 8
+ *
+ * Command packet Header: 2-bytes
+ * byte[0] = ESPI_OPCODE_PUT_MWR32_SHORT_4
+ * byte[1] mem addr[31:24]
+ * byte[2] mem addr[23:16]
+ * byte[3] mem addr[15:8]
+ * byte[4] mem addr[7:0]
+ * byte[5] data 0
+ * byte[6] data 1
+ * byte[7] data 2
+ * byte[8] data 3
+ * byte[9] CRC8
+ * packet len = 10
+ *
+ * Response Packet:
+ * byte[0] response code
+ * byte[1] status_lsb
+ * byte[2] status_msb
+ * byte[3] CRC
+ * packet len = 4
+ */
+int espi_hc_emu_pc_memwr32_short(struct espi_hc_context *hc, uint32_t mem_addr,
+				 uint32_t data, uint8_t datasz, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0;
+	uint16_t status = 0;
+	uint8_t n = 0, pktlen = 0;
+	uint8_t msg_crc = 0;
+	uint8_t rsp_crc = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_MWR32_SHORT_1;
+
+	LOG_INF("eSPI HC EMU PUT_MEM32_SHORT mem_addr=0x%0x len=0x%0x data=0x%0x",
+		mem_addr, datasz, data);
+
+	if (!hc || !cmd_status) {
+		return -EINVAL;
+	}
+
+	switch (datasz) {
+	case 1:
+		pktlen = 7u;
+		break;
+	case 2:
+		pktlen = 8u;
+		opcode = ESPI_OPCODE_PUT_MWR32_SHORT_2;
+		break;
+	case 4:
+		pktlen = 10u;
+		opcode = ESPI_OPCODE_PUT_MWR32_SHORT_4;
+		break;
+	default:
+		LOG_ERR("PUT_MEMWR32_SHORT error invalid length %u: must be 1, 2, or 4", datasz);
+		return -EINVAL;
+	}
+
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	uint8_t *buf = emsg->buf;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	buf[0] = opcode;
+	buf[1] = (uint8_t)(mem_addr >> 24);
+	buf[2] = (uint8_t)(mem_addr >> 16);
+	buf[3] = (uint8_t)(mem_addr >> 8);
+	buf[4] = (uint8_t)mem_addr;
+	buf[5] = (uint8_t)data;
+	buf[6] = (uint8_t)(data >> 8);
+	buf[7] = (uint8_t)(data >> 16);
+	buf[8] = (uint8_t)(data >> 24);
+
+	msg_crc = crc8_init();
+	msg_crc = crc8_update(msg_crc, (const void *)buf, (pktlen - 1u));
+	msg_crc = crc8_finalize(msg_crc);
+	emsg->crc8 = msg_crc;
+	buf[pktlen - 1u] = msg_crc;
+
+	max_rsp_len = 64u;
+	ret = espi_hc_emu_xfr((const uint8_t *)buf, pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_MEMWR32_SHORT error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc = crc8_init();
+	rsp_crc = crc8_update(rsp_crc, (const void *)rbuf, 3u);
+	rsp_crc = crc8_finalize(rsp_crc);
+
+	if (rsp_crc != rbuf[3]) {
+		LOG_ERR("PUT_MEMWR32_SHORT: rsp_crc=0x%02x crc=0x%02x", rsp_crc, rbuf[3]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	status = rbuf[2];
+	status <<= 8;
+	status |= rbuf[1];
+	*cmd_status = status;
+
+	LOG_INF("eSPI HC EMU PUT_PC MEM32 Status 0x%04x", status);
+
+	return 0;
+}
+
+/* Transmit eSPIO PUT_MEMRD32_SHORT write packet to target.
+ * opcode = 0100_10cc where cc=00b(1-byte), 01b(2-bytes), 11b(4-bytes)
+ * Transmit Packet: 1-byte
+ * byte[0] = ESPI_OPCODE_PUT_MRD32_SHORT_1/_2/_4
+ * byte[1] = memAddr[31:24]
+ * byte[2] = memAddr[23:16]
+ * byte[3] = memAddr[15:8]
+ * byte[4] = memAddr[7:0]
+ * byte[5] = CRC8
+ * packet len = 6
+ *
+ * Response Packet with datasz = 1
+ * byte[0] = response code
+ * byte[1] = data 0
+ * byte[2] = status_lsb
+ * byte[3] = status_msb
+ * byte[4] = CRC
+ * packet length = 5
+ *
+ * Response Packet with datasz = 2
+ * byte[0] = response code
+ * byte[1] = data 0
+ * byte[2] = data 1
+ * byte[3] = status_lsb
+ * byte[4] = status_msb
+ * byte[5] = CRC
+ * packet length = 6
+ *
+ * Response Packet with datasz = 4
+ * byte[0] = response code
+ * byte[1] = data 0
+ * byte[2] = data 1
+ * byte[3] = data 2
+ * byte[4] = data 3
+ * byte[5] = status_lsb
+ * byte[6] = status_msb
+ * byte[7] = CRC
+ * packet length = 8
+ */
+int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
+				 uint8_t *data, uint8_t datasz, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len;
+	uint16_t status = 0u;
+	uint8_t n = 0u;
+	uint8_t tx_pktlen = 0u;
+	uint8_t rsp_pktlen = 0u; /* response packet length */
+	uint8_t rsp_code = 0, rsp_crc8 = 0;
+	uint8_t opcode = 0;
+
+	LOG_INF("eSPI HC emu: PUT_PC_MEMRD32_SHORT mem_addr=0x%0x len=0x%0x",
+		mem_addr, datasz);
+
+	if (!hc || !data || !cmd_status) {
+		return -EINVAL;
+	}
+
+	switch (datasz) {
+	case 1:
+		opcode = ESPI_OPCODE_PUT_MRD32_SHORT_1;
+		rsp_pktlen = 5u;
+		break;
+	case 2:
+		opcode = ESPI_OPCODE_PUT_MRD32_SHORT_2;
+		rsp_pktlen = 6u;
+		break;
+	case 4:
+		opcode = ESPI_OPCODE_PUT_MRD32_SHORT_4;
+		rsp_pktlen = 8u;
+		break;
+	default:
+		LOG_ERR("PUT_PC_MEMRD32_SHORT data size (%u) must be 1, 2 or 4", datasz);
+		return -EINVAL;
+	}
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	max_rsp_len = 64u;
+	tx_pktlen = 6u;
+	emsg->buf[0] = opcode;
+	emsg->buf[1] = (uint8_t)(mem_addr >> 24);
+	emsg->buf[2] = (uint8_t)(mem_addr >> 16);
+	emsg->buf[3] = (uint8_t)(mem_addr >> 8);
+	emsg->buf[4] = (uint8_t)mem_addr;
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)emsg->buf, tx_pktlen - 1u);
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	emsg->buf[5] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, tx_pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_MEMRD32_SHORT error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (rsp_pktlen - 1u));
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[rsp_pktlen - 1u]) {
+		LOG_ERR("PUT_PC_MEMRD32_SHORT: CRC error: expected=0x%02x calc=0x%02x",
+			rsp_crc8, rbuf[rsp_pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+	status = ((uint16_t)rbuf[rsp_pktlen - 2u] << 8) | rbuf[rsp_pktlen - 3u];
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_OK) {
+		/* we have data */
+		memcpy(data, &rbuf[1], datasz);
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("eSPI HC EMU GET_PC MEM32 Deferred by Target");
+	}
+
+	*cmd_status = status;
+
+	LOG_INF("PUT_PC_MEMRD32_SHORT RespCode=0x%0x Status 0x%04x", rsp_code, status);
 
 	return 0;
 }

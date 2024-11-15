@@ -36,6 +36,28 @@ struct espi_status_data {
 
 #define APP_FLAG_GET_STATUS_LOOP BIT(0)
 
+/* IMPORTANT: these must match eSPI Target application configuration */
+#define TARGET_SRAM0_BASE_ADDR 0x20000000u
+#define TARGET_SRAM0_SIZE 256u
+#define TARGET_SRAM1_BASE_ADDR 0x20001000u
+#define TARGET_SRAM1_SIZE 256u
+
+#define TARGET_EMI0_BASE_ADDR 0x10000000u
+#define TARGET_EMI1_BASE_ADDR 0x10001000u
+#define EMI_HOST_TO_EC_MBOX_OFFSET 0
+#define EMI_EC_TO_HOST_MBOX_OFFSET 1u
+#define EMI_EC_ADDR_LSB_OFFSET 2u
+#define EMI_EC_ADDR_MSB_OFFSET 3u
+#define EMI_EC_DATA_OFFSET 4u
+#define EMI_EC_INTR_SRC_LSB_OFFSET 8u
+#define EMI_EC_INTR_SRC_MSB_OFFSET 9u
+#define EMI_EC_INTR_MSK_LSB_OFFSET 0xAu
+#define EMI_EC_INTR_MSK_MSB_OFFSET 0xBu
+#define EMI_APP_ID_OFFSET 0xCu
+#define EMI_APP_ID_ASSIGN_OFFSET 0x10u
+
+
+
 static volatile uint32_t app_flags;
 static volatile uint32_t spin_val;
 static volatile int ret_val;
@@ -46,6 +68,9 @@ static struct espi_hc_context hc;
 /* eSPI specification: maximum 64 VWire groups */
 /* static struct espi_hc_vw hcvw[64]; */
 static struct espi_hc_vw hcvw2[64];
+
+static uint8_t data_buf[64];
+static uint8_t data_buf2[64];
 
 #define ESPI_CHAN_READY_PC_IDX 0
 #define ESPI_CHAN_READY_VW_IDX 1
@@ -66,11 +91,14 @@ int main(void)
 {
 	int ret = 0;
 	struct espi_hc_vw vwg = {0};
+	uint32_t mem_addr = 0, mem_len = 0;
+	uint32_t mem_data = 0, mem_data2 = 0;
 	uint32_t io_addr_len = 0;
 	uint32_t io_data = 0;
 	uint32_t chan_config = 0;
 	uint16_t cfgid = 0;
 	uint16_t cmd_status = 0;
+	uint8_t tag = 0;
 
 	LOG_INF("MEC5 eSPI Host Controller emulation for board: %s", DT_N_COMPAT_MODEL_IDX_0);
 
@@ -134,6 +162,41 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+
+#ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
+	/* set bit[28] = 1 indicating Host wants to use ESPI_nALERT pin instead
+	 * of in-band alert.
+	 */
+	uint32_t global_config = hc.global_cap_cfg;
+
+	global_config |= BIT(28);
+
+	cfgid = ESPI_GET_CONFIG_GLB_CAP;
+	ret = espi_hc_ctx_emu_set_config(&hc, cfgid, global_config);
+	if (ret) {
+		LOG_ERR("FAIL: SET_CONFIG %u err (%d)", cfgid, ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	espi_debug_pr_status(hc.pkt_status);
+
+	LOG_INF("Read new General Capabilities from Target");
+	cfgid = ESPI_GET_CONFIG_GLB_CAP;
+	ret = espi_hc_ctx_emu_get_config(&hc, cfgid);
+	if (ret) {
+		LOG_ERR("FAIL: GET_CONFIG %u err (%d)", cfgid, ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	espi_debug_print_cap_word(cfgid, hc.global_cap_cfg);
+	espi_debug_pr_status(hc.pkt_status);
+
+	if ((hc.global_cap_cfg & 0xf) != 0xfu) {
+		LOG_ERR("PC, VW, OOB, FC are not all supported!");
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif
 
 	/* Read VW Capabilities from Target */
 	LOG_INF("Read VWire Capabilities from Target");
@@ -716,6 +779,130 @@ int main(void)
 	
 	k_sleep(K_MSEC(50));
 
+	/* eSPI Target memory mapped SRAM0, SRAM1, EMI0 and EMI1 try using eSPI PUT/GET_PC MEM32
+	 * to access SRAM and EMI.
+	 */
+
+	tag = 0u;
+	cmd_status = 0u;
+	mem_addr = 0x20000000u;
+	mem_data = 0x87654321u;
+
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
+
+	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_sleep(K_MSEC(50));
+
+	esd.buf = &hcvw2;
+	esd.bufsz = sizeof(hcvw2);
+	esd.nitems = 0u;
+	ret = app_process_espi_status(&hc, cmd_status, &esd);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI EMU PUT_MEMRD32 4-bytes from 0x%0x", mem_addr);
+
+	cmd_status = 0u;
+	mem_addr = 0x20000000u;
+	mem_data2 = 0x55555555u;
+
+	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("Data from target = 0x%08x", mem_data2);
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+	tag = 1u;
+	mem_addr = 0x20000014u;
+	mem_len = 0x17u;
+	for (size_t n = 0; n < mem_len; n++) {
+		data_buf[n] = (uint8_t)(n + 1u);
+	}
+
+	LOG_INF("Memory write: %u bytes to 0x%0x", mem_len, mem_addr);
+
+	cmd_status = 0;
+	ret = espi_hc_emu_put_pc_mem_wr32(&hc, mem_addr, tag, data_buf, mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI MEM32 write failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+	LOG_INF("Memory read: %u bytes from 0x%0x", mem_len, mem_addr);
+	memset(data_buf2, 0x55, sizeof(data_buf2));
+
+	cmd_status = 0;
+	ret = espi_hc_emu_put_pc_mem_rd32(&hc, mem_addr, tag, data_buf2, mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI MEM32 read failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = memcmp(data_buf, data_buf2, mem_len);
+	if (ret == 0) {
+		LOG_INF("MEM32 read data matches MEM32 write data: PASS");
+	} else {
+		LOG_ERR("MEM32 read data does not match MEM32 write data: FAIL");
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+
+	/* Signal the Target we wrote to SRAM0 BAR */
+	tag = 0u;
+	cmd_status = 0u;
+	mem_addr = 0x10000000u; /* EMI0 base. Offset 0 is Host-to-EC mailbox */
+	mem_data = 0xA5u;
+
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 1-byte [0x%0x] = 0x%02x", mem_addr, mem_data);
+
+	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 1u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_sleep(K_MSEC(50));
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
 	app_flags |= APP_FLAG_GET_STATUS_LOOP;
 	if (app_flags & APP_FLAG_GET_STATUS_LOOP) {
 		LOG_INF("Application loop issuing eSPI GET_STATUS");
@@ -791,26 +978,29 @@ int app_process_espi_status(struct espi_hc_context *hc, uint16_t espi_status,
 			LOG_ERR("eSPI HC CTX update T2C error %d", rc);
 			return rc;
 		}
-		espi_debug_print_vws(hc->t2c_vw, ESPI_MAX_TC_VW_GROUPS);
+		/* espi_debug_print_vws(hc->t2c_vw, ESPI_MAX_TC_VW_GROUPS); */
+	}
+	if (!(espi_status & BIT(ESPI_STATUS_PC_FREE_POS))) {
+		LOG_INF("PC RX Queue Not Free");
 	}
 	if (espi_status & BIT(ESPI_STATUS_PC_AVAIL_POS)) {
-		LOG_INF("PC available");
+		LOG_INF("PC TX has data");
 		/* TODO Issue GET_PC */
 	}
 	if (espi_status & BIT(ESPI_STATUS_PC_NP_AVAIL_POS)) {
-		LOG_INF("PC NP available");
+		LOG_INF("PC NP TX has data");
 		/* TODO Issue GET_NP */
 	}
 	if (espi_status & BIT(ESPI_STATUS_OOB_AVAIL_POS)) {
-		LOG_INF("OOB available");
+		LOG_INF("OOB TX has data");
 		/* TODO Issue GET_OOB */
 	}
 	if (espi_status & BIT(ESPI_STATUS_FC_AVAIL_POS)) {
-		LOG_INF("FC available");
+		LOG_INF("FC TX has data");
 		/* TODO Issue GET_FC */
 	}
 	if (espi_status & BIT(ESPI_STATUS_FC_NP_AVAIL_POS)) {
-		LOG_INF("FC NP available");
+		LOG_INF("FC NP TX has data");
 		/* TODO Issue GET_FC_NP */
 	}
 
