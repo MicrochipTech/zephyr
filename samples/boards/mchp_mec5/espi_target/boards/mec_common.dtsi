@@ -138,7 +138,7 @@
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_031 GPIO_ACTIVE_HIGH>,
+		espi-gpios = <MCHP_GPIO_DECODE_124 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_242 0>;
 		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
 		pinctrl-names = "default";
@@ -164,13 +164,13 @@
 
 &espi0 {
 	status = "okay";
-	pinctrl-0 = < &espi_reset_n_gpio061
+	pinctrl-0 = < &espi_reset_n_gpio061 &espi_alert_n_gpio063
 		      &espi_clk_gpio065 &espi_cs_n_gpio066
 		      &espi_io0_gpio070 &espi_io1_gpio071
 		      &espi_io2_gpio072 &espi_io3_gpio073 >;
 	pinctrl-names = "default";
-	host-memmap-addr-high = <0x10>; /* bits[47:32] of Host address for memory mapped LDNs */
-	sram-bar-addr-high = <0x20>; /* bits[47:32] of Host address for SRAM BARs */
+	host-memmap-addr-high = <0>; /* bits[47:32] of Host address for memory mapped LDNs */
+	sram-bar-addr-high = <0>; /* bits[47:32] of Host address for SRAM BARs */
 
 	/* We create a node here for the UART we will expose to the Host
 	 * Doing this makes sure this node is a child of espi0 required
@@ -199,9 +199,8 @@
  */
 &espi_sram_bar0 {
 	host-address-lsw = <0x20000000>;
-	region-base = <0x118000>;
-	region-size = "256B";
-	access = "READ_ONLY";
+	region-size = "1KB";
+	access = "READ_WRITE";
 	status = "okay";
 };
 
@@ -210,9 +209,8 @@
  */
 &espi_sram_bar1 {
 	host-address-lsw = <0x20001000>;
-	region-base = <0x118100>;
-	region-size = "256B";
-	access = "WRITE_ONLY";
+	region-size = "1KB";
+	access = "READ_WRITE";
 	status = "okay";
 };
 
@@ -324,6 +322,7 @@
 };
 
 &espi_emi0 {
+	/* host-address = <0x900>; */
 	host-address = <0x10000000>;
 	host-mem-space;
 };
@@ -336,6 +335,7 @@
 };
 
 &espi_emi1 {
+	/* host-address = <0x940>; */
 	host-address = <0x10001000>;
 	host-mem-space;
 };
