@@ -33,8 +33,12 @@ struct espi_mec5_dev_config {
 	struct mec_espi_io_regs *iob;
 	struct mec_espi_mem_regs *memb;
 	struct mec_espi_vw_regs *vwb;
+	uint8_t *sram_bar_mem[2];
+	uint32_t sram_bar_lo[2];
 	uint32_t membar_hi;
 	uint32_t srambar_hi;
+	uint16_t sram_bar_size[2];
+	uint8_t sram_bar_access[2];
 	uint16_t cfg_io_addr;
 	const struct pinctrl_dev_config *pcfg;
 	void (*irq_cfg_func)(const struct device *espi_dev);
