@@ -14,6 +14,7 @@
 enum mec5_espi_sram_bar_id {
 	MEC5_ESPI_SRAM_BAR_0 = 0,
 	MEC5_ESPI_SRAM_BAR_1,
+	MEC5_ESPI_SRAM_BAR_ID_MAX
 };
 
 enum mec5_espi_sram_region_size {
@@ -82,23 +83,20 @@ enum mchp_espi_pc_host_uart_ien_flags {
 	MCHP_ESPI_PC_HUART_IEN_FLAG_SIRQ = BIT(1),
 };
 
-/**
- * @brief Configure Microchip MEC5 eSPI SRAM BAR
- *
- * Configure the specified Microchip MEC5 eSPI SRAM BAR to map a
- * region of EC memory to the eSPI Host's memory address space
- * and set the access mode.
- *
- * @param dev Pointer to the device structure for the driver instance.
- * @param cfg Pointer to the MEC5 eSPI SRAM BAR config structure.
- *
- * @retval 0 If successful.
- * @retval -EWOULDBLOCK if function is called from an ISR.
- * @retval -ERANGE if pin number is out of range.
- * @retval -EIO if fails.
- */
-int mec5_espi_sram_bar_configure(const struct device *dev, uint8_t bar_id,
-				 struct mec5_espi_sram_bar_cfg *cfg);
+/* ---- SRAM0 and SRAM1 BAR Memory Access ---- */
+int mchp_espi_sram_bar_get_size(const struct device *dev, uint8_t sram_bar_id,
+				size_t *size_in_bytes);
+
+int mchp_espi_sram_bar_get_access(const struct device *dev, uint8_t sram_bar_id, int *access);
+
+int mchp_espi_sram_bar_mem_rd(const struct device *dev, uint8_t sram_bar_id, uint16_t offset,
+			      uint8_t *dest, size_t destsz, size_t *rdsz);
+
+int mchp_espi_sram_bar_mem_wr(const struct device *dev, uint8_t sram_bar_id, uint16_t offset,
+			      const uint8_t *src, size_t srcsz, size_t *wrsz);
+
+int mchp_espi_sram_bar_mem_fill(const struct device *dev, uint8_t sram_bar_id,
+				uint16_t offset, size_t fillsz, uint8_t val);
 
 /* ---- Generic Host Device API ---- */
 #define ESPI_HAE_CFG_LDN_POS	0
