@@ -53,6 +53,9 @@ struct espi_mec5_vwire {
 	uint8_t flags;
 };
 
+#define MEC5_DT_ESPI_HD_NODE DT_PATH(mchp_mec5_espi_host_dev)
+#define MEC5_DT_ESPI_SB_NODE DT_PATH(mchp_mec5_espi_sram_bars)
+
 #define E8042_CHOSEN_NODE_ID	DT_CHOSEN(espi_host_em8042)
 #define E8042_DEV_PTR		DEVICE_DT_GET(E8042_CHOSEN_NODE_ID)
 
@@ -195,26 +198,6 @@ static int espi_mec5_init_vwires(const struct device *dev)
 	return ret;
 }
 
-struct espi_mec5_sram_bar {
-	uint32_t host_addr_lsw;
-	uint32_t sram_base;
-	uint8_t sram_size;
-	uint8_t access;
-	uint8_t bar_id;
-};
-
-#define MEC5_DT_ESPI_HD_NODE DT_PATH(mchp_mec5_espi_host_dev)
-#define MEC5_DT_ESPI_SB_NODE DT_PATH(mchp_mec5_espi_sram_bars)
-
-#define MEC5_ESPI_SB_ENTRY(node_id) \
-	{ \
-		.host_addr_lsw = DT_PROP(node_id, host_address_lsw), \
-		.sram_base = DT_PROP(node_id, region_base), \
-		.sram_size = DT_ENUM_IDX(node_id, region_size), \
-		.access = DT_ENUM_IDX(node_id, access), \
-		.bar_id = DT_PROP(node_id, id), \
-	},
-
 /* Construct a table of enabled host devices from DTS */
 struct espi_mec5_hdi2 {
 	const struct device *dev;
@@ -232,33 +215,21 @@ const struct espi_mec5_hdi2 espi_mec5_hdi_tbl2[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY(DT_NODELABEL(espi0), MEC5_ESPI_HDI_ENTRY2)
 };
 
-/* Construct a table of SRAM BARs from DTS */
-const struct espi_mec5_sram_bar espi_mec5_sram_bar_tbl[] = {
-	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_SB_NODE, MEC5_ESPI_SB_ENTRY)
-};
-
+/* Host-Address portion of SRAM BARs are reset by nPLTRST and ESPI_nRESET.
+ * EC SRAM address, size, and access are reset by chip reset and can be
+ * programmed earlier. NOTE: Valid is also reset by chip reset but we
+ * will program it when Host address is set.
+ */
 static int mec5_pcd_sram_bars(const struct device *dev)
 {
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_mem_regs *memb = devcfg->memb;
-	int ret = 0, ret_hal = 0;
 
-	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_sram_bar_tbl); n++) {
-		const struct espi_mec5_sram_bar *sb = &espi_mec5_sram_bar_tbl[n];
-		const struct espi_mec5_sram_bar_cfg sbcfg = {
-			.haddr = sb->host_addr_lsw,
-			.maddr = sb->sram_base,
-			.size = sb->sram_size,
-			.access = sb->access,
-		};
-
-		LOG_DBG("SRAM BAR %u hAddrLsw=0x%0x mAddr=0x%0x sz=%u access=%u", sb->bar_id,
-			sb->host_addr_lsw, sb->sram_base, sb->sram_size, sb->access);
-
-		ret_hal = mec_hal_espi_sram_bar_cfg(memb, &sbcfg, sb->bar_id, 1);
-		if (ret_hal != MEC_RET_OK) {
-			LOG_ERR("SRAM BAR config error!");
-			ret = -EIO;
+	for (uint8_t id = 0; id < MEC5_ESPI_SRAM_BAR_ID_MAX; id++) {
+		mec_hal_espi_sram_bar_enable(memb, id, 0);
+		mec_hal_espi_sram_bar_host_addr_set(memb, id, devcfg->sram_bar_lo[id], devcfg->srambar_hi);
+		if (devcfg->sram_bar_access[id] & BIT(7)) {
+			mec_hal_espi_sram_bar_enable(memb, id, 1);
 		}
 	}
 
@@ -299,12 +270,6 @@ static int mec5_pcd_config_access(const struct device *dev)
 				LOG_ERR("PC host access enable error");
 			}
 		}
-	}
-
-	ret = mec_hal_espi_sram_bar_extended_addr_set(memb, devcfg->srambar_hi);
-	if (ret) {
-		LOG_ERR("SRAM Ext MBAR cfg error");
-		ret = -EIO;
 	}
 
 	ret = mec5_pcd_sram_bars(dev);
@@ -447,8 +412,10 @@ static int espi_mec5_configure(const struct device *dev,
 {
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_io_regs *iob = devcfg->iob;
+	struct mec_espi_mem_regs *memb = devcfg->memb;
 	uint32_t cap;
 	int ret;
+	uint8_t n, ben;
 
 	if (!cfg) {
 		return -EINVAL;
@@ -509,6 +476,16 @@ static int espi_mec5_configure(const struct device *dev,
 	ret = mec5_espi_host_dev_config(dev);
 	if (ret) {
 		return ret;
+	}
+
+	for (n = 0; n <= MEC5_ESPI_SRAM_BAR_1; n++) {
+		ben = 0;
+		if (devcfg->sram_bar_access[n] & BIT(7)) {
+			ben = 1;
+		}
+		mec_hal_espi_sram_bar_ec_mem_cfg(memb, n, (uint32_t)devcfg->sram_bar_mem[n],
+						 devcfg->sram_bar_size[n],
+						 devcfg->sram_bar_access[n] & 0x3u, ben);
 	}
 
 	mec_hal_espi_activate(iob, 1u);
@@ -710,6 +687,143 @@ int espi_mec5_lpc_req_wr(const struct device *dev,
 {
 	return espi_mec5_lpc_req(dev, op, data, BIT(0));
 }
+
+int mchp_espi_sram_bar_get_size(const struct device *dev, uint8_t sram_bar_id,
+				size_t *size_in_bytes)
+{
+	if (!dev || !size_in_bytes || (sram_bar_id > MEC5_ESPI_SRAM_BAR_1)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+
+	*size_in_bytes = (size_t)devcfg->sram_bar_size[sram_bar_id];
+
+	return 0;
+}
+
+int mchp_espi_sram_bar_get_access(const struct device *dev, uint8_t sram_bar_id, int *access)
+{
+	if (!dev || !access || (sram_bar_id > MEC5_ESPI_SRAM_BAR_1)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+
+	*access = (int)(devcfg->sram_bar_access[sram_bar_id] & 0x3);
+
+	return 0;
+}
+
+int mchp_espi_sram_bar_mem_rd(const struct device *dev, uint8_t sram_bar_id, uint16_t offset,
+			      uint8_t *dest, size_t destsz, size_t *rdsz)
+{
+	if (!destsz) {
+		return 0;
+	}
+
+	if (!dev || (sram_bar_id > MEC5_ESPI_SRAM_BAR_1) || (!dest && destsz)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+	uint8_t *sram_ptr = devcfg->sram_bar_mem[sram_bar_id];
+	size_t region_size = (size_t)devcfg->sram_bar_size[sram_bar_id];
+	size_t copy_size = 0;
+
+	if (!sram_ptr) {
+		return -EINVAL;
+	}
+
+	if (offset > region_size) {
+		return -EINVAL;
+	}
+
+	copy_size = region_size - offset;
+	if (copy_size > destsz) {
+		copy_size = destsz;
+	}
+
+	memcpy(dest, sram_ptr + offset, copy_size);
+	if (rdsz) {
+		*rdsz = copy_size;
+	}
+
+	return 0;
+}
+
+int mchp_espi_sram_bar_mem_wr(const struct device *dev, uint8_t sram_bar_id, uint16_t offset,
+			      const uint8_t *src, size_t srcsz, size_t *wrsz)
+{
+	if (!srcsz) {
+		return 0;
+	}
+
+	if (!dev || (sram_bar_id > MEC5_ESPI_SRAM_BAR_1) || (!src && srcsz)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+	uint8_t *sram_ptr = devcfg->sram_bar_mem[sram_bar_id];
+	size_t region_size = (size_t)devcfg->sram_bar_size[sram_bar_id];
+	size_t copy_size = 0;
+
+	if (!sram_ptr) {
+		return -EINVAL;
+	}
+
+	if (offset > region_size) {
+		return -EINVAL;
+	}
+
+	copy_size = region_size - offset;
+	if (copy_size > srcsz) {
+		copy_size = srcsz;
+	}
+
+	memcpy(sram_ptr + offset, src, copy_size);
+	if (wrsz) {
+		*wrsz = copy_size;
+	}
+
+	return 0;
+}
+
+int mchp_espi_sram_bar_mem_fill(const struct device *dev, uint8_t sram_bar_id,
+				uint16_t offset, size_t fillsz, uint8_t val)
+{
+	if (!fillsz) {
+		return 0;
+	}
+
+	if (!dev || (sram_bar_id > MEC5_ESPI_SRAM_BAR_1)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+	uint8_t *sram_ptr = devcfg->sram_bar_mem[sram_bar_id];
+	size_t region_size = (size_t)devcfg->sram_bar_size[sram_bar_id];
+	size_t fsz = 0;
+
+	if (!sram_ptr) {
+		return -EINVAL;
+	}
+
+	if (offset > region_size) {
+		return -EINVAL;
+	}
+
+	fsz = region_size - offset;
+	if (fillsz < fsz) {
+		fsz = fillsz;
+	}
+
+	memset(sram_ptr + offset, (int)val, fsz);
+
+	return 0;
+}
+
+
 #endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
 /* Called on de-assertion of ESPI_nRESET. Arm our eSPI channels
@@ -1201,7 +1315,69 @@ static int espi_mec5_dev_init(const struct device *dev)
 #define MEC5_ESPI_FC_IRQ_CONNECT(inst)
 #endif
 
+#define MEC5_ESPI_SRAM0_NODE DT_CHILD(MEC5_DT_ESPI_SB_NODE, espi_sram_bar0)
+#define MEC5_ESPI_SRAM1_NODE DT_CHILD(MEC5_DT_ESPI_SB_NODE, espi_sram_bar1)
+
+#define MEC5_ESPI_SRAM0_SIZE_POF2 DT_ENUM_IDX(MEC5_ESPI_SRAM0_NODE, region_size)
+#define MEC5_ESPI_SRAM1_SIZE_POF2 DT_ENUM_IDX(MEC5_ESPI_SRAM1_NODE, region_size)
+
+#define MEC5_ESPI_SRAM0_SIZE (1u << (MEC5_ESPI_SRAM0_SIZE_POF2))
+#define MEC5_ESPI_SRAM1_SIZE (1u << (MEC5_ESPI_SRAM1_SIZE_POF2))
+
+#if MEC5_ESPI_SRAM0_SIZE < 4
+	#define MEC5_ESPI_SRAM0_ALIGN 4
+#else
+	#define MEC5_ESPI_SRAM0_ALIGN MEC5_ESPI_SRAM0_SIZE
+#endif
+
+#if MEC5_ESPI_SRAM1_SIZE < 4
+	#define MEC5_ESPI_SRAM1_ALIGN 4
+#else
+	#define MEC5_ESPI_SRAM1_ALIGN MEC5_ESPI_SRAM1_SIZE
+#endif
+
+/* SRAM BAR EC memory must be aligned based on region size. Max size = 32KB */
+#define MEC5_ESPI_SRAM0_MEM_DEF(inst) static uint8_t __aligned(MEC5_ESPI_SRAM0_ALIGN) \
+	espi_mec5_##inst##_sram0[MEC5_ESPI_SRAM0_SIZE]
+
+#define MEC5_ESPI_SRAM0_MEM_DEFINE(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM0_NODE, okay),\
+		(MEC5_ESPI_SRAM0_MEM_DEF(inst)), ())
+
+#define MEC5_ESPI_SRAM0_MEM_ARRAY(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM0_NODE, okay),\
+		(espi_mec5_##inst##_sram0), (NULL))
+
+#define MEC5_ESPI_SRAM1_MEM_DEF(inst) static uint8_t __aligned(MEC5_ESPI_SRAM1_ALIGN) \
+	espi_mec5_##inst##_sram1[MEC5_ESPI_SRAM1_SIZE]
+
+#define MEC5_ESPI_SRAM1_MEM_DEFINE(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM1_NODE, okay),\
+		(MEC5_ESPI_SRAM1_MEM_DEF(inst)), ())
+
+#define MEC5_ESPI_SRAM1_MEM_ARRAY(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM1_NODE, okay),\
+		(espi_mec5_##inst##_sram1), (NULL))
+
+#define MEC5_ESPI_SRAM0_HLO(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM0_NODE, okay),\
+		(DT_PROP(MEC5_ESPI_SRAM0_NODE, host_address_lsw)), (0))
+
+#define MEC5_ESPI_SRAM1_HLO(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM1_NODE, okay),\
+		(DT_PROP(MEC5_ESPI_SRAM1_NODE, host_address_lsw)), (0))
+
+#define MEC5_ESPI_SRAM0_ACCESS(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM0_NODE, okay),\
+		(DT_ENUM_IDX(MEC5_ESPI_SRAM0_NODE, access) | 0x80u), (0))
+
+#define MEC5_ESPI_SRAM1_ACCESS(inst) \
+	COND_CODE_1(DT_NODE_HAS_STATUS(MEC5_ESPI_SRAM1_NODE, okay),\
+		(DT_ENUM_IDX(MEC5_ESPI_SRAM1_NODE, access) | 0x80u), (0))
+
 #define MEC5_ESPI_DEVICE(inst) \
+	MEC5_ESPI_SRAM1_MEM_DEFINE(inst); \
+	MEC5_ESPI_SRAM0_MEM_DEFINE(inst); \
 	static struct espi_mec5_data espi_mec5_data_##inst; \
 	PINCTRL_DT_INST_DEFINE(inst); \
 	static void espi_mec5_irq_config_##inst(const struct device *dev) \
@@ -1217,8 +1393,21 @@ static int espi_mec5_dev_init(const struct device *dev)
 		.iob = MEC5_ESPI_IO_BA(inst), \
 		.memb = MEC5_ESPI_MEM_BA(inst), \
 		.vwb = MEC5_ESPI_VW_BA(inst), \
-		.membar_hi = DT_INST_PROP(inst, host_memmap_addr_high),	\
-		.srambar_hi = DT_INST_PROP(inst, sram_bar_addr_high),	\
+		.sram_bar_mem = { \
+			MEC5_ESPI_SRAM0_MEM_ARRAY(inst), \
+			MEC5_ESPI_SRAM1_MEM_ARRAY(inst) \
+		}, \
+		.sram_bar_lo = { \
+			MEC5_ESPI_SRAM0_HLO(inst), \
+			MEC5_ESPI_SRAM1_HLO(inst), \
+		}, \
+		.membar_hi = DT_INST_PROP(inst, host_memmap_addr_high), \
+		.srambar_hi = DT_INST_PROP(inst, sram_bar_addr_high), \
+		.sram_bar_size = { MEC5_ESPI_SRAM0_SIZE, MEC5_ESPI_SRAM1_SIZE }, \
+		.sram_bar_access = { \
+			MEC5_ESPI_SRAM0_ACCESS(inst), \
+			MEC5_ESPI_SRAM1_ACCESS(inst), \
+		}, \
 		.cfg_io_addr = DT_INST_PROP(inst, config_io_addr), \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst), \
 		.irq_cfg_func = espi_mec5_irq_config_##inst, \
