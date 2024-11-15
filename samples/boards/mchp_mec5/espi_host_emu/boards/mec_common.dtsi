@@ -81,20 +81,16 @@
  * SHD_IO3  J18-9  <-> ESPI_IO0 J46-11 <-> U10 <-> ESPI_IO3_R    J52-1
  *
  * Emulated eSPI Host drives ESPI_nRESET to Target
- * NOTE: GPIO123/PVT_IO2 is on VTR1. We connect to +3.3V signal ESPI_nRESET_R
- * PVT_IO2  J18-14 -> ESPI_nRESET_R JP109-1 (no jumper)
+ * Use GPIO222 on VTR2 (jumpered for 1.8V) as Host ESPI_nRESET and connect
+ * to target 1.8V VTR3 ESPI_nRESET.
+ * MUX: JP24 3x16 34-35
+ * GPIO222 accessed at JP76-11. Make sure JP76 11-12 jumper is removed.
+ * The target board should have a pull on ESPI_nRESET.
  *
  * MEC5 eSPI target drives ESPI_nALERT to Host
- * ESPI_nALERT_R J52-23 -> PVT_IO1 J18-13
+ * ESPI_nALERT(target) to VTR2 pin GPIO014(emulated host)
  *
  * ------------------------------------------------------------------------
- * Alternative: emulate eSPI using GP-SPI controller 0. Limitations:
- * GP-SPI controllers are full-duplex or dual. Not Quad.
- * GP-SPI controller pins are all on the VTR1 domain. We must connect differntly.
- * eSPI pins are connected to bi-direction voltage translator U10. The other
- * side of U10 are ESPI_xxx_R +3.3V signals connected to header J52
- * U10 requires jumper on JP110 1-2 connecting OE to VTR3
- *
  * Wires:
  * J34 1x6
  * pin 1 VTR1
@@ -119,7 +115,95 @@
  * ------------------------------------------------------------------------
  * GPIO175/CMP_VOUT1/PWM8_ALT on schematic, LED4 on silkscreen.
  * JP19 16-17 connects GPIO175 as CMP_VOUT1
+ * ------------------------------------------------------------------------
+ * Sample for MEC172x EVB Assembly 6906 board with various CPU cards.
+ * With MEC1723N-SZ CPU card
+ * EVB power !! Selected one !!
+ * Selected: Jumper on JP30 5-6 selects +5V 2.1mm ID 5.5mm OD barrel connector from
+ *  an external +5V power brick.
+ * Jumper on J1 1-2 uses +5VCC_IN from edge connector Z1
+ * Jumper on J1 3-4 uses VVD_+5V from variable voltage header
+ * Jumper on J1 7-8 uses MCP2200_VBUS from MCP2200 using USB connector P2
  *
+ * Voltage Rail configuration:
+ * JP37 1-2, JP36 1-2, JP38 1-2 connects +3.3V_STBY to VBAT_CHIP
+ * JP40 1-2 connects +3.3V_STBY to VTR selection hardware
+ * JP42 1-2 connects +1.8V_STBY to VTR selection hardware
+ *
+ * JP41 1-2, JP43 1-2, JP39 1-2, JP44 1-2 connects VCHIP_VTR_REG to +3.3V_STBY
+ * JP46 1-2, JP45 1-2, JP47 1-2, connects VCHIP_VTR_PLL to +3.3V_STBY
+ * JP51 1-2, JP50 1-2, JP52 1-2, connects VCHIP_VTR_ANALOG to +3.3V_STBY
+ * JP56 1-2, JP55 1-2, JP57 1-2, connects VCHIP_VTR1 to +3.3V_STBY
+ * JP60 2-3, JP61 1-2, JP59 1-2, JP62 1-2, connects VCHIP_VTR2 to +1.8V_STBY
+ * JP65 1-2, JP63 1-2, JP66 1-2, connects VCHIP_VTR3 to +1.8V_STBY
+ *
+ * Straps:
+ * UART_BSTRAP: JP160 1-2 pulled up to VTR1
+ * CR_STRAP: JP1
+ * JTAG_STRAP: JP2 2-3 pulled down via 1K
+ * CMP_STRAP: JP3 2-3 pulled down via 1K
+ * PWRGD_STRAP: JP4
+ * VTR2_STRAP: JP5
+ * BSS_STRAP: JP6 GPIO074
+ * BSS_STRAP: JP7 1-2 GPIO055 pulled up to VTR2
+ * CRISIS_RECOVERY_STRAP: JP152 1-2 pulled up to VTR1
+ *
+ * Boot-ROM GPIO055 as RSMRST#
+ * GPIO Control register value = 0x0200
+ * Output, push-pull, driver low, no internal pulls,
+ * interrupt detection = level low, alternate out enabled.
+ * ROM drives pin high(inactive) using alternate out (bit[16] of control register)
+ * Control register = 0x10200
+ *
+ * Select GPIO057 as VCC_PWRGD input. JP21 3x6 8-9
+ * Connect VCC_PWRGD to VTR1, switch S1, and U2(MCP121T-300). JP32 1-2
+ * JP151 1-2 VTR1 powers VDD input of U2.
+ *
+ * Emulate eSPI Host using QSPI
+ * JP25 1-2 connect GPIO002 to SHD_nCS1
+ * JP16 14-15 connect GPIO122 to PVT_IO1
+ * JP16 11-12 connect GPIO123 to PVT_IO2
+ * JP115 1-2 U11 OE connected to VTR3 (enabled)
+ * JP120 1-2 U13 and U14 nOE connected to VTR3 (disabled)
+ *
+ * QSPI SHD pins are on VTR2 set to 1.8V fly-wired to eSPI pins.
+ * NOTE: keep fly-wires short or use twisted pairs.
+ *   1.8V               1.8V                     +3.3V
+ * SHD_nCS1 J34-10 ->  ESPI_nCS J45-1  <-> U11 <-> ESPI_nRESET_R J52-19, JP114-1
+ * SHD_CLK  J34-2  ->  ESPI_CLK J45-3  <-> U11 <-> ESPI_CLK_R    J52-13
+ * SHD_IO0  J34-6  <-> ESPI_IO0 J45-5  <-> U11 <-> ESPI_IO0_R    J52-7
+ * SHD_IO1  J34-7  <-> ESPI_IO1 J45-7  <-> U11 <-> ESPI_IO1_R    J52-5
+ * SHD_IO2  J34-8  <-> ESPI_IO2 J45-9  <-> U11 <-> ESPI_IO2_R    J52-3
+ * SHD_IO3  J34-9  <-> ESPI_IO3 J45-11 <-> U11 <-> ESPI_IO3_R    J52-1
+ *
+ * ESPI_nRESET
+ * GPIO222 VTR2 JP76-11
+ *
+ * ESPI_nALERT(target) to VTR2 pin GPIO014(emulated host)
+ * MUX: JP12 3x6 10-11
+ * Access: JP76 2x17 pin 13
+ *
+ * VCC_PWRGD input
+ * GPIO057 Function 1 on JP32-2 (no jumper on JP32 1-2 to disconnect power good ciruit)
+ * to GPIO030 as Host drive output for VCC_PWRGD. Access on J9-1 or J40-6
+ *
+ * GPIO031 used as Target_nReady input to Host. Access J40-7
+ *  Target uses GPIO032 on J40-8 as output
+ *
+ * GPIO013 used for scope measurement. JP12 3x6 7-8. Access J19-1
+ *
+ * Emulated Host pins
+ * GPIO123 as GPIO output for driving ESPI_nRESET
+ * GPIO030 as GPIO output for driving VCC_PWRGD output
+ * GPIO031 as GPIO input for receiving TARGET_nREADY
+ * GPIO012 as GPIO output scope trigger/measurement
+ *
+ * Target pins
+ * GPIO057 PINCTRL function 1 as VCC_PWRGD input
+ * GPIO032 as GPIO output for driving TARGET_nREADY
+ * GPIO013 as GPIO output for scope trigger/measurement
+ *
+ * ------------------------------------------------------------------------
  * I2C00_SDA/SCL = GPIO003/004 selection
  * Install Jumpers on JP15 4-5, JP15 7-8, JP27 31-32, JP27 34-35
  * If pull-ups on the EVB are required:
@@ -163,17 +247,18 @@
 	 * index 1 = eSPI IO[1] GPIO used as eSPI ALERT. eSPI Target controller
 	 * drives this pin low when it requires attention. Note: Target can drive
 	 * eSPI ALERT pin when eSPI nCS is not asserted.
-	 * index 2 = GPIO063 unused dedicated eSPI_nALERT pin. We use as GPIO to
-	 * help measure code sequences.
+	 * index 2 = GPIO013 measure code sequences.
 	 * index 3 = GPIO030 used as GPIO output Host-to-Target VCC_PWRGD
-	 * index 4 = GPIO031 used as GPIO input Target-nReady
+	 * index 4 = GPIO012 used as GPIO input Target-nReady
+	 * index 5 = GPIO014 used as GPIO input ESPI_nALERT
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_012 GPIO_ACTIVE_HIGH>,
+		espi-gpios = <MCHP_GPIO_DECODE_222 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_071 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_013 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_030 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_031 GPIO_ACTIVE_HIGH>;
+			     <MCHP_GPIO_DECODE_012 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_014 GPIO_ACTIVE_HIGH>;
 	};
 };
