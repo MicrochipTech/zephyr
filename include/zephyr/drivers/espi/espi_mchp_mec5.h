@@ -398,6 +398,7 @@ enum mchp_emi_opcode {
 	MCHP_EMI_OPC_MR_EN,		/* re-enable a previously configured memory window */
 	MCHP_EMI_OPC_MBOX_EC_IRQ_DIS,	/* disable EMI Host-to-EC mailbox interrupt */
 	MCHP_EMI_OPC_MBOX_EC_IRQ_EN,	/* enable EMI Host-to-EC mailbox interrupt */
+	MCHP_EMI_OPC_MBOX_EC_TO_HOST_WR,
 };
 
 /* @brief MCHP EMI memory region description. Address 4-byte aligned. Sizes multiple of 4 bytes */
