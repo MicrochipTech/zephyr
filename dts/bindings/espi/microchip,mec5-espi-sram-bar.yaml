@@ -22,13 +22,6 @@ child-binding:
       description: |
         Low 32-bits of the Host address the EC SRAM can be accessed at.
 
-    region-base:
-      type: int
-      required: true
-      description: |
-        Base address of the EC SRAM being mapped. Hardware requires the
-        address to aligned with the SRAM region size.
-
     region-size:
       type: string
       required: true
@@ -57,7 +50,6 @@ child-binding:
     access:
       type: string
       required: true
-      default: "DISABLED"
       description: |
         Host access mode: disabled, read-only, write-only, and read-write.
       enum:
