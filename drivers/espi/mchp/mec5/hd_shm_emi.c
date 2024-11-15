@@ -253,6 +253,13 @@ static int mec5_shm_emi_request(const struct device *dev, enum mchp_emi_opcode o
 			ret = -EIO;
 		}
 		break;
+	case MCHP_EMI_OPC_MBOX_EC_TO_HOST_WR:
+		if (data) {
+			mec_hal_emi_mbox_wr(regs, MEC_EMI_EC_TO_HOST_MBOX, (uint8_t)*data);
+		} else {
+			ret = -EINVAL;
+		}
+		break;
 	default:
 		ret = -EINVAL;
 	}
