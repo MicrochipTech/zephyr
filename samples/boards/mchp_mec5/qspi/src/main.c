@@ -26,6 +26,8 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include <mec_rom_api.h>
 
+#define STACK_SIZE 768
+
 #define MEC540X_ROM_OTP_92_IDX 92u
 #define MEC540X_ROM_OTP_94_IDX 94u
 
@@ -35,10 +37,18 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define FLASH_SIZE_BYTES (FLASH_SIZE_MBIT / 8u)
 #define SPI0_LINES DT_PROP(DT_ALIAS(spi0), lines)
 
+#define SHD_SPI_NODE_ID		DT_NODELABEL(shd_flash)
+
+#define SPI_OP(frame_size) (SPI_OP_MODE_MASTER | SPI_WORD_SET(frame_size) | SPI_LINES_SINGLE)
+
+static struct spi_dt_spec shd_spi_fd_dt = SPI_DT_SPEC_GET(SHD_SPI_NODE_ID, SPI_OP(8), 0);
+
 static const struct gpio_dt_spec led0_gpio_spec = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
 static const struct device *spi_dev = DEVICE_DT_GET(DT_ALIAS(spi0));
 static const struct device *spi_flash_dev = DEVICE_DT_GET(DT_ALIAS(spi_flash));
+
+
 
 static const uint8_t spi_flash_page0_data[] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
@@ -110,8 +120,222 @@ uint8_t buf1[256];
 uint8_t buf2[256];
 uint8_t sector_buf[4096];
 
+#ifdef CONFIG_SPI_ASYNC
+
+static struct k_poll_signal async_sig = K_POLL_SIGNAL_INITIALIZER(async_sig);
+static struct k_poll_event async_evt =
+	K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_SIGNAL,
+				 K_POLL_MODE_NOTIFY_ONLY,
+				 &async_sig);
+static K_SEM_DEFINE(caller, 0, 1);
+K_THREAD_STACK_DEFINE(spi_async_stack, STACK_SIZE);
+static int result = 1;
+
+static void spi_async_call_cb(void *p1, void *p2, void *p3)
+{
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	struct k_poll_event *evt = p1;
+	struct k_sem *caller_sem = p2;
+	int ret;
+
+	LOG_DBG("Polling...");
+
+	while (1) {
+		ret = k_poll(evt, 1, K_MSEC(5000));
+		if (ret) {
+			LOG_ERR("TIMEOUT: Async poll for event");
+			spin_on((uint32_t)__LINE__, ret);
+		}
+
+		result = evt->signal->result;
+		k_sem_give(caller_sem);
+
+		/* Reinitializing for next call */
+		evt->signal->signaled = 0U;
+		evt->state = K_POLL_STATE_NOT_READY;
+	}
+}
+
+/* Issue read of 256 bytes at offset FLASH_TEST_PAGE_ADDR and compare
+ * to spi_flash_page0_data.
+ * Requires previous non-async tests to have successfully programmed
+ * page0 to spi_flash_page0_data.
+ */
+static int spi_async_call(struct spi_dt_spec *spec)
+{
+	int ret = 0;
+
+	memset(buf1, 0, sizeof(buf1));
+	memset(buf2, 0x55, sizeof(buf2));
+
+	/* Fast SPI flash full-duplex read. Requries 8 tri-state clocks after address */
+	buf1[0] = 0x0Bu;
+	buf1[1] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 16) & 0xffu;
+	buf1[2] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 8) & 0xffu;
+	buf1[3] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 0) & 0xffu;
+
+	const struct spi_buf tx_bufs[] = {
+		{
+			.buf = buf1,
+			.len = 4u,
+		},
+		{
+			.buf = NULL,
+			.len = 1u,
+		},
+		{
+			.buf = NULL,
+			.len = 256u,
+		},
+	};
+	const struct spi_buf rx_bufs[] = {
+		{
+			.buf = NULL,
+			.len = 4u,
+		},
+		{
+			.buf = NULL,
+			.len = 1u,
+		},
+		{
+			.buf = buf2,
+			.len = 256u,
+		},
+	};
+	const struct spi_buf_set tx = {
+		.buffers = tx_bufs,
+		.count = ARRAY_SIZE(tx_bufs)
+	};
+	const struct spi_buf_set rx = {
+		.buffers = rx_bufs,
+		.count = ARRAY_SIZE(rx_bufs)
+	};
+
+	LOG_INF("Start async call");
+
+	ret = spi_transceive_signal(spec->bus, &spec->config, &tx, &rx, &async_sig);
+	if (ret == -ENOTSUP) {
+		LOG_ERR("Async Not supported");
+		return ret;
+	}
+
+	if (ret) {
+		LOG_ERR("Async SPI transceive failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		return -1;
+	}
+
+	k_sem_take(&caller, K_FOREVER);
+
+	if (result) {
+		LOG_ERR("Async SPI transceive. Callback error (%d)", result);
+		return -1;
+	}
+
+	if (memcmp(spi_flash_page0_data, buf2, 256u)) {
+		LOG_HEXDUMP_INF(buf2, 256u, "Async read data mismatch");
+		return -1;
+	}
+
+	LOG_INF("Passed");
+
+	return 0;
+}
+
+/* Test with different sized SPI buffer exercising a different
+ * code path in the SPI driver.
+ */
+static int spi_async_call2(struct spi_dt_spec *spec)
+{
+	int ret = 0;
+
+	memset(buf1, 0, sizeof(buf1));
+	memset(buf2, 0x55, sizeof(buf2));
+
+	/* Fast SPI flash full-duplex read. Requries 8 tri-state clocks after address */
+	buf1[0] = 0x0Bu;
+	buf1[1] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 16) & 0xffu;
+	buf1[2] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 8) & 0xffu;
+	buf1[3] = (uint8_t)(FLASH_TEST_PAGE_ADDR >> 0) & 0xffu;
+
+	const struct spi_buf tx_bufs[] = {
+		{
+			.buf = buf1,
+			.len = 4u,
+		},
+		{
+			.buf = NULL,
+			.len = 1u,
+		},
+		{
+			.buf = NULL,
+			.len = 8u,
+		},
+	};
+	const struct spi_buf rx_bufs[] = {
+		{
+			.buf = NULL,
+			.len = 4u,
+		},
+		{
+			.buf = NULL,
+			.len = 1u,
+		},
+		{
+			.buf = buf2,
+			.len = 256u,
+		},
+	};
+	const struct spi_buf_set tx = {
+		.buffers = tx_bufs,
+		.count = ARRAY_SIZE(tx_bufs)
+	};
+	const struct spi_buf_set rx = {
+		.buffers = rx_bufs,
+		.count = ARRAY_SIZE(rx_bufs)
+	};
+
+	LOG_INF("Start async call 2");
+
+	ret = spi_transceive_signal(spec->bus, &spec->config, &tx, &rx, &async_sig);
+	if (ret == -ENOTSUP) {
+		LOG_ERR("Async 2 Not supported");
+		return ret;
+	}
+
+	if (ret) {
+		LOG_ERR("Async 2 SPI transceive failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		return -1;
+	}
+
+	k_sem_take(&caller, K_FOREVER);
+
+	if (result) {
+		LOG_ERR("Async 2 SPI transceive. Callback error (%d)", result);
+		return -1;
+	}
+
+	if (memcmp(spi_flash_page0_data, buf2, 256u)) {
+		LOG_HEXDUMP_INF(buf2, 256u, "Async 2 read data mismatch");
+		return -1;
+	}
+
+	LOG_INF("Passed");
+
+	return 0;
+}
+#endif /* CONFIG_SPI_ASYNC */
+
 int main(void)
 {
+#ifdef CONFIG_SPI_ASYNC
+	struct k_thread async_thread;
+	k_tid_t async_thread_id;
+#endif
 	size_t nflash_pages = 0;
 	size_t flash_min_wr_block_size = 0;
 	int ret, erased;
@@ -121,8 +345,17 @@ int main(void)
 #endif
 	uint16_t otp_index;
 	uint8_t otp_data, spi_status;
+	bool quad_enabled = false;
 
 	LOG_INF("MEC5 QSPI sample: board: %s", DT_N_P_compatible_IDX_0);
+
+#ifdef CONFIG_SPI_ASYNC
+	async_thread_id = k_thread_create(&async_thread,
+					  spi_async_stack, STACK_SIZE,
+					  spi_async_call_cb,
+					  &async_evt, &caller, NULL,
+					  K_PRIO_COOP(7), 0, K_FOREVER);
+#endif
 
 	jedec_id = mec_hal_rom_version();
 	LOG_INF("ROM version = 0x%08x", jedec_id);
@@ -151,23 +384,23 @@ int main(void)
 
 	if (!gpio_is_ready_dt(&led0_gpio_spec)) {
 		LOG_ERR("GPIO LED device is not ready! (%d)", -2);
-		spin_on(1u, -2);
+		spin_on((uint32_t)__LINE__, -2);
 	}
 
 	if (!device_is_ready(spi_dev)) {
 		LOG_ERR("SPI device is not ready! (%d)", -3);
-		spin_on(2u, -3);
+		spin_on((uint32_t)__LINE__, -3);
 	}
 
 	if (!device_is_ready(spi_flash_dev)) {
 		LOG_ERR("Flash device is not ready! (%d)", -3);
-		spin_on(3u, -3);
+		spin_on((uint32_t)__LINE__, -3);
 	}
 
 	ret = gpio_pin_configure_dt(&led0_gpio_spec, GPIO_OUTPUT_ACTIVE);
 	if (ret) {
 		LOG_ERR("LED GPIO configuration error (%d)", ret);
-		spin_on(4u, ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	gpio_pin_toggle_dt(&led0_gpio_spec);
@@ -186,7 +419,7 @@ int main(void)
 
 	if (!flash_params) {
 		LOG_ERR("Flash get parameters failed %d", ret);
-		spin_on(5u, ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	LOG_INF("Flash write block size = 0x%0x  erase value = 0x%02x",
@@ -197,7 +430,7 @@ int main(void)
 	ret = flash_read_jedec_id(spi_flash_dev, (uint8_t *)&jedec_id);
 	if (ret) {
 		LOG_ERR("Flash JEDEC ID read failed: %d", ret);
-		spin_on(6u, ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 	LOG_HEXDUMP_INF(&jedec_id, 3, "JEDEC-ID");
 
@@ -207,7 +440,7 @@ int main(void)
 	ret = flash_sfdp_read(spi_flash_dev, 0, buf1, 64u);
 	if (ret) {
 		LOG_ERR("Flash SFDP read failed: %d", ret);
-		spin_on(7u, ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	LOG_HEXDUMP_INF(&buf1, 64, "SFDP data");
@@ -228,6 +461,11 @@ int main(void)
 			goto app_exit;
 		}
 		LOG_INF("SPI Flash STATUS2 = 0x%02x", spi_status);
+
+		/* SPI flash STATUS2 bit[1] is Quad Enable */
+		if (spi_status & BIT(1)) {
+			quad_enabled = true;
+		}
 
 		ret = spi_flash_read_status(3, &spi_status);
 		if (ret) {
@@ -449,12 +687,12 @@ int main(void)
 	txb[0].buf = buf1;
 	txb[0].len = 4u;
 	txb[1].buf = NULL;
-	txb[1].len = 8; /* Tri-state clocks. len = number of clocks */
+	txb[1].len = 1; /* full-duplex one byte = 8 SPI clocks */
 
-	rxb[0].buf = NULL;
+	rxb[0].buf = NULL; /* discard RX bytes during opcode/address transmit */
 	rxb[0].len = 4u;
-	rxb[1].buf = NULL;
-	rxb[1].len = 8u;
+	rxb[1].buf = NULL; /* discard RX byte during tri-state clocks phase */
+	rxb[1].len = 1u;
 
 	txbs.buffers = &txb[0];
 	txbs.count = 2;
@@ -485,8 +723,15 @@ int main(void)
 
 	ret3 = spi_release(spi_dev, (const struct spi_config *)&spi_cfg);
 
+	LOG_INF("Dual read of 8 bytes API returns: (%d) (%d) (%d)", ret, ret2, ret3);
+
 	ret4 = memcmp(spi_flash_page0_data, buf2, 8u);
-	LOG_INF("Dual read of 8 bytes returns: (%d) (%d) (%d) (%d)", ret, ret2, ret3, ret4);
+	if (ret4) {
+		LOG_INF("Dual read of 8 bytes data mismtach (%d)", ret4);
+		LOG_HEXDUMP_INF(buf2, 8u, "Async 8-byte read data mismatch");
+		LOG_HEXDUMP_INF(spi_flash_page0_data, 8u, "Expected data");
+		spin_on((uint32_t)__LINE__, ret4);
+	}
 
 	/* Dual read 256 bytes */
 	LOG_INF("Read test page using SPI driver using 1-1-2-8 (dual) opcode");
@@ -501,12 +746,12 @@ int main(void)
 	txb[0].buf = buf1;
 	txb[0].len = 4u;
 	txb[1].buf = NULL;
-	txb[1].len = 8; /* number of tri-state clocks */
+	txb[1].len = 1;
 
 	rxb[0].buf = NULL;
 	rxb[0].len = 4u;
 	rxb[1].buf = NULL;
-	rxb[1].len = 8; /* number of tri-state clocks */
+	rxb[1].len = 1;
 
 	txbs.buffers = &txb[0];
 	txbs.count = 2;
@@ -529,15 +774,28 @@ int main(void)
 
 	ret3 = spi_release(spi_dev, (const struct spi_config *)&spi_cfg);
 
+	LOG_INF("Dual read of 256 bytes API returns: (%d) (%d) (%d)", ret, ret2, ret3);
+
 	ret4 = memcmp(spi_flash_page0_data, buf2, 256u);
-	LOG_INF("Dual read of 256 bytes returns: (%d) (%d) (%d) (%d)", ret, ret2, ret3, ret4);
+	if (ret4) {
+		LOG_INF("Dual read of 256 bytes data mismtach (%d)", ret4);
+		LOG_HEXDUMP_INF(buf2, 256u, "Async 8-byte read data mismatch");
+		LOG_HEXDUMP_INF(spi_flash_page0_data, 256u, "Expected data");
+		spin_on((uint32_t)__LINE__, ret4);
+	}
 
 #if SPI0_LINES == 4
-	LOG_INF("Test Quad read. Will fail if SPI flash's QE bit is not set!");
+	if (quad_enabled) {
+		LOG_INF("SPI flash STATUS2 has Quad enabled");
+	} else {
+		LOG_INF("Unable to detect SPI flash Quad Enable bit: Quad SPI commands may fail");
+	}
+
 	/* Quad read 256 bytes */
 	spi_cfg.operation = SPI_WORD_SET(8) | SPI_LINES_SINGLE;
 
 	memset(buf2, 0x55, sizeof(buf2));
+
 	buf1[0] = 0x6bu; /* SPI Read 1-1-4-8 */
 	buf1[1] = (spi_addr >> 16) & 0xffu;
 	buf1[2] = (spi_addr >> 8) & 0xffu;
@@ -546,12 +804,12 @@ int main(void)
 	txb[0].buf = buf1;
 	txb[0].len = 4u;
 	txb[1].buf = NULL;
-	txb[1].len = 8;
+	txb[1].len = 1; /* 8 clocks with I/O lines tri-stated */
 
 	rxb[0].buf = NULL;
 	rxb[0].len = 4u;
 	rxb[1].buf = NULL;
-	rxb[1].len = 8u; /* number of tri-state clocks */
+	rxb[1].len = 1u; /* 1 byte FD is 8 clocks with I/O's tri-stated */
 
 	txbs.buffers = &txb[0];
 	txbs.count = 2;
@@ -579,9 +837,27 @@ int main(void)
 #endif /* #if SPI0_LINES == 4 */
 #endif /* CONFIG_SPI_EXTENDED_MODES */
 
+#ifdef CONFIG_SPI_ASYNC
+	k_thread_start(async_thread_id);
+
+	ret = spi_async_call(&shd_spi_fd_dt);
+	if (ret) {
+		LOG_ERR("SPI Async failed! (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = spi_async_call2(&shd_spi_fd_dt);
+	if (ret) {
+		LOG_ERR("SPI Async call 2 failed! (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_thread_abort(async_thread_id);
+#endif
+
 app_exit:
 	LOG_INF("Application Done (%d)", ret);
-	spin_on(256, 0);
+	spin_on((uint32_t)__LINE__, 0);
 
 	return 0;
 }
