@@ -1165,11 +1165,17 @@ int espi_hc_emu_get_status(struct espi_hc_context *hc, uint16_t *espi_status)
 	crc8 = crc8_init();
 	crc8 = crc8_update(crc8, (const void *)msg, 1u);
 	crc8 = crc8_finalize(crc8);
+	msg[1] = crc8;
 
 	/* MCHP eSPI Target does not support GET_STATUS appended response packets */
 	ret = espi_hc_emu_xfr((const uint8_t *)msg, 2u, buf, rlen);
 	if (ret) {
 		return ret;
+	}
+
+	if (buf[0] == 0xffu) { /* No Response! */
+		LOG_ERR("GET_STATUS: No Response!");
+		return -EIO;
 	}
 
 	if (buf[0] & 0xc0) {
