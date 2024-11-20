@@ -1,6 +1,12 @@
 # Copyright (c) 2024 Microchip Technology
 # SPDX-License-Identifier: Apache-2.0
 
+config SAMPLE_ESPI_ENABLE_PACKET_CRC
+	bool "Configure eSPI packet CRC checking"
+	default n
+	help
+	  eSPI emulated host will enable CRC packet checking
+
 config SAMPLE_USE_ESPI_ALERT_PIN
 	bool "Configure eSPI to use separate ESPI_nALERT pin instead of in-band alert"
 	default n
