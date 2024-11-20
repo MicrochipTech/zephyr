@@ -138,7 +138,7 @@
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_124 GPIO_ACTIVE_HIGH>,
+		espi-gpios = <MCHP_GPIO_DECODE_052 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_242 0>;
 		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
 		pinctrl-names = "default";
