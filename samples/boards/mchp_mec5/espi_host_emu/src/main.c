@@ -95,6 +95,7 @@ int main(void)
 	uint32_t mem_data = 0, mem_data2 = 0;
 	uint32_t io_addr_len = 0;
 	uint32_t io_data = 0;
+	uint32_t global_config = 0;
 	uint32_t chan_config = 0;
 	uint16_t cfgid = 0;
 	uint16_t cmd_status = 0;
@@ -163,40 +164,47 @@ int main(void)
 		goto app_exit;
 	}
 
+	LOG_INF("Make sure CRC packet check is enabled");
+	global_config = hc.global_cap_cfg;
+
+#ifdef CONFIG_SAMPLE_ESPI_ENABLE_PACKET_CRC
+	global_config |= BIT(31);
+#endif
 #ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
-	/* set bit[28] = 1 indicating Host wants to use ESPI_nALERT pin instead
+/* set bit[28] = 1 indicating Host wants to use ESPI_nALERT pin instead
 	 * of in-band alert.
 	 */
-	uint32_t global_config = hc.global_cap_cfg;
-
 	global_config |= BIT(28);
-
-	cfgid = ESPI_GET_CONFIG_GLB_CAP;
-	ret = espi_hc_ctx_emu_set_config(&hc, cfgid, global_config);
-	if (ret) {
-		LOG_ERR("FAIL: SET_CONFIG %u err (%d)", cfgid, ret);
-		spin_on((uint32_t)__LINE__, ret);
-		goto app_exit;
-	}
-	espi_debug_pr_status(hc.pkt_status);
-
-	LOG_INF("Read new General Capabilities from Target");
-	cfgid = ESPI_GET_CONFIG_GLB_CAP;
-	ret = espi_hc_ctx_emu_get_config(&hc, cfgid);
-	if (ret) {
-		LOG_ERR("FAIL: GET_CONFIG %u err (%d)", cfgid, ret);
-		spin_on((uint32_t)__LINE__, ret);
-		goto app_exit;
-	}
-	espi_debug_print_cap_word(cfgid, hc.global_cap_cfg);
-	espi_debug_pr_status(hc.pkt_status);
-
-	if ((hc.global_cap_cfg & 0xf) != 0xfu) {
-		LOG_ERR("PC, VW, OOB, FC are not all supported!");
-		spin_on((uint32_t)__LINE__, ret);
-		goto app_exit;
-	}
 #endif
+
+	if (global_config != hc.global_cap_cfg) {
+		/* Send new Global Configuration to Target */
+		cfgid = ESPI_GET_CONFIG_GLB_CAP;
+		ret = espi_hc_ctx_emu_set_config(&hc, cfgid, global_config);
+		if (ret) {
+			LOG_ERR("FAIL: SET_CONFIG %u err (%d)", cfgid, ret);
+			spin_on((uint32_t)__LINE__, ret);
+			goto app_exit;
+		}
+		espi_debug_pr_status(hc.pkt_status);
+
+		LOG_INF("Read new General Capabilities from Target");
+		cfgid = ESPI_GET_CONFIG_GLB_CAP;
+		ret = espi_hc_ctx_emu_get_config(&hc, cfgid);
+		if (ret) {
+			LOG_ERR("FAIL: GET_CONFIG %u err (%d)", cfgid, ret);
+			spin_on((uint32_t)__LINE__, ret);
+			goto app_exit;
+		}
+		espi_debug_print_cap_word(cfgid, hc.global_cap_cfg);
+		espi_debug_pr_status(hc.pkt_status);
+
+		if ((hc.global_cap_cfg & 0xf) != 0xfu) {
+			LOG_ERR("PC, VW, OOB, FC are not all supported!");
+			spin_on((uint32_t)__LINE__, ret);
+			goto app_exit;
+		}
+	}
 
 	/* Read VW Capabilities from Target */
 	LOG_INF("Read VWire Capabilities from Target");
