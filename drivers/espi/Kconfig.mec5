@@ -111,4 +111,34 @@ config ESPI_PERIPHERAL_ACPI_EC_IBF_HANDSHAKE_UD1
 
 endif #ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA
 
+config ESPI_TAF_MEC5
+	bool "Microchip MEC5 ESPI TAF driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_ESPI_TAF_ENABLED
+	help
+	  Enable the Microchip XEC TAF ESPI driver for MEC15xx family.
+
+config ESPI_TAF_MEC5_RESET_ON_INIT
+       bool "Microchip MEC5 ESPI TAF reset during driver initialization"
+       default n
+       depends on ESPI_TAF_MEC5
+       help
+         Soft reset MEC5 eSPI TAF controller at driver initialization
+
+config ESPI_TAF_MEC5_EC_PORTAL_XFR_TIMEOUT_US
+       int "MEC5 eSPI TAF application initiated transfer timeout"
+       default 100000
+       depends on ESPI_TAF_MEC5
+       help
+         Timeout in microseconds for TAF flash read, erase, and
+	 program operations initiated by the EC application.
+
+config ESPI_TAF_MEC5_RPMC_SUPPORT
+       bool "Enable MEC5 eSPI TAF HW RPMC support and API"
+       default n
+       depends on ESPI_TAF_MEC5
+       help
+         Enable vendor specific driver API to send RPMC OP1 and
+	 OP2 commands to the target attached RPMC flash device.
+
 endif #ESPI_MEC5
