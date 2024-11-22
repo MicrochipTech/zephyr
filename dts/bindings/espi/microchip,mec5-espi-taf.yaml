@@ -1,0 +1,107 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 HAL based ESPI TAF controller
+
+compatible: "microchip,mec5-espi-taf"
+
+include: espi-controller.yaml
+
+properties:
+  reg:
+    description: mmio register space
+    required: true
+
+  version:
+    type: int
+    description: TAF configuration version
+
+  flash-at-cs0:
+    type: boolean
+    description: |
+      Indicates a flash device is connected to QSPI chip select 0.
+
+  flash-at-cs1:
+    type: boolean
+    description: |
+      Indicates a flash device is connected to QSPI chip select 1
+
+  poll-timeout:
+    type: int
+    description: poll flash busy timeout in 32KHz periods
+
+  poll-interval:
+    type: int
+    description: interval between flash busy poll in 20 ns units
+
+  consec-rd-timeout:
+    type: int
+    description: timeout after last read to resume supended operations in 20 ns units
+
+  sus-chk-delay:
+    type: int
+    description: hold off poll after suspend in 20 ns units
+
+  sus-rsm-interval:
+    type: int
+    description: force suspended erase or program to resume in 32KHz periods
+
+  power_down_timeout:
+    type: int
+    description: |
+      TAF will send power down command to flash device(s) after
+      inactivity.
+
+  power_down_min_interval:
+    type: int
+    description: |
+      Minimum time interval between consecutive power down
+      commands to the flash device(s).
+
+  qspi_freq_mhz:
+    type: int
+    description: |
+      Frequency in MHz for QSPI controller TAF uses. Not present or 0 defaults
+      to using the currently configured QSPI controller frequency.
+
+  qspi_cpol:
+    type: int
+    description: QSPI clock state while idle (0 = low, 1 = high).
+
+  qspi_cpha_sdi:
+    type: int
+    description: |
+      QSPI output data change clock phase. 0 means data changes on
+      the second clock edge whereas 1 means data changes on the
+      first clock edge of each clock pulse.
+
+  qspi_cpha_sdo:
+    type: int
+    description: |
+      QSPI data capture clock phase. 0 means data is captured on
+      the first clock edge whereas 1 means data is captured on the
+      second clock edge of each clock pulse.
+
+  qspi_taps_sel:
+    type: int
+    description: QSPI tuning taps
+
+  qspi_cs_timing:
+    type: int
+    description: QSPI chip select timing adjustment
+
+  qspi_descriptors:
+    type: array
+    description: |
+      QSPI requires 16 32-bit descriptors describing the
+      SPI commands TAF uses to communicate with the flash
+      device(s). Refer to Microchip eSPI data sheets for
+      determining the descriptor values. NOTE: values
+      do depend upon the specific flash devices.
+
+        DESCR[0:2] flash at CS0 continuous mode read.
+        DESCR[3:5] flash at CS0 enter continous mode.
+        DESCR[6:8] flash at CS1 continuous mode read.
+        DESCR[9:11] flash at CS1 enter continous mode.
+        DESCR[12:13] exit from continous mode for both flashes.
+        DESCR[14:15] flash read status command.
