@@ -1,0 +1,163 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 HAL based ESPI TAF flash device
+
+compatible: "microchip,mec5-espi-taf-flash"
+
+child-binding:
+  description: |
+    Child node describing a SPI flash device attached to one
+    of the two chip selects of the QSPI controller used by
+    eSPI TAF.
+
+properties:
+  version:
+    type: int
+    description: TAF flash configuration version
+
+  chip-select:
+    type: int
+    description: |
+      QSPI chip select this flash is attached to. Two chip
+      selects are support (0 and 1).
+
+  flash-size:
+    type: int
+    description: SPI flash size in bytes.
+
+  spi-freq-mhz:
+    type: int
+    description: |
+      SPI frequency in megahertz for all SPI commands except read data.
+
+  spi-read-data-freq-mhz:
+    type: int
+    description: SPI frequency to use for flash read data.
+
+  four-byte-addressing:
+    type: boolean
+    description: |
+      Flash supports 4-byte addressing mode. NOTE: application is
+      expected to enable 4-byte address mode in the flash before
+      TAF is activated.
+
+  opcode-write-enable:
+    type: int
+    description: 8-bit opcode for flash write enable.
+
+  opcode-suspend:
+    type: int
+    description: 8-bit opcode for flash suspend.
+
+  opcode-resume:
+    type: int
+    description: 8-bit opcode for flash resume from suspend.
+
+  opcode-poll1:
+    type: int
+    description: 8-bit opcode for flash read status register.
+
+  opcode-erase4k:
+    type: int
+    description: 8-bit opcode for flash 4KB sector erase.
+
+  opcode-erase32k:
+    type: int
+    description: 8-bit opcode for flash 32KB erase.
+
+  opcode-erase64k:
+    type: int
+    description: 8-bit opcode for flash 64KB erase.
+
+  opcode-page-program:
+    type: int
+    description: 8-bit opcode for flash page program.
+
+  opcode-read-data:
+    type: int
+    description: |
+      8-bit opcode for reading data in quad or dual
+      I/O mode. A continuous mode command may be
+      used here.
+
+  opcode-mode-cont:
+    type: int
+    description: |
+      Optional 8-bit command used to put or keep the flash
+      device in continuous mode.
+
+  opcode-poll2:
+    type: int
+    description: |
+      Optional 8-bit command used to confirm a flash device
+      is in suspend state.
+
+  opcode-enter-pd:
+    type: int
+    description: 8-bit command for the flash to enter power down state.
+
+  opcode-exit-pd:
+    type: int
+    description: 8-bit command for the flash to exit power down state.
+
+  poll2-mask:
+    type: int
+    description: |
+      A 16-bit mask value for ignoring bits returned by the flash in
+      response to the TAF flash poll2 command.
+
+  continuous-prefix-required:
+    type: boolean
+    description: |
+      Flash device requires transmission of a prefix byte
+      before transmitting the enter continous mode entry
+      or data read commands.
+
+  continuous-mode-entry-prefix:
+    type: int
+    description: |
+      Prefix byte transmitted before CM entry command if continous
+      prefix required is true.
+
+  continuous-mode-data-prefix:
+    type: int
+    description:
+      Prefix byte transmitted before CM data read command if continous
+      prefix required is true.
+
+  rpmc-op1:
+    type: int
+    description: |
+      RPMC OP1 command opcode for flash devices containing RPMC hardware.
+      This opcode is optional and only require if RPMC flash devices
+      are used and the application wants to use the RPMC hardware
+      feature.
+
+  rpmc-op2:
+    type: int
+    description: |
+      RPMC OP2 command opcode for flash device containing RPMC hardware.
+
+  rpmc-nc:
+    type: int
+    description: |
+      Number of RPMC hardware counters in the flash device.
+      Currently 1 to 16 counters are supported by the eSPI
+      TAF specification.
+
+  qspi_descriptors:
+    type: array
+    description: |
+      QSPI requires 16 32-bit descriptors describing the
+      SPI commands TAF uses to communicate with the flash
+      device(s). Refer to Microchip eSPI data sheets for
+      determining the descriptor values. NOTE: values
+      do depend upon the specific flash devices.
+
+        DESCR[0:2] flash at CS0 continuous mode read.
+        DESCR[3:5] flash at CS0 enter continous mode.
+        DESCR[6:8] flash at CS1 continuous mode read.
+        DESCR[9:11] flash at CS1 enter continous mode.
+        DESCR[12:13] exit from continous mode for both flashes.
+        DESCR[14:15] flash read status command.
