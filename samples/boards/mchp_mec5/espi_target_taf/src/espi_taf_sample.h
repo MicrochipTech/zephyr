@@ -1,0 +1,48 @@
+/*
+ * Copyright (c) 2024 Microchip Technology, Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef __SAMPLES_BOARDS_MEC5_ESPI_TAF_SAMPLE_H_
+#define __SAMPLES_BOARDS_MEC5_ESPI_TAF_SAMPLE_H_
+
+#include <stdint.h>
+
+/* W25Q128JV */
+
+#define FL_WB128_CS0_CM_RD0 0x81406u
+#define FL_WB128_CS0_CM_RD1 0x42402u
+#define FL_WB128_CS0_CM_RD2 0x1C7C2u
+
+#define FL_WB128_CS0_CM_ENTER0 0x24404u
+#define FL_WB128_CS0_CM_ENTER1 0x85406u
+#define FL_WB128_CS0_CM_ENTER2 0x7C602u
+
+#define FL_WB128_CS1_CM_RD0 0x87406u
+#define FL_WB128_CS1_CM_RD1 0x48402u
+#define FL_WB128_CS1_CM_RD2 0x1C7C2u
+
+#define FL_WB128_CS1_CM_ENTER0 0x2A404u
+#define FL_WB128_CS1_CM_ENTER1 0x8B406u
+#define FL_WB128_CS1_CM_ENTER2 0x7C602u
+
+#define FL_WB128_CM_EXIT0 0xAD406u
+#define FL_WB128_CM_EXIT1 0xBC602u
+
+#define FL_WB128_POLL_STS0 0x2F404u
+#define FL_WB128_POLL_STS1 0x50640u
+
+#define FL_WB128_OPA 0x057A7506u
+#define FL_WB128_OPB 0x02D85220u
+#define FL_WB128_OPC 0x35A5FFEBu
+#define FL_WB128_OPD 0x0000ABB9u
+
+#define FL_WB128_CS0_CFG_DESCR_IDS 0x5300u
+#define FL_WB128_CS1_CFG_DESCR_IDS 0xB900u
+
+#define FL_WB128_POLL2_MASK 0xFF7Fu
+
+int sample_espi_taf_config(uint32_t cfg_flags);
+
+#endif /* __SAMPLES_BOARDS_MEC5_ESPI_TAF_SAMPLE_H_ */
