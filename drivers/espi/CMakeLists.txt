@@ -18,6 +18,7 @@ zephyr_library_sources_ifdef(CONFIG_ESPI_TAF_XEC_V2	espi_saf_mchp_xec_v2.c)
 zephyr_library_sources_ifdef(CONFIG_ESPI_RTS5912	espi_realtek_rts5912.c)
 zephyr_library_sources_ifdef(CONFIG_ESPI_SAF_XEC_V2	espi_saf_mchp_xec_v2.c)
 zephyr_library_sources_ifdef(CONFIG_ESPI_MEC5		espi_mchp_mec5.c)
+zephyr_library_sources_ifdef(CONFIG_ESPI_TAF_MEC5	espi_taf_mchp_mec5.c)
 
 if(CONFIG_ESPI_MEC5)
     add_subdirectory(mchp/mec5)
