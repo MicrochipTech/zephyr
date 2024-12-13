@@ -116,6 +116,14 @@ struct espi_hc_context {
 	struct espi_resp_pkt ersp;
 };
 
+struct espi_hc_response {
+	uint16_t status;
+	uint8_t resp_byte;
+	uint16_t resp_data_len;
+	uint16_t resp_buf_len;
+	uint8_t *resp_buf;
+};
+
 int espi_hc_ctx_emu_init(struct espi_hc_context *hc);
 
 int espi_hc_ctx_emu_ctrl(struct espi_hc_context *hc, uint8_t enable);
@@ -176,5 +184,8 @@ int espi_hc_emu_pc_memwr32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 
 int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 				 uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
+
+int espi_hc_emu_send_get_pc(struct espi_hc_context *hc, bool is_np,
+			    uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
 
 #endif /* __SAMPLES_BOARDS_MEC_ASSY6941_ESPI_HC_EMU_H_ */
