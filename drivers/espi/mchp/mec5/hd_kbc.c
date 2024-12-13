@@ -354,7 +354,7 @@ static const struct mchp_espi_pc_kbc_driver_api mec5_kbc_driver_api = {
 										\
 	static const struct mec5_kbc_devcfg mec5_kbc_dcfg_##inst = {		\
 		.regs = (struct mec_kbc_regs *)DT_INST_REG_ADDR(inst),		\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),			\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),	\
 		.cfg_flags = 0,							\
 		.host_addr = MEC5_DT_KBC_HA(inst),				\
 		.host_addr_p92 = MEC5_DT_P92_HA(inst),				\
