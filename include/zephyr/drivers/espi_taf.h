@@ -141,11 +141,11 @@ typedef int (*espi_taf_api_activate)(const struct device *dev);
 typedef bool (*espi_taf_api_get_channel_status)(const struct device *dev);
 
 typedef int (*espi_taf_api_flash_read)(const struct device *dev,
-				       struct espi_taf_packet *pckt);
+				       struct espi_taf_packet *pckt, uint32_t flags);
 typedef int (*espi_taf_api_flash_write)(const struct device *dev,
-					struct espi_taf_packet *pckt);
+					struct espi_taf_packet *pckt, uint32_t flags);
 typedef int (*espi_taf_api_flash_erase)(const struct device *dev,
-					struct espi_taf_packet *pckt);
+					struct espi_taf_packet *pckt, uint32_t flags);
 typedef int (*espi_taf_api_flash_unsuccess)(const struct device *dev,
 					struct espi_taf_packet *pckt);
 /* Callbacks and traffic intercept */
@@ -308,16 +308,17 @@ static inline bool z_impl_espi_taf_get_channel_status(
  *
  * @param dev Pointer to the device structure for the driver instance.
  * @param pckt Address of the representation of read flash transaction.
+ * @param flags Vendor specific flags
  *
  * @retval -ENOTSUP eSPI flash logical channel transactions not supported.
  * @retval -EBUSY eSPI flash channel is not ready or disabled by controller.
  * @retval -EIO General input / output error, failed request to controller.
  */
 __syscall int espi_taf_flash_read(const struct device *dev,
-				  struct espi_taf_packet *pckt);
+				  struct espi_taf_packet *pckt, uint32_t flags);
 
 static inline int z_impl_espi_taf_flash_read(const struct device *dev,
-					     struct espi_taf_packet *pckt)
+					     struct espi_taf_packet *pckt, uint32_t flags)
 {
 	const struct espi_taf_driver_api *api =
 		(const struct espi_taf_driver_api *)dev->api;
@@ -326,7 +327,7 @@ static inline int z_impl_espi_taf_flash_read(const struct device *dev,
 		return -ENOTSUP;
 	}
 
-	return api->flash_read(dev, pckt);
+	return api->flash_read(dev, pckt, flags);
 }
 
 /**
@@ -337,16 +338,17 @@ static inline int z_impl_espi_taf_flash_read(const struct device *dev,
  *
  * @param dev Pointer to the device structure for the driver instance.
  * @param pckt Address of the representation of write flash transaction.
+ * @param flags Vendor specific flags
  *
  * @retval -ENOTSUP eSPI flash logical channel transactions not supported.
  * @retval -EBUSY eSPI flash channel is not ready or disabled by controller.
  * @retval -EIO General input / output error, failed request to controller.
  */
 __syscall int espi_taf_flash_write(const struct device *dev,
-				   struct espi_taf_packet *pckt);
+				   struct espi_taf_packet *pckt, uint32_t flags);
 
 static inline int z_impl_espi_taf_flash_write(const struct device *dev,
-					      struct espi_taf_packet *pckt)
+					      struct espi_taf_packet *pckt, uint32_t flags)
 {
 	const struct espi_taf_driver_api *api =
 		(const struct espi_taf_driver_api *)dev->api;
@@ -355,7 +357,7 @@ static inline int z_impl_espi_taf_flash_write(const struct device *dev,
 		return -ENOTSUP;
 	}
 
-	return api->flash_write(dev, pckt);
+	return api->flash_write(dev, pckt, flags);
 }
 
 /**
@@ -366,16 +368,17 @@ static inline int z_impl_espi_taf_flash_write(const struct device *dev,
  *
  * @param dev Pointer to the device structure for the driver instance.
  * @param pckt Address of the representation of erase flash transaction.
+ * @param flags Vendor specific flags
  *
  * @retval -ENOTSUP eSPI flash logical channel transactions not supported.
  * @retval -EBUSY eSPI flash channel is not ready or disabled by controller.
  * @retval -EIO General input / output error, failed request to controller.
  */
 __syscall int espi_taf_flash_erase(const struct device *dev,
-				   struct espi_taf_packet *pckt);
+				   struct espi_taf_packet *pckt, uint32_t flags);
 
 static inline int z_impl_espi_taf_flash_erase(const struct device *dev,
-					      struct espi_taf_packet *pckt)
+					      struct espi_taf_packet *pckt, uint32_t flags)
 {
 	const struct espi_taf_driver_api *api =
 		(const struct espi_taf_driver_api *)dev->api;
@@ -384,7 +387,7 @@ static inline int z_impl_espi_taf_flash_erase(const struct device *dev,
 		return -ENOTSUP;
 	}
 
-	return api->flash_erase(dev, pckt);
+	return api->flash_erase(dev, pckt, flags);
 }
 
 /**
