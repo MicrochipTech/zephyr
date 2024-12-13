@@ -11,10 +11,6 @@ child-binding:
   description: |
     Child node containing eSPI Host device properties.
   properties:
-    devhandle:
-      type: phandle
-      description: Handle to the Host devices hardware node
-
     ldn:
       type: int
       required: true
