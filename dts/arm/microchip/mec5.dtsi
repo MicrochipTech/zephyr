@@ -310,11 +310,6 @@
 				     <117 0>, <118 0>;
 			status = "disabled";
 		};
-		rtc0: rtc@400f5000 {
-			reg = <0x400f5000 0x100>;
-			interrupts = <119 3>, <120 3>;
-			status = "disabled";
-		};
 		bbram: bb-ram@4000a800 {
 			reg = <0x4000a800 0x80>;
 			reg-names = "memory";
@@ -563,11 +558,7 @@
 
 			status = "disabled";
 
-			/* Devices accessible to the Host via Logical Device mechanism.
-			 * Some devices are capable of having their registers mapped to
-			 * Host I/O or memory address space. Some devices are capable
-			 * of generating Serial IRQ to the Host over eSPI.
-			 */
+			/* Peripheral Channel devices */
 			mbox0: mbox@400f0000 {
 				reg = <0x400f0000 0x200>;
 				interrupts = <60 3>;
@@ -633,6 +624,11 @@
 			emi2: emi@400f4800 {
 				reg = <0x400f4800 0x400>;
 				interrupts = <44 3>;
+				status = "disabled";
+			};
+			rtc0: rtc@400f5000 {
+				reg = <0x400f5000 0x100>;
+				interrupts = <119 3>, <120 3>;
 				status = "disabled";
 			};
 			/* Capture Host writes to a 4-byte I/O range
