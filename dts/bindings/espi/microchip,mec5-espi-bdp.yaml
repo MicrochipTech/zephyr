@@ -7,8 +7,6 @@ compatible: "microchip,mec5-espi-bdp"
 
 include: [base.yaml]
 
-on-bus: espi
-
 properties:
   reg:
     description: mmio register space
@@ -17,6 +15,11 @@ properties:
   interrupts:
     required: true
     description: Interrupt number and priority for BDP interrupt.
+
+  espi-parent:
+    type: phandle
+    required: true
+    description: Handle to eSPI parent controller node
 
   fifo-threshold:
     type: string
