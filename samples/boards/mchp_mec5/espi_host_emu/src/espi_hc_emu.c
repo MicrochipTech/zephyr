@@ -5,6 +5,7 @@
  */
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -81,12 +82,18 @@ LOG_MODULE_DECLARE(app);
 #define ESPI_OPCODE_PUT_IOWR_SHORT_1	0x44u
 #define ESPI_OPCODE_PUT_IOWR_SHORT_2	0x45u
 #define ESPI_OPCODE_PUT_IOWR_SHORT_4	0x47u
+/* PUT_MEMRD32_SHORT 0100_10c1c0
+ * c1:c0 = 00b 1-bytes  0100_1000 = 0x48
+ * c1:c0 = 01b 2-bytes  0100_1001 = 0x49
+ * c1:c0 = 10b reserved
+ * c1:c0 = 11b 4-bytes  0100_1011 = 0x4B
+ */
 #define ESPI_OPCODE_PUT_MRD32_SHORT_1	0x48u
 #define ESPI_OPCODE_PUT_MRD32_SHORT_2	0x49u
-#define ESPI_OPCODE_PUT_MRD32_SHORT_4	0x4bu
-#define ESPI_OPCODE_PUT_MWR32_SHORT_1	0x4cu
-#define ESPI_OPCODE_PUT_MWR32_SHORT_2	0x4du
-#define ESPI_OPCODE_PUT_MWR32_SHORT_4	0x4fu
+#define ESPI_OPCODE_PUT_MRD32_SHORT_4	0x4Bu
+#define ESPI_OPCODE_PUT_MWR32_SHORT_1	0x4Cu
+#define ESPI_OPCODE_PUT_MWR32_SHORT_2	0x4Du
+#define ESPI_OPCODE_PUT_MWR32_SHORT_4	0x4Fu
 /* VWire */
 #define ESPI_OPCODE_PUT_VWIRE		0x04u /* put a tunneled vw packet. Fig. 41 */
 #define ESPI_OPCODE_GET_VWIRE		0x05u /* get a tunneled vw packet. Fig. 42 */
@@ -1143,23 +1150,33 @@ int espi_hc_ctx_emu_ctrl(struct espi_hc_context *hc, uint8_t enable)
  * ? status b[15:8]
  * ? CRC-8
  *
+ * NOTE: TAF mode supports response modifier 11b flash channel completion:
+ * Flash Write/Erase total response size = 7 bytes
+ * Flash Read total response size = (n + 7) bytes where n is the number of
+ * bytes in the read request up to 64.
  */
 int espi_hc_emu_get_status(struct espi_hc_context *hc, uint16_t *espi_status)
 {
+	struct espi_resp_pkt *ersp = NULL;
 	int ret = 0;
-	size_t rlen = 4;
+	size_t rlen = 4u;
+	size_t rlen_max = ESPI_HC_EMU_RESP_BUFF_LEN;
+	uint8_t *rbuf = NULL;
+	uint8_t *rbuf_end = NULL;
 	uint8_t msg[4] = {0};
 	uint16_t status = 0xffffu;
+	uint16_t dlen = 0u;
 	uint8_t crc8 = 0, crc8_pkt = 0;
-
+	uint8_t resp_code = 0, resp_mod = 0;
 	LOG_INF("eSPI HC EMU GET_STATUS");
 
 	if (!hc || !espi_status) {
 		return -EINVAL;
 	}
 
-	struct espi_resp_pkt *ersp = &hc->ersp;
-	uint8_t *buf = ersp->buf;
+	ersp = &hc->ersp;
+	rbuf = ersp->buf;
+	rbuf_end = &ersp->buf[ESPI_HC_EMU_RESP_BUFF_LEN];
 
 	msg[0] = ESPI_OPCODE_GET_STATUS;
 	crc8 = crc8_init();
@@ -1168,39 +1185,169 @@ int espi_hc_emu_get_status(struct espi_hc_context *hc, uint16_t *espi_status)
 	msg[1] = crc8;
 
 	/* MCHP eSPI Target does not support GET_STATUS appended response packets */
-	ret = espi_hc_emu_xfr((const uint8_t *)msg, 2u, buf, rlen);
+	ret = espi_hc_emu_xfr((const uint8_t *)msg, 2u, rbuf, rlen_max);
 	if (ret) {
 		return ret;
 	}
 
-	if (buf[0] == 0xffu) { /* No Response! */
+	if (rbuf[0] == 0xffu) { /* No Response! */
 		LOG_ERR("GET_STATUS: No Response!");
 		return -EIO;
 	}
 
-	if (buf[0] & 0xc0) {
-		LOG_ERR("GET_STATUS has appended response bits set! 0x%02x", buf[0]);
+	resp_code = *rbuf & 0x0fu;
+	resp_mod = (*rbuf & 0xC0u) >> 6;
+	while (resp_code == 0xFu) { /* WAIT_STATE */
+		rbuf++;
+		if (rbuf >= rbuf_end) {
+			LOG_ERR("GET_STATUS error: to many wait states");
+			return -EIO;
+		}
+		resp_code = *rbuf & 0xfu;
+		resp_mod = (*rbuf & 0xc0u) >> 6;
+	}
+
+	/* rbuf points to response byte */
+	switch (resp_code) {
+	case 0x8u: /* ACCEPT */
+		if (resp_mod != 0) {
+			LOG_INF("GET_STATUS has completion appended: respByte=0x%02x", rbuf[0]);
+			LOG_INF("CycleType 0x%02x TAG:len[11:8]=0x%02x Len[7:0]=0x%02x",
+				rbuf[1], rbuf[2], rbuf[3]);
+			dlen = rbuf[2] & 0xfu;
+			dlen = (dlen << 8) | rbuf[3];
+			rlen += (3u + dlen);
+		}
+		break;
+	case 0x1u: /* DEFER */
+		break;
+	case 0x2u: /* NON_FATAL_ERROR */
+		break;
+	case 0x3u: /* FATAL_ERROR */
+		break;
+	default:
+		LOG_ERR("Unkown Response Code 0x%0x from response byte 0x%0x", resp_code, rbuf[0]);
+		return -EIO;
+		break;
 	}
 
 	crc8 = crc8_init();
-	crc8 = crc8_update(crc8, (const void *)buf, rlen - 1u);
+	crc8 = crc8_update(crc8, (const void *)rbuf, rlen - 1u);
 	crc8 = crc8_finalize(crc8);
 
-	crc8_pkt = buf[rlen - 1u];
+	crc8_pkt = rbuf[rlen - 1u];
 	if (crc8 != crc8_pkt) {
 		LOG_ERR("GET_RESP: CRC error: expected=0x%02x calc=0x%02x", crc8, crc8_pkt);
 		return -EIO;
 	}
 
-	status = buf[rlen - 2u];
+	status = rbuf[rlen - 2u];
 	status <<= 8;
-	status |= buf[rlen - 3u];
+	status |= rbuf[rlen - 3u];
 	*espi_status = status;
 
 	LOG_INF("eSPI HC EMU GET_STATUS OK: 0x%04x", status);
 
 	return 0;
 }
+
+#if 0
+struct espi_hc_response {
+	uint16_t status;
+	uint8_t resp_byte;
+	uint16_t resp_data_len;
+	uint16_t resp_buf_len;
+	uint8_t *resp_buf;
+};
+
+int espi_hc_emu_get_status2(struct espi_hc_context *hc, struct espi_hc_response *resp)
+{
+	struct mec_qspi_regs *qr = (struct mec_qspi_regs *)DT_REG_ADDR(DT_NODELABEL(qspi0));
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *rbuf = ersp->buf;
+	uint8_t *rbuf_end = &ersp->buf[ESPI_HC_EMU_RESP_BUFF_LEN];
+	uint32_t descr = 0, status = 0;
+	int ret;
+	uint8_t msg[4] = {0};
+	uint8_t data_byte = 0;
+
+	msg[0] = ESPI_OPCODE_GET_STATUS;
+	crc8 = crc8_init();
+	crc8 = crc8_update(crc8, (const void *)msg, 1u);
+	crc8 = crc8_finalize(crc8);
+	msg[1] = crc8;
+
+	qr->INTR_CTRL = 0;
+	qr->RX_LDMA_CHAN[0].CTRL = 0;
+	qr->TX_LDMA_CHAN[0].CTRL = 0;
+	qr->MODE &= ~(BIT(MEC_QSPI_MODE_RX_LDMA_Pos) | BIT(MEC_QSPI_MODE_TX_LDMA_Pos));
+	qr->LDMA_RXEN = 0;
+	qr->LDMA_TXEN = 0;
+	qr->CTRL = ((MEC_QSPI_CTRL_IFM_FD << MEC_QSPI_CTRL_IFM_Pos)
+		| (MEC_QSPI_CTRL_TXM_EN << MEC_QSPI_CTRL_TXM_Pos)
+		| (MEC_QSPI_CTRL_QUNITS_1B << MEC_QSPI_CTRL_QUNITS_Pos)
+		| (2u << MEC_QSPI_CTRL_QNUNITS_Pos));
+	qr->EXE = BIT(MEC_QSPI_EXE_CLRF_Pos);
+	qr->STATUS = UINT32_MAX;
+	*(volatile uint8_t *)&qr->TX_FIFO = msg[0];
+	*(volatile uint8_t *)&qr->TX_FIFO = msg[1];
+	qr->EXE = BIT(MEC_QSPI_EXE_START_Pos);
+	status = qr->STATUS;
+	while (status & BIT(MEC_QSPI_STATUS_DONE_Pos)) {
+		status = qr->STATUS;
+	}
+	/* 2-clock TAR */
+	qr->CTRL = ((MEC_QSPI_CTRL_IFM_FD << MEC_QSPI_CTRL_IFM_Pos)
+		| (MEC_QSPI_CTRL_TXM_DIS << MEC_QSPI_CTRL_TXM_Pos)
+		| (MEC_QSPI_CTRL_QUNITS_BITS << MEC_QSPI_CTRL_QUNITS_Pos)
+		| (2u << MEC_QSPI_CTRL_QNUNITS_Pos));
+	qr->STATUS = UINT32_MAX;
+	qr->EXE = BIT(MEC_QSPI_EXE_START_Pos);
+	status = qr->STATUS;
+	while (status & BIT(MEC_QSPI_STATUS_DONE_Pos)) {
+		status = qr->STATUS;
+	}
+
+	while (1) {
+		/* Read 4 bytes, GET_STATUS response without response modifier */
+		qr->CTRL = ((MEC_QSPI_CTRL_IFM_FD << MEC_QSPI_CTRL_IFM_Pos)
+			| BIT(MEC_QSPI_CTRL_RXEN_Pos)
+			| (MEC_QSPI_CTRL_QUNITS_1B << MEC_QSPI_CTRL_QUNITS_Pos)
+			| (4u << MEC_QSPI_CTRL_QNUNITS_Pos));
+		qr->STATUS = UINT32_MAX;
+		qr->EXE = BIT(MEC_QSPI_EXE_START_Pos);
+		status = qr->STATUS;
+		while (status & BIT(MEC_QSPI_STATUS_DONE_Pos)) {
+			status = qr->STATUS;
+		}
+		for (size_t n = 0; n < 4u; n++) {
+			rbuf[n] = *(volatile uint8_t *)&qr->RX_FIFO;
+		}
+		if (*rbuf == 0xffu) {
+			LOG_ERR("GET_STATUS: No Response received!");
+			qr->CTRL |= BIT(MEC_QSPI_CTRL_CLOSE_Pos);
+			qr->EXE = BIT(MEC_QSPI_EXE_STOP_Pos);
+			return -EIO;
+		}
+		switch (*rbuf & 0xfu) {
+		case 0x8u: /* ACCEPT */
+			break;
+		case 0x1u: /* DEFER */
+			break;
+		case 0x2u: /* Non-fatal Error */
+			break;
+		case 0x3u: /* Fatal Error */
+			break;
+		case 0xfu: /* Wait State, continue processing data */
+			break;
+		default: /* unkown */
+			break;
+		}
+	}
+
+	return 0;
+}
+#endif
 
 /* Transmit eSPI GET_CONFIGURATION command packet and receive response packet
  * Message offset    description
@@ -2290,7 +2437,7 @@ int espi_hc_emu_put_pc_mem_wr32(struct espi_hc_context *hc, uint32_t mem_addr,
 	return 0;
 }
 
-/* Transmit eSPIO GET_PC MEM32 read packet to target and parse data from response packet
+/* Transmit eSPIO PUT_PC MEM32 read packet to target and parse data from response packet
  * MEC5 eSPI target HW limited to 64-byte peripheral channel packet size.
  * eSPI specification indicates cycle type memory read32 is non-posted.
  * We use the PUT_NP command since the cycles type is non-posted.
@@ -2614,7 +2761,7 @@ int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 				 uint8_t *data, uint8_t datasz, uint16_t *cmd_status)
 {
 	int ret = 0;
-	size_t max_rsp_len;
+	size_t max_rsp_len = 0u;
 	uint16_t status = 0u;
 	uint8_t n = 0u;
 	uint8_t tx_pktlen = 0u;
@@ -2672,6 +2819,9 @@ int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 		return ret;
 	}
 
+	LOG_HEXDUMP_INF(emsg->buf, 16, "PUT_MEMRD32_SHORT cmd packet");
+	LOG_HEXDUMP_INF(rbuf, max_rsp_len, "PUT_MEMRD32_SHORT response data");
+
 	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
 	n = 0;
 	while (n < max_rsp_len) {
@@ -2687,9 +2837,26 @@ int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 		return -EIO;
 	}
 
+	switch (*rbuf) {
+	case ESPI_RESP_CODE_RESP_DEFER:
+		LOG_INF("!!!Response DEFER!!!");
+		rsp_pktlen = 4u;
+		break;
+	case ESPI_RESP_CODE_RESP_NON_FATAL_ERR:
+		LOG_INF("!!!Response Non-FATAL Error!!!");
+		return -EIO;
+	case ESPI_RESP_CODE_RESP_FATAL_ERR:
+		LOG_INF("!!!Response FATAL Error!!!");
+		return -EIO;
+	default:
+		break;
+	}
+
 	rsp_crc8 = crc8_init();
 	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (rsp_pktlen - 1u));
 	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	LOG_HEXDUMP_INF(rbuf, rsp_pktlen - 1u, "PUT_MEMRD32_SHORT response data CRC calculated on");
 
 	if (rsp_crc8 != rbuf[rsp_pktlen - 1u]) {
 		LOG_ERR("PUT_PC_MEMRD32_SHORT: CRC error: expected=0x%02x calc=0x%02x",
@@ -2711,6 +2878,172 @@ int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 	*cmd_status = status;
 
 	LOG_INF("PUT_PC_MEMRD32_SHORT RespCode=0x%0x Status 0x%04x", rsp_code, status);
+
+	return 0;
+}
+
+/* Send GET_PC to eSPI target
+ * This should only be done when the target has deferred a PUT_PC command.
+ * Target response with STATUS where PC_AVAIL or NP_AVAIL has been set.
+ * ESPI_OPCODE_GET_PC if PC_AVAIL is set
+ * ESPI_OPCODE_GET_NP if NP_AVAIL is set
+ * 
+ * GET_PC transmit
+ * byte[0] = ESPI_OPCODE_GET_PC or ESPI_OPCODE_GET_NP
+ * byte[1] = CRC
+ * TAR - receive
+ * byte[0] = ACCEPT
+ * byte[1] = Cycle Type
+ * 	0x00 MEMRD32
+ * 	0x01 MEMWR32
+ * 	0x02 MEMRD64
+ * 	0x03 MEMWR64
+ * 	0x1_xxx0 LTR msg (msg request)
+ * 	0x1_xxx1 LTR msg with data (msg request with data payload)
+ * 		xxx = 000b local, terminated at receiver
+ * 		001b - 111b reserved
+ * 	0x06 Successful completion without data (I/O Write)
+ * 	0x0_1yy1 Successful completion with data (Mem or I/O Read)
+ * 	0x0_1yy0 Unsuccessful completion without data (Mem or I/O)
+ * 		yy = 00b middle completion of a split completion sequence
+ * 		yy = 01b first completion of a split completion sequence
+ * 		yy = 10b last completion of a split completion sequence
+ * 		yy = 11b only completion for split transaction
+ * byte[2] = TAG_Len[11:8]
+ * byte[3] = Len[7:0]
+ * byte[4] = data[0]
+ * byte[5] = data[1]
+ * byte[6] = data[2]
+ * byte[7] = data[3]
+ * byte[8] = STATUS LSB
+ * byte[9] = STATUS MSB
+ * byte[10] = CRC
+ * 
+ */
+int espi_hc_emu_send_get_pc(struct espi_hc_context *hc, bool is_np,
+			    uint8_t *data, uint8_t datasz, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0u;
+	uint16_t status = 0u;
+	uint8_t n = 0u;
+	uint8_t tx_pktlen = 0u;
+	uint8_t rsp_pktlen = 0u; /* response packet length */
+	uint8_t rsp_code = 0, rsp_crc8 = 0;
+	uint8_t opcode = 0;
+	uint8_t cycle_type = 0;
+
+	if (is_np) {
+		opcode = ESPI_OPCODE_GET_NP;
+		LOG_INF("eSPI HC emu: GET_NP");
+	} else {
+		opcode = ESPI_OPCODE_GET_PC;
+		LOG_INF("eSPI HC emu: GET_PC");
+	}
+
+	if (!hc || !data || !cmd_status) {
+		return -EINVAL;
+	}
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	max_rsp_len = 64u;
+	tx_pktlen = 2u;
+	emsg->buf[0] = opcode;
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)emsg->buf, tx_pktlen - 1u);
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	emsg->buf[tx_pktlen - 1u] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, tx_pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	LOG_HEXDUMP_INF(emsg->buf, 16, "GET_PC/NP cmd packet");
+	LOG_HEXDUMP_INF(rbuf, max_rsp_len, "GET_PC/NP response data");
+
+	/* Skip over WAIT_STATEs as they are not part of the response CRC calculation. */
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_MEMRD32_SHORT error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	switch (*rbuf) {
+	case ESPI_RESP_CODE_RESP_NON_FATAL_ERR:
+		LOG_INF("!!!Response Non-FATAL Error!!!");
+		return -EIO;
+	case ESPI_RESP_CODE_RESP_FATAL_ERR:
+		LOG_INF("!!!Response FATAL Error!!!");
+		return -EIO;
+	default:
+		break;
+	}
+
+	cycle_type = rbuf[1];
+	LOG_INF("Cycle type = 0x%02x", cycle_type);
+	if (cycle_type == 0) { /* MEMRD32 */
+		LOG_INF("Cycle type: MEMRD32");
+	} else if (cycle_type == 1u) { /* MEMWR32 */
+		LOG_INF("Cycle type: MEMWR32");
+	} else if (cycle_type == 2u) { /* MEMRD64 */
+		LOG_INF("Cycle type: MEMRD64");
+	} else if (cycle_type == 3u) { /* MEMWR64 */
+		LOG_INF("Cycle type: MEMWR64");
+	} else if (cycle_type == 6u) { /* I/O Write successful completion with no data */
+		LOG_INF("Cycle type: I/O Write completion");
+	} else if ((cycle_type & 0x09u) == 0x08u) { /* 0x0_1yy0 Unsuccessful Mem or I/O */
+		LOG_INF("Cycle type: Unsuccessful Mem or I/O");
+	} else if ((cycle_type & 0x09u) == 0x09u) { /* 0x0_1yy1 Successful completion with data (Mem or I/O Read) */
+		LOG_INF("Cycle type: Successful Mem or I/O");
+	} else {
+		/* LTR message */
+		LOG_INF("Cycle type: Message");
+	}
+
+	rsp_pktlen = 7u; /* TODO */
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (rsp_pktlen - 1u));
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	LOG_HEXDUMP_INF(rbuf, rsp_pktlen - 1u, "GET_PC/NP response data CRC calculated on");
+
+	if (rsp_crc8 != rbuf[rsp_pktlen - 1u]) {
+		LOG_ERR("GET_PC/NP: CRC error: expected=0x%02x calc=0x%02x",
+			rsp_crc8, rbuf[rsp_pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+#if 0
+	status = ((uint16_t)rbuf[rsp_pktlen - 2u] << 8) | rbuf[rsp_pktlen - 3u];
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_OK) {
+		/* we have data */
+		memcpy(data, &rbuf[1], datasz);
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("eSPI HC EMU GET_PC MEM32 Deferred by Target");
+	}
+
+	*cmd_status = status;
+#endif
+	LOG_INF("GET_PC/NP RespCode=0x%0x Status 0x%04x", rsp_code, status);
 
 	return 0;
 }
