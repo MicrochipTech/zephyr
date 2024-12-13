@@ -118,27 +118,37 @@ config ESPI_TAF_MEC5
 	help
 	  Enable the Microchip XEC TAF ESPI driver for MEC15xx family.
 
+if ESPI_TAF_MEC5
+
 config ESPI_TAF_MEC5_RESET_ON_INIT
-       bool "Microchip MEC5 ESPI TAF reset during driver initialization"
-       default n
-       depends on ESPI_TAF_MEC5
-       help
-         Soft reset MEC5 eSPI TAF controller at driver initialization
+	bool "Microchip MEC5 ESPI TAF reset during driver initialization"
+	default n
+	help
+	  Soft reset MEC5 eSPI TAF controller at driver initialization
 
 config ESPI_TAF_MEC5_EC_PORTAL_XFR_TIMEOUT_US
-       int "MEC5 eSPI TAF application initiated transfer timeout"
-       default 100000
-       depends on ESPI_TAF_MEC5
-       help
-         Timeout in microseconds for TAF flash read, erase, and
+	int "MEC5 eSPI TAF application initiated transfer timeout"
+	default 100000
+	help
+	 Timeout in microseconds for TAF flash read, erase, and
 	 program operations initiated by the EC application.
 
 config ESPI_TAF_MEC5_RPMC_SUPPORT
-       bool "Enable MEC5 eSPI TAF HW RPMC support and API"
-       default n
-       depends on ESPI_TAF_MEC5
-       help
-         Enable vendor specific driver API to send RPMC OP1 and
-	 OP2 commands to the target attached RPMC flash device.
+	bool "Enable MEC5 eSPI TAF HW RPMC support and API"
+	default n
+	depends on SOC_SERIES_MEC174X || SOC_SERIES_MEC175X
+	help
+	  Enable vendor specific driver API to send RPMC OP1 and
+	  OP2 commands to the target attached RPMC flash device.
 
+config ESPI_TAF_MEC5_ASYNC
+	bool "Enable asynchronous operation for TAF read, write, and erase"
+	default n
+	help
+	 If enabled TAF driver will look at ASYNC flag passed to read, write,
+	 and erase APIs. If ASYNC flag is set these APIs will return after
+	 starting operation. Application should register a callback to receive
+	 notification the operation has finished.
+
+endif #ESPI_TAF_MEC5
 endif #ESPI_MEC5
