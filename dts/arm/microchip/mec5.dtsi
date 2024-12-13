@@ -541,9 +541,6 @@
 			/* reg tuple contains one 32-bit address cell and one
 			 * 32-bit length(size) cell.
 			 */
-			/* Not needed, no child nodes #address-cells = <1>; */
-			/* Not required, no child nodes #size-cells = <1>; */
-
 			reg = < 0x400f3400 0x400
 				0x400f3800 0x400
 				0x400f9c00 0x400>;
