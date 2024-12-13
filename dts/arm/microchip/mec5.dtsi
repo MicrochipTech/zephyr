@@ -540,6 +540,7 @@
 			 */
 			#address-cells = <1>;
 			#size-cells = <1>;
+
 			reg = < 0x400f3400 0x400
 				0x400f3800 0x400
 				0x400f9c00 0x400>;
@@ -552,9 +553,8 @@
 					  "vwct_0_6", "vwct_7_10";
 
 			config-io-addr = <0x2e>;
+			ec-sirq = <0xff>;
 
-			sirqs = <0xff>;
-			sirq-names = "ec_irq";
 			/* These two properties specify bits[47:32] of the Host address
 			 * for Host logical device memory BARs and the SRAM BARs.
 			 */
