@@ -7,8 +7,6 @@ compatible: "microchip,mec5-espi-kbc"
 
 include: [base.yaml]
 
-on-bus: espi
-
 properties:
   reg:
     description: mmio register space
@@ -21,6 +19,11 @@ properties:
   interrupt-names:
     required: true
     description: Names for Keyboard controller keyboard and mouse interrupts
+
+  espi-parent:
+    type: phandle
+    required: true
+    description: Handle to eSPI parent controller node
 
   host-infos:
     type: phandles
