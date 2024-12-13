@@ -28,23 +28,38 @@ properties:
 
   poll-timeout:
     type: int
-    description: poll flash busy timeout in 32KHz periods
+    description: |
+      Total time for polling flash busy timeout in micro-seconds.
+      Hardware counter is 32KHz based therefore this value should be a multiple
+      of 30.5 us. Recommended value is 5000000 us (5 seconds).
 
   poll-interval:
     type: int
-    description: interval between flash busy poll in 20 ns units
+    description: |
+      Interval between flash busy poll in nano-seconds. Hardware counter is 48MHz
+      therefore this value should be a multiple of 21 ns. Recommended value is 0
+      meaning issue Poll-1 SPI commands as quickly as possible.
 
   consec-rd-timeout:
     type: int
-    description: timeout after last read to resume supended operations in 20 ns units
+    description: |
+      Timeout in nano-seconds after the last read request. When this timeout expires
+      any suspended erase or program operation will be resumed. Hardware counter is
+      48MHz (20.8 ns). If this value is set it is suggested the value be <= 20,000 ns.
 
   sus-chk-delay:
     type: int
-    description: hold off poll after suspend in 20 ns units
+    description: |
+      If the flash has been suspended delay this amount in nano-seconds before issueing
+      a Poll-1 status command. Hardware delay is based on the 48MHz clock therefore this
+      value should be a multiple of 21 ns. Recommended value is 20,000 ns.
 
   sus-rsm-interval:
     type: int
-    description: force suspended erase or program to resume in 32KHz periods
+    description: |
+      Timeout in microseconds to suspend or resume an in-progress erase or program operation.
+      Hardware uses a 32KHz timer therefore the value should be a multiple of 32 us. The default
+      value is 32 us.
 
   power_down_timeout:
     type: int
