@@ -146,7 +146,7 @@ static int mec5_host_uart_init(const struct device *dev)
 											\
 	static const struct mec5_host_uart_devcfg mec5_host_uart_dcfg_##inst = {	\
 		.regs = (struct mec_uart_regs *)MEC5_DT_UART_HW_REGS(inst),		\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),				\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),		\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),				\
 		.host_io_addr = MEC5_DT_UART_HA(inst),					\
 		.ldn = MEC5_DT_UART_LDN(inst),						\
