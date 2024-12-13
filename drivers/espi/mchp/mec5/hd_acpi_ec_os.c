@@ -335,7 +335,7 @@ static int mec5_aec_os_init(const struct device *dev)
 										\
 	static const struct mec5_aec_os_devcfg mec5_aec_os_dcfg_##inst = {	\
 		.regs = (struct mec_acpi_ec_regs *)DT_INST_REG_ADDR(inst),	\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),			\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),	\
 		.host_addr = MEC5_DT_AEC_OS_HA(inst),				\
 		.host_mem_space = MEC5_DT_AEC_OS_HMS(inst),			\
 		.ldn = MEC5_DT_AEC_OS_LDN(inst),				\
