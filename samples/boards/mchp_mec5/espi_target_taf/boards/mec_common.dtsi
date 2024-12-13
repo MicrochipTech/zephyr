@@ -74,9 +74,9 @@
  * Synchronization signals:
  * H2T_VCC_PWRGD -> VCC_PWRGD_ALT GPIO242 Func 3
  *
- * T2H_nREADY <- GPIO031(VTR1) output active low. Init to high
- *		J41-7
- *		JP75 21-22 100K pull-up. Do not install
+ * T2H_nREADY <- GPIO231(VTR2) output active low. Init to high
+ *		J8-3
+ *		JP76 33-34 7.5K pull-up. Do not install
  *		Pull-up enabled on eSPI Host Emulation board
  *
  * GPIO175/CMP_VOUT1/PWM8_ALT on schematic, LED4 on silkscreen.
@@ -130,6 +130,17 @@
 		};
 	};
 
+	/* UART0 will be controlled by the Host */
+	uart0_host: uart0_host {
+		compatible = "microchip,mec5-espi-host-uart";
+		espi-parent = <&espi0>;
+		hwdev = <&uart0>;
+		host-infos = <&espi_uart0>;
+		pinctrl-0 = < &uart0_tx_gpio104 &uart0_rx_gpio105 >;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+
 	/* zephyr,user is a special case node for application & test use
 	 * This node does not require a YAML binding file.
 	 * espi-gpio pins
@@ -138,7 +149,7 @@
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_031 GPIO_ACTIVE_HIGH>,
+		espi-gpios = <MCHP_GPIO_DECODE_231 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_242 0>;
 		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
 		pinctrl-names = "default";
@@ -169,21 +180,8 @@
 		      &espi_io0_gpio070 &espi_io1_gpio071
 		      &espi_io2_gpio072 &espi_io3_gpio073 >;
 	pinctrl-names = "default";
-	host-memmap-addr-high = <0x10>; /* bits[47:32] of Host address for memory mapped LDNs */
-	sram-bar-addr-high = <0x20>; /* bits[47:32] of Host address for SRAM BARs */
-
-	/* We create a node here for the UART we will expose to the Host
-	 * Doing this makes sure this node is a child of espi0 required
-	 * by espi0's driver.
-	 */
-	uart0_host: uart0_host {
-		compatible = "microchip,mec5-espi-host-uart";
-		pinctrl-0 = < &uart0_tx_gpio104 &uart0_rx_gpio105 >;
-		pinctrl-names = "default";
-		hwdev = <&uart0>;
-		host-infos = <&espi_uart0>;
-		status = "okay";
-	};
+	host-memmap-addr-high = <0>; /* bits[47:32] of Host address for memory mapped LDNs */
+	sram-bar-addr-high = <0>; /* bits[47:32] of Host address for SRAM BARs */
 };
 
 /* Map UART0 to Host I/O address space */
@@ -200,7 +198,7 @@
 &espi_sram_bar0 {
 	host-address-lsw = <0x20000000>;
 	region-size = "256B";
-	access = "READ_ONLY";
+	access = "READ_WRITE";
 	status = "okay";
 };
 
@@ -210,13 +208,14 @@
 &espi_sram_bar1 {
 	host-address-lsw = <0x20001000>;
 	region-size = "256B";
-	access = "WRITE_ONLY";
+	access = "READ_WRITE";
 	status = "okay";
 };
 
 /* eSPI Host OS ACPI_EC device */
 &acpi_ec0 {
 	compatible = "microchip,mec5-espi-acpi-ec-os";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_acpi_ec0>;
 	status = "okay";
 };
@@ -231,6 +230,7 @@
 /* eSPI Host command ACPI_EC device */
 &acpi_ec1 {
 	compatible = "microchip,mec5-espi-acpi-ec-hcmd";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_acpi_ec1>;
 	status = "okay";
 };
@@ -245,6 +245,7 @@
 /* eSPI Host generic ACPI_EC devices */
 &acpi_ec2 {
 	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_acpi_ec2>;
 	status = "okay";
 };
@@ -258,6 +259,7 @@
 
 &acpi_ec3 {
 	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_acpi_ec3>;
 	status = "okay";
 };
@@ -271,12 +273,14 @@
 
 &acpi_ec4 {
 	compatible = "microchip,mec5-espi-acpi-ec-generic";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_acpi_ec4>;
-	status = "okay";
+	status = "disabled";
 };
 
 &espi_acpi_ec4 {
-	host-address = <0x340>;
+	host-address = <0x10002000>;
+	host-mem-space;
 	sirqs = <0xff>;
 	sirq-names = "ec_obf";
 	status = "okay";
@@ -285,6 +289,7 @@
 /* Use eSPI Host KBC driver and map KBC0 and KB Port92h to Host I/O space */
 &kbc0 {
 	compatible = "microchip,mec5-espi-kbc";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_kbc0 &espi_kb_port92>;
 	status = "okay";
 };
@@ -304,6 +309,7 @@
 /* Use eSPI Mailbox driver and map mailbox to Host I/O space */
 &mbox0 {
 	compatible="microchip,mec5-espi-mailbox";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_mbox0>;
 	status = "okay";
 };
@@ -317,6 +323,7 @@
 /* Map EMI0 to Host memory address space. */
 &emi0 {
 	compatible = "microchip,mec5-espi-shm-emi";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_emi0>;
 	status = "okay";
 };
@@ -329,6 +336,7 @@
 /* Map EMI1 to Host memory address space */
 &emi1 {
 	compatible = "microchip,mec5-espi-shm-emi";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_emi1>;
 	status = "okay";
 };
@@ -343,6 +351,7 @@
  */
 &p80bd0 {
 	compatible = "microchip,mec5-espi-bdp";
+	espi-parent = <&espi0>;
 	host-infos = <&espi_bdp0 &espi_bdpa0>;
 	status = "okay";
 };
