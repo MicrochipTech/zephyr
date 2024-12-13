@@ -451,8 +451,8 @@ static int mec5_aec_hcmd_init(const struct device *dev)
 	static struct mec5_aec_hcmd_data mec5_aec_hcmd_data_##inst;		\
 										\
 	static const struct mec5_aec_hcmd_devcfg mec5_aec_hcmd_dcfg_##inst = {	\
-		.regs = (struct mec_acpi_ec_regs *)DT_INST_REG_ADDR(inst),		\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),			\
+		.regs = (struct mec_acpi_ec_regs *)DT_INST_REG_ADDR(inst),	\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),	\
 		.host_addr = MEC5_DT_AEC_HCMD_HA(inst),				\
 		.host_mem_space = MEC5_DT_AEC_HCMD_HMS(inst),			\
 		.ldn = MEC5_DT_AEC_HCMD_LDN(inst),				\
