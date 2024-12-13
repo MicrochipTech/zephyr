@@ -56,36 +56,17 @@ properties:
       - "IO14"
       - "IO124"
 
-  vwires:
-    type: phandle-array
-    description: |
-      Optional property to override hardware default configuration of MEC5
-      Virtual Wire registers or configure unused VW registers. Each array
-      entry is a phandle to a VW node from mchp-mec5-espi-vw-routing and an
-      integer containing flags indicating the VW node properites for
-      modification.
-
-  vwire-names:
-    type: string-array
-    description: name of each virtual wire
-
-  sirqs:
-    type: array
-    description: |
-      Host Serial IRQ numbers assigned to this device. A value of 255
-      disables SIRQ genaration.
-
-  sirq-names:
-    type: string-array
-    description: |
-      Names for the provided Serial IRQs. The number of names needs to match the
-      number of sirqs.
-
   config-io-addr:
     type: int
     required: true
     description: |
       Host I/O base address for the eSPI legacy I/O configuration port.
+
+  ec-sirq:
+    type: int
+    description:
+      Serial IRQ slot number for eSPI driver generated software SIRQ.
+      Default is 255 (disabled).
 
   host-memmap-addr-high:
     type: int
@@ -100,27 +81,3 @@ properties:
     description: |
       Contains Host address bits [47:32] where both SRAM BAR's are mapped.
 
-  "#vwire-cells":
-    type: int
-    const: 1
-
-  "#ldn-cells":
-    type: int
-    const: 4
-
-  "#sirq-cells":
-    type: int
-    const: 1
-
-  "#sram-bar-cells":
-    type: int
-    const: 4
-
-vwire-cells:
-  - flags
-
-ldn-cells:
-  - ldn
-  - hostaddr
-  - haddrmsk
-  - flags
