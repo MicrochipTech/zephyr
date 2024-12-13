@@ -280,7 +280,7 @@ static int mec5_bdp_init(const struct device *dev)
 										\
 	static const struct mec5_bdp_devcfg mec5_bdp_dcfg_##inst = {		\
 		.regs = (struct mec_bdp_regs *)DT_INST_REG_ADDR(inst),		\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),			\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),	\
 		.host_io_base = MEC5_DT_BDP_HA(inst),				\
 		.host_io_alias = MEC5_DT_BDPA_HA(inst),				\
 		.alias_byte_lane = MEC5_DT_BDPA_ABL(inst),			\
