@@ -243,14 +243,14 @@
 	/* zephyr,user is a special case node for application & test use
 	 * This node does not require a YAML binding file.
 	 * espi-gpio pins
-	 * index 0 = pin connected to ESPI_nRESET allowing app to control reset.
-	 * index 1 = eSPI IO[1] GPIO used as eSPI ALERT. eSPI Target controller
+	 * index 0 = pin connected to ESPI_nRESET (VTR3) allowing app to control reset.
+	 * index 1 = eSPI IO[1] GPIO (VTR3( used as eSPI ALERT. eSPI Target controller
 	 * drives this pin low when it requires attention. Note: Target can drive
 	 * eSPI ALERT pin when eSPI nCS is not asserted.
-	 * index 2 = GPIO013 measure code sequences.
-	 * index 3 = GPIO030 used as GPIO output Host-to-Target VCC_PWRGD
-	 * index 4 = GPIO012 used as GPIO input Target-nReady
-	 * index 5 = GPIO014 used as GPIO input ESPI_nALERT
+	 * index 2 = GPIO013 (VTR2) measure code sequences.
+	 * index 3 = GPIO030 (VTR1) used as GPIO output Host-to-Target VCC_PWRGD
+	 * index 4 = GPIO012 (VTR2) used as GPIO input Target-nReady
+	 * index 5 = GPIO014 (VTR2) used as GPIO input ESPI_nALERT
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
