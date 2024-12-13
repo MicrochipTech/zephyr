@@ -7,9 +7,12 @@ compatible: "microchip,mec5-espi-host-uart"
 
 include: [base.yaml, pinctrl-device.yaml]
 
-on-bus: espi
-
 properties:
+  espi-parent:
+    type: phandle
+    required: true
+    description: Handle to eSPI parent controller node
+
   pinctrl-0:
     required: true
 
