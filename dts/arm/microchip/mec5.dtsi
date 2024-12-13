@@ -197,11 +197,13 @@
 				#gpio-cells=<2>;
 			};
 		};
+		/* Capable of being mapped to Host via eSPI Peripheral Channel */
 		uart0: uart@400f2400 {
 			reg = <0x400f2400 0x400>;
 			interrupts = <40 1>;
 			status = "disabled";
 		};
+		/* Capable of being mapped to Host via eSPI Peripheral Channel */
 		uart1: uart@400f2800 {
 			reg = <0x400f2800 0x400>;
 			interrupts = <41 1>;
@@ -308,6 +310,12 @@
 			reg = <0x4000ac80 0x80>;
 			interrupts = <114 0>, <115 0>, <116 0>,
 				     <117 0>, <118 0>;
+			status = "disabled";
+		};
+		/* Capable of being mapped to Host via eSPI Peripheral Channel */
+		rtc0: rtc@400f5000 {
+			reg = <0x400f5000 0x100>;
+			interrupts = <119 3>, <120 3>;
 			status = "disabled";
 		};
 		bbram: bb-ram@4000a800 {
@@ -533,8 +541,8 @@
 			/* reg tuple contains one 32-bit address cell and one
 			 * 32-bit length(size) cell.
 			 */
-			#address-cells = <1>;
-			#size-cells = <1>;
+			/* Not needed, no child nodes #address-cells = <1>; */
+			/* Not required, no child nodes #size-cells = <1>; */
 
 			reg = < 0x400f3400 0x400
 				0x400f3800 0x400
@@ -557,89 +565,6 @@
 			sram-bar-addr-high = <0>;
 
 			status = "disabled";
-
-			/* Peripheral Channel devices */
-			mbox0: mbox@400f0000 {
-				reg = <0x400f0000 0x200>;
-				interrupts = <60 3>;
-				status = "disabled";
-			};
-			kbc0: kbc@400f0400 {
-				reg = <0x400f0400 0x400>, <0x400f2000 0x400>;
-				interrupts = <59 3>, <58 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_ec0: acpi_ec@400f0800 {
-				reg = <0x400f0800 0x400>;
-				interrupts = <45 3>, <46 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_ec1: acpi_ec@400f0c00 {
-				reg = <0x400f0c00 0x400>;
-				interrupts = <47 3>, <48 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_ec2: acpi_ec@400f1000 {
-				reg = <0x400f1000 0x400>;
-				interrupts = <49 3>, <50 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_ec3: acpi_ec@400f1400 {
-				reg = <0x400f1400 0x400>;
-				interrupts = <51 3>, <52 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_ec4: acpi_ec@400f1800 {
-				reg = <0x400f1800 0x400>;
-				interrupts = <53 3>, <54 3>;
-				interrupt-names = "ibf", "obe";
-				status = "disabled";
-			};
-			acpi_pm1: acpi_pm1@400f1c00 {
-				reg = <0x400f1c00 0x400>;
-				interrupts = <55 3>, <56 3>, <57 3>;
-				interrupt-names = "ctl", "en", "sts";
-				status = "disabled";
-			};
-			glue: glue_logic@400f3c00 {
-				reg = <0x400f3c00 0x200>;
-				interrupts = <172 1>;
-				status = "disabled";
-			};
-			emi0: emi@400f4000 {
-				reg = <0x400f4000 0x400>;
-				interrupts = <42 3>;
-				status = "disabled";
-			};
-			emi1: emi@400f4400 {
-				reg = <0x400f4400 0x400>;
-				interrupts = <43 3>;
-				status = "disabled";
-			};
-			emi2: emi@400f4800 {
-				reg = <0x400f4800 0x400>;
-				interrupts = <44 3>;
-				status = "disabled";
-			};
-			rtc0: rtc@400f5000 {
-				reg = <0x400f5000 0x100>;
-				interrupts = <119 3>, <120 3>;
-				status = "disabled";
-			};
-			/* Capture Host writes to a 4-byte I/O range
-			 * plus a one byte alias I/O location which maps
-			 * to one of the 4-byte locations.
-			 */
-			p80bd0: p80bd@400f8000 {
-				reg = <0x400f8000 0x400>;
-				interrupts = <62 0>;
-				status = "disabled";
-			};
 		};
 		/* eSPI target attached flash controller.
 		 * When this device is fully activated via its driver, it takes
@@ -651,6 +576,83 @@
 			reg-names = "tafctrl", "tafcomm";
 			interrupts = <166 3>, <167 3>;
 			interrupt-names = "done", "err";
+			status = "disabled";
+		};
+		/* Peripheral Channel devices */
+		mbox0: mbox@400f0000 {
+			reg = <0x400f0000 0x200>;
+			interrupts = <60 3>;
+			status = "disabled";
+		};
+		kbc0: kbc@400f0400 {
+			reg = <0x400f0400 0x400>, <0x400f2000 0x400>;
+			interrupts = <59 3>, <58 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_ec0: acpi_ec@400f0800 {
+			reg = <0x400f0800 0x400>;
+			interrupts = <45 3>, <46 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_ec1: acpi_ec@400f0c00 {
+			reg = <0x400f0c00 0x400>;
+			interrupts = <47 3>, <48 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_ec2: acpi_ec@400f1000 {
+			reg = <0x400f1000 0x400>;
+			interrupts = <49 3>, <50 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_ec3: acpi_ec@400f1400 {
+			reg = <0x400f1400 0x400>;
+			interrupts = <51 3>, <52 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_ec4: acpi_ec@400f1800 {
+			reg = <0x400f1800 0x400>;
+			interrupts = <53 3>, <54 3>;
+			interrupt-names = "ibf", "obe";
+			status = "disabled";
+		};
+		acpi_pm1: acpi_pm1@400f1c00 {
+			reg = <0x400f1c00 0x400>;
+			interrupts = <55 3>, <56 3>, <57 3>;
+			interrupt-names = "ctl", "en", "sts";
+			status = "disabled";
+		};
+		glue: glue_logic@400f3c00 {
+			reg = <0x400f3c00 0x200>;
+			interrupts = <172 1>;
+			status = "disabled";
+		};
+		emi0: emi@400f4000 {
+			reg = <0x400f4000 0x400>;
+			interrupts = <42 3>;
+			status = "disabled";
+		};
+		emi1: emi@400f4400 {
+			reg = <0x400f4400 0x400>;
+			interrupts = <43 3>;
+			status = "disabled";
+		};
+		emi2: emi@400f4800 {
+			reg = <0x400f4800 0x400>;
+			interrupts = <44 3>;
+			status = "disabled";
+		};
+		/* Capture Host writes to a 4-byte I/O range
+		 * plus a one byte alias I/O location which maps
+		 * to one of the 4-byte locations.
+		 */
+		p80bd0: p80bd@400f8000 {
+			reg = <0x400f8000 0x400>;
+			interrupts = <62 0>;
 			status = "disabled";
 		};
 	};
