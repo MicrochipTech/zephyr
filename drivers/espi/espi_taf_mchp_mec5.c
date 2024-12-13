@@ -36,32 +36,39 @@ LOG_MODULE_REGISTER(espi_taf_mec5, CONFIG_ESPI_LOG_LEVEL);
 /* eSPI TAF specification maximum allowed data transfer size */
 #define MEC5_ESPI_TAF_XFRBUF_SIZE  64u
 
+#define MEC5_ESPI_TAF_XFR_FLAG_ASYNC BIT(0)
+
 #define MEC5_ESPI_TAF_FLASH_CFG_CS0 BIT(0)
 #define MEC5_ESPI_TAF_FLASH_CFG_CS1 BIT(1)
 #define MEC5_ESPI_TAF_FLASH_CFG_RPMC_CS0 BIT(4)
 #define MEC5_ESPI_TAF_FLASH_CFG_RPMC_CS1 BIT(5)
 
+#define MEC5_ESPI_TAF_RPMC_OP2_BUF_LEN 64
+
 struct mec5_espi_taf_devcfg {
 	struct mec_espi_taf_regs *regs;
 	void (*irq_cfg_func)(const struct device *);
 	uint32_t poll_timeout;
+	uint32_t poll_interval;
 	uint32_t consec_rd_timeout;
 	uint32_t sus_chk_delay;
-	uint16_t sus_rsm_interval;
-	uint16_t poll_interval;
+	uint32_t sus_rsm_interval;
 };
 
 struct mec5_espi_taf_data {
-	/* hardware requires transfer buffer alignment >= 4-bytes */
-	uint8_t xfrbuf[MEC5_ESPI_TAF_XFRBUF_SIZE];
+	uint8_t *xfrbuf_ptr;
 	uint32_t hwmon_status;
 	uint32_t ecp_status;
 	struct k_sem ecp_lock;
 	struct k_sem ecp_done;
 	const struct espi_taf_cfg *taf_cfg;
 	sys_slist_t callbacks;
-	uint32_t flash_cfg;
+	uint16_t xflags;
+	uint16_t flash_cfg;
 	struct mec_taf_ecp_cmd_pkt cmd_pkt;
+#ifdef CONFIG_ESPI_TAF_MEC5_RPMC_SUPPORT
+	uint8_t *rpmc_op_buf_ptr;
+#endif
 #ifdef MEC5_ESPI_TAF_DEBUG_ISR
 	uint32_t isr_done_count;
 	uint32_t isr_err_count;
@@ -114,6 +121,7 @@ static int mec5_espi_taf_config(const struct device *dev, const struct espi_taf_
 	}
 
 	data->taf_cfg = taf_cfg;
+	data->xflags = 0u;
 	data->flash_cfg = 0u;
 
 	for (uint8_t n = 0; n < taf_cfg->nflash_devices; n++) {
@@ -140,6 +148,10 @@ static int mec5_espi_taf_config(const struct device *dev, const struct espi_taf_
 		return -EIO;
 	}
 #endif
+
+	mec_hal_espi_taf_poll_timing(tregs, devcfg->poll_timeout, devcfg->poll_interval);
+	mec_hal_espi_taf_read_timeout(tregs, devcfg->consec_rd_timeout);
+	mec_hal_espi_taf_sus_timeout(tregs, devcfg->sus_rsm_interval, devcfg->sus_chk_delay);
 
 	record_taf_chip_selects(dev, taf_cfg);
 
@@ -191,8 +203,9 @@ static int mec5_espi_taf_activate(const struct device *dev)
 
 	const struct espi_taf_cfg *tcfg = data->taf_cfg;
 	const struct espi_taf_hw_cfg *hwcfg = &tcfg->hwcfg;
+	const struct espi_taf_flash_cfg *fcfgs = tcfg->flash_cfgs;
 
-	ret = mec_hal_espi_taf_qspi_init(tregs, hwcfg);
+	ret = mec_hal_espi_taf_qspi_init(tregs, hwcfg, fcfgs, tcfg->nflash_devices);
 	if (ret != MEC_RET_OK) {
 		LOG_ERR("MEC5 TAF QSPI init error");
 		return -EIO;
@@ -201,9 +214,11 @@ static int mec5_espi_taf_activate(const struct device *dev)
 	mec_hal_espi_taf_ecp_istatus_clr(tregs, MEC_TAF_ECP_STS_ALL);
 	mec_hal_espi_taf_mon_istatus_clr(tregs, MEC_TAF_HMON_STS_ALL);
 	mec_hal_espi_taf_girq_status_clr(iflags);
+	mec_hal_espi_taf_mon_ictrl(tregs, MEC_TAF_HMON_STS_ALL, 1u);
 
 	mec_hal_espi_taf_activate(1u);
-	mec_hal_espi_taf_mon_ictrl(tregs, MEC_TAF_HMON_STS_ALL, 1u);
+	mec_hal_espi_taf_girq_ctrl(1u, (BIT(MEC_ESPI_TAF_INTR_ECP_DONE_POS)
+					| BIT(MEC_ESPI_TAF_INTR_HWMON_ERR_POS)));
 
 	return 0;
 }
@@ -219,8 +234,13 @@ static bool mec5_espi_taf_get_chan_sts(const struct device *dev)
 	return false;
 }
 
+#if 0 /* TODO implement flags */
+CONFIG_ESPI_TAF_MEC5_ASYNC
+#define ESPI_TAF_MCHP_FLAG_CB_PER_BLOCK BIT(0)
+#define ESPI_TAF_MCHP_FLAG_ASYNC BIT(4)
+#endif
 static int mec5_espi_taf_ecp_rw_cmd(const struct device *dev, struct espi_taf_packet *pckt,
-				    uint8_t cmd)
+				    uint32_t flags, uint8_t cmd)
 {
 	const struct mec5_espi_taf_devcfg *const devcfg = dev->config;
 	struct mec_espi_taf_regs *const regs = devcfg->regs;
@@ -237,7 +257,7 @@ static int mec5_espi_taf_ecp_rw_cmd(const struct device *dev, struct espi_taf_pa
 		goto ecp_cmd_rw_exit;
 	}
 
-	if (mec_hal_espi_taf_is_activated()) {
+	if (!mec_hal_espi_taf_is_activated()) {
 		ret = -EIO;
 		goto ecp_cmd_rw_exit;
 	}
@@ -259,10 +279,10 @@ static int mec5_espi_taf_ecp_rw_cmd(const struct device *dev, struct espi_taf_pa
 		}
 
 		if (cmd == MEC_TAF_ECP_CMD_WRITE) {
-			memcpy(data->xfrbuf, pktbuf, nxfr);
+			memcpy(data->xfrbuf_ptr, pktbuf, nxfr);
 		}
 
-		data->cmd_pkt.dataptr = data->xfrbuf;
+		data->cmd_pkt.dataptr = data->xfrbuf_ptr;
 		data->cmd_pkt.dlen = nxfr;
 		data->cmd_pkt.flash_addr = faddr;
 		data->cmd_pkt.misc = cmd;
@@ -282,7 +302,7 @@ static int mec5_espi_taf_ecp_rw_cmd(const struct device *dev, struct espi_taf_pa
 		}
 
 		if (cmd == MEC_TAF_ECP_CMD_READ) {
-			memcpy(pktbuf, data->xfrbuf, nxfr);
+			memcpy(pktbuf, data->xfrbuf_ptr, nxfr);
 		}
 
 		pktbuf += nxfr;
@@ -291,13 +311,19 @@ static int mec5_espi_taf_ecp_rw_cmd(const struct device *dev, struct espi_taf_pa
 	}
 
 ecp_cmd_rw_exit:
-	memset(data->xfrbuf, 0, MEC5_ESPI_TAF_XFRBUF_SIZE);
+	memset(data->xfrbuf_ptr, 0, MEC5_ESPI_TAF_XFRBUF_SIZE);
 	k_sem_give(&data->ecp_lock);
 
 	return ret;
 }
 
-static int mec5_espi_taf_ecp_erase_cmd(const struct device *dev, struct espi_taf_packet *pckt)
+#if 0 /* TODO implement flags */
+CONFIG_ESPI_TAF_MEC5_ASYNC
+#define ESPI_TAF_MCHP_FLAG_CB_PER_BLOCK BIT(0)
+#define ESPI_TAF_MCHP_FLAG_ASYNC BIT(4)
+#endif
+static int mec5_espi_taf_ecp_erase_cmd(const struct device *dev, struct espi_taf_packet *pckt,
+				       uint32_t flags)
 {
 	const struct mec5_espi_taf_devcfg *const devcfg = dev->config;
 	struct mec_espi_taf_regs *const regs = devcfg->regs;
@@ -312,7 +338,7 @@ static int mec5_espi_taf_ecp_erase_cmd(const struct device *dev, struct espi_taf
 		goto ecp_cmd_erase_exit;
 	}
 
-	if (mec_hal_espi_taf_is_activated()) {
+	if (!mec_hal_espi_taf_is_activated()) {
 		ret = -EIO;
 		goto ecp_cmd_erase_exit;
 	}
@@ -346,19 +372,22 @@ static int mec5_espi_taf_ecp_erase_cmd(const struct device *dev, struct espi_taf
 	return ret;
 }
 
-static int mec5_espi_taf_read(const struct device *dev, struct espi_taf_packet *pckt)
+static int mec5_espi_taf_read(const struct device *dev, struct espi_taf_packet *pckt,
+			      uint32_t flags)
 {
-	return mec5_espi_taf_ecp_rw_cmd(dev, pckt, MEC_TAF_ECP_CMD_READ);
+	return mec5_espi_taf_ecp_rw_cmd(dev, pckt, flags, MEC_TAF_ECP_CMD_READ);
 }
 
-static int mec5_espi_taf_write(const struct device *dev, struct espi_taf_packet *pckt)
+static int mec5_espi_taf_write(const struct device *dev, struct espi_taf_packet *pckt,
+			       uint32_t flags)
 {
-	return mec5_espi_taf_ecp_rw_cmd(dev, pckt, MEC_TAF_ECP_CMD_WRITE);
+	return mec5_espi_taf_ecp_rw_cmd(dev, pckt, flags, MEC_TAF_ECP_CMD_WRITE);
 }
 
-static int mec5_espi_taf_erase(const struct device *dev, struct espi_taf_packet *pckt)
+static int mec5_espi_taf_erase(const struct device *dev, struct espi_taf_packet *pckt,
+			       uint32_t flags)
 {
-	return mec5_espi_taf_ecp_erase_cmd(dev, pckt);
+	return mec5_espi_taf_ecp_erase_cmd(dev, pckt, flags);
 }
 
 /* A transaction was started using pckt (read, write, or erase)
@@ -412,22 +441,132 @@ int espi_taf_mchp_hwmon_ictrl(const struct device *dev, uint32_t intr_bitmap, ui
 	return 0;
 }
 
-int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_packet *pkt)
-{
 #ifdef CONFIG_ESPI_TAF_MEC5_RPMC_SUPPORT
+
+static bool mec5_taf_flash_supports_rpmc(const struct device *dev, uint8_t cs)
+{
+	struct mec5_espi_taf_data *const data = dev->data;
+
+	switch (cs) {
+	case 0:
+		if (data->flash_cfg & MEC5_ESPI_TAF_FLASH_CFG_RPMC_CS0) {
+			return true;
+		}
+		break;
+	case 1:
+		if (data->flash_cfg & MEC5_ESPI_TAF_FLASH_CFG_RPMC_CS1) {
+			return true;
+		}
+		break;
+	default:
+		break;
+	}
+
+	return false;
+}
+
+static bool mec5_taf_is_pkt_buf_valid(void *buf, uint32_t reqlen)
+{
+	if (!buf) {
+		return false;
+	}
+
+	if ((uint32_t)buf & 0x03u) { /* not aligned >= 4 bytes */
+		return false;
+	}
+
+	if ((reqlen < 1u) || (reqlen > 64u)) {
+		return false;
+	}
+
+	return true;
+}
+
+#if 0 /* TODO implement flags */
+CONFIG_ESPI_TAF_MEC5_ASYNC
+#define ESPI_TAF_MCHP_FLAG_CB_PER_BLOCK BIT(0)
+#define ESPI_TAF_MCHP_FLAG_ASYNC BIT(4)
+#endif
+int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_packet *pkt,
+				 uint32_t flags)
+{
 	if (!dev || !pkt) {
 		return -EINVAL;
 	}
 
-	/* TODO */
+	if (!mec_hal_espi_taf_is_activated()) {
+		return -EIO;
+	}
 
-	return -ENOTSUP;
+	const struct mec5_espi_taf_devcfg *const devcfg = dev->config;
+	struct mec_espi_taf_regs *const tregs = devcfg->regs;
+	struct mec5_espi_taf_data *const data = dev->data;
+	enum mec_taf_ecp_command cmd = MEC_TAF_ECP_CMD_RPMC_OP1_CS0;
+	uint32_t hal_flags = BIT(MEC_ESPI_TAF_ECP_CMD_FLAG_IEN_POS);
+	int ret = 0;
+
+	if (mec_hal_espi_taf_ecp_busy(tregs)) {
+		return -EBUSY;
+	}
+
+	if (!mec5_taf_flash_supports_rpmc(dev, pkt->cs)) {
+		return -ENOTSUP;
+	}
+
+	if (!mec5_taf_is_pkt_buf_valid(pkt->buf, pkt->len)) {
+		return -ENOMSG;
+	}
+
+	if (pkt->cmd == ESPI_TAF_CMD_RPMC_OP1) {
+		if (pkt->cs) {
+			cmd = MEC_TAF_ECP_CMD_RPMC_OP1_CS1;
+		}
+		memcpy(data->xfrbuf_ptr, pkt->buf, pkt->len);
+		data->cmd_pkt.dataptr = data->xfrbuf_ptr;
+	} else if (pkt->cmd == ESPI_TAF_CMD_RPMC_OP2) {
+		cmd = MEC_TAF_ECP_CMD_RPMC_OP2_CS0;
+		if (pkt->cs) {
+			cmd = MEC_TAF_ECP_CMD_RPMC_OP2_CS1;
+		}
+		data->cmd_pkt.dataptr = pkt->buf;
+	} else {
+		return -EPROTOTYPE;
+	}
+
+	k_sem_take(&data->ecp_lock, K_FOREVER);
+
+	if (flags & ESPI_TAF_MCHP_RPMC_OP_FLAG_ASYNC) {
+		data->xflags = MEC5_ESPI_TAF_XFR_FLAG_ASYNC;
+	} else {
+		data->xflags &= (uint16_t)~MEC5_ESPI_TAF_XFR_FLAG_ASYNC;
+	}
+
+	data->cmd_pkt.dlen = pkt->len;
+	data->cmd_pkt.flash_addr = 0;
+	data->cmd_pkt.misc = cmd; /* store cmd in misc for use by ISR */
+
+	ret = mec_hal_espi_taf_ecp_cmd_start(tregs, cmd, &data->cmd_pkt, hal_flags);
+	if (ret || (flags & ESPI_TAF_MCHP_RPMC_OP_FLAG_ASYNC)) {
+		return ret;
+	}
+
+	ret = k_sem_take(&data->ecp_done, K_USEC(MEC5_ESPI_TAF_ECP_TMOUT_US)); /* decrement */
+	if (ret == -EAGAIN) {
+		LOG_ERR("MEC5 TAF ECP RPMC timeout");
+		ret = -ETIMEDOUT;
+	}
+
+	return 0;
+}
 #else
+int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_packet *pkt)
+{
 	ARG_UNUSED(dev);
 	ARG_UNUSED(pkt);
+
 	return -ENOTSUP;
-#endif
 }
+#endif /* CONFIG_ESPI_TAF_MEC5_RPMC_SUPPORT */
 
 /* -------- driver ISR -------- */
 
@@ -518,6 +657,11 @@ static void update_taf_ecp_event(const struct device *dev, struct espi_event *pe
 	pevt->evt_data = taf_ecp_event_data(data->ecp_status);
 }
 
+#if 0 /* TODO implement flags */
+CONFIG_ESPI_TAF_MEC5_ASYNC
+#define ESPI_TAF_MCHP_FLAG_CB_PER_BLOCK BIT(0)
+#define ESPI_TAF_MCHP_FLAG_ASYNC BIT(4)
+#endif
 static void mec5_espi_taf_done_isr(const struct device *dev)
 {
 	const struct mec5_espi_taf_devcfg *const devcfg = dev->config;
@@ -534,10 +678,15 @@ static void mec5_espi_taf_done_isr(const struct device *dev)
 	mec_hal_espi_taf_ecp_ictrl(tregs, 0);
 	mec_hal_espi_taf_ecp_istatus(tregs, &data->ecp_status);
 	mec_hal_espi_taf_ecp_istatus_clr(tregs, MEC_TAF_ECP_STS_ALL);
+	mec_hal_espi_taf_girq_status_clr(BIT(MEC_ESPI_TAF_INTR_ECP_DONE_POS));
 
 	update_taf_ecp_event(dev, &evt);
 
 	k_sem_give(&data->ecp_done);
+	if (data->xflags & MEC5_ESPI_TAF_XFR_FLAG_ASYNC) {
+		data->xflags &= (uint16_t)~MEC5_ESPI_TAF_XFR_FLAG_ASYNC;
+		k_sem_give(&data->ecp_lock);
+	}
 
 	espi_send_callbacks(&data->callbacks, dev, evt);
 }
@@ -557,6 +706,7 @@ static void mec5_espi_taf_err_isr(const struct device *dev)
 #endif
 	mec_hal_espi_taf_mon_istatus(tregs, &data->hwmon_status);
 	mec_hal_espi_taf_mon_istatus_clr(tregs, MEC_TAF_HMON_STS_ALL);
+	mec_hal_espi_taf_girq_status_clr(BIT(MEC_ESPI_TAF_INTR_HWMON_ERR_POS));
 
 	evt.evt_data = taf_hmon_event_data(data->hwmon_status);
 
@@ -572,18 +722,22 @@ static void mec5_espi_taf_err_isr(const struct device *dev)
 static int mec5_espi_taf_init(const struct device *dev)
 {
 	const struct mec5_espi_taf_devcfg *const devcfg = dev->config;
-	struct mec_espi_taf_regs *const tregs = devcfg->regs;
-	struct mec5_espi_taf_data *tdata = dev->data;
+	struct mec_espi_taf_regs *const regs = devcfg->regs;
+	struct mec5_espi_taf_data *data = dev->data;
 	uint32_t tflags = BIT(MEC_ESPI_TAF_CAF_SHARE_POS);
 	int ret = 0;
 
-	k_sem_init(&tdata->ecp_lock, 0, 1);
-	k_sem_init(&tdata->ecp_done, 0, 1);
+	k_sem_init(&data->ecp_lock, 1, 1);
+	k_sem_init(&data->ecp_done, 1, 1);
+
+#ifdef CONFIG_ESPI_TAF_MEC5_RPMC_SUPPORT
+	data->rpmc_op_buf_ptr = NULL; /* TODO */
+#endif
 
 #ifdef CONFIG_ESPI_TAF_MEC5_RESET_ON_INIT
 	tflags |= BIT(MEC_ESPI_TAF_INIT_RESET_POS);
 #endif
-	ret = mec_hal_espi_taf_init(tregs, tflags);
+	ret = mec_hal_espi_taf_init(regs, tflags);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -608,16 +762,29 @@ const struct espi_taf_driver_api mec5_espi_taf_api = {
 	.manage_callback = mec5_espi_taf_man_cb,
 };
 
+
+#define MEC5_ESPI_TAF_XFR_BUF_DEF(inst) static uint8_t __aligned(4) \
+	espi_taf_mec5_xfrbuf##inst[MEC5_ESPI_TAF_XFRBUF_SIZE]
+
+#define MEC5_ESPI_TAF_DATA_INIT(inst) .xfrbuf_ptr = espi_taf_mec5_xfrbuf##inst
+
 #define MEC5_ESPI_TAF_DEVICE(inst)                                                                 \
+	MEC5_ESPI_TAF_XFR_BUF_DEF(inst);                                                           \
+                                                                                                   \
+	static struct mec5_espi_taf_data mec5_etaf_data_##inst = {                                 \
+		MEC5_ESPI_TAF_DATA_INIT(inst),                                                     \
+	};                                                                                         \
                                                                                                    \
 	static void mec5_etaf_irq_cfg_func_##inst(const struct device *dev);                       \
-                                                                                                   \
-	static struct mec5_espi_taf_data mec5_etaf_data_##inst;                                    \
                                                                                                    \
 	static const struct mec5_espi_taf_devcfg mec5_etaf_dcfg_##inst = {                         \
 		.regs = (struct mec_espi_taf_regs *)DT_INST_REG_ADDR(inst),                        \
 		.irq_cfg_func = mec5_etaf_irq_cfg_func_##inst,                                     \
-		.poll_timeout = DT_INST_PROP_OR(inst, poll_timeout, 0),                            \
+		.poll_timeout = DT_INST_PROP_OR(inst, poll_timeout, 0x28000),                      \
+		.poll_interval = DT_INST_PROP_OR(inst, poll_interval, 0),                          \
+		.consec_rd_timeout = DT_INST_PROP_OR(inst, consec_rd_timeout, 0),                  \
+		.sus_chk_delay = DT_INST_PROP_OR(inst, sus_chk_delay, 20000),                      \
+		.sus_rsm_interval = DT_INST_PROP_OR(inst, sus_rsm_interval, 32),                   \
 	};                                                                                         \
 	DEVICE_DT_INST_DEFINE(inst, mec5_espi_taf_init, NULL, &mec5_etaf_data_##inst,              \
 			      &mec5_etaf_dcfg_##inst, POST_KERNEL, CONFIG_ESPI_TAF_INIT_PRIORITY,  \
