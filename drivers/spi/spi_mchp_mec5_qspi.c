@@ -26,7 +26,7 @@ LOG_MODULE_REGISTER(spi_mec5, CONFIG_SPI_LOG_LEVEL);
 #include <mec_espi_taf.h>
 #include <mec_qspi_api.h>
 
-#define MEC5_QSPI_DEBUG_ISR
+/* #define MEC5_QSPI_DEBUG_ISR */
 
 /* microseconds for busy wait and total wait interval */
 #define MEC5_QSPI_WAIT_INTERVAL  8
