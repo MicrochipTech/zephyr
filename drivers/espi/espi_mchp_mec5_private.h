@@ -40,6 +40,7 @@ struct espi_mec5_dev_config {
 	uint16_t sram_bar_size[2];
 	uint8_t sram_bar_access[2];
 	uint16_t cfg_io_addr;
+	uint8_t ec_sirq;
 	const struct pinctrl_dev_config *pcfg;
 	void (*irq_cfg_func)(const struct device *espi_dev);
 };
