@@ -347,7 +347,7 @@ static int mec5_shm_emi_init(const struct device *dev)
 											\
 	static const struct mec5_shm_emi_devcfg mec5_shm_emi_dcfg##inst = {		\
 		.regs = (struct mec_emi_regs *)DT_INST_REG_ADDR(inst),			\
-		.parent = DEVICE_DT_GET(DT_INST_PARENT(inst)),				\
+		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, espi_parent)),		\
 		.host_addr = (uint32_t)MEC5_DT_EMI_HA(inst),				\
 		.host_mem_space = (uint8_t)MEC5_DT_EMI_HMS(inst),			\
 		.ldn = MEC5_DT_EMI_LDN(inst),						\

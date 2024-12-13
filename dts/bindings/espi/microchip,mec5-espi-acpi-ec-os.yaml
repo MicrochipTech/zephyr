@@ -9,8 +9,6 @@ compatible: "microchip,mec5-espi-acpi-ec-os"
 
 include: [base.yaml]
 
-on-bus: espi
-
 properties:
   reg:
     description: mmio register space
@@ -23,6 +21,11 @@ properties:
   interrupt-names:
     required: true
     description: Names for ACPI_EC IBF and OBE interrupts.
+
+  espi-parent:
+    type: phandle
+    required: true
+    description: Handle to eSPI parent controller node
 
   four-byte-data-mode:
     type: boolean
