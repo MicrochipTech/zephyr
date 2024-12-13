@@ -277,6 +277,9 @@ static int mec5_pcd_config_access(const struct device *dev)
 		LOG_ERR("SRAM MBAR cfg error");
 	}
 
+	/* EC generated SIRQ */
+	mec_hal_espi_ld_sirq_set(iob, MEC_ESPI_LDN_EC, 0, devcfg->ec_sirq);
+
 	return ret;
 }
 
@@ -1409,6 +1412,7 @@ static int espi_mec5_dev_init(const struct device *dev)
 			MEC5_ESPI_SRAM1_ACCESS(inst), \
 		}, \
 		.cfg_io_addr = DT_INST_PROP(inst, config_io_addr), \
+		.ec_sirq = DT_INST_PROP_OR(inst, ec_sirq, 255), \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst), \
 		.irq_cfg_func = espi_mec5_irq_config_##inst, \
 	}; \
