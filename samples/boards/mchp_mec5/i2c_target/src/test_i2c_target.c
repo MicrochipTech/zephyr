@@ -240,6 +240,9 @@ int test_i2c_target_wr_init(void)
 	return 0;
 }
 
+/* TODO caller is passing i2c_nl_dev which is I2C_SMB Controller 1 on Port 4
+ * Board is now wired for Port 4 <-> Port 5
+ */
 int test_i2c_target_register(const struct device *i2c_dev, bool register_target,
 			     uint8_t target_id)
 {
@@ -265,6 +268,11 @@ int test_i2c_target_register(const struct device *i2c_dev, bool register_target,
 	return 0;
 }
 
+/* TODO caller is passing i2c_nl_dev which is I2C_SMB Controller 1 on Port 4
+ * Board is now wired for Port 4 <-> Port 5
+ * Use Port 4 device as Target same as before
+ * Use Port 5 device as Controller (was Port 0 device before)
+ */
 int test_i2c_target_write(const struct device *i2c_cm_dev, const struct device *i2c_tm_dev,
 			  uint16_t tm_addr, uint8_t *data, size_t datasz)
 {
