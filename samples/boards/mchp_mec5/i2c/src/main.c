@@ -9,12 +9,14 @@
 #include <stdint.h>
 #include <string.h>
 #include <soc.h>
+#include <mec_i2c_api.h>
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c.h>
 #include <zephyr/drivers/led.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/spi.h>
@@ -33,6 +35,9 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
  */
 #define LTC2489_ADC_CONV_TIME_MS 150
 #define LTC2489_ADC_READ_RETRIES 10
+
+#define I2C_SENSOR_PORT 0
+#define I2C_FRAM_PORT 4
 
 #define I2C0_NODE	DT_ALIAS(i2c0)
 #define I2C_NL0_NODE	DT_ALIAS(i2c_nl_0)
@@ -53,6 +58,8 @@ static volatile int ret_val;
 static void spin_on(uint32_t id, int rval);
 static int config_i2c_device(const struct device *dev, uint32_t i2c_dev_config);
 static int test_i2c_nl(const struct device *dev);
+static int test_i2c_nl_port_config(const struct device *dev, uint8_t sensor_port,
+				   uint8_t fram_port);
 
 uint8_t buf1[256];
 uint8_t buf2[256];
@@ -262,6 +269,8 @@ int main(void)
 	if (ret) {
 		LOG_ERR("I2C-NL test failed");
 	}
+	ret = test_i2c_nl_port_config(i2c_nl_dev, I2C_SENSOR_PORT, I2C_FRAM_PORT);
+	LOG_INF("I2C Port Config returned (%d)", ret);
 
 	LOG_INF("Application Done (%d)", ret);
 	spin_on((uint32_t)__LINE__, 0);
@@ -529,5 +538,176 @@ static int test_i2c_nl(const struct device *idev)
 		LOG_ERR("FRAM read back mismatch");
 	}
 #endif /* APP_BOARD_HAS_FRAM_ATTACHED */
+	return 0;
+}
+
+static int test_i2c_nl_port_config(const struct device *dev, uint8_t sensor_port, uint8_t fram_port)
+{
+	uint32_t i2c_config = 0;
+	int ret = 0;
+	uint8_t i2c_port = 0, actual_port = 0;
+	uint8_t nmsgs = 0;
+	struct i2c_msg msgs[4];
+
+	if (!device_is_ready(dev)) {
+		LOG_ERR("I2C-NL device is not ready!");
+		return -EIO;
+	}
+
+	LOG_INF("Switch to I2C Port 15");
+	i2c_config = I2C_MODE_CONTROLLER | I2C_SPEED_SET(I2C_SPEED_STANDARD);
+	i2c_port = MEC_I2C_PORT_15;
+	ret = i2c_mchp_nl_configure(dev, i2c_config, i2c_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL Configure side-band API returned error (%d)", ret);
+		return ret;
+	}
+
+	ret = i2c_mchp_nl_get_port(dev, &actual_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL get port API returned error (%d)", ret);
+		return ret;
+	}
+
+	if (actual_port == i2c_port) {
+		LOG_INF("Change to Port %u OK", i2c_port);
+	} else {
+		LOG_ERR("Change to Port %u FAIL", i2c_port);
+		return -EIO;
+	}
+
+	LOG_INF("Switch to Sensor port");
+	i2c_config = I2C_MODE_CONTROLLER | I2C_SPEED_SET(I2C_SPEED_STANDARD);
+	i2c_port = sensor_port;
+
+	ret = i2c_mchp_nl_configure(dev, i2c_config, i2c_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL Configure side-band API returned error (%d)", ret);
+		return ret;
+	}
+
+	ret = i2c_mchp_nl_get_port(dev, &actual_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL get port API returned error (%d)", ret);
+		return ret;
+	}
+
+	if (actual_port == i2c_port) {
+		LOG_INF("Change to Port %u OK", i2c_port);
+	} else {
+		LOG_ERR("Change to Port %u FAIL", i2c_port);
+		return -EIO;
+	}
+
+	/* Do transfer */
+	LOG_INF("Read both PCA9555 input ports");
+
+	/* PCA9555 read protocol: START TX[wrAddr, cmd],
+	 * Rpt-START TX[rdAddr],  RX[data,...], STOP
+	 */
+	nmsgs = 2u;
+	buf1[0] = 0u; /* PCA9555 cmd=0 is input port 0 */
+	buf2[0] = 0x55u; /* receive buffer */
+	buf2[1] = 0x55u;
+
+	msgs[0].buf = buf1;
+	msgs[0].len = 1u;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = buf2;
+	msgs[1].len = 2u;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	ret = i2c_transfer(dev, msgs, nmsgs, pca9555_dts.addr);
+	if (ret) {
+		LOG_ERR("I2C transfer error: write cmd byte, read 2 data bytes: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("PCA9555 Port 0 input = 0x%02x  Port 1 input = 0x%02x", buf2[0], buf2[1]);
+
+	LOG_INF("Switch to FRAM port");
+	i2c_config = I2C_MODE_CONTROLLER | I2C_SPEED_SET(I2C_SPEED_FAST);
+	i2c_port = fram_port;
+	actual_port = 0;
+
+	ret = i2c_mchp_nl_configure(dev, i2c_config, i2c_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL Configure side-band API returned error (%d)", ret);
+		return ret;
+	}
+
+	ret = i2c_mchp_nl_get_port(dev, &actual_port);
+	if (ret) {
+		LOG_ERR("MCHP I2C NL get port API returned error (%d)", ret);
+		return ret;
+	}
+
+	if (actual_port == i2c_port) {
+		LOG_INF("Change to Port %u OK", i2c_port);
+	} else {
+		LOG_ERR("Change to Port %u FAIL", i2c_port);
+		return -EIO;
+	}
+
+#ifdef APP_BOARD_HAS_FRAM_ATTACHED
+	uint32_t fram_nbytes = 32u;
+	uint32_t fram_mem_addr = 0x1234u;
+
+	memset(buf2, 0x55, sizeof(buf2));
+	memset(buf3, 0x55, sizeof(buf3));
+
+	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x", fram_nbytes, fram_mem_addr);
+
+	nmsgs = 1;
+	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
+	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
+
+	for (uint32_t temp = 0; temp < fram_nbytes; temp++) {
+		buf1[temp + 2] = (uint8_t)((temp + 0x10) & 0xffu);
+	}
+
+	/* NOTE: Do we want to support two write messages?
+	 * if len(msg1) + len(msg2) < len(xfrbuf-1) combine then in driver xfrbuf
+	 * else more complicated
+	 *   len(msg1) may be > len(xfrbuf-1)
+	 */
+	msgs[0].buf = buf1;
+	msgs[0].len = fram_nbytes + 2u;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	ret = i2c_transfer(dev, msgs, nmsgs, mb85rc256v_dts.addr);
+	if (ret) {
+		LOG_ERR("I2C API for FRAM write returned error %d", ret);
+		return ret;
+	}
+
+	LOG_INF("MB85RC256V FRAM read %u bytes from offset 0x%x", fram_nbytes, fram_mem_addr);
+
+	nmsgs = 2;
+	buf2[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
+	buf2[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
+
+	msgs[0].buf = buf2;
+	msgs[0].len = 2u;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = buf3;
+	msgs[1].len = fram_nbytes;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	ret = i2c_transfer(dev, msgs, nmsgs, mb85rc256v_dts.addr);
+	if (ret) {
+		LOG_ERR("I2C API for FRAM read returned error %d", ret);
+		return ret;
+	}
+
+	ret = memcmp(&buf1[2], buf3, fram_nbytes);
+	if (ret == 0) {
+		LOG_INF("FRAM read back of 32 bytes matches written data");
+	} else {
+		LOG_ERR("FRAM read back mismatch");
+	}
+#endif
 	return 0;
 }
