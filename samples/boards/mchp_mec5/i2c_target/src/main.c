@@ -9,13 +9,14 @@
 #include <stdint.h>
 #include <string.h>
 #include <soc.h>
+#include <mec_i2c_api.h>
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/i2c/mchp_mec5_i2c_nl.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c.h>
 #include <zephyr/drivers/led.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/spi.h>
@@ -28,11 +29,36 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "test_i2c_target.h"
 
+/* I2C Port 0
+ *    -> PCA9555 I2C-to-GPIO expander
+ *    -> LTC2489 I2C ADC
+ *
+ * I2C Port 4
+ *    -> MB85RC256V I2C FRAM
+ *
+ * I2C Port 5
+ *    -> I2C Port 4
+ *
+ * I2C-SMB Controllers used by this project
+ * I2C-SMB0 defaulted to Port 0 using MEC5 I2C byte-by-byte driver
+ * I2C-SMB1 defaulted to Port 4 using MEC5 I2C Network Layer/DMA driver
+ * I2C-SMB2 defaulted to Port 5 using MEC5 I2C Network Layer/DMA driver
+ *
+ * MCHP I2C-SMB controller implement a HW MUX allowing the controller to be dynamically
+ * connected to any of the 16 I2C ports the SoC implements.
+ *
+ */
+
 #define APP_BOARD_HAS_FRAM_ATTACHED
 
 #define I2C_TARGET_NOT_PRESENT_ADDR 0x56
 #define I2C_TARGET_MODE_ADDR0 0x40
 #define I2C_TARGET_MODE_ADDR1 0x41
+
+#define PCA9555_REG_IN 0
+#define PCA9555_REG_OUT 2
+#define PCA9555_REG_POLINV 4
+#define PCA9555_REG_CFG 6
 
 /* LTC2489 ADC conversion time using internal clock.
  * If a converstion is in progress LTC2489 will NACK its address.
@@ -43,6 +69,7 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define DMAC_NODE	DT_NODELABEL(dmac)
 #define I2C0_NODE	DT_ALIAS(i2c0)
 #define I2C_NL0_NODE	DT_ALIAS(i2c_nl_0)
+#define I2C_NL1_NODE	DT_ALIAS(i2c_nl_1)
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 
@@ -54,6 +81,7 @@ const struct gpio_dt_spec test_pin2_dt =
 
 static const struct device *i2c_dev = DEVICE_DT_GET(I2C0_NODE);
 static const struct device *i2c_nl_dev = DEVICE_DT_GET(I2C_NL0_NODE);
+static const struct device *i2c_nl2_dev = DEVICE_DT_GET(I2C_NL1_NODE);
 
 /* Driver pads the buffer by 4 bytes */
 #define I2C_NL_TM_RX_BUF_SIZE (DT_PROP(I2C_NL0_NODE, tm_rx_buf_size) + 8u)
@@ -72,6 +100,15 @@ static volatile int ret_val;
 
 static void spin_on(uint32_t id, int rval);
 static int config_i2c_device(const struct device *dev, uint32_t i2c_dev_config);
+
+static int pca9555_write_data16(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t pca_reg,
+				uint16_t reg_data);
+
+static int pca9555_read_data16(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t pca_reg,
+			       uint16_t *reg_data);
+
+static int ltc2489_write_cmd(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t chan);
+static int ltc2489_read_chan(const struct device *i2c_dev, uint16_t i2c_addr, uint32_t *data);
 
 static int test_i2c_fram(const struct i2c_dt_spec *fram_i2c_spec,
 			 uint16_t fram_offset, size_t datasz,
@@ -92,12 +129,14 @@ int main(void)
 	int ret = 0;
 	void (*i2c_cb_fp)(const struct device *, int, void *) = NULL;
 	uint32_t i2c_dev_config = 0;
-	uint32_t adc_retry_count = 0;
+/*	uint32_t adc_retry_count = 0; */
+	uint32_t adc_reading = 0;
 	uint32_t temp = 0;
 	uint32_t i2c_nl_wr_len = 0;
 	uint32_t i2c_nl_rd_len = 0;
 	uint8_t *tm_rxb = NULL;
 	uint32_t tm_rxb_sz = 0;
+	uint16_t pca_cfg = 0, data16 = 0;
 	uint8_t nmsgs = 0;
 	uint8_t target_addr = 0;
 	struct i2c_msg msgs[4];
@@ -119,11 +158,33 @@ int main(void)
 		spin_on((uint32_t)__LINE__, -1);
 	}
 
+	if (!device_is_ready(i2c_nl_dev)) {
+		LOG_ERR("I2C NL device is not ready!");
+		spin_on((uint32_t)__LINE__, -1);
+	}
+
+	if (!device_is_ready(i2c_nl2_dev)) {
+		LOG_ERR("I2C NL2 device is not ready!");
+		spin_on((uint32_t)__LINE__, -1);
+	}
+
 	i2c_dev_config = I2C_SPEED_SET(I2C_SPEED_STANDARD) | I2C_MODE_CONTROLLER;
 
 	ret = config_i2c_device(i2c_dev, i2c_dev_config);
 	if (ret) {
 		LOG_ERR("I2C configuration error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = config_i2c_device(i2c_nl_dev, i2c_dev_config);
+	if (ret) {
+		LOG_ERR("I2C NL configuration error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = config_i2c_device(i2c_nl2_dev, i2c_dev_config);
+	if (ret) {
+		LOG_ERR("I2C NL2 configuration error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
@@ -160,22 +221,29 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-	for (int i = 0; i < 3; i++) {
-		LOG_INF("I2C Write 3 bytes to PCA9555 target device");
 
-		nmsgs = 1u;
-		buf1[0] = 2u; /* PCA9555 cmd=2 is output port 0 */
-		buf1[1] = 0x55u;
-		buf1[2] = 0xaau;
-		msgs[0].buf = buf1;
-		msgs[0].len = 3u;
-		msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+	LOG_INF("Config PCA9555 I2C GPIO expander: Port0 = All input, Port1 = All output");
+	pca_cfg = 0x00ffu; /* port0=input, port1=output */
+	target_addr = pca9555_dts.addr;
 
-		ret = i2c_transfer_dt(&pca9555_dts, msgs, nmsgs);
-		if (ret) {
-			LOG_ERR("Loop %d: I2C write to PCA9555 error (%d)", i, ret);
-			spin_on((uint32_t)__LINE__, ret);
-		}
+	ret = pca9555_write_data16(i2c_dev, target_addr, PCA9555_REG_CFG, pca_cfg);
+	if (ret) {
+		LOG_ERR("PCA9555 write error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("Read PCA9555 I2C GPIO expander config");
+	data16 = 0x5555u;
+	ret = pca9555_read_data16(i2c_dev, target_addr, PCA9555_REG_CFG, &data16);
+	if (ret) {
+		LOG_ERR("PCA9555 read error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	if (data16 != pca_cfg) {
+		LOG_ERR("ERROR: PCA9555 config read back mismatch! expected=0x%04x read=0x%04x",
+			pca_cfg, data16);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	LOG_INF("Write 3 bytes to PCA9555 target using multiple write buffers");
@@ -200,103 +268,57 @@ int main(void)
 	}
 
 	LOG_INF("Read both PCA9555 input ports");
-
-	/* PCA9555 read protocol: START TX[wrAddr, cmd],
-	 * Rpt-START TX[rdAddr],  RX[data,...], STOP
-	 */
-	nmsgs = 2u;
-	buf1[0] = 0u; /* PCA9555 cmd=0 is input port 0 */
-	buf2[0] = 0x55u; /* receive buffer */
-	buf2[1] = 0x55u;
-
-	msgs[0].buf = buf1;
-	msgs[0].len = 1u;
-	msgs[0].flags = I2C_MSG_WRITE;
-
-	msgs[1].buf = buf2;
-	msgs[1].len = 2u;
-	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-	ret = i2c_transfer_dt(&pca9555_dts, msgs, nmsgs);
+	data16 = 0x5555u;
+	ret = pca9555_read_data16(i2c_dev, pca9555_dts.addr, PCA9555_REG_IN, &data16);
 	if (ret) {
-		LOG_ERR("I2C transfer error: write cmd byte, read 2 data bytes: (%d)", ret);
+		LOG_ERR("PCA9555 read data16 error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-	LOG_INF("PCA9555 Port 0 input = 0x%02x  Port 1 input = 0x%02x", buf2[0], buf2[1]);
-
-	LOG_INF("Read both PCA9555 input ports using different buffers for each port");
-	nmsgs = 3u;
-
-	buf1[0] = 0u; /* PCA9555 cmd=0 is input port 0 */
-	buf2[0] = 0x55u; /* first receive buffer */
-	buf2[1] = 0x55u;
-	buf2[8] = 0x55u; /* second receive buffer */
-	buf2[9] = 0x55u;
-
-	msgs[0].buf = buf1;
-	msgs[0].len = 1u;
-	msgs[0].flags = I2C_MSG_WRITE;
-
-	msgs[1].buf = buf2;
-	msgs[1].len = 1u;
-	msgs[1].flags = I2C_MSG_READ;
-
-	msgs[2].buf = &buf2[8];
-	msgs[2].len = 1u;
-	msgs[2].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-	ret = i2c_transfer_dt(&pca9555_dts, msgs, nmsgs);
-	if (ret) {
-		LOG_ERR("I2C transfer error: 3 messages: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	LOG_INF("PCA9555 Port 0 input = 0x%02x  Port 1 input = 0x%02x", buf2[0], buf2[8]);
+	LOG_INF("PCA9555 input Port1:Port0 = 0x%04x", data16);
 
 	LOG_INF("Select ADC channel 0 in LTC2489. This triggers a conversion!");
-	nmsgs = 1;
-	buf1[0] = 0xb0u; /* 1011_0000 selects channel 0 as single ended */
-	msgs[0].buf = buf1;
-	msgs[0].len = 1u;
-	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
 
-	ret = i2c_transfer_dt(&ltc2489_dts, msgs, nmsgs);
+	ret = ltc2489_write_cmd(i2c_dev, ltc2489_dts.addr, 0);
 	if (ret) {
-		LOG_ERR("I2C write to set LTC2489 channel failed: (%d)", ret);
+		LOG_ERR("LTC2489 write command error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	/* wait for LTC2489 to finish a conversion */
-	k_sleep(K_MSEC(LTC2489_ADC_CONV_TIME_MS));
+	k_sleep(K_MSEC(2u * LTC2489_ADC_CONV_TIME_MS));
 
-	/* LTC2489 ADC read protocol is I2C read: START TX[rdAddr]
-	 * RX[data[7:0], data[15:8], data[23:16]] STOP
-	 */
-	LOG_INF("Read 24-bit ADC reading from LTC2489");
-	adc_retry_count = 0;
-	do {
-		buf2[0] = 0x55;
-		buf2[1] = 0x55;
-		buf2[2] = 0x55;
-
-		nmsgs = 1;
-		msgs[0].buf = buf2;
-		msgs[0].len = 3u;
-		msgs[0].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-		ret = i2c_transfer_dt(&ltc2489_dts, msgs, nmsgs);
-		if (ret) {
-			adc_retry_count++;
-			LOG_INF("LTC2489 read error (%d)", ret);
-		}
-	} while ((ret != 0) && (adc_retry_count < LTC2489_ADC_READ_RETRIES));
-
-	if (ret == 0) {
-		temp = ((uint32_t)(buf2[0]) + (((uint32_t)(buf2[1])) << 8)
-				+ (((uint32_t)(buf2[2])) << 16));
-		LOG_INF("LTC2489 reading = 0x%08x", temp);
+	adc_reading = UINT32_MAX;
+	ret = ltc2489_read_chan(i2c_dev, ltc2489_dts.addr, &adc_reading);
+	if (ret) {
+		LOG_ERR("LTC2489 read command error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
+
+	LOG_INF("ADC Chan[0] reading = 0x%08x", adc_reading);
+
+	/* wait for LTC2489 to finish a conversion triggered by reading the previous conversion */
+	k_sleep(K_MSEC(2u * LTC2489_ADC_CONV_TIME_MS));
+
+	LOG_INF("Select ADC channel 1 in LTC2489. This triggers a conversion!");
+
+	ret = ltc2489_write_cmd(i2c_dev, ltc2489_dts.addr, 1);
+	if (ret) {
+		LOG_ERR("LTC2489 write command error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	/* wait for LTC2489 to finish a conversion */
+	k_sleep(K_MSEC(2u * LTC2489_ADC_CONV_TIME_MS));
+
+	adc_reading = UINT32_MAX;
+	ret = ltc2489_read_chan(i2c_dev, ltc2489_dts.addr, &adc_reading);
+	if (ret) {
+		LOG_ERR("LTC2489 read command error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("ADC Chan[1] reading = 0x%08x", adc_reading);
 
 #ifdef APP_BOARD_HAS_FRAM_ATTACHED
 	uint16_t fram_addr = 0;
@@ -394,7 +416,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -411,7 +433,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -428,7 +450,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -445,7 +467,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -462,7 +484,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -479,7 +501,7 @@ int main(void)
 		buf1[i] = (uint8_t)(i % 256);
 	}
 
-	ret = test_i2c_target_write(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
@@ -502,7 +524,7 @@ int main(void)
 
 	test_i2c_target_read_data_init(buf1, i2c_nl_rd_len);
 
-	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_read(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				   buf2, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Target read error (%d)", ret);
@@ -538,7 +560,7 @@ int main(void)
 
 	test_i2c_target_read_data_init(buf1, i2c_nl_rd_len);
 
-	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_read(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				   buf2, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Target read error (%d)", ret);
@@ -574,7 +596,7 @@ int main(void)
 
 	test_i2c_target_read_data_init(buf1, i2c_nl_rd_len);
 
-	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_read(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				   buf2, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Target read error (%d)", ret);
@@ -610,7 +632,7 @@ int main(void)
 
 	test_i2c_target_read_data_init(NULL, 0);
 
-	ret = test_i2c_target_read(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_read(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				   buf2, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Target read error (%d)", ret);
@@ -650,7 +672,7 @@ int main(void)
 
 	test_i2c_target_read_data_init(buf3, i2c_nl_rd_len);
 
-	ret = test_i2c_target_combined(i2c_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+	ret = test_i2c_target_combined(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
 				       buf1, i2c_nl_wr_len, buf2, i2c_nl_rd_len);
 	if (ret) {
 		LOG_ERR("Test I2C target combined error (%d)", ret);
@@ -696,7 +718,7 @@ int main(void)
 	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_RESTART | I2C_MSG_STOP;
 
 	/* synchronous transfer */
-	ret = i2c_transfer(i2c_dev, msgs, 2, I2C_TARGET_MODE_ADDR0);
+	ret = i2c_transfer(i2c_nl2_dev, msgs, 2, I2C_TARGET_MODE_ADDR0);
 	if (ret) {
 		LOG_ERR("Target I2C combined error (%d)", ret);
 	}
@@ -763,6 +785,143 @@ static int config_i2c_device(const struct device *dev, uint32_t i2c_dev_config)
 
 	return ret;
 }
+
+/* Write 16-bit data to PCA9555 register pair.
+ * START, fmtI2CWrAddr(i2c_addr), [A], pca_reg, [A], data0, [A], data1, [A], STOP
+ */
+static int pca9555_write_data16(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t pca_reg,
+				uint16_t reg_data)
+{
+	struct i2c_msg msg = {0};
+	int ret = 0;
+	uint8_t txbuf[3];
+
+	if (!i2c_dev) {
+		return -EINVAL;
+	}
+
+	if (!device_is_ready(i2c_dev)) {
+		return -EIO;
+	}
+
+	txbuf[0] = pca_reg;
+	txbuf[1] = (uint8_t)reg_data;
+	txbuf[2] = (uint8_t)(reg_data >> 8);
+
+	msg.buf = txbuf;
+	msg.len = 3;
+	msg.flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	ret = i2c_transfer(i2c_dev, &msg, 1u, i2c_addr);
+
+	return ret;
+}
+
+static int pca9555_read_data16(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t pca_reg,
+			       uint16_t *reg_data)
+{
+	struct i2c_msg msgs[2] = {0};
+	int ret = 0;
+	uint8_t xfrbuf[4] = {0};
+	uint16_t temp = 0;
+
+	if (!i2c_dev || !reg_data) {
+		return -EINVAL;
+	}
+
+	if (!device_is_ready(i2c_dev)) {
+		return -EIO;
+	}
+
+	xfrbuf[0] = pca_reg;
+
+	msgs[0].buf = xfrbuf;
+	msgs[0].len = 1;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = &xfrbuf[2];
+	msgs[1].len = 2u;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	ret = i2c_transfer(i2c_dev, msgs, 2u, i2c_addr);
+	if (ret) {
+		return ret;
+	}
+
+	temp = xfrbuf[3];
+	temp <<= 8;
+	temp |= xfrbuf[2];
+	*reg_data = temp;
+
+	return ret;
+}
+
+static int ltc2489_write_cmd(const struct device *i2c_dev, uint16_t i2c_addr, uint8_t chan)
+{
+	struct i2c_msg msg = {0};
+	int ret = 0;
+	uint8_t xfrbuf[4] = {0};
+
+	if (!i2c_dev) {
+		return -EINVAL;
+	}
+
+	switch (chan) {
+	case 0:
+		xfrbuf[0] = 0xb0u;
+		break;
+	case 1:
+		xfrbuf[0] = 0xb8u;
+		break;
+	case 2:
+		xfrbuf[0] = 0xb1u;
+		break;
+	case 3:
+		xfrbuf[0] = 0xb9u;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	msg.buf = xfrbuf;
+	msg.len = 1u;
+	msg.flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	ret = i2c_transfer(i2c_dev, &msg, 1u, i2c_addr);
+
+	return ret;
+}
+
+static int ltc2489_read_chan(const struct device *i2c_dev, uint16_t i2c_addr, uint32_t *data)
+{
+	struct i2c_msg msg = {0};
+	int ret = 0;
+	uint8_t xfrbuf[4] = {0};
+
+	if (!i2c_dev || !data) {
+		return -EINVAL;
+	}
+
+	if (!device_is_ready(i2c_dev)) {
+		return -EIO;
+	}
+
+	msg.buf = xfrbuf;
+	msg.len = 3u;
+	msg.flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	ret = i2c_transfer(i2c_dev, &msg, 1u, i2c_addr);
+	if (ret) {
+		LOG_ERR("LTC2489 read error (%d)", ret);
+		return ret;
+	}
+
+	*data = ((uint32_t)(xfrbuf[0]) + (((uint32_t)(xfrbuf[1])) << 8)
+		 + (((uint32_t)(xfrbuf[2])) << 16));
+
+	return ret;
+}
+
 
 #ifdef APP_BOARD_HAS_FRAM_ATTACHED
 static int test_i2c_fram(const struct i2c_dt_spec *fram_i2c_spec,
