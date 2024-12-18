@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/sys_io.h>
@@ -88,7 +89,6 @@ enum i2c_mec5_isr_state {
 struct i2c_mec5_config {
 	struct mec_i2c_smb_regs *base;
 	uint32_t clock_freq;
-	uint8_t port_sel;
 	struct gpio_dt_spec sda_gpio;
 	struct gpio_dt_spec scl_gpio;
 	const struct pinctrl_dev_config *pcfg;
@@ -116,6 +116,7 @@ struct i2c_mec5_data {
 	struct k_sem lock;
 	struct k_sem sync;
 	uint32_t i2c_status;
+	uint8_t port_sel;
 	uint8_t wraddr;
 	uint8_t state;
 	uint8_t cm_dir;
@@ -332,7 +333,7 @@ static int i2c_mec5_reset_config(const struct device *dev)
 
 	mcfg.std_freq = data->speed_id;
 	mcfg.cfg_flags = 0u;
-	mcfg.port = devcfg->port_sel;
+	mcfg.port = data->port_sel;
 	mcfg.target_addr1 = 0;
 	mcfg.target_addr2 = 0;
 
@@ -397,6 +398,20 @@ static int i2c_mec5_configure(const struct device *dev, uint32_t dev_config_raw)
 	int ret = i2c_mec5_reset_config(dev);
 
 	return ret;
+}
+
+/* side-band API */
+int i2c_mchp_configure(const struct device *dev, uint32_t dev_config, uint8_t port_num)
+{
+	if (!dev || (port_num >= MCHP_I2C_NUM_PORTS)) {
+		return -EINVAL;
+	}
+
+	struct i2c_mec5_data *data = dev->data;
+
+	data->port_sel = port_num;
+
+	return i2c_mec5_configure(dev, dev_config);
 }
 
 /* i2c_get_config API */
@@ -1007,11 +1022,12 @@ static int i2c_mec5_init(const struct device *dev)
 									\
 	static void i2c_mec5_irq_config_func_##n(void);			\
 									\
-	static struct i2c_mec5_data i2c_mec5_data_##n;			\
+	static struct i2c_mec5_data i2c_mec5_data_##n = {		\
+		.port_sel = DT_INST_PROP(n, port_sel),			\
+	};								\
 									\
 	static const struct i2c_mec5_config i2c_mec5_config_##n = {	\
 		.base = (struct mec_i2c_smb_regs *)DT_INST_REG_ADDR(n),	\
-		.port_sel = DT_INST_PROP(n, port_sel),			\
 		.clock_freq = DT_INST_PROP(n, clock_frequency),		\
 		.sda_gpio = GPIO_DT_SPEC_INST_GET(n, sda_gpios),	\
 		.scl_gpio = GPIO_DT_SPEC_INST_GET(n, scl_gpios),	\
