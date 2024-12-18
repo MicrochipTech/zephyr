@@ -15,7 +15,7 @@
 #include <zephyr/drivers/dma.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/i2c/mchp_mec5_i2c_nl.h>
+#include <zephyr/drivers/i2c/mchp_mec5_i2c.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/irq.h>
 #include <zephyr/logging/log.h>
@@ -1324,6 +1324,36 @@ static int i2c_mec5_nl_configure(const struct device *dev, uint32_t dev_config)
 	return ret;
 }
 
+/* Side-band API */
+int i2c_mchp_nl_configure(const struct device *dev, uint32_t dev_config, uint8_t port_num)
+{
+	if (!dev || (port_num >= MCHP_I2C_NUM_PORTS)) {
+		return -EINVAL;
+	}
+
+	struct i2c_mec5_nl_data *data = dev->data;
+
+	data->misc_cfg &= (uint32_t)~I2C_MEC5_NL_MISC_CFG_PORT_MSK;
+	data->misc_cfg |= (((uint32_t)port_num << I2C_MEC5_NL_MISC_CFG_PORT_POS)
+			   & I2C_MEC5_NL_MISC_CFG_PORT_MSK);
+
+	return i2c_mec5_nl_configure(dev, dev_config);
+}
+
+int i2c_mchp_nl_get_port(const struct device *dev, uint8_t *port_num)
+{
+	const struct i2c_mec5_nl_config *const devcfg = dev->config;
+	struct mec_i2c_smb_regs *regs = devcfg->regs;
+	uint8_t port = mec_hal_i2c_smb_port_get(regs);
+
+	if (!port_num) {
+		return -EINVAL;
+	}
+
+	*port_num = port;
+	return 0;
+}
+
 static int i2c_mec5_nl_get_config(const struct device *dev, uint32_t *dev_config)
 {
 	struct i2c_mec5_nl_data *data = dev->data;
@@ -1412,7 +1442,6 @@ static int i2c_mec5_nl_transfer(const struct device *dev, struct i2c_msg *msgs,
 /* I2C-NL supports up to two 7-bit target addresses */
 static int i2c_mec5_nl_target_register(const struct device *dev, struct i2c_target_config *cfg)
 {
-	/* const struct i2c_mec5_nl_config *const devcfg = dev->config; */
 	struct i2c_mec5_nl_data *const data = dev->data;
 	int ret = 0;
 	uint8_t targ_addr = 0;
