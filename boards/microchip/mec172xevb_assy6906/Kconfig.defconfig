@@ -1,7 +1,7 @@
 # Copyright (c) 2021 Microchip Technology Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-if BOARD_MEC172XEVB_ASSY6906
+if BOARD_MEC172XEVB_ASSY6906 || BOARD_MEC172XEVB_ASSY6906_SZ || BOARD_MEC172XEVB_ASSY6906_LJ
 
 config INPUT
 	default y if KSCAN
