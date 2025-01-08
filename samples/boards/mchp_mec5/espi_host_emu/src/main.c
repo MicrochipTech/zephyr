@@ -971,6 +971,107 @@ int main(void)
 	}
 #endif 
 
+/* New for NV Yukon project */	/* //////////////////////////////////////////////////////////////////////////////////////////// */
+#if 1
+	k_sleep(K_MSEC(12000));
+	/* Send nSUS_STAT=1 and nPLTRST=1
+	 * nSUS_STAT Host index 0x03 bit 0
+	 * nPLTRST Host index 0x03 bit 1
+	 */	
+//	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 0, 1);
+	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 2, 1);
+
+	if (ret) {
+		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x03u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x03 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif 
+
+#if 0
+	/* 01/02/2025 VW Cold Reset# support */
+	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
+	LOG_INF("Host send C2T nSLP_WLAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 1, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_WLAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	//#if 1
+	k_sleep(K_MSEC(200));
+	/* 01/02/2025 VW Cold Reset# support */
+	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
+	LOG_INF("Host send C2T nSLP_WLAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 0, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_WLAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	//#endif 
+
+	k_sleep(K_MSEC(200));
+
+
+	/* 01/02/2025 VW Cold Reset# support */
+	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
+	LOG_INF("Host send C2T nSLP_WLAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 1, 0);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_WLAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	//#if 1
+	k_sleep(K_MSEC(200));
+	/* 01/02/2025 VW Cold Reset# support */
+	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
+	LOG_INF("Host send C2T nSLP_WLAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 0, 0);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_WLAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	//#endif 
+
+	k_sleep(K_MSEC(200));
+
+#endif
+
 	LOG_INF("Application Done");
 	spin_val = 99u;
 	while (spin_val) {
