@@ -577,7 +577,7 @@ int espi_hc_emu_is_target_ready(void)
 {
 	int pin_level =	gpio_pin_get_dt(&target_ready_n_dt);
 
-	if (pin_level == 0) {
+	if (pin_level == 1) {
 		return 1;
 	}
 
@@ -1056,12 +1056,14 @@ int espi_hc_ctx_emu_ctrl(struct espi_hc_context *hc, uint8_t enable)
 
 	LOG_INF("eSPI HC emu: nESPI_RESET de-asserted");
 
+#if 0
 	config_offset = ESPI_GET_CONFIG_DEV_ID;
 	ret = espi_hc_emu_get_config(hc, config_offset, &hc->version_id, &hc->pkt_status);
 	if (ret) {
 		LOG_ERR("eSPI GET_CONFIG[%u] after release of nESPI_RESET failed (%d)",
 			config_offset, ret);
 	}
+#endif
 
 	config_offset = ESPI_GET_CONFIG_GLB_CAP;
 	ret = espi_hc_emu_get_config(hc, config_offset, &hc->global_cap_cfg, &hc->pkt_status);

@@ -135,6 +135,7 @@ int main(void)
 	LOG_INF("Delay 100 ms to allow Target to print debug messages");
 	k_sleep(K_MSEC(100));
 
+#if 0
 	/* Get eSPI Device ID */
 	LOG_INF("Read eSPI Device ID from Target");
 	cfgid = ESPI_GET_CONFIG_DEV_ID;
@@ -146,6 +147,7 @@ int main(void)
 	}
 	espi_debug_print_cap_word(cfgid, hc.version_id);
 	espi_debug_pr_status(hc.pkt_status);
+#endif
 
 	LOG_INF("Read General Capabilities from Target");
 	cfgid = ESPI_GET_CONFIG_GLB_CAP;
@@ -463,6 +465,8 @@ int main(void)
 		goto app_exit;
 	}
 
+#if 0
+/* Configure all VWs as default values as POR */
 	LOG_INF("Send default values of all Controller-to-Target VWires");
 	ret = espi_hc_ctx_emu_put_mult_host_index(&hc, c2t_vw_host_idxs,
 						  ARRAY_SIZE(c2t_vw_host_idxs),
@@ -472,6 +476,7 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+#endif
 
 	LOG_INF("Issue GET_STATUS");
 	ret = espi_hc_ctx_get_status(&hc);
@@ -500,6 +505,7 @@ int main(void)
 		goto app_exit;
 	}
 
+#if 0
 	/* PUT_VWIRE SUS_WARN# = 1. Host index 0x41 bit 0 */
 	LOG_INF("Host send C2T nSUS_WARN = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x41u, 0, 1);
@@ -514,7 +520,10 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+#endif
 
+/* need S3/s4/s5 !!! VW */
+#if 0
 	/* Send VW nSLP_S5=1. Host index 0x02 bit 2 */
 	LOG_INF("Host send C2T nSLP_S5 = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 2, 1);
@@ -559,7 +568,9 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+#endif
 
+#if 0
 	/* Send VW nSLP_A=1, Host index 0x41 bit 3 */
 	LOG_INF("Host send C2T nSLP_A = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x41u, 3, 1);
@@ -604,24 +615,28 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+#endif
 
 	/* Send nSUS_STAT=1 and nPLTRST=1
 	 * nSUS_STAT Host index 0x03 bit 0
 	 * nPLTRST Host index 0x03 bit 1
 	 */
 	LOG_INF("Host send C2T nSLP_WLAN = 1 and nPLTRST = 1");
+#if 0	
 	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 0, 1);
 	if (ret) {
 		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+#endif	
 	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 1, 1);
 	if (ret) {
 		LOG_ERR("In HC CTX set PLTRST# = 1 error %d", ret);
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+//	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x03u);
 	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x03u);
 	if (ret) {
 		LOG_ERR("PUT_VW Host Index 0x03 error %d", ret);
@@ -630,7 +645,7 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
-
+#if 0
 	/* write 1-byte to I/O 0x62 currently mapped to EC ACPI_EC0 */
 	io_addr_len = 0x10062u;
 	io_data = 0x5Au;
@@ -784,7 +799,7 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-	
+#endif	
 	k_sleep(K_MSEC(50));
 
 	/* eSPI Target memory mapped SRAM0, SRAM1, EMI0 and EMI1 try using eSPI PUT/GET_PC MEM32
@@ -793,7 +808,9 @@ int main(void)
 
 	tag = 0u;
 	cmd_status = 0u;
-	mem_addr = 0x20000000u;
+//	mem_addr = 0x20000000u;
+//	mem_addr = 0x01000000u;
+	mem_addr = 0x06000600u;
 	mem_data = 0x87654321u;
 
 	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
@@ -818,13 +835,15 @@ int main(void)
 	LOG_INF("eSPI EMU PUT_MEMRD32 4-bytes from 0x%0x", mem_addr);
 
 	cmd_status = 0u;
-	mem_addr = 0x20000000u;
-	mem_data2 = 0x55555555u;
+//	mem_addr = 0x20000000u;
+//	mem_addr = 0x01000000u;
+	mem_addr = 0x06000600u;
+	mem_data2 = 0xaaaabbbbu;
 
 	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
 	if (ret) {
 		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		spin_on((uint32_t)__LINE__, ret);		/* read back error here */
 	}
 
 	LOG_INF("Data from target = 0x%08x", mem_data2);
@@ -838,7 +857,9 @@ int main(void)
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
 
 	tag = 1u;
-	mem_addr = 0x20000014u;
+//	mem_addr = 0x20000014u;
+//	mem_addr = 0x01000014u;
+	mem_addr = 0x06000614u;
 	mem_len = 0x17u;
 	for (size_t n = 0; n < mem_len; n++) {
 		data_buf[n] = (uint8_t)(n + 1u);
@@ -886,7 +907,23 @@ int main(void)
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
 
+/* FPGA test */
+// read 0x01000100
+	cmd_status = 0u;
+//	mem_addr = 0x01000100u;
+	mem_addr = 0x06000700u;
+	mem_data2 = 0x0u;
 
+	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);		/* read back error here */
+	}
+
+	LOG_INF("Data from target = 0x%08x", mem_data2);
+
+
+#if 0
 	/* Signal the Target we wrote to SRAM0 BAR */
 	tag = 0u;
 	cmd_status = 0u;
@@ -932,6 +969,7 @@ int main(void)
 
 		k_sleep(K_MSEC(200));
 	}
+#endif 
 
 	LOG_INF("Application Done");
 	spin_val = 99u;
