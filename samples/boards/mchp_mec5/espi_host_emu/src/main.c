@@ -923,6 +923,7 @@ int main(void)
 	LOG_INF("Data from target = 0x%08x", mem_data2);
 
 
+#if 1
 #if 0
 	/* Signal the Target we wrote to SRAM0 BAR */
 	tag = 0u;
@@ -937,6 +938,7 @@ int main(void)
 		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
+#endif
 
 	k_sleep(K_MSEC(50));
 
@@ -972,7 +974,8 @@ int main(void)
 #endif 
 
 /* New for NV Yukon project */	/* //////////////////////////////////////////////////////////////////////////////////////////// */
-#if 1
+
+#if 0
 	k_sleep(K_MSEC(12000));
 	/* Send nSUS_STAT=1 and nPLTRST=1
 	 * nSUS_STAT Host index 0x03 bit 0
