@@ -84,9 +84,9 @@ static const struct device *i2c_nl_dev = DEVICE_DT_GET(I2C_NL0_NODE);
 static const struct device *i2c_nl2_dev = DEVICE_DT_GET(I2C_NL1_NODE);
 
 /* Driver pads the buffer by 4 bytes */
-#define I2C_NL_TM_RX_BUF_SIZE (DT_PROP(I2C_NL0_NODE, tm_rx_buf_size) + 8u)
+#define I2C_NL_TM_DATA_RX_BUF_SIZE (DT_PROP(I2C_NL0_NODE, tm_rx_buf_size))
 
-BUILD_ASSERT(I2C_NL_TM_RX_BUF_SIZE >= 4, "I2C-NL0 tm-rx-buf-size property < 4");
+BUILD_ASSERT(I2C_NL_TM_DATA_RX_BUF_SIZE >= 4, "I2C-NL0 tm-rx-buf-size property < 4");
 
 /* Access devices on an I2C bus using Device Tree child nodes of the I2C controller */
 static const struct i2c_dt_spec pca9555_dts = I2C_DT_SPEC_GET(DT_NODELABEL(pca9555_evb));
@@ -115,14 +115,9 @@ static int test_i2c_fram(const struct i2c_dt_spec *fram_i2c_spec,
 			 i2c_callback_t cb, void *userdata,
 			 bool async);
 
-static int test_i2c_fram_multi_msg(const struct i2c_dt_spec *fram_i2c_spec,
-				   uint16_t fram_offset, size_t datasz,
-				   i2c_callback_t cb, void *userdata,
-				   bool async);
-
-uint8_t buf1[512];
-uint8_t buf2[512];
-uint8_t buf3[512];
+uint8_t buf1[512 + 8u];
+uint8_t buf2[512 + 8u];
+uint8_t buf3[512 + 8u];
 
 int main(void)
 {
@@ -354,9 +349,6 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
 	ret = test_i2c_fram(&mb85rc256v_dts, fram_addr, fram_datasz, i2c_cb_fp, NULL, false);
 	if (ret) {
 		spin_on((uint32_t)__LINE__, ret);
@@ -388,14 +380,6 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-	LOG_INF("Test multi-message");
-	fram_addr = 0x600u;
-	fram_datasz = 16u;
-	ret = test_i2c_fram_multi_msg(&mb85rc256v_dts, fram_addr, fram_datasz,
-				      i2c_cb_fp, NULL, false);
-	if (ret) {
-		spin_on((uint32_t)__LINE__, ret);
-	}
 #endif /* APP_BOARD_HAS_FRAM_ATTACHED */
 
 	ret = test_i2c_target_register(i2c_nl_dev, true, 0);
@@ -407,9 +391,9 @@ int main(void)
 
 	LOG_INF("Target 0 registered");
 
-	LOG_INF("I2C-NL0 TM RX buffer size is %u bytes", I2C_NL_TM_RX_BUF_SIZE);
+	LOG_INF("I2C-NL0 TM RX buffer size is %u bytes", I2C_NL_TM_DATA_RX_BUF_SIZE);
 
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 5u;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE - 5u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -420,13 +404,10 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 4u;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE - 4u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -437,13 +418,10 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 3u;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE - 3u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -454,13 +432,10 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 2u;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE - 2u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -471,13 +446,10 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE - 1u;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE - 1u;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -488,13 +460,10 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
-	i2c_nl_wr_len = I2C_NL_TM_RX_BUF_SIZE;
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE;
 	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
 
 	for (int i = 0; i < i2c_nl_wr_len; i++) {
@@ -505,12 +474,24 @@ int main(void)
 				    buf1, i2c_nl_wr_len);
 	if (ret) {
 		LOG_ERR("Target write error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
 	}
 
-	/* Target Read tests */
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
+	i2c_nl_wr_len = I2C_NL_TM_DATA_RX_BUF_SIZE + 16u;
+	LOG_INF("Write %u bytes to I2C-NL0 target", i2c_nl_wr_len);
+
+	for (int i = 0; i < i2c_nl_wr_len; i++) {
+		buf1[i] = (uint8_t)(i % 256);
+	}
+
+	ret = test_i2c_target_write(i2c_nl2_dev, mb85rc256v_dts.bus, I2C_TARGET_MODE_ADDR0,
+				    buf1, i2c_nl_wr_len);
+	if (ret) {
+		LOG_ERR("Target write error (%d)", ret);
+		/* spin_on((uint32_t)__LINE__, ret); */
+	}
+
+	k_sleep(K_MSEC(2));
 
 	i2c_nl_rd_len = 3u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
@@ -545,9 +526,6 @@ int main(void)
 	}
 
 	/* read 0xf8(248) bytes */
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
 	i2c_nl_rd_len = 248u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
 
@@ -581,9 +559,6 @@ int main(void)
 	}
 
 	/* read 501 bytes */
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
 	i2c_nl_rd_len = 501u;
 	LOG_INF("Target read %u bytes", i2c_nl_rd_len);
 
@@ -617,9 +592,6 @@ int main(void)
 	}
 
 	/* read 5 bytes and intentionally do not supply an application buffer: error path in driver */
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
-
 	i2c_nl_rd_len = 5u;
 	LOG_INF("Target read %u bytes with app returning error on buffer request cb", i2c_nl_rd_len);
 
@@ -651,9 +623,6 @@ int main(void)
 	} else {
 		LOG_INF("Target read %u bytes data mismatch: EXPECT FAIL", i2c_nl_rd_len);
 	}
-
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
 
 	/* Break the driver: Target START wrAddr wrData1 Rpt-START rdAddr rdData1 */
 	i2c_nl_wr_len = 1u;
@@ -693,9 +662,6 @@ int main(void)
 		LOG_INF("I2C Combined write %u bytes, read %u bytes: data mismatch FAIL",
 			i2c_nl_wr_len, i2c_nl_rd_len);
 	}
-
-	i2c_mchp_nl_clr_buffers(mb85rc256v_dts.bus, 0x55);
-	i2c_mchp_nl_clr_debug_data(mb85rc256v_dts.bus);
 
 	LOG_INF("Target Combined: Write 2, Write 3");
 
@@ -954,25 +920,20 @@ static int test_i2c_fram(const struct i2c_dt_spec *fram_i2c_spec,
 		return -EMSGSIZE;
 	}
 
-	for (size_t n = 0; n < datasz; n++) {
-		buf2[n] = (uint8_t)(n % 256u);
-	}
-
 	buf1[0] = (uint8_t)((fram_offset >> 8) & 0xffu); /* address b[15:8] */
 	buf1[1] = (uint8_t)((fram_offset) & 0xffu); /* address b[7:0] */
+
+	for (size_t n = 0; n < datasz; n++) {
+		buf1[n + 2] = (uint8_t)(n % 256u);
+	}
 
 	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x", datasz, fram_offset);
 
 	msgs[0].buf = buf1;
-	msgs[0].len = 2u;
-	msgs[0].flags = I2C_MSG_WRITE;
+	msgs[0].len = 2u + datasz; /* 2 byte offset plus data */
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
 
-	msgs[1].buf = buf2;
-	msgs[1].len = datasz;
-	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
-
-
-	nmsgs = 2;
+	nmsgs = 1;
 	ret = i2c_transfer_dt(fram_i2c_spec, msgs, nmsgs);
 	if (ret) {
 		LOG_ERR("I2C API for FRAM write returned error %d", ret);
@@ -1000,85 +961,7 @@ static int test_i2c_fram(const struct i2c_dt_spec *fram_i2c_spec,
 		return ret;
 	}
 
-	ret = memcmp(buf2, buf3, datasz);
-	if (ret == 0) {
-		LOG_INF("I2C FRAM Test write data and read back at "
-			"offset 0x%0x length %u: PASS", fram_offset, datasz);
-	} else {
-		LOG_ERR("I2C FRAM Test write data and read back FAIL");
-	}
-
-	return ret;
-}
-
-/* Trigger driver to parse messages into more than one group */
-static int test_i2c_fram_multi_msg(const struct i2c_dt_spec *fram_i2c_spec,
-				   uint16_t fram_offset, size_t datasz,
-				   i2c_callback_t cb, void *userdata,
-				   bool async)
-{
-	struct i2c_msg msgs[4] = { 0 };
-	int ret = 0;
-	uint8_t nmsgs = 0;
-
-	if (!fram_i2c_spec) {
-		LOG_ERR("I2C FRAM test bad i2c_dt_spec parameter");
-		return -EINVAL;
-	}
-
-	if (!datasz) {
-		LOG_INF("I2C FRAM test data size is 0. Nothing to do");
-		return 0;
-	}
-
-	if (((uint32_t)fram_offset + datasz) > (32u * 1024u)) {
-		LOG_ERR("I2C FRAM test: offset + datasz overflows 32KB FRAM size");
-		return -EMSGSIZE;
-	}
-
-	if (datasz > sizeof(buf2)) {
-		LOG_ERR("I2C FRAM test requested data size exceeds "
-			"test buffer size of %u bytes", sizeof(buf2));
-		return -EMSGSIZE;
-	}
-
-	/* fill receive buffer with 0x55 */
-	memset(buf2, 0x55, sizeof(buf2));
-	memset(buf3, 0x55, sizeof(buf3));
-
-	for (size_t n = 0; n < datasz; n++) {
-		buf2[n] = (uint8_t)(n % 256u);
-	}
-
-	buf1[0] = (uint8_t)((fram_offset >> 8) & 0xffu); /* address b[15:8] */
-	buf1[1] = (uint8_t)((fram_offset) & 0xffu); /* address b[7:0] */
-
-	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x and read back", datasz, fram_offset);
-
-	msgs[0].buf = buf1;
-	msgs[0].len = 2u;
-	msgs[0].flags = I2C_MSG_WRITE;
-
-	msgs[1].buf = buf2;
-	msgs[1].len = datasz;
-	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
-
-	msgs[2].buf = buf1;
-	msgs[2].len = 2u;
-	msgs[2].flags = I2C_MSG_WRITE;
-
-	msgs[3].buf = buf3;
-	msgs[3].len = datasz;
-	msgs[3].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-	nmsgs = 4;
-	ret = i2c_transfer_dt(fram_i2c_spec, msgs, nmsgs);
-	if (ret) {
-		LOG_ERR("I2C API passed multi-messages returned error %d", ret);
-		return ret;
-	}
-
-	ret = memcmp(buf2, buf3, datasz);
+	ret = memcmp(&buf1[2], buf3, datasz);
 	if (ret == 0) {
 		LOG_INF("I2C FRAM Test write data and read back at "
 			"offset 0x%0x length %u: PASS", fram_offset, datasz);

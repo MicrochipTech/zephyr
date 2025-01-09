@@ -143,7 +143,9 @@
 
 &dmac {
 	compatible = "microchip,mec5-dmac";
-	status = "okay";
+	/* reserve channels 2 - 5 for i2c_smb_1 and i2c_smb_2 I2C-NL driver */
+	dma-channel-mask = <0xfffc3>;
+	status = "disabled";
 };
 
 &uart1 {
@@ -195,9 +197,13 @@
 	drive-strength = "4x";
 };
 
+/* I2C-NL driver for i2c_smb_0 and i2c_smb_1 NVIC priority set to 3.
+ * Driver has build time check of I2C and DMA channel priorities.
+ */
 &i2c_smb_0 {
 	compatible = "microchip,mec5-i2c";
 	status = "okay";
+	interrupts = <20 3>;
 	port_sel = < 0 >;
 	sda-gpios = < MCHP_GPIO_DECODE_003 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_004 0 >;
@@ -220,16 +226,14 @@
 	};
 };
 
-/* Work-around Target mode receive from Host when Host writes enough data to
- * trigger DMA done interrupt. We configure DMA to be at a higher interrupt
- * priority than I2C. Since both are at priority 1, we set I2C-NL to priority
- * 2. ARM NVIC priority numbers are low is higher priority.
- *
+/* I2C-NL driver requires I2C controller interrupt NVIC priority < DMA channel NVIC priority
+ * All DMA channels are at NVIC priority 1 in the chip level DTSI file.
+ * NOTE: For NVIC lower number is higher priority.
  */
 &i2c_smb_1 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
-	interrupts = <21 2>;
+	interrupts = <21 3>;
 	port_sel = < 4 >;
 	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
@@ -248,6 +252,7 @@
 &i2c_smb_2 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
+	interrupts = <22 3>;
 	port_sel = < 5 >;
 	sda-gpios = < MCHP_GPIO_DECODE_141 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_142 0 >;

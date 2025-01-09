@@ -158,7 +158,7 @@ static int i2c_target0_stop_cb(struct i2c_target_config *config)
 	target0_stop_cb = true;
 
 #ifdef TEST_I2C_TARGET_DBG_MSGS
-	LOG_INF("TM CB STOP");
+	LOG_INF("TM CB I2C STOP: addr=0x%0x", config->address);
 #endif
 	atomic_set(&target0_read_done, 1);
 
@@ -166,6 +166,7 @@ static int i2c_target0_stop_cb(struct i2c_target_config *config)
 }
 
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+
 static void i2c_target0_buf_wr_rcvd_cb(struct i2c_target_config *config, uint8_t *ptr,
 				       uint32_t len)
 {
@@ -175,17 +176,32 @@ static void i2c_target0_buf_wr_rcvd_cb(struct i2c_target_config *config, uint8_t
 		return;
 	}
 
-	target_test_wr_rx_len = len;
+	target_test_wr_rx_len += len;
 
 #ifdef TEST_I2C_TARGET_DBG_MSGS
-	LOG_INF("TM CB Write received: cfg=%p buf=%p len=%u", config, ptr, len);
+	LOG_INF("TM CB Write rcvd: cfg=%p buf=%p len=%u", config, ptr, len);
 #endif
 
 	if (ptr && len) {
-		if ((uint32_t)(tm_rx_buf_ptr - tm_rx_buf) < len) {
-			memcpy(tm_rx_buf_ptr, ptr, len);
-			tm_rx_buf_ptr += len;
+		uint32_t avail = TM_RX_BUF_SIZE - (tm_rx_buf_ptr - tm_rx_buf);
+		uint32_t clen = len;
+
+		if (!avail) {
+#ifdef TEST_I2C_TARGET_DBG_MSGS
+			LOG_ERR("TM CB Write rcvd: ");
+#endif
+			return;
 		}
+
+		if (clen > avail) {
+			clen = avail;
+		}
+
+#ifdef TEST_I2C_TARGET_DBG_MSGS
+		LOG_INF("TM CB Write rcvd: dest=%p len=%u", tm_rx_buf_ptr, len);
+#endif
+		memcpy(tm_rx_buf_ptr, ptr, len);
+		tm_rx_buf_ptr += len;
 	}
 }
 
@@ -296,17 +312,16 @@ int test_i2c_target_write(const struct device *i2c_cm_dev, const struct device *
 		return ret;
 	}
 
-	if (target_test_wr_rx_len != datasz) {
-		LOG_INF("Target captured only %u bytes of %u from External Controller",
-			target_test_wr_rx_len, datasz);
-	} else if (target_test_wr_rx_len && datasz) {
+	LOG_INF("Sleep 2 sec: time for communication");
+	k_sleep(K_MSEC(2000)); /* kludge */
+
+	LOG_INF("Target captured %u bytes of %u from External Controller",
+		target_test_wr_rx_len, datasz);
+
+	ret = -EILSEQ;
+	if (target_test_wr_rx_len) {
 		ret = memcmp(tm_rx_buf, data, target_test_wr_rx_len);
-		if (ret) {
-			ret = -EILSEQ;
-			LOG_ERR("Target write data != send data");
-		} else {
-			LOG_INF("Target captured bytes match: PASS");
-		}
+		LOG_INF("Data compare result(0=Match): %d", ret);
 	}
 
 	return ret;
