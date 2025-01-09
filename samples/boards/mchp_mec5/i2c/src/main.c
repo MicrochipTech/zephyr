@@ -14,6 +14,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/dma.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/i2c/mchp_mec5_i2c.h>
@@ -41,6 +42,7 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define I2C0_NODE	DT_ALIAS(i2c0)
 #define I2C_NL0_NODE	DT_ALIAS(i2c_nl_0)
+#define I2C_NL0_CM_TX_BUF_SIZE DT_PROP(I2C_NL0_NODE, cm_tx_buf_size)
 
 static const struct device *i2c_dev = DEVICE_DT_GET(I2C0_NODE);
 static const struct device *i2c_nl_dev = DEVICE_DT_GET(I2C_NL0_NODE);
@@ -76,6 +78,11 @@ int main(void)
 	struct i2c_msg msgs[4];
 
 	LOG_INF("MEC5 I2C sample: board: %s", DT_N_P_compatible_IDX_0);
+
+	LOG_INF("Zephyr DMA driver struct dma_block_config size = %u",
+		sizeof(struct dma_block_config));
+	LOG_INF("Zephyr DMA driver struct dma_config size = %u",
+		sizeof(struct dma_config));
 
 	memset(msgs, 0, sizeof(msgs));
 	memset(buf1, 0x55, sizeof(buf1));
@@ -367,8 +374,8 @@ static int test_i2c_nl(const struct device *idev)
 	}
 
 #ifdef APP_BOARD_HAS_FRAM_ATTACHED
-	fram_nbytes = 32u;
-	fram_mem_addr = 0x1234u;
+	fram_nbytes = 4u;
+	fram_mem_addr = 0x2010u;
 
 	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x", fram_nbytes, fram_mem_addr);
 
@@ -397,6 +404,8 @@ static int test_i2c_nl(const struct device *idev)
 
 	LOG_INF("MB85RC256V FRAM read %u bytes from offset 0x%x", fram_nbytes, fram_mem_addr);
 
+	memset(buf3, 0x55, sizeof(buf3));
+
 	nmsgs = 2;
 	buf2[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
 	buf2[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
@@ -411,30 +420,30 @@ static int test_i2c_nl(const struct device *idev)
 
 	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
 	if (ret) {
-		LOG_ERR("I2C API for FRAM write returned error %d", ret);
+		LOG_ERR("I2C API for FRAM read returned error %d", ret);
 		return ret;
 	}
 
 	ret = memcmp(&buf1[2], buf3, fram_nbytes);
 	if (ret == 0) {
-		LOG_INF("FRAM read back of 32 bytes matches written data");
+		LOG_INF("FRAM read back of %u bytes matches written data", fram_nbytes);
 	} else {
 		LOG_ERR("FRAM read back mismatch");
 	}
 
-	if (sizeof(buf1) < ((2 * CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE) + 2u)) {
+	if (sizeof(buf1) < ((2 * I2C_NL0_CM_TX_BUF_SIZE) + 2u)) {
 		LOG_ERR("Test error: require buf1 and buf2 sizes > "
 			"(2 * I2C-NL driver buffer size) + 2");
 		return -EINVAL;
 	}
 
-	fram_nbytes = 2 * CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE;
+	fram_nbytes = 2 * I2C_NL0_CM_TX_BUF_SIZE;
 	for (temp = 0; temp < fram_nbytes; temp++) {
 		buf1[temp + 2] = (uint8_t)(temp & 0xffu);
 	}
 
 	/* FRAM offset 0 */
-	fram_mem_addr = 0;
+	fram_mem_addr = 0x0210;
 	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
 	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
 
@@ -485,25 +494,21 @@ static int test_i2c_nl(const struct device *idev)
 	memset(buf3, 0x55, sizeof(buf3));
 
 	/* odd size larger than driver buffer */
-	fram_nbytes = CONFIG_I2C_MCHP_MEC5_NL_BUFFER_SIZE + 5u;
-	fram_mem_addr = 0x8756u;
+	fram_nbytes = I2C_NL0_CM_TX_BUF_SIZE + 5u;
+	fram_mem_addr = 0x0320u;
 	buf1[0] = (uint8_t)((fram_mem_addr >> 8) & 0xffu); /* address b[15:8] */
 	buf1[1] = (uint8_t)((fram_mem_addr) & 0xffu); /* address b[7:0] */
 
 	for (temp = 0; temp < fram_nbytes; temp++) {
-		buf2[temp] = (uint8_t)(temp & 0xffu);
+		buf1[temp + 2] = (uint8_t)(temp & 0xffu);
 	}
 
-	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x: first write msg is offset, "
-		"second is data", fram_nbytes, fram_mem_addr);
+	LOG_INF("MB85RC256V FRAM write %u bytes to offset 0x%x", fram_nbytes, fram_mem_addr);
 
-	nmsgs = 2;
+	nmsgs = 1;
 	msgs[0].buf = buf1;
-	msgs[0].len = 2u; /* 16-bit offset in FRAM */
-	msgs[0].flags = I2C_MSG_WRITE;
-	msgs[1].buf = buf2;
-	msgs[1].len = fram_nbytes;
-	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+	msgs[0].len = fram_nbytes + 2u;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
 
 	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
 	if (ret) {
@@ -527,11 +532,11 @@ static int test_i2c_nl(const struct device *idev)
 
 	ret = i2c_transfer_dt(&mb85rc256v_dts, msgs, nmsgs);
 	if (ret) {
-		LOG_ERR("I2C API for FRAM write returned error %d", ret);
+		LOG_ERR("I2C API for FRAM write-read returned error %d", ret);
 		return ret;
 	}
 
-	ret = memcmp(buf2, buf3, fram_nbytes);
+	ret = memcmp(&buf1[2], buf3, fram_nbytes);
 	if (ret == 0) {
 		LOG_INF("FRAM read back of %u bytes matches written data", fram_nbytes);
 	} else {

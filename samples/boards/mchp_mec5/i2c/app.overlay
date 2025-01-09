@@ -125,7 +125,8 @@
 
 &dmac {
 	compatible = "microchip,mec5-dmac";
-	status = "okay";
+	dma-channel-mask = <0xfffc3>;
+	status = "disabled";
 };
 
 &uart1 {
@@ -180,6 +181,7 @@
 &i2c_smb_0 {
 	compatible = "microchip,mec5-i2c";
 	status = "okay";
+	interrupts = <20 3>;
 	port_sel = < 0 >;
 	sda-gpios = < MCHP_GPIO_DECODE_003 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_004 0 >;
@@ -205,6 +207,7 @@
 &i2c_smb_1 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
+	interrupts = <21 3>;
 	port_sel = < 4 >;
 	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
@@ -212,6 +215,7 @@
 	pinctrl-names = "default";
 	dmas = <&dmac 2 0x3>, <&dmac 3 0x2>;
 	dma-names = "cm", "tm";
+	cm-tx-buf-size = <8>;
 
 	/* External Fujitsu MB85RC256V 256KB (32K x 8) FRAM */
 	mb85rc256v: mb85rc256v@50 {
@@ -223,11 +227,12 @@
 &i2c_smb_2 {
 	compatible = "microchip,mec5-i2c-nl";
 	status = "okay";
+	interrupts = <22 3>;
 	port_sel = < 5 >;
 	sda-gpios = < MCHP_GPIO_DECODE_141 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_142 0 >;
 	pinctrl-0 = < &i2c05_sda_gpio141 &i2c05_scl_gpio142 >;
 	pinctrl-names = "default";
-	dmas = <&dmac 3 0x5>, <&dmac 4 0x4>;
+	dmas = <&dmac 4 0x5>, <&dmac 5 0x4>;
 	dma-names = "cm", "tm";
 };
