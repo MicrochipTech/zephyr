@@ -12,12 +12,14 @@ zephyr_sources_ifdef(CONFIG_PM
   power.c
   )
 
-if(CONFIG_SOC_HAS_TIMING_FUNCTIONS AND NOT CONFIG_BOARD_HAS_TIMING_FUNCTIONS)
-  if(CONFIG_TIMING_FUNCTIONS)
-    # Use MEC15xx timing calculations only if DWT is not present
-    if(NOT CONFIG_CORTEX_M_DWT)
-      zephyr_library_sources(timing.c)
-    endif()
+# This method allows forcing use of SoC timing functions by setting
+# CONFIG_MCHP_MEC_SOC_HAS_TIMING_FUNCTIONS=y. Both arch and SoC timing functions will be
+# built but the timing subsys module will only call the SoC functions.
+# CONFIG_MCHP_MEC_SOC_HAS_TIMING_FUNCTIONS defaults to "n" resulting in the arch Cortex-M4 DWT
+# timing functions being built if CONFIG_TIMING_FUNCTIONS=y.
+if(CONFIG_TIMING_FUNCTIONS)
+  if(CONFIG_SOC_HAS_TIMING_FUNCTIONS AND NOT CONFIG_BOARD_HAS_TIMING_FUNCTIONS)
+    zephyr_library_sources(timing.c)
   endif()
 endif()
 

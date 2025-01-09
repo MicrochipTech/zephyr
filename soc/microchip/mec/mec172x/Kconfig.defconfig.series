@@ -17,6 +17,7 @@ if RTOS_TIMER
 
 config SOC_HAS_TIMING_FUNCTIONS
 	default y if !CORTEX_M_DWT
+	default y if MCHP_MEC_SOC_HAS_TIMING_FUNCTIONS
 
 config ARCH_HAS_CUSTOM_BUSY_WAIT
 	default y

@@ -6,6 +6,13 @@
 
 if SOC_FAMILY_MICROCHIP_MEC
 
+config MCHP_MEC_SOC_HAS_TIMING_FUNCTIONS
+	bool "SoC will supply timing functions for timing subsys"
+	default n
+	help
+	  Set this to use SoC timing functions instead of the functions
+	  implemented in the CPU architecture.
+
 menuconfig MCHP_MEC_UNSIGNED_HEADER
 	bool "Create an unsigned output binary with MCHP MEC binary header"
 	depends on SOC_SERIES_MEC172X

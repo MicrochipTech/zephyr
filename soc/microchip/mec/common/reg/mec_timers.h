@@ -12,6 +12,9 @@
 
 /* Basic timers */
 
+/* 0 <= n <= 5 */
+#define MCHP_BTMR_BASE_ADDR(n) (0x40000c00u + ((n) * 0x20u))
+
 /* Offset between instances of the Basic Timer blocks */
 #define MCHP_BTMR_INSTANCE_POS		5ul
 #define MCHP_BTMR_INSTANCE_OFS		0x20u
@@ -94,6 +97,9 @@ struct btmr_regs {
 #define MCHP_HTMR_CTRL_RESOL_30US	0u
 #define MCHP_HTMR_CTRL_RESOL_125MS	BIT(MCHP_HTMR_CTRL_EN_POS)
 
+/* 0 <= n <= 1 */
+#define MCHP_HTMR_BASE_ADDR(n) (0x40009800u + ((n) * 0x20u))
+
 /*
  * Hibernation timer is started and stopped by writing a value
  * to the CNT (count) register.
@@ -113,6 +119,8 @@ struct htmr_regs {
 };
 
 /* Capture/Compare Timer */
+
+#define MCHP_CCT_BASE_ADDR 0x40001000u
 
 /* Control register at offset 0x00. Must use 32-bit access */
 #define MCHP_CCT_CTRL_ACTIVATE		BIT(0)
@@ -152,6 +160,8 @@ struct cct_regs {
 };
 
 /* RTOS Timer */
+#define MCHP_RTMR_BASE_ADDR 0x40007400u
+
 #define MCHP_RTMR_FREQ_HZ		32768u
 
 #define MCHP_RTMR_CTRL_MASK		0x1fu
@@ -184,6 +194,8 @@ struct rtmr_regs {
 };
 
 /* Week Timer */
+#define MCHP_WKTMR_BASE_ADDR 0x4000ac80u
+
 #define MCHP_WKTMR_CTRL_MASK		0x41u
 #define MCHP_WKTMR_CTRL_WT_EN_POS	0
 #define MCHP_WKTMR_CTRL_WT_EN_MASK	BIT(MCHP_WKTMR_CTRL_WT_EN_POS)

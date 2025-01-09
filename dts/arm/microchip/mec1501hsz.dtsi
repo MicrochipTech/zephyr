@@ -339,6 +339,7 @@
 			prescaler = <0>;
 			girqs = <23 5>;
 			pcrs = <3 24>;
+			status = "disabled";
 		};
 		hibtimer0: timer@40009800 {
 			reg = <0x40009800 0x20>;
