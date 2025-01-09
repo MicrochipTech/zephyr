@@ -18,8 +18,4 @@ int i2c_mchp_nl_configure(const struct device *dev, uint32_t dev_config, uint8_t
 int i2c_mchp_nl_get_port(const struct device *dev, uint8_t *port_num);
 int i2c_mchp_get_port(const struct device *dev, uint8_t *port_num);
 
-int i2c_mchp_nl_clr_buffers(const struct device *dev, uint8_t val);
-
-int i2c_mchp_nl_clr_debug_data(const struct device *dev);
-
 #endif /* ZEPHYR_INCLUDE_DRIVERS_I2C_MCHP_MEC5_I2C_H_ */
