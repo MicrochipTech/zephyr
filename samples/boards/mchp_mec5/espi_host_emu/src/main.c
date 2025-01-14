@@ -645,10 +645,24 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
-#if 0
+	k_sleep(K_MSEC(1500));
+//#if 0
+	/* write 1-byte to I/O 0x200 currently mapped to EC ACPI_EC1 */
+	//io_addr_len = 0x10200u;
+	io_addr_len = 0x106A4u;
+	io_data = 0x12u;
+	cmd_status = 0u;
+	LOG_INF("Write to ACPI_EC1 I/O: 1 byte data = 0x%02x", io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
 	/* write 1-byte to I/O 0x62 currently mapped to EC ACPI_EC0 */
-	io_addr_len = 0x10062u;
-	io_data = 0x5Au;
+	io_addr_len = 0x10066u;
+	io_data = 0xabu;
 	cmd_status = 0u;
 	LOG_INF("Write to ACPI_EC0 I/O: 1 byte data = 0x%02x", io_data);
 	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
@@ -658,6 +672,7 @@ int main(void)
 		goto app_exit;
 	}
 
+#if 0
 	io_addr_len = 0x10080u;
 	io_data = 0x69u;
 	cmd_status = 0u;
@@ -671,7 +686,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-
+//#if 0
 	io_addr_len = 0x10081u;
 	io_data = 0x6Au;
 	cmd_status = 0u;
