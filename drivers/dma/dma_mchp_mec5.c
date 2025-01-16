@@ -347,8 +347,8 @@ static int dma_mec5_configure(const struct device *dev, uint32_t channel,
 	if (config->channel_direction == PERIPHERAL_TO_MEMORY) {
 		chcfg->dir = MEC_DMAC_DIR_DEV_TO_MEM;
 	} else if (config->channel_direction == MEMORY_TO_MEMORY) {
-		/* use HW mem2dev with deviceId = None */
-		chcfg->hwfc_dev = MEC_DMAC_DEV_ID_NONE;
+		/* mem-to-mem requires software flow control */
+		chcfg->flags |= MEC_DMA_CFG_FLAG_SWFLC;
 	}
 
 	chcfg->src_addr = block->source_address;
@@ -523,7 +523,7 @@ static int dma_mec5_get_status(const struct device *dev, uint32_t channel,
 					  - chan_data->total_curr_xfr_len);
 	}
 
-	if (dmacfg.hwfc_dev == MEC_DMAC_DEV_ID_NONE) {
+	if (dmacfg.flags & MEC_DMA_CFG_FLAG_SWFLC) {
 		status->dir = MEMORY_TO_MEMORY;
 	} else if (dmacfg.dir == MEC_DMAC_DIR_MEM_TO_DEV) {
 		status->dir = MEMORY_TO_PERIPHERAL;
@@ -619,15 +619,12 @@ static void do_callback(const struct device *dev, enum mec_dmac_channel chan,
 static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 {
 	struct dma_mec5_data *const data = dev->data;
-	const struct dma_mec5_config *const devcfg = dev->config;
-	struct mec_dmac_regs *const regs = devcfg->regs;
 	struct dma_mec5_channel *chan_data = &data->channels[chan];
 	struct dma_block_config *block = chan_data->curr;
-	uint32_t istatus = 0u;
+	uint32_t istatus = 0u, num_rem_bytes = 0;
 
-	/* TODO */
-	chan_data->total_curr_xfr_len += (regs->CHAN[chan].MEND - regs->CHAN[chan].MSTART);
-		/* chan_data->chan_cfg.nbytes */
+	mec_hal_dma_chan_rem_bytes((enum mec_dmac_channel)chan, &num_rem_bytes);
+	chan_data->total_curr_xfr_len += (chan_data->chan_cfg.nbytes - num_rem_bytes);
 
 	mec_hal_dma_chan_intr_en((enum mec_dmac_channel)chan, 0);
 	mec_hal_dma_chan_halt((enum mec_dmac_channel)chan);
