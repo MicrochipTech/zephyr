@@ -645,12 +645,11 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
-	k_sleep(K_MSEC(1500));
-//#if 0
+#if 0
 	/* write 1-byte to I/O 0x200 currently mapped to EC ACPI_EC1 */
 	//io_addr_len = 0x10200u;
 	io_addr_len = 0x106A4u;
-	io_data = 0x12u;
+	io_data = 0x01u;
 	cmd_status = 0u;
 	LOG_INF("Write to ACPI_EC1 I/O: 1 byte data = 0x%02x", io_data);
 	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
@@ -672,7 +671,6 @@ int main(void)
 		goto app_exit;
 	}
 
-#if 0
 	io_addr_len = 0x10080u;
 	io_data = 0x69u;
 	cmd_status = 0u;
@@ -825,7 +823,7 @@ int main(void)
 	cmd_status = 0u;
 //	mem_addr = 0x20000000u;
 //	mem_addr = 0x01000000u;
-	mem_addr = 0x06000600u;
+	mem_addr = 0x06000800u;
 	mem_data = 0x87654321u;
 
 	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
@@ -852,7 +850,7 @@ int main(void)
 	cmd_status = 0u;
 //	mem_addr = 0x20000000u;
 //	mem_addr = 0x01000000u;
-	mem_addr = 0x06000600u;
+	mem_addr = 0x06000800u;
 	mem_data2 = 0xaaaabbbbu;
 
 	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
@@ -871,6 +869,59 @@ int main(void)
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
 
+//// Martin, add to test sci range in sram bar//////////////////////////////////////////////////////////////////
+
+	/* eSPI Target memory mapped SRAM0, SRAM1, EMI0 and EMI1 try using eSPI PUT/GET_PC MEM32
+	 * to access SRAM and EMI.
+	 */
+
+	tag = 0u;
+	cmd_status = 0u;
+	mem_addr = 0x06000900u;
+	mem_data = 0x11223344u;
+
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
+
+	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_sleep(K_MSEC(50));
+
+	esd.buf = &hcvw2;
+	esd.bufsz = sizeof(hcvw2);
+	esd.nitems = 0u;
+	ret = app_process_espi_status(&hc, cmd_status, &esd);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI EMU PUT_MEMRD32 4-bytes from 0x%0x", mem_addr);
+
+	cmd_status = 0u;
+	mem_addr = 0x06000900u;
+	mem_data2 = 0xaaaabbbbu;
+
+	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);		/* read back error here */
+	}
+
+	LOG_INF("Data from target = 0x%08x", mem_data2);
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+#if 0
 	tag = 1u;
 //	mem_addr = 0x20000014u;
 //	mem_addr = 0x01000014u;
@@ -936,7 +987,7 @@ int main(void)
 	}
 
 	LOG_INF("Data from target = 0x%08x", mem_data2);
-
+#endif
 
 #if 1
 #if 0
@@ -955,7 +1006,41 @@ int main(void)
 	}
 #endif
 
-	k_sleep(K_MSEC(50));
+///////////////////////  test acpiec1 //////////////////////////////////////////////////////////////
+	/* write 1-byte to I/O 0x200 currently mapped to EC ACPI_EC1 */
+	//io_addr_len = 0x10200u;
+	io_addr_len = 0x106A4u;
+	io_data = 0x01u;
+	cmd_status = 0u;
+	LOG_INF("Write to ACPI_EC1 I/O: 1 byte data = 0x%02x", io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#if 0
+	k_sleep(K_MSEC(150));
+
+/* IO read */
+	/* read 1-byte to I/O 0x200 currently mapped to EC ACPI_EC1 */
+	io_addr_len = 0x106A0u;
+	io_data = 0x01u;
+	cmd_status = 0u;
+	LOG_INF("Read to ACPI_EC1 I/O: 1 byte data = 0x%02x", io_data);
+//	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	ret = espi_hc_emu_put_iord(&hc, io_addr_len, io_data, &cmd_status);
+
+//	int espi_hc_emu_put_iord(struct espi_hc_context *hc, uint32_t io_addr_len,
+//			 uint32_t *data, uint16_t *cmd_status);
+
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif
+	k_sleep(K_MSEC(350));
 
 	ret = espi_hc_ctx_get_status(&hc);
 	if (ret) {
