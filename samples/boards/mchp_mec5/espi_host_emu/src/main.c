@@ -522,13 +522,107 @@ int main(void)
 	}
 #endif
 
+/* need S3/s4/s5 !!! VW */
+#if 0
+	/* Send VW nSLP_S5=1. Host index 0x02 bit 2 */
+	LOG_INF("Host send C2T nSLP_S5 = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 2, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_S5# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x02u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x02 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	/* Send VW nSLP_S4=1. Host index 0x02 bit 1 */
+	LOG_INF("Host send C2T nSLP_S4 = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 1, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_S4# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x02u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x02 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	/* Send VW nSLP_S3=1, Host index 0x02 bit 0 */
+	LOG_INF("Host send C2T nSLP_S3 = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 0, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_S3# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x02u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x02 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif
+
+#if 0
+	/* Send VW nSLP_A=1, Host index 0x41 bit 3 */
+	LOG_INF("Host send C2T nSLP_A = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x41u, 3, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_A# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x41u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x41 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	/* Send VW nSLP_LAN=1, Host index 0x42 bit 0 */
+	LOG_INF("Host send C2T nSLP_LAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 0, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_LAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
+	LOG_INF("Host send C2T nSLP_WLAN = 1");
+	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 1, 1);
+	if (ret) {
+		LOG_ERR("In HC CTX set SLP_WLAN# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x42u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x42 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif
 
 	/* Send nSUS_STAT=1 and nPLTRST=1
 	 * nSUS_STAT Host index 0x03 bit 0
 	 * nPLTRST Host index 0x03 bit 1
 	 */
 	LOG_INF("Host send C2T nSLP_WLAN = 1 and nPLTRST = 1");
-#if 1
+#if 0	
 	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 0, 1);
 	if (ret) {
 		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
@@ -551,16 +645,172 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
+#if 0
+	/* write 1-byte to I/O 0x62 currently mapped to EC ACPI_EC0 */
+	io_addr_len = 0x10062u;
+	io_data = 0x5Au;
+	cmd_status = 0u;
+	LOG_INF("Write to ACPI_EC0 I/O: 1 byte data = 0x%02x", io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
 
+	io_addr_len = 0x10080u;
+	io_data = 0x69u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+
+	io_addr_len = 0x10081u;
+	io_data = 0x6Au;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10082u;
+	io_data = 0x6Bu;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10083u;
+	io_data = 0x6Cu;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x20080u;
+	io_data = 0x4321u;
+	cmd_status = 0u;
+	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x20082u;
+	io_data = 0x9876u;
+	cmd_status = 0u;
+	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x20081u;
+	io_data = 0xA987u;
+	cmd_status = 0u;
+	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x40080u;
+	io_data = 0x99887766u;
+	cmd_status = 0u;
+	LOG_INF("32-bit Write I/O Port 0x%02x = 0x%08x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10320u;
+	io_data = 0x22u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10330u;
+	io_data = 0x33u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	
+	k_sleep(K_MSEC(50));
+
+	io_addr_len = 0x10340u;
+	io_data = 0x33u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+#endif	
 	k_sleep(K_MSEC(50));
 
 	/* eSPI Target memory mapped SRAM0, SRAM1, EMI0 and EMI1 try using eSPI PUT/GET_PC MEM32
 	 * to access SRAM and EMI.
 	 */
-#if 0
+
 	tag = 0u;
 	cmd_status = 0u;
-	mem_addr = 0x06000800u;
+//	mem_addr = 0x20000000u;
+//	mem_addr = 0x01000000u;
+	mem_addr = 0x06000600u;
 	mem_data = 0x87654321u;
 
 	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
@@ -570,6 +820,8 @@ int main(void)
 		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
+
+#if 0
 
 	k_sleep(K_MSEC(50));
 
@@ -585,7 +837,9 @@ int main(void)
 	LOG_INF("eSPI EMU PUT_MEMRD32 4-bytes from 0x%0x", mem_addr);
 
 	cmd_status = 0u;
-	mem_addr = 0x06000800u;
+//	mem_addr = 0x20000000u;
+//	mem_addr = 0x01000000u;
+	mem_addr = 0x06000600u;
 	mem_data2 = 0xaaaabbbbu;
 
 	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
@@ -603,28 +857,24 @@ int main(void)
 	}
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
-#endif 
-//// Martin, add to test sci range in sram bar//////////////////////////////////////////////////////////////////
 
-
-#if 1
-k_sleep(K_MSEC(10));
-k_sleep(K_MSEC(10000));
-
-// read 2 byte data back - sci
-	LOG_INF("eSPI EMU PUT_MEMRD32 4-bytes from 0x%0x", mem_addr);
-
-	cmd_status = 0u;
-	mem_addr = 0x06000900u;
-	mem_data2 = 0xaaaabbbbu;
-
-	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 1u, &cmd_status);
-	if (ret) {
-		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);		/* read back error here */
+	tag = 1u;
+//	mem_addr = 0x20000014u;
+//	mem_addr = 0x01000014u;
+	mem_addr = 0x06000614u;
+	mem_len = 0x17u;
+	for (size_t n = 0; n < mem_len; n++) {
+		data_buf[n] = (uint8_t)(n + 1u);
 	}
 
-	LOG_INF("Data from target = 0x%08x", mem_data2);
+	LOG_INF("Memory write: %u bytes to 0x%0x", mem_len, mem_addr);
+
+	cmd_status = 0;
+	ret = espi_hc_emu_put_pc_mem_wr32(&hc, mem_addr, tag, data_buf, mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI MEM32 write failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
 
 	ret = espi_hc_ctx_get_status(&hc);
 	if (ret) {
@@ -634,9 +884,63 @@ k_sleep(K_MSEC(10000));
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
 
+	LOG_INF("Memory read: %u bytes from 0x%0x", mem_len, mem_addr);
+	memset(data_buf2, 0x55, sizeof(data_buf2));
 
-/* read status - read sci */
-//	k_sleep(K_MSEC(10000));
+	cmd_status = 0;
+	ret = espi_hc_emu_put_pc_mem_rd32(&hc, mem_addr, tag, data_buf2, mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI MEM32 read failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = memcmp(data_buf, data_buf2, mem_len);
+	if (ret == 0) {
+		LOG_INF("MEM32 read data matches MEM32 write data: PASS");
+	} else {
+		LOG_ERR("MEM32 read data does not match MEM32 write data: FAIL");
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+/* FPGA test */
+// read 0x01000100
+	cmd_status = 0u;
+//	mem_addr = 0x01000100u;
+	mem_addr = 0x06000700u;
+	mem_data2 = 0x0u;
+
+	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data2, 4u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI PUT_MEMRD32_SHORT failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);		/* read back error here */
+	}
+
+	LOG_INF("Data from target = 0x%08x", mem_data2);
+#endif
+
+#if 0
+	/* Signal the Target we wrote to SRAM0 BAR */
+	tag = 0u;
+	cmd_status = 0u;
+	mem_addr = 0x10000000u; /* EMI0 base. Offset 0 is Host-to-EC mailbox */
+	mem_data = 0xA5u;
+
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 1-byte [0x%0x] = 0x%02x", mem_addr, mem_data);
+
+	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 1u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_sleep(K_MSEC(50));
 
 	ret = espi_hc_ctx_get_status(&hc);
 	if (ret) {
@@ -670,6 +974,98 @@ k_sleep(K_MSEC(10000));
 #endif 
 
 /* New for NV Yukon project */	/* //////////////////////////////////////////////////////////////////////////////////////////// */
+#if 1
+	k_sleep(K_MSEC(220));
+	/* Send nSUS_STAT=1 and nPLTRST=1
+	 * nSUS_STAT Host index 0x03 bit 0
+	 * nPLTRST Host index 0x03 bit 1
+	 */	
+// index 3, bit 2 - oob_rst	 
+//	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 0, 1);
+	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 2, 1);
+
+	if (ret) {
+		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x03u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x03 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+// index 43, bit 0 - 
+//	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 2, 1);
+	ret = espi_hc_set_ct_vwire(&hc, 0x43u, 0, 1);
+
+	if (ret) {
+		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x43u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x03 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+// index 43, bit 0 - 
+//	ret = espi_hc_set_ct_vwire(&hc, 0x03u, 2, 1);
+	ret = espi_hc_set_ct_vwire(&hc, 0x43u, 1, 1);
+
+	if (ret) {
+		LOG_ERR("In HC CTX set SUS_STAT# = 1 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+	ret = espi_hc_ctx_emu_put_host_index(&hc, 0x43u);
+	if (ret) {
+		LOG_ERR("PUT_VW Host Index 0x03 error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+#endif 
+
+// poll status
+#if 1
+	k_sleep(K_MSEC(50));
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+	app_flags |= APP_FLAG_GET_STATUS_LOOP;
+	if (app_flags & APP_FLAG_GET_STATUS_LOOP) {
+		LOG_INF("Application loop issuing eSPI GET_STATUS");
+	}
+
+	while (app_flags & APP_FLAG_GET_STATUS_LOOP) {
+		ret = espi_hc_ctx_get_status(&hc);
+		if (ret) {
+			LOG_ERR("GET_STATUS failed (%d)", ret);
+			spin_on((uint32_t)__LINE__, ret);
+			goto app_exit;
+		}
+		if (hc.pkt_status & ESPI_STATUS_ALL_AVAIL) {
+			esd.buf = &hcvw2;
+			esd.bufsz = sizeof(hcvw2);
+			esd.nitems = 0u;
+			ret = app_process_espi_status(&hc, hc.pkt_status, &esd);
+		}
+
+		k_sleep(K_MSEC(200));
+	}
+#endif 
 
 
 	LOG_INF("Application Done");
