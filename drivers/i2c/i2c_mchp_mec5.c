@@ -414,6 +414,21 @@ int i2c_mchp_configure(const struct device *dev, uint32_t dev_config, uint8_t po
 	return i2c_mec5_configure(dev, dev_config);
 }
 
+/* side-band API */
+int i2c_mchp_get_port(const struct device *dev, uint8_t *port_num)
+{
+	const struct i2c_mec5_config *const devcfg = dev->config;
+	struct mec_i2c_smb_regs *regs = devcfg->base;
+	uint8_t port = mec_hal_i2c_smb_port_get(regs);
+
+	if (!port_num) {
+		return -EINVAL;
+	}
+
+	*port_num = port;
+	return 0;
+}
+
 /* i2c_get_config API */
 static int i2c_mec5_get_config(const struct device *dev, uint32_t *dev_config)
 {
