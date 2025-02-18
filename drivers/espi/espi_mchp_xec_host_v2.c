@@ -826,6 +826,7 @@ static void p80bd0_isr(const struct device *dev)
 	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION, 0,
 				  ESPI_PERIPHERAL_NODATA };
 	int count = 8; /* limit ISR to 8 bytes */
+	printk("SP %x\n", *((unsigned int *) 0x400F810C));
 	uint32_t dattr = p80regs->EC_DA;
 
 	/* b[7:0]=8-bit value written, b[15:8]=attributes */
@@ -844,14 +845,20 @@ static void p80bd0_isr(const struct device *dev)
 					   ESPI_PERIPHERAL_DEBUG_PORT80;
 			break;
 		case MCHP_P80BD_ECDA_LANE_2:
+			evt.evt_details |= (ESPI_PERIPHERAL_INDEX_2 << 16) |
+					   ESPI_PERIPHERAL_DEBUG_PORT80;
 			break;
 		case MCHP_P80BD_ECDA_LANE_3:
+			evt.evt_details |= (ESPI_PERIPHERAL_INDEX_3 << 16) |
+					   ESPI_PERIPHERAL_DEBUG_PORT80;
 			break;
 		default:
 			break;
 		}
 
 		if (evt.evt_details) {
+			printk("edat %x\n", evt.evt_data);
+			printk("edtl %x\n", evt.evt_details);
 			espi_send_callbacks(&data->callbacks, dev, evt);
 			evt.evt_details = 0;
 		}
@@ -886,6 +893,9 @@ static int init_p80bd0(const struct device *dev)
 		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
 
 	regs->IOHBAR[IOB_P80BD] = ESPI_XEC_PORT80_BAR_ADDRESS |
+				  MCHP_ESPI_IO_BAR_HOST_VALID;
+
+	regs->IOHBAR[IOB_P80BD_ALIAS] = ESPI_XEC_PORT81_BAR_ADDRESS |
 				  MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	p80bd_hw->ACTV = 1;
