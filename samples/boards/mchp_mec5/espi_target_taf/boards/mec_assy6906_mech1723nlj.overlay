@@ -14,10 +14,65 @@
 	compatible = "microchip,mec5-qspi";
 	status = "okay";
 	pinctrl-0 = < &qspi_shd_cs0_n_gpio055
+		      &qspi_shd_cs1_n_gpio002
 		      &qspi_shd_clk_gpio056
 		      &qspi_shd_io0_gpio223
 		      &qspi_shd_io1_gpio224
 		      &qspi_shd_io2_gpio227
 		      &qspi_shd_io3_gpio016 >;
 	pinctrl-names = "default";
+
+	/* RPMC capable flash connected to chip select 0 */
+	shd_flash0: w25r256jv@0 {
+		compatible ="jedec,spi-nor";
+		/* 32 Mbit Flash */
+		size = <DT_SIZE_M(32)>;
+		page-size = <256>;
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(12)>;
+		has-dpd;
+		t-enter-dpd = <3000>;
+		t-exit-dpd = <3000>;
+		status = "okay";
+		jedec-id = [ef 40 19];
+	};
+
+	/* RPMC capable flash connected to chip select 1 */
+	shd_flash1: w25r256jv@1 {
+		compatible ="jedec,spi-nor";
+		/* 32 Mbit Flash */
+		size = <DT_SIZE_M(32)>;
+		page-size = <256>;
+		reg = <1>;
+		spi-max-frequency = <DT_FREQ_M(12)>;
+		has-dpd;
+		t-enter-dpd = <3000>;
+		t-exit-dpd = <3000>;
+		status = "okay";
+		jedec-id = [ef 40 19];
+	};
+};
+
+&vw_slp_s3_n {
+	reset-state = <1>;
+};
+
+&vw_slp_s4_n {
+	reset-state = <1>;
+};
+
+&vw_slp_s5_n {
+	reset-state = <1>;
+};
+
+&vw_sus_stat_n {
+	reset-state = <1>;
+};
+
+&vw_pltrst_n {
+	reset-state = <1>;
+};
+
+&vw_oob_rst_warn {
+	reset-state = <1>;
 };
