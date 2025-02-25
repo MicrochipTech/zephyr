@@ -559,7 +559,8 @@ int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_
 	return 0;
 }
 #else
-int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_packet *pkt)
+int espi_taf_mchp_rpmc_operation(const struct device *dev, struct espi_taf_rpmc_packet *pkt,
+				 uint32_t flags)
 {
 	ARG_UNUSED(dev);
 	ARG_UNUSED(pkt);
