@@ -8,8 +8,7 @@ Overview
 
 The MEC5 Assembly 6941 EVB kit is a development platform to evaluate the Microchip
 MEC174x and MEC175x series microcontrollers. This board requires a CPU daughter card:
-DC 176WFBGA DC ASSY 6949 for MEC1743Q-LJ or MEC1753Q-LJ (176-pin package)
-DC 176WFBGA DC ASSY 6947 for MEC1743Q-SZ or MEC1753Q-SZ (144-pin package)
+DC 176WFBGA DC ASSY 6942 for MEC1743Q-LJ or MEC1753Q-LJ (176-pin package)
 
 .. image:: mec5_assy6941_evb.jpg
      :align: center
@@ -39,7 +38,8 @@ Hardware
 - Board power jumper selectable from +5V 2.1mm/5.5mm barrel connector or USB Micro A connector.
 - MEC175x has one I3C Host controller and one I3C secondary controller each with multiple ports.
 
-For more information about the SOC's please see `MEC172x Reference Manual`_
+For more information about the MEC174x please see `MEC174x Data Brief`_
+For more information about the MEC175x please see `MEC175x Data Brief`_
 
 Supported Features
 ==================
@@ -85,8 +85,7 @@ Connections and IOs
 This evaluation board kit is comprised of the following HW blocks:
 
 - MEC174x EVB ASSY 6941 Rev B
-- MEC174x 144WFBGA SOLDER DC ASSY 6947 with MEC1743Q-SZ silicon
-- MEC174x 176WFBGA SOLDER DC ASSY 6949 with MEC1743Q-LJ silicon
+- MEC174x 176WFBGA SOLDER DC ASSY 6942 with MEC1743Q-LJ or MEC1753Q-LJ silicon
 - SPI DONGLE ASSY 6791
 
 System Clock
@@ -467,19 +466,19 @@ References
 
 .. target-notes::
 
-.. _MEC174x Reference Manual:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172x-Data-Sheet.pdf
-.. _MEC174x EVB Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172X-EVB-Assy_6906-A1p0-SCH.pdf
-.. _MEC174x Daughter Card Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172X-144WFBGA-Socket-DC-Assy6914-Rev-A-SCH.pdf
+.. _MEC174x Data Brief:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/MEC174x/MEC174x_DataBrief.pdf
+.. _MEC175x Data Brief:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/MEC175x/MEC175x_DataBrief.pdf
+.. _EVB Schematic:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/EVB_Assy6941.pdf
+.. _SOC Daughter Card Schematic:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/MEC174x_176WFBGA_DC_6942.pdf
 .. _SPI Dongle Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC1501/SPI%20Dongles%20and%20Aardvark%20Interposer%20Assy%206791%20Rev%20A1p1%20-%20SCH.pdf
-.. _MEC172x SPI Image Gen:
-    https://github.com/MicrochipTech/CPGZephyrDocs/tree/master/MEC172x/SPI_image_gen
-.. _SF100 Linux GitHub:
-    https://github.com/DediProgSW/SF100Linux
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/SPI_Flash_and_EEPROM_Dongle_Assy6791_Rev_B1p0.pdf
+.. _MEC174x SPI Image Gen:
+    https://github.com/MicrochipTech/CPGZephyrDocs/tree/main/MEC174x/SPI_image_gen
+.. _MEC175x SPI Image Gen:
+    https://github.com/MicrochipTech/CPGZephyrDocs/tree/main/MEC175x/SPI_image_gen
 .. _SF100 Product page:
-    https://www.dediprog.com/product/SF100
-.. _SF100 Linux manual:
-    https://www.dediprog.com/download/save/727.pdf
+    https://dediprog.com/product/SF100
