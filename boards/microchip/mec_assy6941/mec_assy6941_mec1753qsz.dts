@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Microchip Technology Inc.
+ * Copyright (c) 2025, Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -54,11 +54,6 @@
 
 /* We chose 32-bit basic timer 5 for use by ktimer */
 &timer5 {
-	status = "okay";
-};
-
-&bbram {
-	compatible = "microchip,mec5-bbram";
 	status = "okay";
 };
 
