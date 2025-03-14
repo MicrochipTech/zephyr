@@ -1,4 +1,4 @@
-; MEC174xQ SPI Image Generator configuration file
+; MEC174x SPI Image Generator configuration file
 [SPI]
 SPISizeMegabits = 128
 
@@ -10,7 +10,6 @@ TagAddr1 = 0
 ; BoardID value with an OTP PlatformID value. Load is aborted if the ID's do
 ; not match.
 BoardID = 0x316
-ChipStr = MEC174x
 
 [IMAGE "0"]
 ImageLocation = 0x2000
