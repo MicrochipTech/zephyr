@@ -1,8 +1,9 @@
-; MEC175xQ SPI Image Generator configuration file
+; MEC175x SPI Image Generator configuration file
 [SPI]
 SPISizeMegabits = 128
 
 [DEVICE]
+DeviceSel = A
 TagAddr0 = 0
 TagAddr1 = 0
 ; BoardID is used by a Boot-ROM feature named PlatformID. By default PlatformID
@@ -10,7 +11,6 @@ TagAddr1 = 0
 ; BoardID value with an OTP PlatformID value. Load is aborted if the ID's do
 ; not match.
 BoardID = 0x316
-ChipStr = MEC175x
 
 [IMAGE "0"]
 ImageLocation = 0x2000
