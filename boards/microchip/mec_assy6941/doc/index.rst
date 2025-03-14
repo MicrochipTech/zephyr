@@ -8,8 +8,7 @@ Overview
 
 The MEC5 Assembly 6941 EVB kit is a development platform to evaluate the Microchip
 MEC174x and MEC175x series microcontrollers. This board requires a CPU daughter card:
-DC 176WFBGA DC ASSY 6949 for MEC1743Q-LJ (176-pin package) or
-DC 176WFBGA DC ASSY 6947 for MEC1743Q-SZ (144-pin package)
+DC 176WFBGA DC ASSY 6942 for MEC1743Q-LJ or MEC1753Q-LJ (176-pin package)
 
 .. image:: mec5_assy6941_evb.jpg
      :align: center
@@ -18,7 +17,7 @@ DC 176WFBGA DC ASSY 6947 for MEC1743Q-SZ (144-pin package)
 Hardware
 ********
 
-- MEC174xQ-LJ/SZ, MEC175xQ-LJ/SZ ARM Cortex-M4 Processor
+- MEC174xQ-LJ/SZ or MEC175xQ-LJ/SZ ARM Cortex-M4 Processor
 - 480 KB total SRAM (416 KB code, 64 KB data) and 128 KB boot ROM
 - Keyboard interface
 - ADC & GPIO headers
@@ -39,7 +38,8 @@ Hardware
 - Board power jumper selectable from +5V 2.1mm/5.5mm barrel connector or USB Micro A connector.
 - MEC175x has one I3C Host controller and one I3C secondary controller each with multiple ports.
 
-For more information about the SOC's please see `MEC172x Reference Manual`_
+For more information about the MEC174x please see `MEC174x Data Brief`_
+For more information about the MEC175x please see `MEC175x Data Brief`_
 
 Supported Features
 ==================
@@ -47,29 +47,29 @@ Supported Features
 The mec5_assy6941 board configuration supports the following hardware
 features:
 
-+-----------+------------+-------------------------------------+
-| Interface | Controller | Driver/Component                    |
-+===========+============+=====================================+
-| NVIC      | on-chip    | nested vector interrupt controller  |
-+-----------+------------+-------------------------------------+
-| SYSTICK   | on-chip    | systick                             |
-+-----------+------------+-------------------------------------+
-| UART      | on-chip    | serial port                         |
-+-----------+------------+-------------------------------------+
-| GPIO      | on-chip    | gpio                                |
-+-----------+------------+-------------------------------------+
-| I2C       | on-chip    | i2c                                 |
-+-----------+------------+-------------------------------------+
-| PINMUX    | on-chip    | pinmux                              |
-+-----------+------------+-------------------------------------+
-| PS/2      | on-chip    | ps2                                 |
-+-----------+------------+-------------------------------------+
-| KSCAN     | on-chip    | kscan                               |
-+-----------+------------+-------------------------------------+
-| TACH      | on-chip    | tachometer                          |
-+-----------+------------+-------------------------------------+
-| RPMFAN    | on-chip    | Fan speed controller                |
-+-----------+------------+-------------------------------------+
+	+-----------+------------+-------------------------------------+
+	| Interface | Controller | Driver/Component                    |
+	+===========+============+=====================================+
+	| NVIC      | on-chip    | nested vector interrupt controller  |
+	+-----------+------------+-------------------------------------+
+	| SYSTICK   | on-chip    | systick                             |
+	+-----------+------------+-------------------------------------+
+	| UART      | on-chip    | serial port                         |
+	+-----------+------------+-------------------------------------+
+	| GPIO      | on-chip    | gpio                                |
+	+-----------+------------+-------------------------------------+
+	| I2C       | on-chip    | i2c                                 |
+	+-----------+------------+-------------------------------------+
+	| PINMUX    | on-chip    | pinmux                              |
+	+-----------+------------+-------------------------------------+
+	| PS/2      | on-chip    | ps2                                 |
+	+-----------+------------+-------------------------------------+
+	| KSCAN     | on-chip    | kscan                               |
+	+-----------+------------+-------------------------------------+
+	| TACH      | on-chip    | tachometer                          |
+	+-----------+------------+-------------------------------------+
+	| RPMFAN    | on-chip    | Fan speed controller                |
+	+-----------+------------+-------------------------------------+
 
 Other hardware features are not currently supported by Zephyr.
 
@@ -85,15 +85,14 @@ Connections and IOs
 This evaluation board kit is comprised of the following HW blocks:
 
 - MEC174x EVB ASSY 6941 Rev B
-- MEC174x 144WFBGA SOLDER DC ASSY 6947 with MEC1743Q-SZ silicon
-- MEC174x 176WFBGA SOLDER DC ASSY 6949 with MEC1743Q-LJ silicon
+- MEC174x 176WFBGA SOLDER DC ASSY 6942 with MEC1743Q-LJ or MEC1753Q-LJ silicon
 - SPI DONGLE ASSY 6791
 
 System Clock
 ============
 
-The MEC174x MCU is configured to use the 96Mhz internal oscillator with the
-on-chip PLL to generate a resulting EC clock rate of 12 MHz. See Processor clock
+The MEC174x/MEC175x MCU is configured to use the 96Mhz internal oscillator with the
+on-chip PLL to generate a resulting EC clock rate of 96 MHz. See Processor clock
 control register in chapter 4 "4.0 POWER, CLOCKS, and RESETS" of the data sheet in
 the references at the end of this document.
 
@@ -108,14 +107,14 @@ Jumper settings
 Please follow the jumper settings below to properly demo this
 board. Advanced users may deviate from this recommendation.
 
-Jumper setting for MEC174x EVB Assy 6941 Rev B
-=================================================
+Jumper settings for EVB Assy 6941 Rev B
+=======================================
 
 Power-related jumpers
 ---------------------
 
 If you wish to power from +5V power brick, then connect to barrel connector ``P1``
-(5.5mm OD, 2.1mm ID) and move the jumper to ``J1 5-6``.
+(5.5mm OD, 2.1mm ID) and set the jumper ``J1 5-6``.
 
 If you wish to power from the Host USB micro-USB type A/B connector ``J62``, move the
 jumper to ``J1 9-10`` ``J59 1-2`` and ``J61 1-2``.
@@ -124,295 +123,247 @@ jumper to ``J1 9-10`` ``J59 1-2`` and ``J61 1-2``.
 .. note:: A single jumper is required in ``J1``.
 
 Required power jumpers on:
-JP42, JP43, JP45, JP47, JP48, JP50, JP53, JP56, JP58, JP60, JP62, JP65, JP66, JP68
+
+	* ``JP42 1-2``, ``JP43 1-2``, ``JP45 1-2``, ``JP47 1-2``, ``JP48 1-2``
+	* ``JP50 1-2``, ``JP53 1-2``, ``JP56 1-2``, ``JP58 1-2``, ``JP60 1-2``
+	* ``JP62 1-2``, ``JP65 1-2``, ``JP66 1-2``, ``JP68 1-2``
 
 Select board +3.3V_STBY for:
-   VBAT_CHIP power rail:         JP161 1-2
-   VCHIP_VTR_REG power rail:     J67 1-2
-   VCHIP_VTR_PLL power rail:     JP157 1-2
-   VCHIP_VTR_ANALOG power rail:  JP158 1-2
-   VCHIP_VTR1 power rail:        JP159 1-2
 
-VCHIP_VTR2 power rail can be +3.3V or +1.8V affecting the pin on VTR2.
+	* ``JP161 1-2``  VBAT_CHIP power rail
+	* ``J67 1-2``    VCHIP_VTR_REG power rail
+	* ``JP157 1-2``  VCHIP_VTR_PLL power rail
+	* ``JP158 1-2``  VCHIP_VTR_ANALOG power rail
+	* ``JP159 1-2``  VCHIP_VTR1 power rail
+
+VCHIP_VTR2 power rail can be +3.3V or +1.8V affecting the pins on VTR2.
 NOTE: QSPI shared port pins are on the VTR2 power rail.
 Select one only:
-   J68 1-2 VTR2 is connected to +3.3V_STBY
-   J68 3-4 VTR2 is connected to +1.8V_STBY
+
+	* ``J68 1-2`` VTR2 is connected to +3.3V_STBY
+	* ``J68 3-4`` VTR2 is connected to +1.8V_STBY
 
 VCHIP_VTR3 power rail in normal operation is connected to +1.8V.
-   JP160 1-2 VTR3 is connected to +1.8V_STBY
+	* ``JP160 1-2`` VTR3 is connected to +1.8V_STBY
 
 Jumper selection for VCC_PWRGD
 VCC_PWRGD is connected to a 4.75K pull-up to VTR1, switch S1 to ground it,
 and reset generator U2.
-JP17 3x7 19-20
-JP19 3x6 8-9
-JP36 1-2
-JP34 1-2
+
+	* ``JP17 3x7 19-20``
+	* ``JP19 3x6 8-9``
+	* ``JP36 1-2``
+	* ``JP34 1-2``
 
 Jumper selection for nRESET_IN
 nRESET_IN is connected to a 4.75K pull-up to VTR1, switch S2 to ground it,
 and reset generator U3.
-JP37 1-2
-JP35 1-2
+
+	* ``JP37 1-2``
+	* ``JP35 1-2``
 
 Boot-ROM Straps
 ---------------
 
 These jumpers configure MEC174x/MEC175x Boot-ROM straps.
-Schematic Name
-UART_BSTRAP             JP1 1-2 Normal Boot
-CR_STRAP                JP2 1-2 Normal Boot
-JTAG_STRAP              JP3 2-3 JTAG/SWD is available
-CMP_STRAP               JP4 2-3 GPIO207 is available as a GPIO
-PWRGD_STRAP             JP5 1-2
-BSS_STRAP               JP7 1-2 Select eSPI CAF vs G3 if enabled in OTP
-BSS_STRAP               JP8 1-2 Default BSS_STRAP. Select load from Shared SPI
-VTR2_STRAP              JP6 1-2
-CRISIS_RECOVERY_STRAP   JP9 1-2
 
-TODO
+	* ``JP1 1-2`` UART_BSTRAP Normal Boot
+	* ``JP2 1-2`` CR_STRAP Normal Boot
+	* ``JP3 2-3`` JTAG_STRAP JTAG/SWD interface is not held in reset
+	* ``JP4 2-3`` CMP_STRAP GPIO207 is available as a GPIO
+	* ``JP5 1-2`` PWRGD_STRAP
+	* ``JP7 1-2`` BSS_STRAP Select eSPI CAF vs G3 if enabled in OTP
+	* ``JP8 1-2`` BSS_STRAP Default BSS_STRAP. Select load from Shared SPI
+	* ``JP6 1-2`` VTR2_STRAP
+	* ``JP9 1-2`` CRISIS_RECOVERY_STRAP
+
 Peripheral Routing Jumpers
 --------------------------
 
-Each column of the following table illustrates how to enable UART0, UART1, SHD SPI
-and SWD, respectively.
+UART0 to P19A DB9(top)
 
-+-------+-------+------+------+------+------+------+
-|                   UART0 (P11)                    |
-+-------+-------+------+------+------+------+------+
-| JP13  | JP17  | JP19 | JP22 | JP88 | JP89 | JP93 |
-+=======+=======+======+======+======+======+======+
-| 2-3   | 2-3   | 1-2  | 1-2  | 2-3  | 2-3  | 1-3  |
-+-------+-------+------+------+------+------+------+
-| 5-6   | 5-6   | 4-5  | 4-5  |      |      | 2-4  |
-+-------+-------+------+------+------+------+------+
-| 8-9   | 8-9   |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
-| 11-12 | 11-12 |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
-| 14-15 | 14-15 |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
-| 17-18 | 17-18 |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
-|       | 20-21 |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
-|       | 23-24 |      |      |      |      |      |
-+-------+-------+------+------+------+------+------+
+	* ``JP89 No jumper`` RS-232 transceiver U8 not in reset.
+	* ``JP21 2-3, 8-9`` Select UART0_TX and UART0_RX from GPIOs.
+	* ``JP22 1-2, 4-5`` Select UART0_TX and UART0_RX to U8.
 
-+------+------+-------+-------+------+------+-------+-----+--------+------+------+------+-------+
-|                                             UART1                                             |
-+---------------------------------------------------+-------------------------------------------+
-|                      (P12)                        |                    (P2)                   |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-| JP11 | JP14 | JP19  | JP24  | JP90 | JP94 | JP157 | JP11 | JP19  | JP24 | JP90 | JP94 | JP157 |
-+======+======+=======+=======+======+======+=======+======+=======+======+======+======+=======+
-| 1-2  | 1-2  | 20-21 |  2-3  | 2-3  | 1-3  |  1-2  | 1-2  | 11-12 | 5-6  | 2-3  | 1-3  |  1-3  |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-| 4-5  |      |       |  5-6  |      | 2-4  |  4-5  | 4-5  |       | 8-9  |      | 2-4  |  4-6  |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-| 8-9  |      |       |  8-9  |      |      |  7-8  |      |       |17-18 |      |      |  7-9  |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-|      |      |       | 11-12 |      |      | 10-11 |      |       |23-24 |      |      | 10-12 |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-|      |      |       | 14-15 |      |      |       |      |       |      |      |      |       |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
-|      |      |       | 17-18 |      |      |       |      |       |      |      |      |       |
-+------+------+-------+-------+------+------+-------+------+-------+------+------+------+-------+
+UART1 to P19B DB9(bottom)
 
-NOTE: The "Hello World" example outputs at ``UART1 P12`` .
+	* ``JP90 No jumper`` RS-232 transceiver U9 not in reset.
+	* ``JP91 1-2, 4-5`` Connect UART1_TX and UART1_RX to U9.
+	* ``JP24 2-3, 5-6`` Select UART1_TX and UART1_RX from GPIOs.
 
-+----------------------+-------+--------+
-|        SHD_SPI       |  SWD  | LED4-5 |
-+-------+------+-------+-------+--------+
-| JP23  | JP25 | JP156 |  J18  |  JP21  |
-+=======+======+=======+=======+========+
-|  2-3  | 1-2  |  1-2  |  8-9  |  4-5   |
-+-------+------+-------+-------+--------+
-|  8-9  |      |       | 11-12 | 16-17  |
-+-------+------+-------+-------+--------+
-| 14-15 |      |       |       |        |
-+-------+------+-------+-------+--------+
-| 17-18 |      |       |       |        |
-+-------+------+-------+-------+--------+
+Shared SPI on J18 2x10 header.
 
-Jumper settings for MEC1743 144WFBGA Socket DC Assy 6947 Rev A0p1
-=================================================================
+	* ``JP18 14-15`` Select SHD_nCS0.
+	* ``JP18 17-18`` Select SHD_CLK.
+	* ``JP18 2-3`` Select SHD_IO0.
+	* ``JP18 5-6`` Select SHD_IO1.
+	* ``JP18 8-9`` Select SHD_IO2(nWP).
+	* ``JP18 11-12`` Select SHD_IO3(nHOLD).
+
+Second chip select for accessing SPI dongle flash U7.
+	* ``JP18 20-12`` Select SHD_nCS1.
+
+JTAG/SWD ARM JTAG 2x10 J29.
+
+	* ``JP80 1-2`` No jumper. This jumper holds JTAG/SWD interface in reset.
+	* ``JP12 2-3`` Select JTAG_TDO or SWO.
+	* ``JP12 5-6`` Select JTAG_TDI Not required for ARM SWD.
+	* ``JP12 8-9`` Select JTAG_TMS or SWDIO.
+	* ``JP12 11-12`` Select JTAG_CLK or SWCLK.
+
+NOTE:
+ARM SWD is a two pin interface using JTAG_TMS as a bidirectional I/O pin and JTAG_CLK.
+The ARM Serial Wire Output Trace feature is on a third pin, JTAG_TDO.
+Configuration options are:
+
+	1. 4-pin JTAG or SWD plus SWO. Connect all four JP12 jumpers shown above.
+	2. 2-pin SWD plus SWO. Connect JP12 jumpers for JTAG_TDO, JTAG_TMS, and JTAG_CLK. JTAG_TDI is available to use as GPIO145.
+	3. 2-pin SWD only. Connect JP12 jumpers for JTAG_TMS and JTAG_CLK. JTAG_TDI and JTAG_TDO are available as GPIO145 and GPIO146 respectively
+
+Jumper settings for MEC174x/MEC175x 176WFBGA Socket DC Assy 6942 Rev A0p1
+=========================================================================
 
 The jumper configuration explained above covers the base board. The ASSY
-6914 MEC172x CPU board provides capability for an optional, external 32KHz
+6942 MEC174x/MEC175x CPU board provides capability for an optional, external 32KHz
 clock source. The card includes a 32KHz crystal oscillator. The card can
 also be configured to use an external 50% duty cycle 32KHz source on the
-XTAL2/32KHZ_IN pin. Note, firmware must set the MEC172x clock enable
+XTAL2/32KHZ_IN pin. Note, firmware must set the MEC174x/MEC175x clock enable
 register to select the external source matching the jumper settings. If
-using the MEC172x internal silicon oscillator then the 32K jumper settings
+using the MEC174x/MEC175x internal silicon oscillator then the 32K jumper settings
 are don't cares. ``JP1`` on DC is for scoping test clock outputs. Please
 refer to the schematic in reference section below.
 
 Parallel 32KHz crystal configuration
 ------------------------------------
-
-+-------+-------+
-| JP1   | JP2   |
-+=======+=======+
-| 1-2   | 2-3   |
-+-------+-------+
+``JP1 1x2 ON``
+``JP2 1x3 2-3``
 
 External 32KHz 50% duty cycle configuration
 -------------------------------------------
+``JP1 1x2 NC``
+``JP2 1x3 1-2``
 
-+-------+-------+
-| JP2   | JP3   |
-+=======+=======+
-| NC    | 1-2   |
-+-------+-------+
-
-NOTE: ``JP121 3-4`` on base board also needs to be loaded.
-
-
-Programming and Debugging
-*************************
-
-Setup
-=====
-
-#. If you use Dediprog SF100 programmer, then setup it.
-
-   Windows version can be found at the `SF100 Product page`_.
-
-   Linux version source code can be found at `SF100 Linux GitHub`_.
-   Follow the `SF100 Linux manual`_ to complete setup of the SF100 programmer.
-   For Linux please make sure that you copied ``60-dediprog.rules``
-   from the ``SF100Linux`` folder to the :code:`/etc/udev/rules.s` (or rules.d)
-   then restart service using:
-
-   .. code-block:: console
-
-      $ udevadm control --reload
-
-   Add directory with program ``dpcmd`` (on Linux)
-   or ``dpcmd.exe`` (on Windows) to your ``PATH``.
-
-#. Clone the `MEC174x SPI Image Gen`_ repository or download the files within
-   that directory.
-
-#. Make the image generation available for Zephyr, by making the tool
-   searchable by path, or by setting an environment variable
-   ``MEC174X_SPI_GEN``, for example:
-
-   .. code-block:: console
-
-      export MEC174X_SPI_GEN=<path to tool>/mec172x_spi_gen_lin_x86_64
-
-   Note that the tools for Linux and Windows have different file names.
-
-#. The default MEC174X_SPI_CFG file is spi_cfg.txt located in ${BOARD_DIR}/support.
-   If needed, a custom SPI image configuration file can be specified to override the
-   default one.
-
-   .. code-block:: console
-
-      export MEC174X_SPI_CFG=custom_spi_cfg.txt
-
-Wiring
-========
-
-#. Connect the SPI Dongle ASSY 6791 to ``J34`` in the EVB.
-
-   .. image:: spidongle_assy6791.jpg
-        :align: center
-        :alt: SPI DONGLE ASSY 6791 Connected
-
-#. Connect programmer to the header J6 on the Assy6791 board, it will flash the SPI NOR chip
-   ``U3``. Make sure that your programmer's offset is 0x0.
-   For programming you can use Dediprog SF100 or a similar tool for flashing SPI chips.
-
-   .. image:: dediprog_connector.jpg
-        :align: center
-        :alt: SF100 Connected
-
-
-   .. note:: Remember that SPI MISO/MOSI are swapped on Dediprog headers!
-    Use separate wires to connect Dediprog pins with pins on the Assy6791 SPI board.
-    Wiring connection is described in the table below.
-
-    +------------+---------------+
-    |  Dediprog  |  Assy6791     |
-    |  Connector |  J6 Connector |
-    +============+===============+
-    |    VCC     |       1       |
-    +------------+---------------+
-    |    GND     |       2       |
-    +------------+---------------+
-    |    CS      |       3       |
-    +------------+---------------+
-    |    CLK     |       4       |
-    +------------+---------------+
-    |    MISO    |       6       |
-    +------------+---------------+
-    |    MOSI    |       5       |
-    +------------+---------------+
-
-#. Connect UART1 port of the MEC17xxEVB_ASSY_6906 board
-   to your host computer using the RS232 cable.
-
-#. Apply power to the board via a micro-USB cable.
-   Configure this option by using a jumper between ``JP30 7-8``.
-
-   .. image:: jp30_power_options.jpg
-        :align: center
-        :alt: Power Connection
+NOTE: EVB ``JP117 3-4`` Connects 32KHz OSC U15 output to DC.
 
 Building
 ========
 
-#. Build :ref:`hello_world` application as you would normally do.
+#. Build :zephyr:code-sample:'hello_world` application as you normally do.
 
 #. The file :file:`spi_image.bin` will be created if the build system
    can find the image generation tool. This binary image can be used
    to flash the SPI chip.
 
+Programming and Debugging
+=========================
+
+Setup
+=====
+
+#. Example programming the SPI flash on the Assy6791 SPI dongle.
+
+#. We use a low cost USB-to-GPIO device based on the FTDI FT232H device.
+
+   The FT232H device used here is the `AdaFruit FT232H`_
+   The AdaFruit FT232H supports both 5V and 3.3V parts.
+
+   The linux flashrom tool supports FT232H USB-to-GPIO used as an SPI programmer.
+
+   .. code-block:: console
+
+      $ sudo /usr/sbin/flashrom -V -p ft2232_spi:type=232H,divisor=30 -w spi_image.bin
+
+#. Clone the `MEC174x SPI Image Gen`_ or `MEC175x SPI Image Gen`_ repository or download the
+   files within that directory.
+
+#. Make the image generation available for Zephyr, by making the tool
+   searchable by path, or by setting an environment variable
+   ``MEC5_SPI_GEN``, for example:
+
+   .. code-block:: console
+
+      export MEC5_SPI_GEN=<path to tool>/mec174x_spi_gen_linux_x86_64
+      or
+      export MEC5_SPI_GEN=<path to tool>/mec175x_spi_gen_linux_x86_64
+
+
+#. The default configuration file is mec174x_spi_cfg.txt or mec175x_spi_cfg.txt located in
+   ${BOARD_DIR}/support. If needed, a custom SPI image configuration file can be specified
+   to override the default one.
+
+   .. code-block:: console
+
+      export MEC5_SPI_CFG=custom_spi_cfg.txt
+
+Wiring
+========
+
+#. Connect the SPI Dongle ASSY 6791 to ``J18`` in the EVB.
+
+   .. image:: spi_dongle_assy6791.jpg
+        :align: center
+        :alt: SPI DONGLE ASSY 6791 Connected
+
+#. IMPORTANT: Temporarily remove the jumper from JP87 to isolate SPI dongle power from EVB power rails.
+   This will prevent the SPI programmer from back driving voltage to the EVB.
+
+#. Connect programmer to the header J6 on the Assy6791 board, it will flash the SPI NOR chip
+   ``U3``.
+
+   .. note:: The AdaFruit FT232H board supports +5V or +3.3V SPI flash devices. It has
+    separate +3V and +5V pins. You should connect the appropriate voltage rail to the
+    Assy6791 flash dongle's J6-1 power pin.  It is recommended to remove the Assy6791
+    dongle from the EVB when flashing. If the dongle is attached to an unpowered EVB then
+    then the SPI programmer will back drive all the components. Back driving voltage can
+    be avoided by removing the jumper on EVB JP87 disconnecting VTR1/VTR2 from the 2x10
+    header J18.
+
+    +------------+---------------+
+    |  AdaFruit  |  Assy6791     |
+    |  Connector |  J6 Connector |
+    +============+===============+
+    |  3V or 5V  |       1       |
+    +------------+---------------+
+    |    GND     |       2       |
+    +------------+---------------+
+    |    D3      |       3       |
+    +------------+---------------+
+    |    D0      |       4       |
+    +------------+---------------+
+    |    D2      |       6       |
+    +------------+---------------+
+    |    D1      |       5       |
+    +------------+---------------+
+
+#. The AdaFruit FT232H has USB type-C connector. Connect it to your
+   development system with the appropriate USB cable. The FT232H board and
+   Assy6791 dongle will be powered.
+
+
 Flashing
 ========
 
-#. Run your favorite terminal program to listen for output.
-   Under Linux the terminal should be :code:`/dev/ttyUSB0`. Do not close it.
+#. Run your favorite terminal program
 
-   For example:
-
-   .. code-block:: console
-
-      $ minicom -D /dev/ttyUSB0 -o
-
-   The -o option tells minicom not to send the modem initialization
-   string. Connection should be configured as follows:
-
-   - Speed: 115200
-   - Data: 8 bits
-   - Parity: None
-   - Stop bits: 1
-
-#. Flash your board using ``west`` from the second terminal window.
-   Split first and second terminal windows to view both of them.
+#. Flash the SPI image created by Microchip SPI image generator during the
+   zephyr build process. The divisor option flashrom passes to the linux
+   FT232 driver divides down the 60 MHz SPI clock.  You can read the current
+   SPI image by changing the '-w' option to '-r'.
 
    .. code-block:: console
 
-      $ west flash
-
-   .. note:: When west process started press Reset button ``S2`` and do not release it
-    till the whole west process will not be finished successfully.
-
-   .. image:: Reset_Button.jpg
-        :align: center
-        :alt: Reset Button
-
-   .. note:: If you don't want to press Reset button every time, you can disconnect
-    SPI Dongle ASSY 6791 from the EVB during the west flash programming.
-    Then connect it back to the ``J34`` header and apply power to the EVB.
-    Result will be the same.
+      $ sudo /usr/sbin/flashrom -V -p ft2232_spi:type=232H,divisor=30 -w spi_image.bin
 
 
-#. You should see ``"Hello World! mec172xevb_assy6906"`` in the first terminal window.
+#. When flashrom completes.
+   Disconnect USB cable to remove power from the AdaFruit FT232H programmer.
+   Disconnect FT232H from Assy6791 dongle.
+   Replace the jumper on EVB JP87.
+
+# Power on the EVB.
+
+#. You should see ``"Hello World! <board name>"`` in the first terminal window.
    If you don't see this message, press the Reset button and the message should appear.
 
 Debugging
@@ -428,10 +379,8 @@ Troubleshooting
 #. In case you don't see your application running, please make sure ``LED1`` and ``LED2``
    are lit. If one of these is off, then check the power-related jumpers again.
 
-#. If you can't program the board using Dediprog, disconnect the Assy6791
-   from the main board Assy6906 and try again.
-
-#. If Dediprog can't detect the onboard flash, press the board's Reset button and try again.
+#. If you suspect the SPI image was not programmed remove the SPI dongle from the EVB
+   and try flashing it again.
 
 PCA9555 Enabling
 ================
@@ -467,19 +416,19 @@ References
 
 .. target-notes::
 
-.. _MEC174x Reference Manual:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172x-Data-Sheet.pdf
-.. _MEC174x EVB Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172X-EVB-Assy_6906-A1p0-SCH.pdf
-.. _MEC174x Daughter Card Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC172x/MEC172X-144WFBGA-Socket-DC-Assy6914-Rev-A-SCH.pdf
+.. _MEC174x Data Brief:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/MEC174x/MEC174x_DataBrief.pdf
+.. _MEC175x Data Brief:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/MEC175x/MEC175x_DataBrief.pdf
+.. _EVB Schematic:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/EVB_Assy6941.pdf
+.. _SOC Daughter Card Schematic:
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/MEC174x_176WFBGA_DC_6942.pdf
 .. _SPI Dongle Schematic:
-    https://github.com/MicrochipTech/CPGZephyrDocs/blob/master/MEC1501/SPI%20Dongles%20and%20Aardvark%20Interposer%20Assy%206791%20Rev%20A1p1%20-%20SCH.pdf
-.. _MEC172x SPI Image Gen:
-    https://github.com/MicrochipTech/CPGZephyrDocs/tree/master/MEC172x/SPI_image_gen
-.. _SF100 Linux GitHub:
-    https://github.com/DediProgSW/SF100Linux
-.. _SF100 Product page:
-    https://www.dediprog.com/product/SF100
-.. _SF100 Linux manual:
-    https://www.dediprog.com/download/save/727.pdf
+    https://github.com/MicrochipTech/CPGZephyrDocs/blob/main/schematics/SPI_Flash_and_EEPROM_Dongle_Assy6791_Rev_B1p0.pdf
+.. _MEC174x SPI Image Gen:
+    https://github.com/MicrochipTech/CPGZephyrDocs/tree/main/MEC174x/SPI_image_gen
+.. _MEC175x SPI Image Gen:
+    https://github.com/MicrochipTech/CPGZephyrDocs/tree/main/MEC175x/SPI_image_gen
+.. _AdaFruit FT232H:
+    https://www.adafruit.com/product/2264
