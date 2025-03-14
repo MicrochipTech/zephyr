@@ -44,9 +44,13 @@ LOG_MODULE_REGISTER(espi, CONFIG_ESPI_LOG_LEVEL);
  * reg_idx is the index of the MEC5 vwire register group for this Host Index
  * flags indicate the group is Controller-to-Target or Target-to-Controller, reset source,
  * interrupt detection, etc.
+ * MEC5 eSPI hardware support 11 controller-to-target and 11 target-to-controller VWire groups.
+ * Each VWire group contains 4 wires. Maximum supported number of VWires is 88.
  */
+BUILD_ASSERT(((ESPI_VWIRE_SIGNAL_SLP_S3) == 0), "VWires in espi header have been renumbered!!!");
+BUILD_ASSERT(((ESPI_VWIRE_SIGNAL_COUNT) <= 88), "Max HW VWire count exceeded!!!");
+
 struct espi_mec5_vwire {
-	uint8_t signal;
 	uint8_t host_idx;
 	uint8_t source_bit;
 	uint8_t reg_idx;
@@ -107,22 +111,20 @@ struct espi_mec5_vwire {
 	  ((MEC5_VW_RST_SRC(node_id) & 0x3) << 2))
 
 #define MEC5_ESPI_CTVW_ENTRY(node_id) \
-	{\
-		.signal = MEC5_VW_SIGNAL(node_id), \
+[(MEC5_VW_SIGNAL(node_id))] = { \
 		.host_idx = MEC5_VW_HOST_IDX(node_id), \
 		.source_bit = MEC5_VW_SOURCE_BIT(node_id), \
 		.reg_idx = MEC5_VW_HW_REG_IDX(node_id), \
 		.flags = MEC5_VW_CT_FLAGS(node_id), \
-	},
+},
 
 #define MEC5_ESPI_TCVW_ENTRY(node_id) \
-	{\
-		.signal = MEC5_VW_SIGNAL(node_id), \
+[(MEC5_VW_SIGNAL(node_id))] = { \
 		.host_idx = MEC5_VW_HOST_IDX(node_id), \
 		.source_bit = MEC5_VW_SOURCE_BIT(node_id), \
 		.reg_idx = MEC5_VW_HW_REG_IDX(node_id), \
 		.flags = MEC5_VW_TC_FLAGS(node_id), \
-	},
+},
 
 #define MEC5_ESPI_CTVW_FLAGS_DIR(x) ((uint8_t)(x) & 0x01u)
 #define MEC5_ESPI_CTVW_FLAGS_RST_STATE(x) (((uint8_t)(x) & 0x02u) >> 1)
@@ -131,39 +133,28 @@ struct espi_mec5_vwire {
 
 #define MEC5_ESPI_VW_FLAGS_DIR_IS_TC(x) ((uint8_t)(x) & 0x01u)
 
-const struct espi_mec5_vwire espi_mec5_vw_tbl[] = {
+static const struct espi_mec5_vwire espi_mec5_vw_tbl[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_CT_VWIRES_NODE, MEC5_ESPI_CTVW_ENTRY)
 	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_TC_VWIRES_NODE, MEC5_ESPI_TCVW_ENTRY)
 };
 
-static struct espi_mec5_vwire const *find_vw(const struct device *dev,
-					     enum espi_vwire_signal signal)
-{
-	size_t nvw = ARRAY_SIZE(espi_mec5_vw_tbl);
+/* Create a look up table for the Controller-to-Target VWire interrupt handler.
+ * Hardware has 11 C2T VWire registers. Each register controls a group of 4 vwires.
+ * The array is indexed by the (vw_reg_index * 4) + vwire_source_position
+ * where vw_reg_index in [0, 10] and vwire_source_position in [0, 3]
+ * Each array value is the enum espi_vwire_signal stored an an uint8_t.
+ * The eSPI specification allows a maximum of 256 virtual wires. Some of these are
+ * dedicated for serial IRQ.
+ */
+#define MEC5_ESPI_CTVW_ISR_IDX(node_id) \
+	(((uint32_t)MEC5_VW_HW_REG_IDX(node_id) * 4u) + MEC5_VW_SOURCE_BIT(node_id))
 
-	for (size_t n = 0; n < nvw; n++) {
-		if (signal == (uint8_t)espi_mec5_vw_tbl[n].signal) {
-			return &espi_mec5_vw_tbl[n];
-		}
-	}
+#define MEC5_ESPI_CTVW_ISR_ENTRY(node_id) \
+	[MEC5_ESPI_CTVW_ISR_IDX(node_id)] = (uint8_t)(MEC5_VW_SIGNAL(node_id) & 0xffu),
 
-	return NULL;
-}
-
-static int find_ct_vw_signal(uint8_t ctidx, uint8_t ctpos)
-{
-	size_t nct = ARRAY_SIZE(espi_mec5_vw_tbl);
-
-	for (size_t n = 0; n < nct; n++) {
-		const struct espi_mec5_vwire *p = &espi_mec5_vw_tbl[n];
-
-		if ((ctidx == (uint8_t)p->reg_idx) && (ctpos == (uint8_t)p->source_bit)) {
-			return (int)p->signal;
-		}
-	}
-
-	return -1;
-}
+static const uint8_t __aligned(4) espi_mec5_vw_ct_isr_tbl[] = {
+	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_CT_VWIRES_NODE, MEC5_ESPI_CTVW_ISR_ENTRY)
+};
 
 /* Initialize MEC5 eSPI target virtual wire registers static configuration
  * set by DT. Configuration which is not changed by ESPI_nRESET or nPLTRST.
@@ -534,10 +525,17 @@ static int espi_mec5_vw_send(const struct device *dev, enum espi_vwire_signal si
 		.delay_param = MEC5_ESPI_VW_T2C_POLL_DELAY_US,
 		.nloops = MEC5_ESPI_VW_T2C_POLL_CNT,
 	};
-	const struct espi_mec5_vwire *vw = find_vw(dev, signal);
+	const struct espi_mec5_vwire *vw = NULL;
 
-	if (!vw) {
+	if (signal >= ARRAY_SIZE(espi_mec5_vw_tbl)) {
+		LOG_ERR("signal exceeds configured number of VWires");
 		return -EINVAL;
+	}
+
+	vw = &espi_mec5_vw_tbl[signal];
+	if (vw->host_idx < 2u) { /* 0 disabled, 1 is illegal */
+		LOG_ERR("signal references an unconfigured VWire");
+		return -EINVAL; /* unconfigured VWire */
 	}
 
 	mvw.vwidx = vw->reg_idx;
@@ -565,10 +563,16 @@ static int espi_mec5_vw_receive(const struct device *dev, enum espi_vwire_signal
 	struct mec_espi_vw mvw = {0};
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_vw_regs *regs = devcfg->vwb;
-	const struct espi_mec5_vwire *vw = find_vw(dev, signal);
+	const struct espi_mec5_vwire *vw = NULL;
 
-	if (!vw || !level) {
+	if (!level || (signal >= ARRAY_SIZE(espi_mec5_vw_tbl))) {
 		return -EINVAL;
+	}
+
+	vw = &espi_mec5_vw_tbl[signal];
+	if (vw->host_idx < 2u) { /* 0 is disabled, 1 is illegal */
+		LOG_ERR("signal references an unconfigured VWire");
+		return -EINVAL; /* unconfigured VWire */
 	}
 
 	mvw.vwidx = vw->reg_idx;
@@ -875,14 +879,12 @@ static void send_boot_done_to_host(const struct device *dev)
 
 	ret = espi_mec5_vw_receive(dev, ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE, &boot_done);
 	if (!ret && !boot_done) {
-		const struct espi_mec5_vwire *bdone_vw =
-			find_vw(dev, ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE);
-		const struct espi_mec5_vwire *bsts_vw =
-			find_vw(dev, ESPI_VWIRE_SIGNAL_TARGET_BOOT_STS);
+		const struct espi_mec5_vwire *bdvw = &espi_mec5_vw_tbl[ESPI_VWIRE_SIGNAL_TARGET_BOOT_DONE];
+		const struct espi_mec5_vwire *bsvw = &espi_mec5_vw_tbl[ESPI_VWIRE_SIGNAL_TARGET_BOOT_STS];
 
-		groupval = BIT(bdone_vw->source_bit) | BIT(bsts_vw->source_bit);
+		groupval = BIT(bdvw->source_bit) | BIT(bsvw->source_bit);
 		groupmsk = groupval;
-		ret = mec_hal_espi_vw_set_group(vwregs, bdone_vw->host_idx, groupval, groupmsk, 0);
+		ret = mec_hal_espi_vw_set_group(vwregs, bdvw->host_idx, groupval, groupmsk, 0);
 	}
 }
 #endif
@@ -1018,7 +1020,7 @@ static void espi_mec5_ctvw_common_isr(const struct device *dev, uint8_t bank)
 	struct mec_espi_vw_regs *vwregs = devcfg->vwb;
 	struct espi_mec5_data *data = dev->data;
 	struct espi_event evt = { ESPI_BUS_EVENT_VWIRE_RECEIVED, 0, 0 };
-	uint32_t result = 0;
+	uint32_t result = 0, idx = 0;
 	int signal = 0;
 	unsigned int pos = 0;
 	uint8_t ctidx = MEC_ESPI_VW_MAX_REG_IDX, ctsrc = MEC_ESPI_VW_SOURCE_MAX;
@@ -1038,11 +1040,13 @@ static void espi_mec5_ctvw_common_isr(const struct device *dev, uint8_t bank)
 	mec_hal_espi_vw_ct_from_girq_pos(bank, pos, &ctidx, &ctsrc);
 	mec_hal_espi_vw_ct_wire_get(vwregs, ctidx, ctsrc, (uint8_t *)&evt.evt_data);
 
-	signal = find_ct_vw_signal(ctidx, ctsrc);
-	if (signal < 0) {
+	idx = (ctidx * 4u) + ctsrc;
+	if (idx >= ARRAY_SIZE(espi_mec5_vw_ct_isr_tbl)) {
 		LOG_ERR("CTVW ISR: bad ctidx=%u ctsrc=%u", ctidx, ctsrc);
 		return;
 	}
+
+	signal = (int)espi_mec5_vw_ct_isr_tbl[idx];
 
 	/* special handling */
 	if (signal == ESPI_VWIRE_SIGNAL_SLP_S5) {
