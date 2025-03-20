@@ -51,8 +51,6 @@
 		uart3: uart@400f3000 {
 			reg = <0x400f3000 0x400>;
 			interrupts = <184 2>;
-			clock-frequency = <1843200>;
-			current-speed = <38400>;
 			status = "disabled";
 		};
 	};

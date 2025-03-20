@@ -44,16 +44,12 @@
 		uart2: uart@400f2c00 {
 			reg = <0x400f2c00 0x400>;
 			interrupts = <183 2>;
-			clock-frequency = <1843200>;
-			current-speed = <38400>;
 			status = "disabled";
 		};
 
 		uart3: uart@400f3000 {
 			reg = <0x400f3000 0x400>;
 			interrupts = <184 2>;
-			clock-frequency = <1843200>;
-			current-speed = <38400>;
 			status = "disabled";
 		};
 	};
