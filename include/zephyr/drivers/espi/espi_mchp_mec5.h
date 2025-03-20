@@ -110,25 +110,13 @@ int mchp_espi_sram_bar_mem_fill(const struct device *dev, uint8_t sram_bar_id,
 	(((uint32_t)(ldn) & ESPI_HAE_CFG_LDN_MSK0) << ESPI_HAE_CFG_LDN_POS)
 
 /* eSPI peripheral channel host facing devices have different API's with
- * the requirement the first API is "host_access_enable". We can cast
- * each driver's API struct to this one allowing the eSPI driver to invoke
- * host_access_enable after the Host eSPI controller de-asserts PLTRST#.
+ * the requirement the first API is "intr_enable". We can cast
+ * each driver's API struct to this one to provide extension API's specfic
+ * to each peripheral device.
  */
 struct espi_pc_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 };
-
-static inline int espi_pc_host_access(const struct device *dev, uint8_t en, uint32_t cfg)
-{
-	const struct espi_pc_driver_api *api = (const struct espi_pc_driver_api *)dev->api;
-
-	if (!api->host_access_enable) {
-		return -ENOTSUP;
-	}
-
-	return api->host_access_enable(dev, en, cfg);
-}
 
 static inline int espi_pc_intr_enable(const struct device *dev, uint8_t en, uint32_t flags)
 {
@@ -159,7 +147,6 @@ typedef void (*mchp_espi_pc_bdp_callback_t)(const struct device *dev,
 					    void *user_data);
 
 struct mchp_espi_pc_bdp_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, int intr_en, uint32_t flags);
 	int (*has_data)(const struct device *dev);
 	int (*get_data)(const struct device *dev, struct host_io_data *data);
@@ -238,7 +225,6 @@ typedef void (*mchp_espi_pc_kbc_callback_t)(const struct device *dev,
 #endif
 
 struct mchp_espi_pc_kbc_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
@@ -320,7 +306,6 @@ typedef void (*mchp_espi_pc_aec_callback_t)(const struct device *dev,
 					    void *user_data);
 
 struct mchp_espi_pc_aec_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*lpc_request)(const struct device *dev, enum lpc_peripheral_opcode op,
 			   uint32_t *data, uint32_t flags);
@@ -410,7 +395,6 @@ typedef void (*mchp_espi_pc_emi_callback_t)(const struct device *dev,
 					    uint32_t emi_mbox_data, void *data);
 
 struct mchp_espi_pc_emi_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 	int (*configure_mem_region)(const struct device *dev, struct mchp_emi_mem_region *mr,
 				    uint8_t region_id);
@@ -476,7 +460,6 @@ static inline int mchp_espi_pc_emi_request(const struct device *dev,
 /* -------- Mailbox -------- */
 
 struct mchp_espi_pc_mbox_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
 	int (*set_callback)(const struct device *dev, mchp_espi_pc_mbox_callback_t callback,
@@ -524,7 +507,6 @@ static inline int mchp_espi_pc_mbox_set_callback(const struct device *dev,
 
 /* -------- Host visible UART -------- */
 struct mec5_host_uart_driver_api {
-	int (*host_access_enable)(const struct device *dev, uint8_t enable, uint32_t cfg);
 	int (*intr_enable)(const struct device *dev, uint8_t enable, uint32_t flags);
 };
 
