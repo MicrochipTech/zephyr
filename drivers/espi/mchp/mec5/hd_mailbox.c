@@ -127,44 +127,7 @@ static void mec5_mbox_isr(const struct device *dev)
 #endif
 }
 
-/* Mailbox peripheral does not implement a logical device activate register.
- * Its runtime registers mapped to Host address space via the eSPI I/O or Memory BAR
- * are held in reset state until VCC_PWRGD is active.
- * Mailbox EC-only registers are reset by RESET_SYS and will retain configuration
- * through VCC_PWRGD and PLTRST# transitions.
- */
-static int mec5_mbox_host_access_en(const struct device *dev, uint8_t enable, uint32_t cfg)
-{
-	const struct mec5_mbox_devcfg *const devcfg = dev->config;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	uint32_t sirqcfg = devcfg->ldn;
-	int ret = 0;
-
-	if (devcfg->host_mem_space) {
-		barcfg |= BIT(ESPI_MEC5_BAR_CFG_MEM_BAR_POS);
-	}
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg = devcfg->ldn | (((uint32_t)devcfg->hev_sirq << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-				 & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg = devcfg->ldn | (((uint32_t)devcfg->hsmi_sirq << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-				 & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-
-	return ret;
-}
-
 static struct mchp_espi_pc_mbox_driver_api mec5_mbox_drv_api = {
-	.host_access_enable = mec5_mbox_host_access_en,
 	.intr_enable = mec5_mbox_intr_enable,
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
 	.set_callback = mec5_mbox_set_callback,
