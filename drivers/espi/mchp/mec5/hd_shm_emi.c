@@ -31,6 +31,8 @@
 
 LOG_MODULE_REGISTER(espi_shm_emi, CONFIG_ESPI_LOG_LEVEL);
 
+#define MEC5_SHM_EMI_DEBUG_ISR
+
 /* Driver sharing EC SRAM with the Host via an EMI device instance.
  * Features:
  * 1. EMI host facing register can be mapped to Host I/O or memory spaces.
@@ -57,7 +59,10 @@ struct mec5_shm_emi_devcfg {
 };
 
 struct mec5_shm_emi_data {
+#ifdef MEC5_SHM_EMI_DEBUG_ISR
 	uint32_t isr_count;
+#endif
+	const struct mec5_shm_emi_devcfg *devcfg;
 	uint8_t mb_host_to_ec;
 	uint8_t mb_ec_to_host;
 	struct mchp_emi_mem_region mr[MEC_EMI_MEM_REGION_NUM];
@@ -95,41 +100,6 @@ static int mec5_shm_emi_intr_en(const struct device *dev, uint8_t enable, uint32
 	}
 
 	return 0;
-}
-
-/* Called by eSPI driver when Host eSPI controller has de-asserted PLTRST# virtual wire.
- * Also, requires the platform has driven VCC_PWRGD active.
- * EMI runtime and EC-only registers are reset by RESET_SYS not RESET_VCC therefore we
- * do not need configuration on PLTRST# or VCC_PWRGD events.
- */
-static int mec5_shm_emi_host_access_en(const struct device *dev, uint8_t enable, uint32_t cfg)
-{
-	const struct mec5_shm_emi_devcfg *devcfg = dev->config;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	uint32_t sirqcfg = devcfg->ldn;
-	int ret = 0;
-
-	if (devcfg->host_mem_space) {
-		barcfg |= BIT(ESPI_MEC5_BAR_CFG_MEM_BAR_POS);
-	}
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg = devcfg->ldn | (((uint32_t)devcfg->sirq_hev << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-				 & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg = devcfg->ldn | (((uint32_t)devcfg->sirq_e2h << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-				 & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-
-	return ret;
 }
 
 /* EMI Memory windows 0 and 1.
@@ -278,8 +248,9 @@ static void mec5_shm_emi_isr(const struct device *dev)
 	struct mec_emi_regs *const regs = devcfg->regs;
 	uint32_t mbval = 0;
 
+#ifdef MEC5_SHM_EMI_DEBUG_ISR
 	data->isr_count++;
-
+#endif
 	mbval = mec_hal_emi_mbox_rd(regs, MEC_EMI_HOST_TO_EC_MBOX);
 	data->mb_host_to_ec = mbval;
 	mec_hal_emi_girq_clr(regs);
@@ -292,7 +263,6 @@ static void mec5_shm_emi_isr(const struct device *dev)
 }
 
 static const struct mchp_espi_pc_emi_driver_api mec5_shm_emi_driver_api = {
-	.host_access_enable = mec5_shm_emi_host_access_en,
 	.intr_enable = mec5_shm_emi_intr_en,
 	.configure_mem_region = mec5_shm_emi_cfg_mr,
 	.set_callback = mec5_shm_emi_set_callback,
@@ -302,9 +272,13 @@ static const struct mchp_espi_pc_emi_driver_api mec5_shm_emi_driver_api = {
 static int mec5_shm_emi_init(const struct device *dev)
 {
 	const struct mec5_shm_emi_devcfg *const devcfg = dev->config;
+	struct mec5_shm_emi_data *data = dev->data;
 	struct mec_emi_regs *const regs = devcfg->regs;
-	int ret = mec_hal_emi_init(regs, 0);
+	int ret = 0;
 
+	data->devcfg = devcfg;
+
+	ret = mec_hal_emi_init(regs, 0);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}

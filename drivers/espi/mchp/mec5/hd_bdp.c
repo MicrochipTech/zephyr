@@ -182,40 +182,7 @@ static void mec5_bdp_isr(const struct device *dev)
 	mec_hal_bdp_girq_status_clr(regs);
 }
 
-/* Called by parent eSPI driver when platform reset has de-asserted.
- * We are required to program the BDP eSPI I/O BAR's and set the
- * BDP activate bits.
- */
-static int mec5_bdp_host_access_en(const struct device *dev, uint8_t enable, uint32_t ha_cfg)
-{
-	const struct mec5_bdp_devcfg *const devcfg = dev->config;
-	struct mec_bdp_regs *const regs = devcfg->regs;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	int ret = 0;
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_io_base, barcfg);
-	if (ret != MEC_RET_OK) {
-		LOG_ERR("MEC5 BDP IO BAR: (%d)", ret);
-		return -EIO;
-	}
-
-	mec_hal_bdp_activate(regs, enable, 0);
-
-	if (devcfg->host_io_alias) {
-		barcfg = devcfg->ldn_alias | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-		ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_io_alias, barcfg);
-		if (ret != MEC_RET_OK) {
-			LOG_ERR("MEC5 BDPA IO BAR: (%d)", ret);
-			return -EIO;
-		}
-		mec_hal_bdp_activate(regs, enable, 1);
-	}
-
-	return 0;
-}
-
 static const struct mchp_espi_pc_bdp_driver_api mec5_bdp_drv_api = {
-	.host_access_enable = mec5_bdp_host_access_en,
 	.intr_enable = mec5_bdp_intr_enable,
 	.has_data = mec5_bdp_has_data,
 	.get_data = mec5_bdp_get_data,
