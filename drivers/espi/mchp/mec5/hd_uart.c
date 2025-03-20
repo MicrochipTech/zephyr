@@ -39,34 +39,11 @@ struct mec5_host_uart_devcfg {
 	uint8_t irqn;
 };
 
-/* Called by eSPI parent driver when platform reset has de-asserted.
- * Program eSPI I/O BARs and Serial IRQ
- */
-static int mec5_uart_host_access_en(const struct device *dev, uint8_t enable, uint32_t cfg)
-{
-	const struct mec5_host_uart_devcfg *const devcfg = dev->config;
-	struct mec_uart_regs *const regs = devcfg->regs;
-	uint32_t sirqcfg = devcfg->ldn;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	int ret = 0;
-
-	ret = mec_hal_uart_power_on(regs, MEC5_UART_CFG_RESET_HOST);
-	if (ret != MEC_RET_OK) {
-		LOG_ERR("HAL uart power on failed: (%d)", ret);
-		return -EIO;
-	}
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_io_addr, barcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg |= (((uint32_t)devcfg->sirq << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-		    & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-
-	return ret;
-}
+struct mec5_host_uart_data {
+	const struct mec5_host_uart_devcfg *devcfg;
+	struct espi_callback espi_vw_pltrst_cbs;
+	struct espi_callback espi_pc_chan_ready_cbs;
+};
 
 /* Issue1: UART has one interrupt signal to EC and one SIRQ to the Host.
  * These signals are asserted by one or more interrupt enables in the
@@ -105,22 +82,82 @@ static int mec5_uart_intr_enable(const struct device *dev, uint8_t enable, uint3
 }
 
 static const struct mec5_host_uart_driver_api mec5_host_uart_drv_api = {
-	.host_access_enable = mec5_uart_host_access_en,
 	.intr_enable = mec5_uart_intr_enable,
 };
+
+static void mec5_host_uart_vw_pltrst_cb(const struct device *dev,
+					struct espi_callback *cb,
+					struct espi_event espi_evt)
+{
+	struct mec5_host_uart_data *data =
+		CONTAINER_OF(cb, struct mec5_host_uart_data, espi_vw_pltrst_cbs);
+	const struct mec5_host_uart_devcfg *devcfg = data->devcfg;
+	struct mec_uart_regs *regs = devcfg->regs;
+
+	LOG_DBG("PC UART sub-driver VW nPLTRST CB");
+	if ((espi_evt.evt_type == ESPI_BUS_EVENT_VWIRE_RECEIVED) &&
+		(espi_evt.evt_details == ESPI_VWIRE_SIGNAL_PLTRST) && (espi_evt.evt_data != 0)) {
+		LOG_DBG("PC UART: power-on");
+		mec_hal_uart_power_on(regs, MEC5_UART_CFG_RESET_HOST);
+		mec_hal_uart_activate(regs, 1);
+	}
+}
+
+/* struct espi_event evt = { ESPI_BUS_EVENT_CHANNEL_READY, ESPI_CHANNEL_PERIPHERAL, 0 }; */
+static void mec5_host_uart_pc_chan_ready_cb(const struct device *dev,
+					    struct espi_callback *cb,
+					    struct espi_event espi_evt)
+{
+	struct mec5_host_uart_data *data =
+		CONTAINER_OF(cb, struct mec5_host_uart_data, espi_pc_chan_ready_cbs);
+	const struct mec5_host_uart_devcfg *devcfg = data->devcfg;
+	struct mec_uart_regs *regs = devcfg->regs;
+
+	LOG_DBG("PC UART sub-driver VW nPLTRST CB");
+	if ((espi_evt.evt_type == ESPI_BUS_EVENT_CHANNEL_READY) &&
+		(espi_evt.evt_details == ESPI_CHANNEL_PERIPHERAL) &&
+		(espi_evt.evt_data & ESPI_PC_EVT_BUS_CHANNEL_READY)) {
+		LOG_DBG("PC UART: power-on");
+		mec_hal_uart_power_on(regs, MEC5_UART_CFG_RESET_HOST);
+		mec_hal_uart_activate(regs, 1);
+	}
+}
 
 static int mec5_host_uart_init(const struct device *dev)
 {
 	const struct mec5_host_uart_devcfg *const devcfg = dev->config;
+	struct mec5_host_uart_data *data = dev->data;
+	int ret = 0;
 
-	int ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
+	data->devcfg = devcfg;
 
+	ret = pinctrl_apply_state(devcfg->pcfg, PINCTRL_STATE_DEFAULT);
 	if (ret) {
 		LOG_ERR("pinctrl dflt state (%d)", ret);
 		return ret;
 	}
 
-	return 0;
+	if (!device_is_ready(devcfg->parent)) {
+		LOG_ERR("Host UART: eSPI parent device is not ready!");
+		return -EIO;
+	}
+
+	/* register callback on nPLTRST VWire */
+	espi_init_callback(&data->espi_vw_pltrst_cbs, mec5_host_uart_vw_pltrst_cb,
+			   ESPI_BUS_EVENT_VWIRE_RECEIVED);
+
+	ret = espi_add_callback(devcfg->parent, &data->espi_vw_pltrst_cbs);
+	if (ret) {
+		LOG_ERR("eSPI VW PLTRST add cb error (%d)", ret);
+		return ret;
+	}
+
+	espi_init_callback(&data->espi_pc_chan_ready_cbs, mec5_host_uart_pc_chan_ready_cb,
+  			   ESPI_BUS_EVENT_CHANNEL_READY);
+
+	ret = espi_add_callback(devcfg->parent, &data->espi_pc_chan_ready_cbs);
+
+	return ret;
 }
 
 #define MEC5_DT_UART_NODE(inst) DT_INST(inst, DT_DRV_COMPAT)
@@ -153,7 +190,9 @@ static int mec5_host_uart_init(const struct device *dev)
 		.sirq = MEC5_DT_UART_SIRQ(inst),					\
 		.irqn = MEC5_DT_UART_HW_IRQN(inst),					\
 	};										\
-	DEVICE_DT_INST_DEFINE(inst, mec5_host_uart_init, NULL, NULL,			\
+	static struct mec5_host_uart_data mec5_host_uart_data_##inst;                   \
+	DEVICE_DT_INST_DEFINE(inst, mec5_host_uart_init, NULL,                          \
+			&mec5_host_uart_data_##inst,                                    \
 			&mec5_host_uart_dcfg_##inst,					\
 			POST_KERNEL, CONFIG_ESPI_INIT_PRIORITY,				\
 			&mec5_host_uart_drv_api);

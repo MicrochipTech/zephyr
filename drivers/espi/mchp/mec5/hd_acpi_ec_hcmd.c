@@ -307,42 +307,6 @@ static void mec5_aec_hcmd_ibf_isr(const struct device *dev)
 	espi_mec5_send_callbacks(cfg->parent, evt);
 }
 
-/* Called by eSPI parent driver when platform reset de-asserts.
- * ACPI_EC peripheral registers reset by "RESET_SYS"
- * RESET_SYS is active if any of the following activate:
- *  RESET_VTR: VTR power rail up/down
- *  nRESET_IN pin asserted
- *  Watch Dog Timer reset generated
- *  PCR System Reset register Soft-Sys reset set by firmware
- *  Cortex-M4 SYSRESETREQ signal active
- * ACPI_EC configuration in driver init should be stable across eSPI PLTRST#
- * and VCC_RESET.
- * eSPI BARs and SerialIRQ are reset by eSPI PLTRST# active. We must reprogram
- * these eSPI registers for this device.
- */
-static int mec5_hcmd_aec_host_access_en(const struct device *dev, uint8_t enable, uint32_t cfg)
-{
-	const struct mec5_aec_hcmd_devcfg *devcfg = dev->config;
-	uint32_t sirqcfg = devcfg->ldn;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	int ret = 0;
-
-	if (devcfg->host_mem_space) {
-		barcfg |= BIT(ESPI_MEC5_BAR_CFG_MEM_BAR_POS);
-	}
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg = (((uint32_t)devcfg->sirq_obf << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-		   & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-
-	return ret;
-}
-
 static int mec5_hcmd_aec_intr_enable(const struct device *dev, uint8_t enable, uint32_t flags)
 {
 	const struct mec5_aec_hcmd_devcfg *devcfg = dev->config;
@@ -389,7 +353,6 @@ static int mec5_hcmd_aec_intr_enable(const struct device *dev, uint8_t enable, u
  * for the ACPI_EC instance obtained via DT chosen espi,os-acpi
  */
 static const struct mchp_espi_pc_aec_driver_api mec5_aec_hcmd_driver_api = {
-	.host_access_enable = mec5_hcmd_aec_host_access_en,
 	.intr_enable = mec5_hcmd_aec_intr_enable,
 	.lpc_request = mec5_hcmd_aec_lpc_request,
 };
