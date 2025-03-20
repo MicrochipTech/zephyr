@@ -13,23 +13,23 @@
 
 static void mec5_soc_init_debug_interface(void)
 {
-#if defined(CONFIG_SOC_MEC_DEBUG_DISABLED)
-	mec_ecs_etm_pins(ECS_ETM_PINS_DISABLE);
-	mec_hal_ecs_debug_port(MEC_DEBUG_MODE_DISABLE);
-#else
-#if defined(SOC_MEC_DEBUG_WITHOUT_TRACING)
-	mec_ecs_etm_pins(ECS_ETM_PINS_DISABLE);
-	mec_hal_ecs_debug_port(MEC_DEBUG_MODE_SWD);
-#elif defined(SOC_MEC_DEBUG_AND_TRACING)
-#if defined(SOC_MEC_DEBUG_AND_ETM_TRACING)
-	mec_ecs_etm_pins(ECS_ETM_PINS_DISABLE);
-	mec_hal_ecs_debug_port(MEC_DEBUG_MODE_SWD_SWV);
-#elif defined(CONFIG_SOC_MEC_DEBUG_AND_ETM_TRACING)
-	mec_ecs_debug_port(MEC_DEBUG_MODE_SWD);
-	mec_hal_ecs_etm_pins(ECS_ETM_PINS_ENABLE);
+	uint8_t etm_en = 0;
+	enum mec_debug_mode dbg_mode = MEC_DEBUG_MODE_DISABLE;
+
+#if defined(CONFIG_SOC_MEC_DEBUG_WITHOUT_TRACING)
+	dbg_mode = MEC_DEBUG_MODE_SWD;
+#endif
+
+#if defined(CONFIG_SOC_MEC_DEBUG_AND_TRACING)
+	dbg_mode = MEC_DEBUG_MODE_SWD_SWV;
+#if defined(CONFIG_SOC_MEC_DEBUG_AND_ETM_TRACING)
+	dbg_mode = MEC_DEBUG_MODE_SWD;
+	etm_en = 1u;
 #endif
 #endif
-#endif
+
+	mec_hal_ecs_etm_pins(etm_en);
+	mec_hal_ecs_debug_port(dbg_mode);
 }
 
 int mec5_soc_common_init(void)
