@@ -190,20 +190,32 @@ static int espi_mec5_init_vwires(const struct device *dev)
 }
 
 /* Construct a table of enabled host devices from DTS */
-struct espi_mec5_hdi2 {
-	const struct device *dev;
+struct espi_mec5_hdi {
+	uint8_t ldn;
+	uint8_t nsirqs;
+	uint8_t sirq0;
+	uint8_t sirq1;
+	uint32_t host_addr;
+
 };
 
-#define MEC5_ESPI_HDI_ENTRY2(node_id) \
-	{ \
-		.dev = (const struct device *)DEVICE_DT_GET(node_id), \
-	},
+#define MEC5_ESPI_HDI_SIRQ_BY_IDX(node_id, idx) \
+	COND_CODE_1(DT_PROP_HAS_IDX(node_id, sirqs, idx), (DT_PROP_BY_IDX(node_id, sirqs, idx)), (0))
+
+#define MEC5_ESPI_HDI_SIRQ(node_id, idx) \
+	COND_CODE_1(DT_NODE_HAS_PROP(node_id, sirqs), (MEC5_ESPI_HDI_SIRQ_BY_IDX(node_id, idx)), (0))
 
 #define MEC5_ESPI_HDI_ENTRY(node_id) \
-	COND_CODE_1(DT_NODE_HAS_PROP(node_id, host_infos), (MEC5_ESPI_HDI_ENTRY2(node_id)), ())
+	{\
+		.ldn = ((uint8_t)DT_PROP(node_id, ldn) & 0x3fu), \
+		.nsirqs = DT_PROP_LEN_OR(node_id, sirqs, 0), \
+		.sirq0 = MEC5_ESPI_HDI_SIRQ(node_id, 0), \
+		.sirq1 = MEC5_ESPI_HDI_SIRQ(node_id, 1), \
+		.host_addr = DT_PROP(node_id, host_address), \
+	},
 
-const struct espi_mec5_hdi2 espi_mec5_hdi_tbl2[] = {
-	DT_FOREACH_CHILD_STATUS_OKAY(DT_NODELABEL(espi0), MEC5_ESPI_HDI_ENTRY2)
+const struct espi_mec5_hdi espi_mec5_hdi_tbl[] = {
+	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_HD_NODE, MEC5_ESPI_HDI_ENTRY)
 };
 
 /* Host-Address portion of SRAM BARs are reset by nPLTRST and ESPI_nRESET.
@@ -217,6 +229,7 @@ static int mec5_pcd_sram_bars(const struct device *dev)
 	struct mec_espi_mem_regs *memb = devcfg->memb;
 
 	for (uint8_t id = 0; id < MEC5_ESPI_SRAM_BAR_ID_MAX; id++) {
+		LOG_DBG("Prog SRAM BAR[%u] = 0x%0x%x", id, devcfg->srambar_hi, devcfg->sram_bar_lo[id]);
 		mec_hal_espi_sram_bar_enable(memb, id, 0);
 		mec_hal_espi_sram_bar_host_addr_set(memb, id, devcfg->sram_bar_lo[id], devcfg->srambar_hi);
 		if (devcfg->sram_bar_access[id] & BIT(7)) {
@@ -236,32 +249,48 @@ static int mec5_pcd_config_access(const struct device *dev)
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_io_regs *iob = devcfg->iob;
 	struct mec_espi_mem_regs *memb = devcfg->memb;
-	uint32_t ha_cfg = 0;
 	int ret = 0;
 
-
+	LOG_DBG("Enable I/O BAR for 0x%0x", devcfg->cfg_io_addr);
 	ret = mec_hal_espi_iobar_cfg(iob, MEC_ESPI_LDN_IOC, devcfg->cfg_io_addr, 1u);
 	if (ret != MEC_RET_OK) {
 		LOG_ERR("eSPI config IO BAR error");
 		return -EIO;
 	}
 
+	LOG_DBG("Set memory BARs b[47:32] = 0x%0x", devcfg->membar_hi);
 	ret = mec_hal_espi_mbar_extended_addr_set(memb, devcfg->membar_hi);
 	if (ret) {
 		LOG_ERR("LDN Ext MBAR cfg error");
 		return -EIO;
 	}
 
-	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_hdi_tbl2); n++) {
-		const struct espi_mec5_hdi2 *hdi = &espi_mec5_hdi_tbl2[n];
+	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_hdi_tbl); n++) {
+		const struct espi_mec5_hdi *hdi = &espi_mec5_hdi_tbl[n];
+		uint8_t enbar = 0;
 
-		if (hdi->dev) {
-			ret = espi_pc_host_access(hdi->dev, 1, ha_cfg);
-			if (ret) {
-				LOG_ERR("PC host access enable error");
-			}
+		if (hdi->host_addr) {
+			enbar = 1u;
 		}
-	}
+
+		if (hdi->host_addr > UINT16_MAX) {
+			LOG_DBG("Prog ldn=%u MBAR = 0x%0x", hdi->ldn, hdi->host_addr);
+			ret = mec_hal_espi_mbar_cfg(memb, hdi->ldn, hdi->host_addr, enbar);
+		} else {
+			LOG_DBG("Prog ldn=%u IOBAR = 0x%0x", hdi->ldn, hdi->host_addr);
+			ret = mec_hal_espi_iobar_cfg(iob, hdi->ldn, hdi->host_addr, enbar);
+		}
+
+		if (ret) {
+			LOG_ERR("LDN %x BAR config error (%d)", hdi->ldn, ret);
+		}
+
+		if (hdi->nsirqs) {
+			LOG_DBG("Prog ldn=%u SIRQ", hdi->ldn);
+			mec_hal_espi_ld_sirq_set(iob, hdi->ldn, 0, hdi->sirq0);
+			mec_hal_espi_ld_sirq_set(iob, hdi->ldn, 1, hdi->sirq1);
+		}
+	};
 
 	ret = mec5_pcd_sram_bars(dev);
 	if (ret) {
@@ -1122,7 +1151,7 @@ static void espi_mec5_pc_isr(const struct device *dev)
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_io_regs *iob = devcfg->iob;
 	struct espi_mec5_data *data = dev->data;
-	struct espi_event evt = { ESPI_BUS_EVENT_CHANNEL_READY, ESPI_CHANNEL_PERIPHERAL, 1 };
+	struct espi_event evt = { ESPI_BUS_EVENT_CHANNEL_READY, ESPI_CHANNEL_PERIPHERAL, 0 };
 	int ret = 0;
 	uint32_t status = mec_hal_espi_pc_status(iob);
 
@@ -1135,6 +1164,7 @@ static void espi_mec5_pc_isr(const struct device *dev)
 
 	if (status & BIT(MEC_ESPI_PC_ISTS_CHEN_CHG_POS)) {
 		if (status & BIT(MEC_ESPI_PC_ISTS_CHEN_STATE_POS)) {
+			evt.evt_data |= ESPI_PC_EVT_BUS_CHANNEL_READY;
 			ret = espi_mec5_pc_cfg(dev);
 			if (ret) {
 				LOG_ERR("PC enable: config error");
@@ -1142,16 +1172,20 @@ static void espi_mec5_pc_isr(const struct device *dev)
 		} else {
 			LOG_DBG("Host disabled PC");
 		}
+
 	}
 
 	if (status & BIT(MEC_ESPI_PC_ISTS_BMEN_CHG_POS)) {
 		if (status & BIT(MEC_ESPI_PC_ISTS_BMEN_STATE_POS)) {
 			/* signal PC bus mastering enabled by Host */
-			LOG_WRN("eSPI PC BM enable by Host");
-			evt.evt_data = ESPI_PC_EVT_BUS_MASTER_ENABLE;
-			espi_send_callbacks(&data->callbacks, dev, evt);
+			evt.evt_data |= ESPI_PC_EVT_BUS_MASTER_ENABLE;
+			LOG_DBG("eSPI PC BM enable by Host");
+		} else {
+			LOG_DBG("eSPI PC BM disabled by Host");
 		}
 	}
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 #endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
@@ -1176,7 +1210,6 @@ static const struct espi_driver_api espi_mec5_driver_api = {
 	.write_lpc_request = espi_mec5_lpc_req_wr,
 #endif
 };
-
 /* ---------- Driver Init ------------ */
 
 #ifdef MEC5_ESPI_DEBUG_VW_TABLE
@@ -1234,7 +1267,6 @@ static int espi_mec5_dev_init(const struct device *dev)
 {
 	const struct espi_mec5_dev_config *devcfg = dev->config;
 	struct mec_espi_io_regs *iob = devcfg->iob;
-
 	int ret;
 
 #ifdef MEC5_ESPI_DEBUG_VW_TABLE
