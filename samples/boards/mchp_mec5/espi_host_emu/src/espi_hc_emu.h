@@ -16,6 +16,10 @@ int espi_hc_emu_espi_reset_n(uint8_t level);
 int espi_hc_emu_vcc_pwrgd(uint8_t level);
 int espi_hc_emu_is_target_ready(void);
 
+int espi_hc_emu_host_ready_n(uint8_t level);
+int espi_hc_emu_espi_reset_n(uint8_t level);
+int espi_hc_emu_vcc_pwrgd(uint8_t level);
+
 int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t resplen);
 
 uint32_t espi_emu_event_wait(uint32_t events, bool clr_before_wait, k_timeout_t timeout);

@@ -34,6 +34,7 @@ struct espi_status_data {
 	uint32_t nitems;
 };
 
+/* #define DEBUG_CONTINUE */
 #define APP_FLAG_GET_STATUS_LOOP BIT(0)
 
 /* IMPORTANT: these must match eSPI Target application configuration */
@@ -62,6 +63,9 @@ static volatile uint32_t app_flags;
 static volatile uint32_t spin_val;
 static volatile int ret_val;
 static volatile int app_main_exit;
+#ifdef DEBUG_CONTINUE
+static volatile uint32_t debug_continue;
+#endif
 
 static struct espi_status_data esd;
 static struct espi_hc_context hc;
@@ -110,12 +114,26 @@ int main(void)
 		goto app_exit;
 	}
 
+	/* Configure Handshake pins:
+	 * eSPI_nRESET as output and drive low
+	 * VCC_PWRGD as output and drive low
+	 * TARGET_nREADY as input. Board has pull-up jumper installed on this pin.
+	 */
 	LOG_INF("Init eSPI HC emulation using QSPI0");
 	ret = espi_hc_emu_init(MHZ(4));
 	if (ret) {
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
+
+	LOG_INF("Signal Target Host is ready");
+	ret = espi_hc_emu_host_ready_n(0);
+	if (ret) {
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(5000));
 
 	LOG_INF("Wait for Target nREADY");
 	do {
@@ -132,8 +150,8 @@ int main(void)
 
 	/* espi_hc_emu_espi_reset_n(1); */
 
-	LOG_INF("Delay 100 ms to allow Target to print debug messages");
-	k_sleep(K_MSEC(100));
+	LOG_INF("Delay 1000 ms to allow Target to print debug messages");
+	k_sleep(K_MSEC(1000));
 
 	/* Get eSPI Device ID */
 	LOG_INF("Read eSPI Device ID from Target");
@@ -493,6 +511,7 @@ int main(void)
 	}
 
 	/* Host set Target's VCC_PWRGD input High */
+	LOG_INF("Host: drive VCC_PWRGD High");
 	ret = espi_hc_emu_vcc_pwrgd(1);
 	if (ret) {
 		LOG_ERR("Set VCC_PWRGD error: %d", ret);
@@ -514,7 +533,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_S5=1. Host index 0x02 bit 2 */
 	LOG_INF("Host send C2T nSLP_S5 = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 2, 1);
@@ -529,7 +553,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_S4=1. Host index 0x02 bit 1 */
 	LOG_INF("Host send C2T nSLP_S4 = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 1, 1);
@@ -544,7 +573,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_S3=1, Host index 0x02 bit 0 */
 	LOG_INF("Host send C2T nSLP_S3 = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x02u, 0, 1);
@@ -559,7 +593,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_A=1, Host index 0x41 bit 3 */
 	LOG_INF("Host send C2T nSLP_A = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x41u, 3, 1);
@@ -574,7 +613,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_LAN=1, Host index 0x42 bit 0 */
 	LOG_INF("Host send C2T nSLP_LAN = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 0, 1);
@@ -589,7 +633,12 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-
+#ifdef DEBUG_CONTINUE
+	while(debug_continue == 0) {
+		;
+	}
+	debug_continue = 0;
+#endif
 	/* Send VW nSLP_WLAN=1, Host index 0x42 bit 1 */
 	LOG_INF("Host send C2T nSLP_WLAN = 1");
 	ret = espi_hc_set_ct_vwire(&hc, 0x42u, 1, 1);

@@ -249,8 +249,9 @@
 	 * eSPI ALERT pin when eSPI nCS is not asserted.
 	 * index 2 = GPIO013 (VTR2) measure code sequences.
 	 * index 3 = GPIO030 (VTR1) used as GPIO output Host-to-Target VCC_PWRGD
-	 * index 4 = GPIO012 (VTR2) used as GPIO input Target-nReady
+	 * index 4 = GPIO151 (VTR1) used as GPIO input Target-nReady
 	 * index 5 = GPIO014 (VTR2) used as GPIO input ESPI_nALERT
+	 * index 6 = GPIO140 (VTR1) used at GPIO output Host-to-Target nReady
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
@@ -258,7 +259,8 @@
 			     <MCHP_GPIO_DECODE_071 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_013 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_030 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_012 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_014 GPIO_ACTIVE_HIGH>;
+			     <MCHP_GPIO_DECODE_151 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_014 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_140 GPIO_ACTIVE_HIGH>;
 	};
 };

@@ -159,6 +159,9 @@ const struct gpio_dt_spec target_ready_n_dt =
 const struct gpio_dt_spec espi_alert_n_dt =
 	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 5);
 
+const struct gpio_dt_spec host_ready_n_dt =
+	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 6);
+
 /* Controller-to-Target Virtual Wire initialization table */
 const struct espi_hc_vw ctvw_init[] = {
 	{ /* Host Index 02h b[0]=nSLP_S3, b[1]=nSLP_S4, b[2]=nSLP_S5, b[3]=rsvd */
@@ -495,6 +498,12 @@ int espi_hc_emu_init(uint32_t freqhz)
 		return ret;
 	}
 
+	ret = gpio_pin_configure_dt(&host_ready_n_dt, GPIO_OUTPUT_HIGH);
+	if (ret) {
+		LOG_ERR("Configure host_ready_n GPIO and drive high error (%d)", ret);
+		return ret;
+	}
+
 #ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
 	espi_alert_pin_cb.handler = espi_alert_pin_cb_handler;
 	espi_alert_pin_cb.pin_mask = BIT(espi_alert_n_dt.pin);
@@ -552,6 +561,19 @@ int espi_hc_inband_alert_detction_enable(int enable)
 	return gpio_pin_interrupt_configure_dt(&espi_io1_dt, flags);
 }
 #endif
+
+int espi_hc_emu_host_ready_n(uint8_t level)
+{
+	int ret;
+
+	if (level) {
+		ret = gpio_pin_set_dt(&host_ready_n_dt, 1);
+	} else {
+		ret = gpio_pin_set_dt(&host_ready_n_dt, 0);
+	}
+
+	return ret;
+}
 
 int espi_hc_emu_espi_reset_n(uint8_t level)
 {

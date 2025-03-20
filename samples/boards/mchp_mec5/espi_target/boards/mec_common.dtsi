@@ -34,8 +34,11 @@
  * VTR1 voltage select +3.3V_STBY
  * JP43 1-2, JP159 1-2, JP58 1-2, JP60 1-2
  *
- * VTR2 voltage select +1.8V_STBY
- * JP45 1-2, J68 3-4, JP62 1-2, JP65 1-2
+ * VTR2 voltage select +3.3V_STBY
+ * JP45 1-2, J68 1-2, JP62 1-2, JP65 1-2
+ * If SPI flash dongle on J18 has +1.8V SPI flash devices then set move J68 to 3-4
+ * NOTE: J18 SPI dongle header voltage can be switched between VTR1 and VTR2 by
+ * JP87, 1-2=VTR2, 3-4=VTR1.
  *
  * VTR3 voltage select +1.8V_STBY
  * JP45 1-2, JP160 1-2, JP66 1-2, JP68 1-2
@@ -72,12 +75,21 @@
  * H2T_ESPI_nALERT -> ESPI_nALERT J46-13
  *
  * Synchronization signals:
- * H2T_VCC_PWRGD -> VCC_PWRGD_ALT GPIO242 Func 3
  *
- * T2H_nREADY <- GPIO031(VTR1) output active low. Init to high
- *		J41-7
- *		JP75 21-22 100K pull-up. Do not install
- *		Pull-up enabled on eSPI Host Emulation board
+ * Host to Target VCC Power Good connect with wire
+ * Enumalated Host GPIO030(VTR1) as GPIO output. Init drive low(inactive)
+ *    JP77-1
+ * Target GPIO242(VTR1) as Function 3(VCC_PWRGD_ALT)
+ *    JP69-11
+ *    Remove JP36 to disconnect GPIO057/VCC_PWRGD from reset generator U2.
+ *
+ * Target to Host Ready
+ * Emulated Host GPIO151(VTR1) as GPIO input.
+ *    JP72 7-8 pull-up to VTR1 with 100K Ohm. INSTALL
+ *    Access on 2x9 J39-16
+ * Target GPIO151(VTR1) as GPIO output. Init drive High (inactive)
+ *    JP74 7-8 pull-up to VTR1 with 7.5K. Not installed.
+ *    Access on 2x9 J40-16 or JP79-19
  *
  * GPIO175/CMP_VOUT1/PWM8_ALT on schematic, LED4 on silkscreen.
  * JP19 16-17 connects GPIO175 as CMP_VOUT1
@@ -146,11 +158,13 @@
 	 * espi-gpio pins
 	 * index 0 = Target nREADY output to Host eSPI emulator
 	 * index 1 = VCC_PWRGD_ALT drivent by external eSPI Emulated Host board
+	 * index 2 = Host nREADY input
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_052 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_242 0>;
+		espi-gpios = <MCHP_GPIO_DECODE_151 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_242 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_140 GPIO_ACTIVE_HIGH>;
 		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
 		pinctrl-names = "default";
 		io-channels = <&adc0 4>, <&adc0 5>;
@@ -331,6 +345,7 @@
 	/* host-address = <0x900>; */
 	host-address = <0x10000000>;
 	host-mem-space;
+	status = "okay";
 };
 
 /* Map EMI1 to Host memory address space */
@@ -345,6 +360,7 @@
 	/* host-address = <0x940>; */
 	host-address = <0x10001000>;
 	host-mem-space;
+	status = "okay";
 };
 
 /* eSPI Host I/O capture device. Map 4-byte Host I/O capture range and
@@ -359,11 +375,13 @@
 
 &espi_bdp0 {
 	host-address = <0x80>;
+	status = "okay";
 };
 
 &espi_bdpa0 {
 	host-address = <0x90>;
 	bdp-host-alias-byte-lane = <1>;
+	status = "okay";
 };
 
 &i2c_smb_0 {
