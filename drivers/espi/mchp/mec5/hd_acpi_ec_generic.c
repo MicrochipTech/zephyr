@@ -147,42 +147,6 @@ static void mec5_aec_generic_obe_isr(const struct device *dev)
 	}
 }
 
-/* Called by eSPI parent driver when platform reset de-asserts.
- * ACPI_EC peripheral registers reset by "RESET_SYS"
- * RESET_SYS is active if any of the following activate:
- *  RESET_VTR: VTR power rail up/down
- *  nRESET_IN pin asserted
- *  Watch Dog Timer reset generated
- *  PCR System Reset register Soft-Sys reset set by firmware
- *  Cortex-M4 SYSRESETREQ signal active
- * ACPI_EC configuration in driver init should be stable across eSPI PLTRST#
- * and VCC_RESET.
- * eSPI BARs and SerialIRQ are reset by eSPI PLTRST# active. We must reprogram
- * these eSPI registers for this device.
- */
-static int mec5_aec_generic_host_access_en(const struct device *dev, uint8_t enable, uint32_t cfg)
-{
-	const struct mec5_aec_generic_devcfg *devcfg = dev->config;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	uint32_t sirqcfg = devcfg->ldn;
-	int ret = 0;
-
-	if (devcfg->host_mem_space) {
-		barcfg |= BIT(ESPI_MEC5_BAR_CFG_MEM_BAR_POS);
-	}
-
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return ret;
-	}
-
-	sirqcfg |= (((uint32_t)devcfg->sirq_obf << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-		    & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-
-	return ret;
-}
-
 /* ISSUE
  * Supporting SIRQ enable/disable with this API is only possible if we use the
  * static DT value for SIRQ slot. We need an 8-bit value for the
@@ -244,17 +208,6 @@ static int mec5_aec_generic_set_cb(const struct device *dev, mchp_espi_pc_aec_ca
 
 	return 0;
 }
-
-#if 0
-enum mchp_espi_pc_acpi_ec_op {
-	MCHP_ESPI_AEC_OP_GET_RXDATA = 0,
-	MCHP_ESPI_AEC_OP_SEND_DATA,
-	MCHP_ESPI_AEC_OP_UD_SET, /* data(0) specifies UD0A or (1) UD1A */
-	MCHP_ESPI_AEC_OP_UD_CLR,
-	MCHP_ESPI_AEC_OP_GEN_SCI, /* data(1) set and generate SCI else clear SCI status */
-	MCHP_ESPI_AEC_OP_GEN_SMI, /* data(1) set and generate SMI else clear SMI status */
-};
-#endif
 
 /* ACPI_EC generic operations requested by the application.
  * Send data - transmit data from ACPI_EC to Host. Always write 32-bit data. If 4-byte data
@@ -333,7 +286,6 @@ static int mec5_aec_generic_op(const struct device *dev, enum mchp_espi_pc_acpi_
  * API's to get/set configuration: 4-byte mode, ...
  */
 static const struct mchp_espi_pc_aec_driver_api mec5_aec_generic_driver_api = {
-	.host_access_enable = mec5_aec_generic_host_access_en,
 	.intr_enable = mec5_aec_generic_intr_enable,
 	.set_callback = mec5_aec_generic_set_cb,
 	.operation = mec5_aec_generic_op,
