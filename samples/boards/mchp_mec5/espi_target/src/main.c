@@ -36,7 +36,7 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 struct gen_acpi_ec_info {
 	const struct device *dev;
-	uint16_t iobase;
+	uint32_t iobase;
 	mchp_espi_pc_aec_callback_t cb;
 };
 
@@ -44,6 +44,8 @@ struct gen_acpi_ec_info {
 #define ESPI0_NODE       DT_NODELABEL(espi0)
 #define EMI0_NODE        DT_NODELABEL(emi0)
 #define EMI1_NODE        DT_NODELABEL(emi1)
+#define GPIO_BANK1_NODE	DT_NODELABEL(gpio_040_076)
+#define ESPI_RESET_GPIO_BANK1_POS 17
 
 PINCTRL_DT_DEFINE(ZEPHYR_USER_NODE);
 
@@ -55,17 +57,21 @@ const struct gpio_dt_spec target_n_ready_out_dt =
 const struct gpio_dt_spec vcc_pwrgd_alt_in_dt =
 	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 1);
 
+const struct gpio_dt_spec host_n_ready_in_dt =
+	GPIO_DT_SPEC_GET_BY_IDX(ZEPHYR_USER_NODE, espi_gpios, 2);
+
 static const struct device *espi_dev = DEVICE_DT_GET(ESPI0_NODE);
-#if DT_NODE_HAS_STATUS(EMI0_NODE, okay)
+#if DT_NODE_HAS_STATUS_OKAY(EMI0_NODE)
 static const struct device *emi0_dev = DEVICE_DT_GET(EMI0_NODE);
 #else
 static const struct device *emi0_dev = NULL;
 #endif
-#if DT_NODE_HAS_STATUS(EMI1_NODE, okay)
+#if DT_NODE_HAS_STATUS_OKAY(EMI1_NODE)
 static const struct device *emi1_dev = DEVICE_DT_GET(EMI1_NODE);
 #else
 static const struct device *emi1_dev = NULL;
 #endif
+static const struct device *gpio_bank1_dev = DEVICE_DT_GET(GPIO_BANK1_NODE);
 
 struct mec_espi_io_regs *const espi_iobase =
 	(struct mec_espi_io_regs *)DT_REG_ADDR_BY_NAME(ESPI0_NODE, io);
@@ -77,6 +83,8 @@ struct mec_acpi_ec_regs *const os_acpi_ec_regs =
 static volatile uint32_t spin_val;
 static volatile int ret_val;
 static volatile int app_main_exit;
+static volatile uint32_t espi_reset_ev_cnt;
+static volatile uint8_t espi_reset_ev_state;
 
 struct espi_cfg ecfg;
 struct espi_callback espi_cb_reset;
@@ -138,16 +146,25 @@ static void gpio_cb(const struct device *port,
 		    struct gpio_callback *cb,
 		    gpio_port_pins_t pins);
 
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC2_NODE)
 static void acpi_ec2_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data);
+#endif
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC3_NODE)
 static void acpi_ec3_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data);
+#endif
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC4_NODE)
 static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data);
+#endif
 
 static void emi0_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data);
 static void emi1_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data);
 
+/* TODO - .iobase = (uint32_t)DT_PROP_OR(DT_PHANDLE_BY_IDX(ACPI_EC2_NODE, iom_mappings, 0), hostaddr, 0)
+ * is not working. We switched from DT_PROP to DT_PROP_OR until we understand the problem.
+ */
 const struct gen_acpi_ec_info gen_acpi_ec_tbl[] = {
 	{
 		.dev = DEVICE_DT_GET(ACPI_EC2_NODE),
@@ -166,6 +183,19 @@ const struct gen_acpi_ec_info gen_acpi_ec_tbl[] = {
 	},
 };
 
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ * TODO
+ * Do NOT configure eSPI until Emulated Host signals it is ready:
+ *  Emulated Host has driven ESPI_nRESET and VCC_PWRGD both low.
+ *
+ * We only configure HOST_nREADY GPIO input and poll it.
+ * When we see HOST_nREADY == 0 then we configure the rest of our pins
+ * and drivers.
+ * Once our Target configuration is done we signal Host we are ready
+ * and spin waiting on ESPI_nRESET callback.
+ * When Host sees our TARGET_nREADY signal go low it will de-assert ESPI_nRESET
+ * triggering our Target eSPI driver.
+ */
 int main(void)
 {
 	int ret = 0;
@@ -181,6 +211,34 @@ int main(void)
 	k_fifo_init(&espi_ev_fifo);
 	init_espi_events(espi_evs, MAX_ESPI_EVENTS);
 #endif
+
+	ret = gpio_pin_configure_dt(&host_n_ready_in_dt, GPIO_INPUT);
+	if (ret) {
+		LOG_ERR("Configure Host_nReady GPIO as input (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	/* Wait for Host Emulator Ready */
+	LOG_INF("Wait for Host Emulator Ready");
+	do {
+		k_sleep(K_MSEC(10));
+		ret = gpio_pin_get_dt(&host_n_ready_in_dt);
+		if (ret < 0) {
+			LOG_ERR("GPIO driver failed to read Host_nReady (%d)", ret);
+			spin_on((uint32_t)__LINE__, ret);
+		}
+	} while (ret == 1);
+	LOG_INF("Host Emulator is Ready");
+
+	espi_reset_ev_cnt = 0;
+	espi_reset_ev_state = 0;
+	ret = gpio_pin_get(gpio_bank1_dev, ESPI_RESET_GPIO_BANK1_POS);
+	if (ret < 0) {
+		LOG_ERR("Could not read ESPI_nRESET pin state using GPIO driver (%d)", ret);
+		spin_on((uint32_t)__LINE__, 1);
+	}
+	espi_reset_ev_state = (uint8_t)(ret & 0x7fu);
+	LOG_INF("ESPI_nRESET state = %u", espi_reset_ev_state);
 
 	for (size_t n = 0; n < ARRAY_SIZE(gen_acpi_ec_tbl); n++) {
 		const struct gen_acpi_ec_info *info = &gen_acpi_ec_tbl[n];
@@ -201,13 +259,13 @@ int main(void)
 	ret = pinctrl_apply_state(app_pinctrl_cfg, PINCTRL_STATE_DEFAULT);
 	if (ret) {
 		LOG_ERR("App pin control state apply: %d", ret);
-		spin_on((uint32_t)__LINE__, 1);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	ret = gpio_pin_configure_dt(&target_n_ready_out_dt, GPIO_OUTPUT_HIGH);
 	if (ret) {
 		LOG_ERR("Configure Target_nReady GPIO as output hi (%d)", ret);
-		spin_on((uint32_t)__LINE__, 2);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	gpio_init_callback(&gpio_cb_vcc_pwrgd, gpio_cb, GPIO_0242_PIN_MASK);
@@ -219,8 +277,8 @@ int main(void)
 
 	ret = gpio_pin_configure_dt(&vcc_pwrgd_alt_in_dt, GPIO_INPUT);
 	if (ret) {
-		LOG_ERR("Configure Target_nReady GPIO as output hi (%d)", ret);
-		spin_on((uint32_t)__LINE__, 2);
+		LOG_ERR("Configure VCC_PWRGD_ALT GPIO as input (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
 	}
 
 	ret =  gpio_pin_interrupt_configure_dt(&vcc_pwrgd_alt_in_dt,
@@ -315,21 +373,30 @@ int main(void)
 	LOG_INF("Signal Host emulator Target is Ready");
 	ret = gpio_pin_set_dt(&target_n_ready_out_dt, 0);
 
+	LOG_INF("Wait for Host to de-assert ESPI_nRESET");
+	while ((espi_reset_ev_cnt == 0) && (espi_reset_ev_state == 0)) {
+		k_sleep(K_MSEC(1000u));
+	}
+
 	/* poll channel enables */
 	LOG_INF("Poll driver for VW channel enable");
 	do {
+		k_sleep(K_MSEC(10));
 		vw_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_VWIRE);
 	} while (!vw_en);
 	LOG_INF("VW channel is enabled");
 
 	LOG_INF("Poll driver for OOB channel enable");
 	do {
+		k_sleep(K_MSEC(10));
 		oob_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_OOB);
+
 	} while (!oob_en);
 	LOG_INF("OOB channel is enabled");
 
 	LOG_INF("Poll driver for Flash channel enable");
 	do {
+		k_sleep(K_MSEC(10));
 		fc_en = espi_get_channel_status(espi_dev, ESPI_CHANNEL_FLASH);
 	} while (!fc_en);
 	LOG_INF("Flash channel is enabled");
@@ -430,6 +497,9 @@ static void espi_reset_cb(const struct device *dev,
 			  struct espi_callback *cb,
 			  struct espi_event ev)
 {
+	espi_reset_ev_cnt++;
+	espi_reset_ev_state = (uint8_t)(ev.evt_data & 0x7fu);
+
 #ifdef APP_ESPI_EVENT_CAPTURE
 	struct espi_ev_data *pevd = get_espi_ev_data();
 
@@ -584,6 +654,7 @@ static void espi_periph_cb(const struct device *dev,
 	}
 }
 
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC2_NODE)
 static void acpi_ec2_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data)
 {
@@ -591,20 +662,25 @@ static void acpi_ec2_cb(const struct device *dev, struct mchp_espi_acpi_ec_event
 		ev->flags, ev->ev_type, ev->cmd_data);
 
 }
+#endif
 
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC3_NODE)
 static void acpi_ec3_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data)
 {
 	LOG_INF("ACPI_EC3 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
 		ev->flags, ev->ev_type, ev->cmd_data);
 }
+#endif
 
+#if DT_NODE_HAS_STATUS_OKAY(ACPI_EC4_NODE)
 static void acpi_ec4_cb(const struct device *dev, struct mchp_espi_acpi_ec_event *ev,
 			void *user_data)
 {
 	LOG_INF("ACPI_EC3 CB: flags=0x%02x ev=0x%02x cmd_data=0x%08x",
 		ev->flags, ev->ev_type, ev->cmd_data);
 }
+#endif
 
 static void emi0_cb(const struct device *dev, uint32_t emi_mbox_data, void *user_data)
 {
