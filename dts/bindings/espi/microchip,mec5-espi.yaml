@@ -64,7 +64,7 @@ properties:
 
   ec-sirq:
     type: int
-    description:
+    description: |
       Serial IRQ slot number for eSPI driver generated software SIRQ.
       Default is 255 (disabled).
 
@@ -80,4 +80,3 @@ properties:
     required: true
     description: |
       Contains Host address bits [47:32] where both SRAM BAR's are mapped.
-

@@ -47,10 +47,13 @@ struct mec5_kbc_devcfg {
 };
 
 struct mec5_kbc_data {
+	const struct mec5_kbc_devcfg *devcfg;
 	volatile uint32_t isr_count_ibf;
 	volatile uint32_t isr_count_obe;
 	volatile uint8_t status;
 	volatile uint8_t cmd_data;
+	struct espi_callback espi_vw_pltrst_cbs;
+	struct espi_callback espi_pc_chan_ready_cbs;
 };
 
 static int mec5_kbc_lpc_request(const struct device *dev,
@@ -235,53 +238,38 @@ static void mec5_kbc_obe_isr(struct device *dev)
 	espi_mec5_send_callbacks(devcfg->parent, evt);
 }
 
-/* The hd_kbc driver uses two related peripherals, 8042-KBC and Port92h fast KB reset.
- * Each of these peripherals has a logical device activate register reset by RESET_VCC.
- * The eSPI driver will call this API after configuring each peripheral's I/O BAR.
- * RESET_VCC is active if any of the following activate:
- *  RESET_SYS signal active
- *    VTR power rail, nRESET_IN pin, FW triggered chip resets
- *  VCC_PWRGD or VCC_PWRGD2 inactive
- *  PCR PWR_INV bit == 1
- *
- * Enable: eSPI IO BARs and Serial IRQs
- */
-static int mec5_kbc_host_access_en(const struct device *dev, uint8_t enable, uint32_t ha_cfg)
+static void mec5_kbc_vw_pltrst_cb(const struct device *dev, struct espi_callback *cb,
+				  struct espi_event espi_evt)
 {
-	const struct mec5_kbc_devcfg *devcfg = dev->config;
-	struct mec_kbc_regs *const regs = devcfg->regs;
-	uint32_t sirqcfg = devcfg->ldn;
-	uint32_t barcfg = devcfg->ldn | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	int ret = 0;
+	struct mec5_kbc_data *data =
+		CONTAINER_OF(cb, struct mec5_kbc_data, espi_vw_pltrst_cbs);
+	const struct mec5_kbc_devcfg *devcfg = data->devcfg;
+	struct mec_kbc_regs *regs = devcfg->regs;
 
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return -EIO;
+	LOG_DBG("PC KBC sub-driver VW nPLTRST CB");
+	if ((espi_evt.evt_type == ESPI_BUS_EVENT_VWIRE_RECEIVED) &&
+		(espi_evt.evt_details == ESPI_VWIRE_SIGNAL_PLTRST) && (espi_evt.evt_data != 0)) {
+		LOG_DBG("PC KBC: Activate");
+		mec_hal_kbc_activate(regs, 1u, MEC_KBC_ACTV_KBC | MEC_KBC_ACTV_P92);
 	}
+}
 
-	barcfg = devcfg->ldn_p92 | BIT(ESPI_MEC5_BAR_CFG_EN_POS);
-	ret = espi_mec5_bar_config(devcfg->parent, devcfg->host_addr, barcfg);
-	if (ret) {
-		return -EIO;
+/* struct espi_event evt = { ESPI_BUS_EVENT_CHANNEL_READY, ESPI_CHANNEL_PERIPHERAL, 0 }; */
+static void mec5_kbc_pc_chan_ready_cb(const struct device *dev, struct espi_callback *cb,
+				      struct espi_event espi_evt)
+{
+	struct mec5_kbc_data *data =
+		CONTAINER_OF(cb, struct mec5_kbc_data, espi_pc_chan_ready_cbs);
+	const struct mec5_kbc_devcfg *devcfg = data->devcfg;
+	struct mec_kbc_regs *regs = devcfg->regs;
+
+	LOG_DBG("PC KBC sub-driver chan ready CB");
+	if ((espi_evt.evt_type == ESPI_BUS_EVENT_CHANNEL_READY) &&
+		(espi_evt.evt_details == ESPI_CHANNEL_PERIPHERAL) &&
+		(espi_evt.evt_data & ESPI_PC_EVT_BUS_CHANNEL_READY)) {
+		LOG_DBG("PC KBC: Activate");
+		mec_hal_kbc_activate(regs, 1u, MEC_KBC_ACTV_KBC | MEC_KBC_ACTV_P92);
 	}
-
-	sirqcfg |= (((uint32_t)devcfg->kirq << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-		    & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-	if (ret) {
-		return -EIO;
-	}
-
-	sirqcfg |= (((uint32_t)devcfg->mirq << ESPI_MEC5_SIRQ_CFG_SLOT_POS)
-		    & ESPI_MEC5_SIRQ_CFG_SLOT_MSK);
-	ret = espi_mec5_sirq_config(devcfg->parent, sirqcfg);
-	if (ret) {
-		return -EIO;
-	}
-
-	mec_hal_kbc_activate(regs, enable, MEC_KBC_ACTV_KBC | MEC_KBC_ACTV_P92);
-
-	return 0;
 }
 
 static int mec5_kbc_init(const struct device *dev)
@@ -291,13 +279,13 @@ static int mec5_kbc_init(const struct device *dev)
 	struct mec5_kbc_data *data = dev->data;
 	uint32_t init_flags = MEC_KBC_PCOBF_EN | MEC_KBC_AUXOBF_EN | MEC_KBC_PORT92_EN;
 
+	data->devcfg = devcfg;
 	data->isr_count_ibf = 0;
 	data->isr_count_obe = 0;
 	data->status = 0;
 	data->cmd_data = 0;
 
 	int ret = mec_hal_kbc_init(regs, init_flags);
-
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -307,11 +295,30 @@ static int mec5_kbc_init(const struct device *dev)
 		mec_hal_kbc_girq_en(regs, MEC_KBC_IBF_IRQ);
 	}
 
-	return 0;
+	if (!device_is_ready(devcfg->parent)) {
+		LOG_ERR("Host UART: parent device is not ready!");
+		return -EIO;
+	}
+
+	/* register callback on nPLTRST VWire */
+	espi_init_callback(&data->espi_vw_pltrst_cbs, mec5_kbc_vw_pltrst_cb,
+			   ESPI_BUS_EVENT_VWIRE_RECEIVED);
+
+	ret = espi_add_callback(devcfg->parent, &data->espi_vw_pltrst_cbs);
+	if (ret) {
+		LOG_ERR("eSPI VW PLTRST add cb error (%d)", ret);
+		return ret;
+	}
+
+	espi_init_callback(&data->espi_pc_chan_ready_cbs, mec5_kbc_pc_chan_ready_cb,
+  			   ESPI_BUS_EVENT_CHANNEL_READY);
+
+	ret = espi_add_callback(devcfg->parent, &data->espi_pc_chan_ready_cbs);
+
+	return ret;
 }
 
 static const struct mchp_espi_pc_kbc_driver_api mec5_kbc_driver_api = {
-	.host_access_enable = mec5_kbc_host_access_en,
 	.intr_enable = mec5_kbc_intr_enable,
 	.lpc_request = mec5_kbc_lpc_request,
 };
