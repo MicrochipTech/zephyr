@@ -940,11 +940,13 @@ static void i2c_mec5_isr(const struct device *dev)
 			MEC5_I2C_DEBUG_STATE_UPDATE(data, 0x85);
 			mec_hal_i2c_smb_idle_intr_enable(hwctx, 1);
 			mec_hal_i2c_smb_stop_gen(hwctx);
+			data->cm_dir = MEC5_I2C_DIR_NONE;
 			run_sm = false;
 			break;
 		case I2C_MEC5_ISR_STATE_EV_IDLE:
 			MEC5_I2C_DEBUG_STATE_UPDATE(data, 0x86);
 			mec_hal_i2c_smb_idle_status_clr(hwctx);
+			data->cm_dir = MEC5_I2C_DIR_NONE;
 			next_state = I2C_MEC5_ISR_STATE_NEXT_MSG;
 			if (xfr->xfr_sts) {
 				data->mdone = 0x13;
