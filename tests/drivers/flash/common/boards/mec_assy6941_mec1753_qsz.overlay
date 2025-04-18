@@ -1,0 +1,33 @@
+/*
+ * Copyright (c) 2023 Intercreate, Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Build test for jedec,spi-nor compatible (drivers/flash/spi_nor.c)
+ * EVB should have SPI dongle Assembly 6791 on J18.
+ * SPI dongle should have W25Q128JVSQ 128 megabit SPI flash parts.
+ */
+
+&qspi0 {
+	status = "okay";
+	compatible = "microchip,mec5-qspi";
+	clock-frequency = <12000000>;
+	lines = <1>;
+	chip-select = <0>;
+
+	pinctrl-0 = < &qspi_shd_cs0_n_gpio055 &qspi_shd_clk_gpio056
+		      &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224 >;
+	pinctrl-names = "default";
+
+	w25q128jvsq: w25q128jvsq@0 { 
+		compatible = "jedec,spi-nor";
+		status = "okay";
+		reg = <0>;
+		spi-max-frequency = <12000000>;
+		size = <0x8000000>;  // bits
+		has-dpd;
+		t-enter-dpd = <10000>;
+		t-exit-dpd = <45000>;
+		jedec-id = [ EF 40 18 ];
+	};
+};
