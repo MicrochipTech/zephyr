@@ -616,6 +616,12 @@ static void do_callback(const struct device *dev, enum mec_dmac_channel chan,
 	}
 }
 
+/* Handler for any DMA channel.
+ * If DMA config per block callback flag is set we invoke the callback
+ * for each block with status = DMA_STATUS_BLOCK
+ * else we invoke the callback when the last block is complete with
+ * status = DMA_STATUS_COMPLETE.
+ */
 static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 {
 	struct dma_mec5_data *const data = dev->data;
@@ -641,21 +647,23 @@ static void dma_mec5_irq_handler(const struct device *dev, uint8_t chan)
 		return;
 	}
 
+	if ((chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_EOB_POS)) && chan_data->cb) {
+		do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
+	}
+
 	chan_data->block_count--;
-	if (chan_data->block_count) {
-		if ((chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_EOB_POS)) && chan_data->cb) {
-			do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
-		}
-		block = block->next_block;
-		if (block) {
-			chan_data->curr = block;
-			dma_mec5_reload(dev, chan, block->source_address,
-					block->dest_address, block->block_size);
-			dma_mec5_start(dev, chan);
-		}
+	block = block->next_block;
+
+	if (block) {
+		chan_data->curr = block;
+		dma_mec5_reload(dev, chan, block->source_address,
+				block->dest_address, block->block_size);
+		dma_mec5_start(dev, chan);
 	} else {
 		dma_mec5_device_busy_clear(dev, chan);
-		do_callback(dev, chan, chan_data, DMA_STATUS_COMPLETE);
+		if (!(chan_data->flags & BIT(DMA_MEC5_CHAN_FLAGS_CB_EOB_POS)) && chan_data->cb) {
+			do_callback(dev, chan, chan_data, DMA_STATUS_COMPLETE);
+		}
 	}
 }
 
