@@ -31,24 +31,24 @@ LOG_MODULE_REGISTER(i2c_mchp, CONFIG_I2C_LOG_LEVEL);
 /* #define MEC5_I2C_DEBUG_STATE */
 #define MEC5_I2C_DEBUG_STATE_ENTRIES 64
 
-#define RESET_WAIT_US		20
+#define RESET_WAIT_US 20
 
 /* I2C timeout is  10 ms (WAIT_INTERVAL * WAIT_COUNT) */
-#define WAIT_INTERVAL		50
-#define WAIT_COUNT		200
-#define STOP_WAIT_COUNT		500
-#define PIN_CFG_WAIT		50
+#define WAIT_INTERVAL   50
+#define WAIT_COUNT      200
+#define STOP_WAIT_COUNT 500
+#define PIN_CFG_WAIT    50
 
 /* I2C recover SCL low retries */
-#define I2C_MEC5_RECOVER_SCL_LOW_RETRIES	10
+#define I2C_MEC5_RECOVER_SCL_LOW_RETRIES 10
 /* I2C recover SDA low retries */
-#define I2C_MEC5_RECOVER_SDA_LOW_RETRIES	3
+#define I2C_MEC5_RECOVER_SDA_LOW_RETRIES 3
 /* I2C recovery bit bang delay */
-#define I2C_MEC5_RECOVER_BB_DELAY_US		5
+#define I2C_MEC5_RECOVER_BB_DELAY_US     5
 /* I2C recovery SCL sample delay */
-#define I2C_MEC5_RECOVER_SCL_DELAY_US		50
+#define I2C_MEC5_RECOVER_SCL_DELAY_US    50
 
-#define I2C_MEC5_CTRL_WR_DLY	8
+#define I2C_MEC5_CTRL_WR_DLY 8
 
 enum mec5_i2c_state {
 	MEC5_I2C_STATE_CLOSED = 0,
@@ -94,11 +94,11 @@ struct i2c_mec5_config {
 };
 
 #define I2C_MEC5_XFR_FLAG_START_REQ 0x01
-#define I2C_MEC5_XFR_FLAG_STOP_REQ 0x02
+#define I2C_MEC5_XFR_FLAG_STOP_REQ  0x02
 
-#define I2C_MEC5_XFR_STS_NACK	    0x01
-#define I2c_MEC5_XFR_STS_BER	    0x02
-#define I2c_MEC5_XFR_STS_LAB	    0x04
+#define I2C_MEC5_XFR_STS_NACK 0x01
+#define I2c_MEC5_XFR_STS_BER  0x02
+#define I2c_MEC5_XFR_STS_LAB  0x04
 
 struct i2c_mec5_cm_xfr {
 	volatile uint8_t *mbuf;
@@ -163,7 +163,7 @@ static void mec5_i2c_dbg_state_update(struct i2c_mec5_data *data, uint8_t state)
 		data->dbg_state_idx = ++idx;
 	}
 }
-#define MEC5_I2C_DEBUG_STATE_INIT(pd) mec5_i2c_dbg_state_init(pd)
+#define MEC5_I2C_DEBUG_STATE_INIT(pd)          mec5_i2c_dbg_state_init(pd)
 #define MEC5_I2C_DEBUG_STATE_UPDATE(pd, state) mec5_i2c_dbg_state_update(pd, state)
 #else
 #define MEC5_I2C_DEBUG_STATE_INIT(pd)
@@ -393,35 +393,6 @@ static int i2c_mec5_configure(const struct device *dev, uint32_t dev_config_raw)
 	return ret;
 }
 
-/* side-band API */
-int i2c_mchp_configure(const struct device *dev, uint32_t dev_config, uint8_t port_num)
-{
-	if (!dev || (port_num >= MCHP_I2C_NUM_PORTS)) {
-		return -EINVAL;
-	}
-
-	struct i2c_mec5_data *data = dev->data;
-
-	data->port_sel = port_num;
-
-	return i2c_mec5_configure(dev, dev_config);
-}
-
-/* side-band API */
-int i2c_mchp_get_port(const struct device *dev, uint8_t *port_num)
-{
-	const struct i2c_mec5_config *const devcfg = dev->config;
-	struct mec_i2c_smb_regs *regs = devcfg->base;
-	uint8_t port = mec_hal_i2c_smb_port_get(regs);
-
-	if (!port_num) {
-		return -EINVAL;
-	}
-
-	*port_num = port;
-	return 0;
-}
-
 /* i2c_get_config API */
 static int i2c_mec5_get_config(const struct device *dev, uint32_t *dev_config)
 {
@@ -445,6 +416,9 @@ static int i2c_mec5_get_config(const struct device *dev, uint32_t *dev_config)
 	}
 
 	dcfg |= I2C_MODE_CONTROLLER;
+#ifdef CONFIG_I2C_PORT_SWITCH
+	dcfg |= I2C_PORT_SET(data->port_sel);
+#endif
 	*dev_config = dcfg;
 
 	return 0;
@@ -595,8 +569,8 @@ static int i2c_mec5_xfr_begin(const struct device *dev, uint16_t addr)
 }
 
 /* i2c_transfer API - Synchronous using interrupts */
-static int i2c_mec5_transfer(const struct device *dev, struct i2c_msg *msgs,
-			     uint8_t num_msgs, uint16_t addr)
+static int i2c_mec5_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			     uint16_t addr)
 {
 	struct i2c_mec5_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
@@ -990,8 +964,8 @@ static int i2c_mec5_init(const struct device *dev)
 	const struct i2c_mec5_config *cfg = dev->config;
 	struct i2c_mec5_data *data = dev->data;
 	struct mec_i2c_smb_ctx *hwctx = &data->ctx;
-	int ret;
-	uint32_t bitrate_cfg;
+	int ret = 0;
+	uint32_t bitrate_cfg = 0, i2c_config = 0;
 
 	hwctx->base = cfg->base;
 	hwctx->i2c_ctrl_cached = 0;
@@ -1011,7 +985,11 @@ static int i2c_mec5_init(const struct device *dev)
 	}
 
 	/* Default configuration */
-	ret = i2c_mec5_configure(dev, I2C_MODE_CONTROLLER | bitrate_cfg);
+	i2c_config = I2C_MODE_CONTROLLER | bitrate_cfg;
+#ifdef CONFIG_I2C_PORT_SWITCH
+	i2c_config |= I2C_PORT_SET(data->port_sel);
+#endif
+	ret = i2c_mec5_configure(dev, i2c_config);
 	if (ret) {
 		return ret;
 	}
