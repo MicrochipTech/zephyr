@@ -89,8 +89,6 @@ enum i2c_mec5_isr_state {
 struct i2c_mec5_config {
 	struct mec_i2c_smb_regs *base;
 	uint32_t clock_freq;
-	struct gpio_dt_spec sda_gpio;
-	struct gpio_dt_spec scl_gpio;
 	const struct pinctrl_dev_config *pcfg;
 	void (*irq_config_func)(void);
 };
@@ -220,19 +218,14 @@ static int wait_bus_free(const struct device *dev, uint32_t nwait)
 static int check_lines(const struct device *dev)
 {
 	const struct i2c_mec5_config *cfg = dev->config;
-	gpio_port_value_t sda = 0, scl = 0;
+	struct mec_i2c_smb_regs *regs = cfg->base;
+	uint8_t pin_states = mec_hal_i2c_smb_bbmon_pin_states(regs);
 
-	gpio_port_get_raw(cfg->sda_gpio.port, &sda);
-	scl = sda;
-	if (cfg->sda_gpio.port != cfg->scl_gpio.port) {
-		gpio_port_get_raw(cfg->scl_gpio.port, &scl);
+	if (pin_states != 0x03u) {
+		return -EIO;
 	}
 
-	if ((sda & BIT(cfg->sda_gpio.pin)) && (scl & BIT(cfg->scl_gpio.pin))) {
-		return 0;
-	}
-
-	return -EIO;
+	return 0;
 }
 
 static int i2c_mec5_bb_recover(const struct device *dev)
@@ -1033,36 +1026,29 @@ static int i2c_mec5_init(const struct device *dev)
 	return 0;
 }
 
-#define I2C_MEC5_DEVICE(n)						\
-									\
-	PINCTRL_DT_INST_DEFINE(n);					\
-									\
-	static void i2c_mec5_irq_config_func_##n(void);			\
-									\
-	static struct i2c_mec5_data i2c_mec5_data_##n = {		\
-		.port_sel = DT_INST_PROP(n, port_sel),			\
-	};								\
-									\
-	static const struct i2c_mec5_config i2c_mec5_config_##n = {	\
-		.base = (struct mec_i2c_smb_regs *)DT_INST_REG_ADDR(n),	\
-		.clock_freq = DT_INST_PROP(n, clock_frequency),		\
-		.sda_gpio = GPIO_DT_SPEC_INST_GET(n, sda_gpios),	\
-		.scl_gpio = GPIO_DT_SPEC_INST_GET(n, scl_gpios),	\
-		.irq_config_func = i2c_mec5_irq_config_func_##n,	\
-		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
-	};								\
-	I2C_DEVICE_DT_INST_DEFINE(n, i2c_mec5_init, NULL,		\
-		&i2c_mec5_data_##n, &i2c_mec5_config_##n,		\
-		POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,			\
-		&i2c_mec5_driver_api);					\
-									\
-	static void i2c_mec5_irq_config_func_##n(void)			\
-	{								\
-		IRQ_CONNECT(DT_INST_IRQN(n),				\
-			    DT_INST_IRQ(n, priority),			\
-			    i2c_mec5_isr,				\
-			    DEVICE_DT_INST_GET(n), 0);			\
-		irq_enable(DT_INST_IRQN(n));				\
+#define I2C_MEC5_DEVICE(n)                                                                         \
+	PINCTRL_DT_INST_DEFINE(n);                                                                 \
+	static void i2c_mec5_irq_config_func_##n(void);                                            \
+                                                                                                   \
+	static struct i2c_mec5_data i2c_mec5_data_##n = {                                          \
+		.port_sel = DT_INST_PROP(n, port_sel),                                             \
+	};                                                                                         \
+                                                                                                   \
+	static const struct i2c_mec5_config i2c_mec5_config_##n = {                                \
+		.base = (struct mec_i2c_smb_regs *)DT_INST_REG_ADDR(n),                            \
+		.clock_freq = DT_INST_PROP(n, clock_frequency),                                    \
+		.irq_config_func = i2c_mec5_irq_config_func_##n,                                   \
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),                                         \
+	};                                                                                         \
+	I2C_DEVICE_DT_INST_DEFINE(n, i2c_mec5_init, NULL, &i2c_mec5_data_##n,                      \
+				  &i2c_mec5_config_##n, POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,     \
+				  &i2c_mec5_driver_api);                                           \
+                                                                                                   \
+	static void i2c_mec5_irq_config_func_##n(void)                                             \
+	{                                                                                          \
+		IRQ_CONNECT(DT_INST_IRQN(n), DT_INST_IRQ(n, priority), i2c_mec5_isr,               \
+			    DEVICE_DT_INST_GET(n), 0);                                             \
+		irq_enable(DT_INST_IRQN(n));                                                       \
 	}
 
 DT_INST_FOREACH_STATUS_OKAY(I2C_MEC5_DEVICE)
