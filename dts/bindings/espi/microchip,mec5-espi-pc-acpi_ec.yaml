@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel ACPI embedded controller.
+
+compatible: "microchip,mec5-espi-pc-acpi_ec"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]
+
+properties:
+  four-byte-data-mode:
+    type: boolean
+    description: |
+      Enable support of four byte data mode. In four byte mode the
+      data register is four bytes and status is set when the host
+      write byte lane 3 of the data register.

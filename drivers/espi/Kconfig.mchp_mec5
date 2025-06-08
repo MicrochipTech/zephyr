@@ -1,0 +1,38 @@
+# Microchip MEC5 eSPI driver
+# Copyright (c) 2025 Microchip Technology Inc
+
+config ESPI_MCHP_MEC5
+	bool "Microchip MEC5 family eSPI driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_ESPI_ENABLED
+	select PINCTRL
+	help
+	  Enable the eSPI driver for Microchip MEC5 family
+
+if ESPI_MCHP_MEC5
+
+config ESPI_OOB_CHANNEL
+	default y
+
+config ESPI_FLASH_CHANNEL
+	default y
+
+config ESPI_OOB_BUFFER_SIZE
+	int "eSPI OOB channel buffer size in bytes"
+	default 128
+	depends on ESPI_OOB_CHANNEL
+	help
+	  Driver OOB transfer buffer size in bytes. Default is the
+	  eSPI specification defined minimum of 128 bytes. The current
+	  maximum OOB payload from the eSPI host is 73 bytes.
+
+config ESPI_FLASH_BUFFER_SIZE
+	int "eSPI flash channel buffer size in bytes"
+	default 256
+	depends on ESPI_FLASH_CHANNEL
+	help
+	  Driver flash channel transfer buffer size in bytes. The
+	  default value is 256 bytes which is the eSPI specification
+	  maximum.
+
+endif # ESPI_MCHP_MEC5

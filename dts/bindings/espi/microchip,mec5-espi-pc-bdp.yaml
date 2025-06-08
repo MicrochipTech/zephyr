@@ -1,0 +1,32 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel BIOS I/O port capture device.
+
+compatible: "microchip,mec5-espi-pc-bdp"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]
+
+properties:
+  fifo-threshold:
+    type: string
+    description: |
+      BDP will generate an interrupt to the EC when the number of
+      Host I/O writes to the capture range is equal to or greater
+      than this value.
+    enum:
+      - "1"
+      - "4"
+      - "8"
+      - "16"
+      - "20"
+      - "24"
+      - "28"
+      - "30"
+
+  alias-byte-lane:
+    type: int
+    description: |
+      Store the byte captured on the alias I/O port into the specified
+      byte lane [0 - 3].
