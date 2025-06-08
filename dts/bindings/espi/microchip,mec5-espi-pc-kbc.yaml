@@ -1,0 +1,15 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel 8042 keyboard controller
+  with Port 92h fast keyboard support.
+
+compatible: "microchip,mec5-espi-pc-kbc"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]
+
+properties:
+  port92-enable:
+    type: boolean
+    description: Enable fast keyboard Gate A20 hardware support
