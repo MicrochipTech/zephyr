@@ -1,0 +1,11 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel UART.
+  The 16550 compatible UART registers are mapped to
+  eSPI host I/O address space.
+
+compatible: "microchip,mec5-espi-pc-uart"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]

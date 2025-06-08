@@ -1,0 +1,11 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel EMI.
+  Embedded memory interface provides a mechanism for the host
+  to access EC memory.
+
+compatible: "microchip,mec5-espi-pc-emi"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]

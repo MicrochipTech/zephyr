@@ -1,0 +1,22 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 eSPI Peripheral Channel device common properties
+
+include: [base.yaml]
+
+on-bus: espi
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  hostinfos:
+    type: phandles
+    required: true
+    description:
+      Handles to one or more nodes from the mchp-mec5-esp-pc-host-dev table.
