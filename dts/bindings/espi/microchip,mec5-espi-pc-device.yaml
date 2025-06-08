@@ -1,0 +1,50 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip MEC5 eSPI Host Logical Devices
+
+compatible: "microchip,mec5-espi-pc-device"
+
+include: [base.yaml]
+
+child-binding:
+  description: |
+    Child node containing eSPI Peripheral Channel device Host properties
+  properties:
+    ldn:
+      type: int
+      required: true
+      description: Host device logical device number.
+
+    host-address:
+      type: int
+      required: true
+      description: |
+        Host address the logical device appears at. On x86 systems this
+        address may be I/O or memory space. Address values are interpreted
+        as: 0 = disabled, [1, 0xffff] I/O space, [0x10000, UINT32_MAX]
+        memory space.
+
+    sirqs:
+      type: array
+      description: |
+        Host Serial IRQ numbers assigned to this device. Each entry is
+        a hardware slot index and slot value. A slot value of 255
+        disables SIRQ genaration. Refer to SoC data sheet eSPI Seria-IRQ
+        assignment table.
+
+        Example: KBC implements two Serial IRQ slots and indices 2 and 3.
+                 We map them to Serial-IRQ slots 1 and 12.
+          sirqs = <2 1 3 12>;
+        Example: UART0 implements one Serial IRQ slot at hardware index 9.
+          sirqs = <9 3>;
+
+    sirq-names:
+      type: string-array
+      description: |
+        Names for the provided Serial IRQs. The number of names needs to match the
+        number of sirqs.
+
+    "#sirq-cells":
+      type: int
+      const: 1
