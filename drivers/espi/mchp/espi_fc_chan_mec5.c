@@ -51,23 +51,30 @@ void espi_mec5_fc_irq_connect(const struct device *dev)
 		    espi_mec5_fc_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, fc, irq));
 
-	sys_write32(BIT(ESPI_GIRQ_FC_POS), ESPI_GIRQ_ENSET_ADDR);
+	sys_set_bit(ESPI_GIRQ_ENSET_ADDR, ESPI_GIRQ_FC_POS);
+}
+
+void espi_mec5_fc_erst_config(const struct device *dev, uint8_t n_erst_state)
+{
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t iob = drvcfg->ioc_base;
+
+	if (n_erst_state != 0) {
+		sys_write32(BIT(ESPI_FC_IER_CHG_EN_POS), iob + ESPI_FC_IER);
+	}
 }
 
 int espi_mec5_flash_read_api(const struct device *dev, struct espi_flash_packet *pckt)
 {
-	LOG_INF("MEC5 flash read: dev = %p pckt = %p", dev, pckt);
-	return 0;
+	return -ENOTSUP;
 }
 
 int espi_mec5_flash_write_api(const struct device *dev, struct espi_flash_packet *pckt)
 {
-	LOG_INF("MEC5 flash write: dev = %p pckt = %p", dev, pckt);
-	return 0;
+	return -ENOTSUP;
 }
 
 int espi_mec5_flash_erase_api(const struct device *dev, struct espi_flash_packet *pckt)
 {
-	LOG_INF("MEC5 flash erase: dev = %p pckt = %p", dev, pckt);
-	return 0;
+	return -ENOTSUP;
 }
