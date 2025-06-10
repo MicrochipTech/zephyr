@@ -44,6 +44,10 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 BUILD_ASSERT(((ESPI_VWIRE_SIGNAL_SLP_S3) == 0), "VWires in espi header have been renumbered!!!");
 BUILD_ASSERT(((ESPI_VWIRE_SIGNAL_COUNT) <= 88), "Max HW VWire count exceeded!!!");
 
+#define ESPI_MEC5_VW_FLAG_DIR_POS 0
+#define ESPI_MEC5_VW_FLAG_DIR_H2T 0
+#define ESPI_MEC5_VW_FLAG_DIR_T2H BIT(0)
+
 struct espi_mec5_vwire {
 	uint8_t host_idx;
 	uint8_t source_bit;
@@ -105,7 +109,8 @@ struct espi_mec5_vwire {
 
 static const struct espi_mec5_vwire espi_mec5_vw_tbl[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_CT_VWIRES_NODE, MEC5_ESPI_CTVW_ENTRY)
-		DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_TC_VWIRES_NODE, MEC5_ESPI_TCVW_ENTRY)};
+	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_TC_VWIRES_NODE, MEC5_ESPI_TCVW_ENTRY)
+};
 
 /* Create a look up table for the Controller-to-Target VWire interrupt handler.
  * Hardware has 11 C2T VWire registers. Each register controls a group of 4 vwires.
@@ -185,17 +190,87 @@ int espi_mec5_init_vwires(const struct device *dev)
 	return rc2;
 }
 
+void espi_mec5_vw_erst_config(const struct device *dev, uint8_t n_erst_state)
+{
+	if (n_erst_state != 0) { /* danger! level low interrupt */
+		sys_write32(ESPI_GIRQ_VW_CHEN_POS, ESPI_GIRQ_STS_ADDR);
+		sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENSET_ADDR);
+	}
+}
+
 /* -------- eSPI driver VWire API -------- */
-int espi_mec5_send_vwire_api(const struct device *dev, enum espi_vwire_signal vw, uint8_t level)
+/* Why did the original implementations allow writing Host-to-Target VWires?
+ * If the EC application changes Host-to-Target VWires the Host will not be notified.
+ */
+int espi_mec5_send_vwire_api(const struct device *dev, enum espi_vwire_signal signal, uint8_t level)
 {
-	return -ENOTSUP;
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t regaddr = (mm_reg_t)drvcfg->vwc_base;
+	uint32_t host_rd_cnt = CONFIG_ESPI_VWIRE_SEND_TIMEOUT;
+	uint32_t src_word = 0;
+
+	if ((signal <= ESPI_VWIRE_SIGNAL_C2T_COUNT) || (signal >= ESPI_VWIRE_SIGNAL_COUNT)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_vwire *vw = &espi_mec5_vw_tbl[signal];
+
+	regaddr += ESPI_THVW_GRPW(vw->reg_idx, 0);
+	src_word = sys_read32(regaddr + 4u);
+	if (level != 0) {
+		src_word |= BIT(ESPI_VW_STATE_POS(vw->source_bit));
+	} else {
+		src_word &= (uint32_t)~BIT(ESPI_VW_STATE_POS(vw->source_bit));
+	}
+
+	sys_write32(src_word, regaddr + 4u);
+
+	if (host_rd_cnt != 0) {
+		while ((sys_read32(regaddr) & BIT(ESPI_VW_T2H_W0_CHG_POS(vw->source_bit))) != 0) {
+			k_busy_wait(1);
+			if (host_rd_cnt == 0) {
+				LOG_ERR("VW %d send timeout", signal);
+				return -ETIMEDOUT;
+			}
+			host_rd_cnt--;
+		}
+	}
+
+	return 0;
 }
 
-int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal vw, uint8_t *level)
+int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal signal, uint8_t *level)
 {
-	return -ENOTSUP;
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t regaddr = (mm_reg_t)drvcfg->vwc_base;
+	uint32_t src_word = 0;
+
+	if ((signal >= ESPI_VWIRE_SIGNAL_COUNT) || (level == NULL)) {
+		return -EINVAL;
+	}
+
+	const struct espi_mec5_vwire *vw = &espi_mec5_vw_tbl[signal];
+
+	if ((vw->flags & BIT(ESPI_MEC5_VW_FLAG_DIR_POS)) == ESPI_MEC5_VW_FLAG_DIR_H2T) {
+		regaddr += ESPI_HTVW_GRPW(vw->reg_idx, 2);
+	} else {
+		regaddr += ESPI_THVW_GRPW(vw->reg_idx, 1);
+	}
+
+	src_word = sys_read32(regaddr);
+	*level = (uint8_t)((src_word >> ESPI_VW_STATE_POS(vw->source_bit)) & BIT(0));
+
+	return 0;
 }
 
+/* eSPI virtual wire common interrupt handler.
+ * The eSPI specification and harware groups VWires into groups of 4.
+ * The Host transmits a PUT_VWIRE packet 1 to the maximum configured number of groups.
+ * The packet contains the Host Index for a group plus a byte containing two 4-bit fields:
+ * valid bit map and value bit map. MEC VW hardware processes the valid and value and sets
+ * status if the value is valid and matches the IRQ selection field in the VWire group register
+ * for that VWire bit (level lo, level high, rising edge, falling edge, or both edges).
+ */
 static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase, uint8_t vwbank)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
@@ -233,8 +308,8 @@ static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase,
 	signal = (int)espi_mec5_vw_ct_isr_tbl[idx];
 	evt.evt_details = (uint32_t)signal;
 
-	/* TODO special handling */
-	if (signal == ESPI_VWIRE_SIGNAL_PLTRST) {
+	/* special handling */
+	if (signal == ESPI_VWIRE_SIGNAL_PLTRST) { /* nPLTRST vwire de-assertion? */
 		if (evt.evt_data != 0) {
 			espi_mec5_pc_pltrst_handler(dev, 1u);
 		}

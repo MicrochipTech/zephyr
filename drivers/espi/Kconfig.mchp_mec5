@@ -17,6 +17,23 @@ config ESPI_OOB_CHANNEL
 config ESPI_FLASH_CHANNEL
 	default y
 
+config ESPI_VWIRE_SEND_TIMEOUT
+       int "eSPI send VWire to host timeout in microseconds"
+       default 1000
+       depends on ESPI_VWIRE_CHANNEL
+       help
+         ESPI target to host VWire protocal uses a notification
+	 and GET_VW command. When the target changes any target-to-host
+	 VWire it will cause ESPI_ALERT to be asserted when ESPI_CS
+	 de-asserts. The eSPI Host should issue a GET_STATUS command
+	 to determine cause of the alert. The status information will
+	 have a bit indicating new VWire values are available. The Host
+	 then issues a GET_VW command to get the target-to-host VWire
+	 groups containing changes. MEC hardware has a read-only status
+	 not connected to an interrupt indicating the Host has read the
+	 VWires using GET_VW. This timeout is used by the driver which
+	 polls the GET_VW status.
+
 config ESPI_OOB_BUFFER_SIZE
 	int "eSPI OOB channel buffer size in bytes"
 	default 128
