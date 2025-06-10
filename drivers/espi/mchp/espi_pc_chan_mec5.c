@@ -58,10 +58,24 @@ struct espi_mec5_pc_device {
 	uint8_t flags;
 };
 
+#define MEC5_PC_DEV_FLAG_HAS_SIRQ BIT(4)
+
+#define MEC5_PC_DEV_FLAGS(nid) \
+	COND_CODE_1(DT_NODE_HAS_PROP(niq, sirqs), (MEC5_PC_DEV_FLAG_HAS_SIRQ), (0))
+
+/* nid = node ID, i in [0, 1] */
+#define MEC5_PC_SIRQ_VAL(nid, i) DT_PROP_BY_IDX(nid, sirqs, i)
+
+#define MEC5_PC_SIRQ(nid, i) \
+	COND_CODE_1(DT_NODE_HAS_PROP(nid, sirqs), (MEC5_PC_SIRQ_VAL(nid, i)), (0xffu))
+
 #define ESPI_MEC5_PC_DEV_BAR_SIRQ(node_id) \
 	{ \
 		.haddr_lsw = DT_PROP(node_id, host_address), \
 		.ldn = DT_PROP(node_id, ldn), \
+		.sirq0_slot = MEC5_PC_SIRQ(node_id, 0), \
+		.sirq1_slot = MEC5_PC_SIRQ(node_id, 1), \
+		.flags = MEC5_PC_DEV_FLAGS(nid), \
 	},
 
 /* PC device BAR and Serial-IRQ table */
@@ -80,10 +94,31 @@ static int espi_mec5_pc_config_bars(const struct device *dev)
 		const struct espi_mec5_pc_device *p = &espi_mec5_pc_devtbl[n];
 
 		if (p->haddr_lsw > UINT16_MAX) {
+			LOG_DBG("LDN[%u] MBAR = 0x%0x", p->ldn, p->haddr_lsw);
 			ret = mec_hal_espi_mbar_cfg(mregs, p->ldn, p->haddr_lsw, 1u);
 		} else {
+			LOG_DBG("LDN[%u] IOBAR = 0x%0x", p->ldn, p->haddr_lsw);
 			ret =  mec_hal_espi_iobar_cfg(ioregs, p->ldn,
 						      (uint16_t)p->haddr_lsw & UINT16_MAX, 1);
+		}
+	}
+
+	return 0;
+}
+
+static int espi_mec5_pc_config_sirqs(const struct device *dev)
+{
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t iobase = (mm_reg_t)drvcfg->ioc_base;
+
+	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_pc_devtbl); n++) {
+		const struct espi_mec5_pc_device *p = &espi_mec5_pc_devtbl[n];
+
+		if ((p->flags & MEC5_PC_DEV_FLAG_HAS_SIRQ) != 0) {
+			LOG_DBG("LDN[%u] SIRQ0[%u]=0x%02x SIRQ1[%u]=0x%02x", p->ldn,
+				p->sirq0_idx, p->sirq0_slot, p->sirq1_idx, p->sirq1_slot);
+			sys_write8(p->sirq0_slot, iobase + ESPI_SIRQ_OFS(p->sirq0_idx));
+			sys_write8(p->sirq1_slot, iobase + ESPI_SIRQ_OFS(p->sirq1_idx));
 		}
 	}
 
@@ -116,13 +151,34 @@ void espi_mec5_pc_irq_connect(const struct device *dev)
 	sys_write32(pc_ien_msk, ESPI_GIRQ_ENSET_ADDR);
 }
 
+#define PC_IER_ALL (BIT(ESPI_PC_IER_ABERR_POS) | BIT(ESPI_PC_IER_CHEN_CHG_POS) |\
+		    BIT(ESPI_PC_IER_BMEN_CHG_POS))
+
+void espi_mec5_pc_erst_config(const struct device *dev, uint8_t n_erst_state)
+{
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t iob = drvcfg->ioc_base;
+
+	if (n_erst_state != 0) {
+		sys_write32(PC_IER_ALL, iob + ESPI_PC_IER);
+	}
+}
+
 int espi_mec5_pc_pltrst_handler(const struct device *dev, uint8_t pltrst_state)
 {
-	int ret1 = espi_mec5_pc_config_bars(dev);
+	int rc = 0;
 
-	/* TODO Serial-IRQs */
+	if (pltrst_state) {
+		if (espi_mec5_pc_config_bars(dev) != 0) {
+			rc = -EIO;
+		}
 
-	return ret1;
+		if (espi_mec5_pc_config_sirqs(dev) != 0) {
+			rc = -EIO;
+		}
+	}
+
+	return rc;
 }
 
 int espi_mec5_read_req_api(const struct device *dev, struct espi_request_packet *req)

@@ -238,6 +238,7 @@ enum espi_vwire_signal {
 	ESPI_VWIRE_SIGNAL_SLP_LAN,
 	ESPI_VWIRE_SIGNAL_HOST_C10,
 	ESPI_VWIRE_SIGNAL_DNX_WARN,
+	ESPI_VWIRE_SIGNAL_C2T_COUNT = ESPI_VWIRE_SIGNAL_DNX_WARN,
 	/* Virtual wires that can only be sent from target to controller */
 	ESPI_VWIRE_SIGNAL_PME,
 	ESPI_VWIRE_SIGNAL_WAKE,

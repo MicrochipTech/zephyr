@@ -47,7 +47,30 @@ static bool is_espi_bootrom_config(const struct device *dev)
 /* eSPI Reset interrupt handler */
 static void espi_mec5_ereset_isr(const struct device *dev)
 {
-	/* TODO */
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	struct espi_mec5_drv_data *data = dev->data;
+	mm_reg_t iob = (mm_reg_t)drvcfg->ioc_base;
+	struct espi_event evt = { ESPI_BUS_RESET, 0, 0 };
+	uint8_t erst_sts = 0, n_erst_state = 0;
+
+	erst_sts = sys_read8(iob + ESPI_ERST_SR);
+	sys_write8(iob + ESPI_ERST_SR, erst_sts);
+	n_erst_state = (erst_sts >> ESPI_ESRT_STS_STATE_POS) & BIT(0);
+	evt.evt_data = n_erst_state;
+
+#ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
+	espi_mec5_pc_erst_config(dev, n_erst_state);
+#endif
+#ifdef CONFIG_ESPI_VWIRE_CHANNEL
+	espi_mec5_vw_erst_config(dev, n_erst_state);
+#endif
+#ifdef CONFIG_ESPI_OOB_CHANNEL
+	espi_mec5_oob_erst_config(dev, n_erst_state);
+#endif
+#ifdef CONFIG_ESPI_FLASH_CHANNEL
+	espi_mec5_fc_erst_config(dev, n_erst_state);
+#endif
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
 /* -------- Public API -------- */

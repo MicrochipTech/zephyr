@@ -33,6 +33,8 @@ struct espi_mec5_drv_data {
 #if defined(CONFIG_ESPI_OOB_CHANNEL)
 	struct k_sem oob_tx_sync;
 	struct k_sem oob_rx_sync;
+	uint32_t oob_tx_status;
+	uint32_t oob_rx_status;
 	uint8_t *oob_rxb;
 	uint16_t oob_rx_len;
 #endif
@@ -41,6 +43,7 @@ struct espi_mec5_drv_data {
 #if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
 int espi_mec5_pc_pltrst_handler(const struct device *dev, uint8_t pltrst_state);
 void espi_mec5_pc_irq_connect(const struct device *dev);
+void espi_mec5_pc_erst_config(const struct device *dev, uint8_t n_erst_state);
 
 int espi_mec5_read_req_api(const struct device *dev, struct espi_request_packet *req);
 
@@ -56,6 +59,7 @@ int espi_mec5_write_lpc_req_api(const struct device *dev, enum lpc_peripheral_op
 #if defined(CONFIG_ESPI_VWIRE_CHANNEL)
 int espi_mec5_init_vwires(const struct device *dev);
 void espi_mec5_vw_irq_connect(const struct device *dev);
+void espi_mec5_vw_erst_config(const struct device *dev, uint8_t n_erst_state);
 
 int espi_mec5_send_vwire_api(const struct device *dev, enum espi_vwire_signal vw, uint8_t level);
 int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal vw, uint8_t *level);
@@ -63,6 +67,7 @@ int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal vw
 
 #if defined(CONFIG_ESPI_OOB_CHANNEL)
 void espi_mec5_oob_irq_connect(const struct device *dev);
+void espi_mec5_oob_erst_config(const struct device *dev, uint8_t n_erst_state);
 
 int espi_mec5_send_oob_api(const struct device *dev, struct espi_oob_packet *pckt);
 int espi_mec5_recv_oob_api(const struct device *dev, struct espi_oob_packet *pckt);
@@ -70,6 +75,7 @@ int espi_mec5_recv_oob_api(const struct device *dev, struct espi_oob_packet *pck
 
 #if defined(CONFIG_ESPI_FLASH_CHANNEL)
 void espi_mec5_fc_irq_connect(const struct device *dev);
+void espi_mec5_fc_erst_config(const struct device *dev, uint8_t n_erst_state);
 
 /* eSPI driver flash channel API implementation */
 int espi_mec5_flash_read_api(const struct device *dev, struct espi_flash_packet *pckt);
