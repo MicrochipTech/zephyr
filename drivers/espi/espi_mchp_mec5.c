@@ -36,8 +36,8 @@ static bool is_espi_bootrom_config(const struct device *dev)
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = (mm_reg_t)drvcfg->ioc_base;
 
-	if (((sys_read8(iob + ESPI_ACTV) & BIT(ESPI_ACTV_EN_POS)) != 0) &&
-	    ((sys_read32(iob + ESPI_VWC_TAF) & BIT(ESPI_VW_RDY_POS)) != 0)) {
+	if ((sys_test_bit8(iob + ESPI_ACTV, ESPI_ACTV_EN_POS) != 0) &&
+	    (sys_test_bit8(iob + ESPI_VW_READY, ESPI_CHAN_RDY_POS) != 0)) {
 		return true;
 	}
 
@@ -53,9 +53,9 @@ static void espi_mec5_ereset_isr(const struct device *dev)
 	struct espi_event evt = { ESPI_BUS_RESET, 0, 0 };
 	uint8_t erst_sts = 0, n_erst_state = 0;
 
-	erst_sts = sys_read8(iob + ESPI_ERST_SR);
-	sys_write8(iob + ESPI_ERST_SR, erst_sts);
-	n_erst_state = (erst_sts >> ESPI_ESRT_STS_STATE_POS) & BIT(0);
+	erst_sts = sys_read8(iob + ESPI_RESET_SR);
+	sys_write8(iob + ESPI_RESET_SR, erst_sts);
+	n_erst_state = (erst_sts >> ESPI_RESET_SR_STATE_POS) & BIT(0);
 	evt.evt_data = n_erst_state;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
@@ -81,13 +81,39 @@ static int espi_mec5_config_api(const struct device *dev, struct espi_cfg *cfg)
 
 static bool espi_mec5_get_chan_status_api(const struct device *dev, enum espi_channel ch)
 {
-	return -ENOTSUP;
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t iob = (mm_reg_t)drvcfg->ioc_base;
+	uint32_t ofs = 0;
+
+	if (ch == ESPI_CHANNEL_PERIPHERAL) {
+		ofs = ESPI_PC_READY;
+	} else if (ch == ESPI_CHANNEL_VWIRE) {
+		ofs = ESPI_VW_READY;
+	} else if (ch == ESPI_CHANNEL_OOB) {
+		ofs = ESPI_OOB_READY;
+	} else if (ch == ESPI_CHANNEL_FLASH) {
+		ofs = ESPI_FC_READY;
+	} else {
+		return false;
+	}
+
+	if (sys_test_bit8(iob + ofs, ESPI_CHAN_RDY_POS)) {
+		return true;
+	}
+
+	return false;
 }
 
 static int espi_mec5_manage_cb_api(const struct device *dev, struct espi_callback *callback,
 				   bool set)
 {
-	return -ENOTSUP;
+	struct espi_mec5_drv_data *data = dev->data;
+
+	if ((callback == NULL) || (callback->handler == NULL)) {
+		return -EINVAL;
+	}
+
+	return espi_manage_callback(&data->callbacks, callback, set);
 }
 
 static int espi_mec5_driver_init(const struct device *dev)
