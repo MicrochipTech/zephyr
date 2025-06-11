@@ -8,7 +8,6 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
-#include <errno.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/drivers/espi.h>
@@ -27,34 +26,18 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 /* local */
 #include "../espi_utils.h"
 #include "../espi_mchp_mec5.h"
-#include "espi_mchp_mec5_regs.h"
-
-#if 0 /* from ../espi_mchp_mec5.h */
-
-struct espi_mec5_drv_data {
-	const struct device *dev;
-	volatile uint32_t status;
-	struct espi_callback vwcb;
-	sys_slist_t callbacks;
-#if defined(CONFIG_ESPI_OOB_CHANNEL)
-	struct k_sem oob_tx_sync;
-	struct k_sem oob_rx_sync;
-	uint8_t *oob_rxb;
-	uint16_t oob_rx_len;
-#endif
-};
-
-#endif
+#include "espi_mchp_regs.h"
 
 /* -------- OOB Channel -------- */
-#define OOB_TARGET_TAG_NUM	0
-#define OOB_TX_MAX_TIMEOUT_MS	200u
-#define OOB_RX_MAX_TIMEOUT_MS	200u
+#define OOB_TARGET_TAG_NUM    0
+#define OOB_TX_MAX_TIMEOUT_MS 200u
+#define OOB_RX_MAX_TIMEOUT_MS 200u
 
-#define OOB_TX_ANY_ERROR						\
-	(BIT(ESPI_OOB_TX_SR_ABERR_POS) | BIT(ESPI_OOB_TX_SR_OVR_POS) | BIT(ESPI_OOB_TX_SR_BAD_REQ_POS))
+#define OOB_TX_ANY_ERROR                                                                           \
+	(BIT(ESPI_OOB_TX_SR_ABERR_POS) | BIT(ESPI_OOB_TX_SR_OVR_POS) |                             \
+	 BIT(ESPI_OOB_TX_SR_BAD_REQ_POS))
 
-#define OOB_RX_ANY_ERROR	(BIT(ESPI_OOB_RX_SR_ABERR_POS) | BIT(ESPI_OOB_RX_SR_OVR_POS))
+#define OOB_RX_ANY_ERROR (BIT(ESPI_OOB_RX_SR_ABERR_POS) | BIT(ESPI_OOB_RX_SR_OVR_POS))
 
 /* MEC OOB hardware has 9 bytes of added buffer size */
 static uint32_t mec5_oob_get_max_payload_size(const struct device *dev)
@@ -90,7 +73,7 @@ static void espi_mec5_oob_config(const struct device *dev)
 	/* set OOB RX buffer maximum size */
 	r = sys_read32(iob + ESPI_OOB_RXL);
 	r &= (uint32_t)~(ESPI_OOB_RXL_BLEN_MSK);
-	r |= (((uint32_t)drvcfg->oob_rxb_size << ESPI_OOB_RXL_BLEN_POS) & ESPI_OOB_RXL_BLEN_MSK);
+	r |= ESPI_OOB_RXL_BLEN((uint32_t)drvcfg->oob_rxb_size);
 	sys_write32(r, iob + ESPI_OOB_RXL);
 
 	/* set RX buffer available */
@@ -101,7 +84,7 @@ static void espi_mec5_oob_config(const struct device *dev)
 
 	/* Inform Host OOB channel is ready to use */
 	sys_set_bit8(iob + ESPI_OOB_READY, ESPI_CHAN_RDY_POS);
- }
+}
 
 /* OOB channel upstream data transfer (Target to Host) and OOB channel enable change */
 static void espi_mec5_oob_up_isr(const struct device *dev)
@@ -145,9 +128,8 @@ static void espi_mec5_oob_dn_isr(const struct device *dev)
 	struct espi_mec5_drv_data *data = dev->data;
 	mm_reg_t iob = drvcfg->ioc_base;
 #ifdef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
-	struct espi_event evt = { .evt_type = ESPI_BUS_EVENT_OOB_RECEIVED,
-				  .evt_details = 0,
-				  .evt_data = 0 };
+	struct espi_event evt = {
+		.evt_type = ESPI_BUS_EVENT_OOB_RECEIVED, .evt_details = 0, .evt_data = 0};
 #endif
 	uint32_t oob_rx_sts = sys_read32(iob + ESPI_OOB_RX_SR);
 
@@ -168,20 +150,14 @@ static void espi_mec5_oob_dn_isr(const struct device *dev)
 
 void espi_mec5_oob_irq_connect(const struct device *dev)
 {
-/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
-/*	mm_reg_t iob = drvcfg->ioc_base; */
 	uint32_t oob_ien_msk = BIT(ESPI_GIRQ_OOB_UP_POS) | BIT(ESPI_GIRQ_OOB_DN_POS);
 
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, oob_up, irq),
-		DT_INST_IRQ_BY_NAME(0, oob_up, priority),
-		espi_mec5_oob_up_isr,
-		DEVICE_DT_INST_GET(0), 0);
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, oob_up, irq), DT_INST_IRQ_BY_NAME(0, oob_up, priority),
+		    espi_mec5_oob_up_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, oob_up, irq));
 
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, oob_dn, irq),
-		DT_INST_IRQ_BY_NAME(0, oob_dn, priority),
-		espi_mec5_oob_dn_isr,
-		DEVICE_DT_INST_GET(0), 0);
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, oob_dn, irq), DT_INST_IRQ_BY_NAME(0, oob_dn, priority),
+		    espi_mec5_oob_dn_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, oob_dn, irq));
 
 	sys_write32(oob_ien_msk, ESPI_GIRQ_ENSET_ADDR);
@@ -230,8 +206,8 @@ int espi_mec5_send_oob_api(const struct device *dev, struct espi_oob_packet *pck
 	sys_write32(iob + ESPI_OOB_TX_BA, (uint32_t)pckt->buf);
 	sys_write32(iob + ESPI_OOB_TX_LEN, pckt->len);
 	sys_set_bit(iob + ESPI_OOB_TX_IER, ESPI_OOB_TX_IER_DONE_POS);
-	sys_write32(iob + ESPI_OOB_TX_CR, (ESPI_OOB_TX_TAG(OOB_TARGET_TAG_NUM) |
-					   BIT(ESPI_OOB_TX_CR_START_POS)));
+	sys_write32(iob + ESPI_OOB_TX_CR,
+		    (ESPI_OOB_TX_TAG(OOB_TARGET_TAG_NUM) | BIT(ESPI_OOB_TX_CR_START_POS)));
 
 	rc = k_sem_take(&data->oob_tx_sync, K_MSEC(OOB_TX_MAX_TIMEOUT_MS));
 	if (rc == -EAGAIN) {
