@@ -44,7 +44,7 @@
 /* ---- eSPI IO component ---- */
 
 /* Global configuration  */
-#define ESPI_GC				0x2e0
+#define ESPI_GC				0x2e0u
 #define ESPI_GC_ID_POS			0
 #define ESPI_GC_CAP0_POS		8
 #define ESPI_GC_CAP0_MSK		GENMASK(15, 8)
@@ -78,70 +78,94 @@
 #define ESPI_GC_PC_MPLS_64B		FIELD_PREP(ESPI_CAP_PC_MPLS_MSK, 1)
 #define ESPI_GC_PC_MPLS_DFLT		ESPI_CAP_PC_MPLS_64B
 
-#define ESPI_CAP_VOF_RDY		0x2e4
-#define ESPI_CAP_VOF_VW_POS		0
-#define ESPI_CAP_VOF_VW_MSK		GENMASK(7, 0)
-#define ESPI_CAP_VOF_VW_MCNT_POS	0
-#define ESPI_CAP_VOF_VW_MCNT_MSK	GENMASK(5, 0)
-#define ESPI_CAP_VOF_VW_MCNT_8		FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, 7)
-#define ESPI_CAP_VOF_VW_MCNT_64		FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, 0x3F)
-#define ESPI_CAP_VOF_VW_MCNT_DFLT	ESPI_CAP_VW_MCNT_64
-#define ESPI_CAP_VOF_VW_MCNT(nvwg)	FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, (nvwg))
-#define ESPI_CAP_VOF_OOB_POS		8
-#define ESPI_CAP_VOF_OOB_MPLS_POS	8
-#define ESPI_CAP_VOF_OOB_MPLS_MSK	GENMASK(10, 8)
-#define ESPI_CAP_VOF_OOB_MPLS_73	FIELD_PREP(ESPI_CAP_OOB_MPLS_MSK, 1)
-#define ESPI_CAP_VOF_OOB_MPLS_DFLT	ESPI_CAP_OOB_MPLS_73
-#define ESPI_CAP_VOF_FC_POS		16
-#define ESPI_CAP_VOF_FC_MSK		GENMASK(23, 16)
-#define ESPI_CAP_VOF_FC_MPLS_POS	16
-#define ESPI_CAP_VOF_FC_MPLS_MSK	GENMASK(18, 16)
-#define ESPI_CAP_VOF_FC_MPLS_64		FIELD_PREP(ESPI_CAP_FC_MPLS_MSK, 1)
-#define ESPI_CAP_VOF_FC_SM_POS		19
-#define ESPI_CAP_VOF_FC_SM_MSK		GENMASK(20, 16)
-#define ESPI_CAP_VOF_FC_SM_CAF		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 0)
-#define ESPI_CAP_VOF_FC_SM_CAF_ALT	FIELD_PREP(ESPI_CAP_FC_SM_MSK, 1)
-#define ESPI_CAP_VOF_FC_SM_TAF		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 2)
-#define ESPI_CAP_VOF_FC_SM_CAF_TAF	FIELD_PREP(ESPI_CAP_FC_SM_MSK, 3)
-#define ESPI_CAP_VOF_FC_TAF_MPLS_POS	21
-#define ESPI_CAP_VOF_FC_TAF_MPLS_MSK	GENMASK(23, 21)
-#define ESPI_CAP_VOF_FC_TAF_MPLS_64	FIELD_PREP(ESPI_CAP_FC_TAF_MPLS_MSK, 1)
-#define ESPI_CAP_VOF_PC_RDY_POS		24
+#define ESPI_CAP_VW			0x2e4u
+#define ESPI_CAP_VW_MAX_GRPS_POS	0
+#define ESPI_CAP_VW_MAX_GRPS_MSK	GENMASK(5, 0)
+#define ESPI_CAP_VW_MAX_GRPS_8		FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, 7)
+#define ESPI_CAP_VW_MAX_GRPS_64		FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, 0x3F)
+#define ESPI_CAP_VW_MAX_GRPS_DFLT	ESPI_CAP_VW_MCNT_64
+#define ESPI_CAP_VW_MAX_GRPS(nvwg)	FIELD_PREP(ESPI_CAP_VW_MCNT_MSK, (nvwg))
 
-/* OOB, Flash ready, and nESPI_RESET status/interrupt enable */
-#define ESPI_OFR_RST			0x2e8
-#define ESPI_OFR_RST_OOB_RDY_POS	0
-#define ESPI_OFR_RST_FC_RDY_POS		8
-#define ESPI_OFR_RST_SR_EDGE_POS	16 /* R/W1C nESPI_RESET edge detected */
-#define ESPI_OFR_RST_SR_STATE_POS	17 /* RO current nESPI_RESET pin state */
-#define ESPI_OFR_RST_IE_POS		24 /* nESPI_RESET edge detect interrupt enable */
+#define ESPI_CAP_OOB			0x2e5u
+#define ESPI_CAP_OOB_MPLD_POS		0
+#define ESPI_CAP_OOB_MPLD_MSK		GENMASK(2, 0)
+#define ESPI_CAP_OOB_MPLD_73		FIELD_PREP(ESPI_CAP_OOB_MPLS_MSK, 1)
+#define ESPI_CAP_OOB_MPLD_DFLT      	ESPI_CAP_OOB_MPLS_73
+#define ESPI_CAP_OOB_MPLD(v)		FIELD_GET(ESPI_CAP_OOB_MPLD_MSK, (v))
 
-/* nESPI_RESET as an 8-bit register */
-#define ESPI_ERST_SR			0x2ea
-#define ESPI_ERST_STS_CHG_POS		0
-#define ESPI_ESRT_STS_STATE_POS		1
+#define ESPI_CAP_FC			0x2e6u
+#define ESPI_CAP_FC_MPLD_POS		0
+#define ESPI_CAP_FC_MPLD_MSK		GENMASK(2, 0)
+#define ESPI_CAP_FC_MPLD_64		FIELD_PREP(ESPI_CAP_FC_MPLD_MSK, 1)
+#define ESPI_CAP_FC_SM_POS		3
+#define ESPI_CAP_FC_SM_MSK		GENMASK(4, 3)
+#define ESPI_CAP_FC_SM_CAF		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 0)
+#define ESPI_CAP_FC_SM_CAF_ALT		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 1)
+#define ESPI_CAP_FC_SM_TAF		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 2)
+#define ESPI_CAP_FC_SM_CAF_TAF		FIELD_PREP(ESPI_CAP_FC_SM_MSK, 3)
+#define ESPI_CAP_FC_TAF_MPLD_POS	5
+#define ESPI_CAP_FC_TAF_MPLD_MSK	GENMASK(7, 5)
+#define ESPI_CAP_FC_TAF_MPLD_64		FIELD_PREP(ESPI_CAP_FC_TAF_MPLD_MSK, 1)
 
-/* nESPI_RESET interrupt enable as an 8-bit register */
-#define ESPI_ERST_IER			0x2eb
-#define ESPI_ERST_IER_CHG_EN_POS	0
+#define ESPI_PC_READY			0x2e7u
+#define ESPI_OOB_READY			0x2e8u
+#define ESPI_FC_READY                   0x2e9u
+#define ESPI_VW_READY			0x2edu
+#define ESPI_CHAN_RDY_POS		0
 
-#define ESPI_VWC_TAF			0x2ec
-#define ESPI_PLTRST_SRC_POS		0
-#define ESPI_PLTRST_SRC_VW		0
+/* nESPI_RESET status and interrupt enable */
+#define ESPI_RESET_SR			0x2eau
+#define ESPI_RESET_SR_CHG_POS		0
+#define ESPI_RESET_SR_STATE_POS		1 /* RO */
+
+#define ESPI_RESET_IER			0x2ebu
+#define ESPI_RESET_IER_EN_POS		0
+
+#define ESPI_PLTRST_SOURCE		0x2ecu
+#define ESPI_PLTRST_SRC_POS             0
+#define ESPI_PLTRST_SRC_VW              0
 #define ESPI_PLTRST_SRC_PIN		BIT(ESPI_PLTRST_SRC_POS)
-#define ESPI_VW_RDY_POS			8
-#define ESPI_TAF_EBS_POS		16
-#define ESPI_TAF_EBS_1K_POS		16
-#define ESPI_TAF_EBS_2K_POS		17
-#define ESPI_TAF_EBS_4K_POS		18
-#define ESPI_TAF_EBS_8K_POS		19
-#define ESPI_TAF_EBS_16K_POS		20
-#define ESPI_TAF_EBS_32K_POS		21
-#define ESPI_TAF_EBS_64K_POS		22
-#define ESPI_TAF_EBS_128K_POS		23
 
-#define ESPI_TAF_RPMC_OP1_CFG		0x300
-#define ESPI_TAF_OP1_NC			0x304
+#define ESPI_TAF_EBSZ			0x2edu
+#define ESPI_TAF_EBS_1K_POS		0
+#define ESPI_TAF_EBS_2K_POS		1
+#define ESPI_TAF_EBS_4K_POS		2
+#define ESPI_TAF_EBS_8K_POS		3
+#define ESPI_TAF_EBS_16K_POS		4
+#define ESPI_TAF_EBS_32K_POS		5
+#define ESPI_TAF_EBS_64K_POS		6
+#define ESPI_TAF_EBS_128K_POS		7
+
+/* ---- RPMC configuration ---- */
+#define ESPI_RPMC_CFG1			0x300u
+#define ESPI_RPMC_CFG1_C0_D040_POS	0
+#define ESPI_RPMC_CFG1_C0_D848_POS	1
+#define ESPI_RPMC_CFG1_C1_D040_POS	2
+#define ESPI_RPMC_CFG1_C1_D848_POS	3
+#define ESPI_RPMC_CFG1_C0_PNP_POS	4
+#define ESPI_RPMC_CFG1_C1_PNP_POS	5
+#define ESPI_RPMC_CFG1_NFL_POS		6
+#define ESPI_RPMC_CFG1_NFL_MSK		GENMASK(7, 6)
+#define ESPI_RPMC_CFG1_NFL_1		FIELD_PREP(ESPI_RPMC_OP1_CFG_NFL_MSK, 0)
+#define ESPI_RPMC_CFG1_NFL_2		FIELD_PREP(ESPI_RPMC_OP1_CFG_NFL_MSK, 1)
+#define ESPI_RPMC_CFG1_CT_POS		8 /* total number of counters */
+#define ESPI_RPMC_CFG1_CT_MSK		GENMASK(13, 8)
+#define ESPI_RPMC_CFG1_CT(ct)		FIELD_PREP(ESPI_RPMC_OP1_CFG_CT_MSK, (ct))
+#define ESPI_RPMC_CFG1_STRICT_POS	31
+
+#define ESPI_RPMC_CFG2			0x304u /* RPMC OP1 opcodes and number of counters per flash device */
+#define ESPI_RPMC_CFG2_OPC0_POS		0 /* RPMC OP1 opcode for device connected to CS0 */
+#define ESPI_RPMC_CFG2_OPC0_MSK		GENMASK(7, 0)
+#define ESPI_RPMC_CFG2_OPC0(opc)	FIELD_PREP(ESPI_RPMC_CFG2_OPC0_MSK, (opc))
+#define ESPI_RPMC_CFG2_CNTC0_POS	8
+#define ESPI_RPMC_CFG2_CNTC0_MSK	GENMASK(12, 8)
+#define ESPI_RPMC_CFG2_CNTC0(nc)	FIELD_PREP(ESPI_RPMC_CFG2_CNTC0_MSK, (nc))
+#define ESPI_RPMC_CFG2_OPC1_POS		16 /* RPMC OP1 opcode for device connected to CS1 */
+#define ESPI_RPMC_CFG2_OPC1_MSK		GENMASK(23, 16)
+#define ESPI_RPMC_CFG2_OPC1(opc)	FIELD_PREP(ESPI_RPMC_CFG2_OPC1_MSK, (opc))
+#define ESPI_RPMC_CFG2_CNTC1_POS	24
+#define ESPI_RPMC_CFG2_CNTC1_MSK	GENMASK(28, 24)
+#define ESPI_RPMC_CFG2_CNTC1(nc)	FIELD_PREP(ESPI_RPMC_CFG2_CNTC1_MSK, (nc))
 
 #define ESPI_ACTV			0x330
 #define ESPI_ACTV_EN_POS		0
@@ -203,10 +227,10 @@
 #define ESPI_SIRQ_OFS(n)	(0x3acu + (n))
 
 /* ---- Peripheral channel ---- */
-#define ESPI_PC_LC_ADDR_LSW		0x100
-#define ESPI_PC_LC_ADDR_MSW		0x104
+#define ESPI_PC_LC_ADDR_LSW		0x100u
+#define ESPI_PC_LC_ADDR_MSW		0x104u
 
-#define ESPI_PC_LC_LTT			0x108
+#define ESPI_PC_LC_LTT			0x108u
 #define ESPI_PC_LC_LTT_LEN_POS		0
 #define ESPI_PC_LC_LTT_LEN_MSK		GENMASK(11, 0)
 #define ESPI_PC_LC_LTT_TYPE_POS		12
@@ -270,29 +294,31 @@
  */
 #define ESPI_OOB_ADDED_SIZE		9u
 
-#define ESPI_OOB_RX_BA			0x240 /* OOB RX EC buffer address, b[1:0]=00b(RO) */
-#define ESPI_OOB_TX_BA			0x248 /* OOB TX EC buffer address, b[1:0]=00b(RO) */
+#define ESPI_OOB_RX_BA			0x240u /* OOB RX EC buffer address, b[1:0]=00b(RO) */
+#define ESPI_OOB_TX_BA			0x248u /* OOB TX EC buffer address, b[1:0]=00b(RO) */
 
-#define ESPI_OOB_RXL			0x250
+#define ESPI_OOB_RXL			0x250u
 #define ESPI_OOB_RXL_MLEN_POS		0
 #define ESPI_OOB_RXL_MLEN_MSK		GENMASK(12, 0) /* number of bytes received (RO) */
+#define ESPI_OOB_RXL_MLEN(n)		FIELD_PREP(ESPI_OOB_RXL_MLEN_MSK, (n))
 #define ESPI_OOB_RXL_BLEN_POS		16
 #define ESPI_OOB_RXL_BLEN_MSK		GENMASK(28, 16) /* max RX mesg length (RW) */
+#define ESPI_OOB_RXL_BLEN(n)		FIELD_PREP(ESPI_OOB_RXL_BLEN_MSK, (n))
 
-#define ESPI_OOB_TX_LEN			0x254
+#define ESPI_OOB_TX_LEN			0x254u
 #define ESPI_OOB_TXL_MLEN_POS		0
 #define ESPI_OOB_TXL_MLEN_MSK		GENMASK(12, 0) /* number of byte to transmit (RW) */
 
-#define ESPI_OOB_RX_CR			0x258
+#define ESPI_OOB_RX_CR			0x258u
 #define ESPI_OOB_RX_CR_SRA_POS		0
 #define ESPI_OOB_RX_CR_CHEN_POS		9 /* RO */
 #define EPSI_OOB_MPLD_SZ_POS		16 /* RO */
 #define ESPI_OOB_MPLD_SZ_MSK		GENMASK(18, 16)
 
-#define ESPI_OOB_RX_IER			0x25c
+#define ESPI_OOB_RX_IER			0x25cu
 #define ESPI_OOB_RX_IER_DONE_POS	0
 
-#define ESPI_OOB_RX_SR			0x260
+#define ESPI_OOB_RX_SR			0x260u
 #define ESPI_OOB_RX_SR_DONE_POS		0
 #define ESPI_OOB_RX_SR_ABERR_POS	1
 #define ESPI_OOB_RX_SR_OVR_POS		2
@@ -301,17 +327,17 @@
 #define ESPI_OOB_RX_TAG_IN_MSK		GENMASK(11, 8)
 #define ESPI_OOB_RX_TAG_IN(tv)		FIELD_GET(ESPI_OOB_RX_TAG_IN_MSK, (tv))
 
-#define ESPI_OOB_TX_CR			0x264
+#define ESPI_OOB_TX_CR			0x264u
 #define ESPI_OOB_TX_CR_START_POS	0 /* WO */
 #define ESPI_OOB_TX_TAG_POS		8
 #define ESPI_OOB_TX_TAG_MSK		GENMASK(11, 8)
 #define ESPI_OOB_TX_TAG(t)		FIELD_PREP(ESPI_OOB_TX_TAG_MSK, (t))
 
-#define ESPI_OOB_TX_IER			0x268
+#define ESPI_OOB_TX_IER			0x268u
 #define ESPI_OOB_TX_IER_DONE_POS	0
 #define ESPI_OOB_TX_IER_CENC_POS	1 /* OOB channel enable change interrupt enable */
 
-#define ESPI_OOB_TX_SR			0x26c
+#define ESPI_OOB_TX_SR			0x26cu
 #define ESPI_OOB_TX_SR_MSK		0x30fu
 #define ESPI_OOB_TX_SR_DONE_POS		0
 #define ESPI_OOB_TX_SR_CENC_POS		1
@@ -322,15 +348,15 @@
 #define ESPI_OOB_TX_SR_CHEN_POS		9 /* RO image of OOB channel enable */
 
 /* Flash channel  */
-#define ESPI_FC_FA			0x280 /* Flash channel flash address register */
+#define ESPI_FC_FA			0x280u /* Flash channel flash address register */
 
-#define ESPI_FC_BA			0x288 /* Flash channel EC buffer address register */
+#define ESPI_FC_BA			0x288u /* Flash channel EC buffer address register */
 #define ESPI_FC_BA_MSK			GENMASK(31, 2)
 
-#define ESPI_FC_LEN			0x290
+#define ESPI_FC_LEN			0x290u
 #define ESPI_FC_LEN_ERASE_VAL		0x01u
 
-#define ESPI_FC_CR			0x294 /* R/W unless specified */
+#define ESPI_FC_CR			0x294u /* R/W unless specified */
 #define ESPI_FC_CR_START_POS		0 /* WO */
 #define ESPI_FC_CR_FUNC_POS		2
 #define ESPI_FC_CR_FUNC_MSK		GENMASK(3, 2)
@@ -343,11 +369,11 @@
 #define ESPI_FC_CR_TAG(t)		FIELD_PREP(ESPI_FC_CR_TAG_MSK, (t))
 #define ESPI_FC_CR_ABORT_POS		16
 
-#define ESPI_FC_IER                     0x298
+#define ESPI_FC_IER                     0x298u
 #define ESPI_FC_IER_DONE_POS		0
 #define ESPI_FC_IER_CHG_EN_POS		1
 
-#define ESPI_FC_SR			0x2a0 /* RW/1C unless specified */
+#define ESPI_FC_SR			0x2a0u /* RW/1C unless specified */
 #define ESPI_FC_SR_CHEN_STATE_POS	0 /* RO */
 #define ESPI_FC_SR_CHEN_CHG_POS		1
 #define ESPI_FC_SR_DONE_POS		2
@@ -361,45 +387,12 @@
 #define ESPI_FC_SR_BAD_REQ_POS		11
 
 /* ---- Virtual Wire Channel  ---- */
-#define ESPI_VW_SR			0x2b0 /* read-only */
-#define ESPI_VW_SR_CHEN_POS		0 /* image of VW channel enable bit */
 
-#define ESPI_VW_ERR_SR			0x3f0
+#define ESPI_VW_ERR_SR			0x3f0u
 #define ESPI_VW_ERR_FATAL_POS		0 /* read-only */
 #define ESPI_VW_ERR_FATAL_CLR_POS	1 /* write-only */
 #define ESPI_VW_ERR_NON_FATAL_POS	4 /* read-only */
 #define ESPI_VW_ERR_NON_FATAL_CLR_POS	5 /* write-only */
-
-/* ---- RPMC configuration ---- */
-#define ESPI_RPMC_CFG1			0x300u
-#define ESPI_RPMC_CFG1_C0_D040_POS	0
-#define ESPI_RPMC_CFG1_C0_D848_POS	1
-#define ESPI_RPMC_CFG1_C1_D040_POS	2
-#define ESPI_RPMC_CFG1_C1_D848_POS	3
-#define ESPI_RPMC_CFG1_C0_PNP_POS	4
-#define ESPI_RPMC_CFG1_C1_PNP_POS	5
-#define ESPI_RPMC_CFG1_NFL_POS		6
-#define ESPI_RPMC_CFG1_NFL_MSK		GENMASK(7, 6)
-#define ESPI_RPMC_CFG1_NFL_1		FIELD_PREP(ESPI_RPMC_OP1_CFG_NFL_MSK, 0)
-#define ESPI_RPMC_CFG1_NFL_2		FIELD_PREP(ESPI_RPMC_OP1_CFG_NFL_MSK, 1)
-#define ESPI_RPMC_CFG1_CT_POS		8 /* total number of counters */
-#define ESPI_RPMC_CFG1_CT_MSK		GENMASK(13, 8)
-#define ESPI_RPMC_CFG1_CT(ct)		FIELD_PREP(ESPI_RPMC_OP1_CFG_CT_MSK, (ct))
-#define ESPI_RPMC_CFG1_STRICT_POS	31
-
-#define ESPI_RPMC_CFG2			0x304u /* RPMC OP1 opcodes and number of counters per flash device */
-#define ESPI_RPMC_CFG2_OPC0_POS		0 /* RPMC OP1 opcode for device connected to CS0 */
-#define ESPI_RPMC_CFG2_OPC0_MSK		GENMASK(7, 0)
-#define ESPI_RPMC_CFG2_OPC0(opc)	FIELD_PREP(ESPI_RPMC_CFG2_OPC0_MSK, (opc))
-#define ESPI_RPMC_CFG2_CNTC0_POS	8
-#define ESPI_RPMC_CFG2_CNTC0_MSK	GENMASK(12, 8)
-#define ESPI_RPMC_CFG2_CNTC0(nc)	FIELD_PREP(ESPI_RPMC_CFG2_CNTC0_MSK, (nc))
-#define ESPI_RPMC_CFG2_OPC1_POS		16 /* RPMC OP1 opcode for device connected to CS1 */
-#define ESPI_RPMC_CFG2_OPC1_MSK		GENMASK(23, 16)
-#define ESPI_RPMC_CFG2_OPC1(opc)	FIELD_PREP(ESPI_RPMC_CFG2_OPC1_MSK, (opc))
-#define ESPI_RPMC_CFG2_CNTC1_POS	24
-#define ESPI_RPMC_CFG2_CNTC1_MSK	GENMASK(28, 24)
-#define ESPI_RPMC_CFG2_CNTC1(nc)	FIELD_PREP(ESPI_RPMC_CFG2_CNTC1_MSK, (nc))
 
 /* ---- eSPI Memory component ---- */
 
@@ -432,7 +425,7 @@
 #define ESPI_MC_MBAR_CFG_HA0		2 /* half-word 2 is b[15:0] of host address */
 #define ESPI_MC_MBAR_CFG_HA1		3 /* half-word 3 is b[31:16] of host address */
 
-#define ESPI_MC_MBAR_CFG_OFS		0x330
+#define ESPI_MC_MBAR_CFG_OFS		0x330u
 #define ESPI_MC_MBAR_CFG_HW(id, hw)	\
 	(ESPI_MC_MBAR_CFG_OFS + ((uint32_t)(id) * 10u) + ((hw) * 2u))
 
@@ -491,7 +484,7 @@
  * b[31:0] contain Host index, reset source, reset state, and RO change status
  * b[63:32] contain current vwire states
  */
-#define ESPI_THVW_OFS			0x200
+#define ESPI_THVW_OFS			0x200u
 #define ESPI_THVW_GRP(n)		(ESPI_THVW_OFS + ((uint32_t)(n) * 8u))
 #define ESPI_THVW_GRPW(n, w)		(ESPI_THVW_GRP(n) + ((uint32_t)(w) * 4u))
 

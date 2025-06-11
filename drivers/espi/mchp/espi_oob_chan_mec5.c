@@ -61,9 +61,9 @@ static uint32_t mec5_oob_get_max_payload_size(const struct device *dev)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
-	uint32_t msize = sys_read32(iob + ESPI_CAP_VOF_RDY);
+	uint32_t msize = sys_read8(iob + ESPI_CAP_OOB);
 
-	msize = (msize & ESPI_CAP_VOF_OOB_MPLS_MSK) >> ESPI_CAP_VOF_OOB_MPLS_POS;
+	msize = ESPI_CAP_OOB_MPLD(msize);
 	switch (msize) {
 	case 2u:
 		return 128u + ESPI_OOB_ADDED_SIZE;
@@ -100,7 +100,7 @@ static void espi_mec5_oob_config(const struct device *dev)
 	sys_set_bit(iob + ESPI_OOB_RX_IER, ESPI_OOB_RX_IER_DONE_POS);
 
 	/* Inform Host OOB channel is ready to use */
-	sys_set_bit(iob + ESPI_CAP_VOF_RDY, ESPI_CAP_VOF_PC_RDY_POS);
+	sys_set_bit8(iob + ESPI_OOB_READY, ESPI_CHAN_RDY_POS);
  }
 
 /* OOB channel upstream data transfer (Target to Host) and OOB channel enable change */
@@ -217,8 +217,7 @@ int espi_mec5_send_oob_api(const struct device *dev, struct espi_oob_packet *pck
 		return 0;
 	}
 
-	status = sys_read32(iob + ESPI_OFR_RST);
-	if ((status & BIT(ESPI_OFR_RST_OOB_RDY_POS)) == 0) {
+	if (sys_test_bit8(iob + ESPI_OOB_READY, ESPI_CHAN_RDY_POS) == 0) {
 		return -EIO; /* OOB channel not ready */
 	}
 
@@ -265,7 +264,7 @@ static void espi_mec5_oob_rx_prep(const struct device *dev)
 	sys_write32((uint32_t)data->oob_rxb, iob + ESPI_OOB_RX_BA);
 	r = sys_read32(iob + ESPI_OOB_RXL);
 	r &= (uint32_t)~(ESPI_OOB_RXL_BLEN_MSK);
-	r |= (((uint32_t)drvcfg->oob_rxb_size << ESPI_OOB_RXL_BLEN_POS) & ESPI_OOB_RXL_BLEN_MSK);
+	r |= ESPI_OOB_RXL_BLEN((uint32_t)drvcfg->oob_rxb_size);
 	sys_write32(r, iob + ESPI_OOB_RXL);
 
 	/* enable OOB channel RX interrupt */
