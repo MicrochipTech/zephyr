@@ -344,8 +344,8 @@ static void espi_mec5_vw_chen_isr(const struct device *dev)
 	sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENCLR_ADDR);
 	sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_STS_ADDR);
 
-	if ((sys_read32(iob + ESPI_OFR_RST) & BIT(ESPI_VW_SR_CHEN_POS)) != 0) {
-		sys_set_bit(iob + ESPI_VWC_TAF, ESPI_VW_RDY_POS);
+	if (sys_test_bit8(iob + ESPI_RESET_SR, ESPI_RESET_SR_STATE_POS) != 0) {
+		sys_set_bit(iob + ESPI_VW_READY, ESPI_CHAN_RDY_POS);
 		evt.evt_data = 1u;
 	} else {
 		sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENSET_ADDR);
