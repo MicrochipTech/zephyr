@@ -52,4 +52,12 @@ config ESPI_FLASH_BUFFER_SIZE
 	  default value is 256 bytes which is the eSPI specification
 	  maximum.
 
+config ESPI_FLASH_TIMEOUT_MS
+       int "eSPI flash channel read/write/erase timeout in milliseconds"
+       default 1000
+       depends on ESPI_FLASH_CHANNEL
+       help
+         Driver timeout for eSPI flash channel read, write, and erase
+	 operations. Value is in milliseconds.
+
 endif # ESPI_MCHP_MEC5

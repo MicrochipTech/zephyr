@@ -26,7 +26,7 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 /* local */
 #include "../espi_utils.h"
 #include "../espi_mchp_mec5.h"
-#include "espi_mchp_mec5_regs.h"
+#include "espi_mchp_regs.h"
 
 /* -------- eSPI Virtual Wire Channel -------- */
 
@@ -109,8 +109,7 @@ struct espi_mec5_vwire {
 
 static const struct espi_mec5_vwire espi_mec5_vw_tbl[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_CT_VWIRES_NODE, MEC5_ESPI_CTVW_ENTRY)
-	DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_TC_VWIRES_NODE, MEC5_ESPI_TCVW_ENTRY)
-};
+		DT_FOREACH_CHILD_STATUS_OKAY(MEC5_DT_ESPI_TC_VWIRES_NODE, MEC5_ESPI_TCVW_ENTRY)};
 
 /* Create a look up table for the Controller-to-Target VWire interrupt handler.
  * Hardware has 11 C2T VWire registers. Each register controls a group of 4 vwires.
@@ -239,7 +238,8 @@ int espi_mec5_send_vwire_api(const struct device *dev, enum espi_vwire_signal si
 	return 0;
 }
 
-int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal signal, uint8_t *level)
+int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal signal,
+			     uint8_t *level)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t regaddr = (mm_reg_t)drvcfg->vwc_base;

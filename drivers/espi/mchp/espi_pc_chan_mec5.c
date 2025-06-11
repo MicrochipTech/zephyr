@@ -27,21 +27,21 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 /* local */
 #include "../espi_utils.h"
 #include "../espi_mchp_mec5.h"
-#include "espi_mchp_mec5_regs.h"
+#include "espi_mchp_regs.h"
 
 /* -------- Peripheral Channel -------- */
 #define PC_MBOX0_NODE DT_NODELABEL(mbox0)
-#define PC_KBC0_NODE DT_NODELABEL(kbc0)
-#define PC_AEC0_NODE DT_NODELABEL(acpi_ec0)
-#define PC_AEC1_NODE DT_NODELABEL(acpi_ec1)
-#define PC_AEC2_NODE DT_NODELABEL(acpi_ec2)
-#define PC_AEC3_NODE DT_NODELABEL(acpi_ec3)
-#define PC_AEC4_NODE DT_NODELABEL(acpi_ec4)
-#define PC_GLUE_NODE DT_NODELABEL(glue)
-#define PC_EMI0_NODE DT_NODELABEL(emi0)
-#define PC_EMI1_NODE DT_NODELABEL(emi1)
-#define PC_EMI2_NODE DT_NODELABEL(emi2)
-#define PC_BDP0_NODE DT_NODELABEL(p80bd0)
+#define PC_KBC0_NODE  DT_NODELABEL(kbc0)
+#define PC_AEC0_NODE  DT_NODELABEL(acpi_ec0)
+#define PC_AEC1_NODE  DT_NODELABEL(acpi_ec1)
+#define PC_AEC2_NODE  DT_NODELABEL(acpi_ec2)
+#define PC_AEC3_NODE  DT_NODELABEL(acpi_ec3)
+#define PC_AEC4_NODE  DT_NODELABEL(acpi_ec4)
+#define PC_GLUE_NODE  DT_NODELABEL(glue)
+#define PC_EMI0_NODE  DT_NODELABEL(emi0)
+#define PC_EMI1_NODE  DT_NODELABEL(emi1)
+#define PC_EMI2_NODE  DT_NODELABEL(emi2)
+#define PC_BDP0_NODE  DT_NODELABEL(p80bd0)
 
 #define ESPI_MEC5_PC_DEV_PATH DT_PATH(mchp_mec5_espi_pc_host_dev)
 
@@ -60,28 +60,27 @@ struct espi_mec5_pc_device {
 
 #define MEC5_PC_DEV_FLAG_HAS_SIRQ BIT(4)
 
-#define MEC5_PC_DEV_FLAGS(nid) \
+#define MEC5_PC_DEV_FLAGS(nid)                                                                     \
 	COND_CODE_1(DT_NODE_HAS_PROP(niq, sirqs), (MEC5_PC_DEV_FLAG_HAS_SIRQ), (0))
 
 /* nid = node ID, i in [0, 1] */
 #define MEC5_PC_SIRQ_VAL(nid, i) DT_PROP_BY_IDX(nid, sirqs, i)
 
-#define MEC5_PC_SIRQ(nid, i) \
+#define MEC5_PC_SIRQ(nid, i)                                                                       \
 	COND_CODE_1(DT_NODE_HAS_PROP(nid, sirqs), (MEC5_PC_SIRQ_VAL(nid, i)), (0xffu))
 
-#define ESPI_MEC5_PC_DEV_BAR_SIRQ(node_id) \
-	{ \
-		.haddr_lsw = DT_PROP(node_id, host_address), \
-		.ldn = DT_PROP(node_id, ldn), \
-		.sirq0_slot = MEC5_PC_SIRQ(node_id, 0), \
-		.sirq1_slot = MEC5_PC_SIRQ(node_id, 1), \
-		.flags = MEC5_PC_DEV_FLAGS(nid), \
+#define ESPI_MEC5_PC_DEV_BAR_SIRQ(node_id)                                                         \
+	{                                                                                          \
+		.haddr_lsw = DT_PROP(node_id, host_address),                                       \
+		.ldn = DT_PROP(node_id, ldn),                                                      \
+		.sirq0_slot = MEC5_PC_SIRQ(node_id, 0),                                            \
+		.sirq1_slot = MEC5_PC_SIRQ(node_id, 1),                                            \
+		.flags = MEC5_PC_DEV_FLAGS(nid),                                                   \
 	},
 
 /* PC device BAR and Serial-IRQ table */
 const struct espi_mec5_pc_device espi_mec5_pc_devtbl[] = {
-	DT_FOREACH_CHILD_STATUS_OKAY(ESPI_MEC5_PC_DEV_PATH, ESPI_MEC5_PC_DEV_BAR_SIRQ)
-};
+	DT_FOREACH_CHILD_STATUS_OKAY(ESPI_MEC5_PC_DEV_PATH, ESPI_MEC5_PC_DEV_BAR_SIRQ)};
 
 static int espi_mec5_pc_config_bars(const struct device *dev)
 {
@@ -98,8 +97,8 @@ static int espi_mec5_pc_config_bars(const struct device *dev)
 			ret = mec_hal_espi_mbar_cfg(mregs, p->ldn, p->haddr_lsw, 1u);
 		} else {
 			LOG_DBG("LDN[%u] IOBAR = 0x%0x", p->ldn, p->haddr_lsw);
-			ret =  mec_hal_espi_iobar_cfg(ioregs, p->ldn,
-						      (uint16_t)p->haddr_lsw & UINT16_MAX, 1);
+			ret = mec_hal_espi_iobar_cfg(ioregs, p->ldn,
+						     (uint16_t)p->haddr_lsw & UINT16_MAX, 1);
 		}
 	}
 
@@ -115,8 +114,8 @@ static int espi_mec5_pc_config_sirqs(const struct device *dev)
 		const struct espi_mec5_pc_device *p = &espi_mec5_pc_devtbl[n];
 
 		if ((p->flags & MEC5_PC_DEV_FLAG_HAS_SIRQ) != 0) {
-			LOG_DBG("LDN[%u] SIRQ0[%u]=0x%02x SIRQ1[%u]=0x%02x", p->ldn,
-				p->sirq0_idx, p->sirq0_slot, p->sirq1_idx, p->sirq1_slot);
+			LOG_DBG("LDN[%u] SIRQ0[%u]=0x%02x SIRQ1[%u]=0x%02x", p->ldn, p->sirq0_idx,
+				p->sirq0_slot, p->sirq1_idx, p->sirq1_slot);
 			sys_write8(p->sirq0_slot, iobase + ESPI_SIRQ_OFS(p->sirq0_idx));
 			sys_write8(p->sirq1_slot, iobase + ESPI_SIRQ_OFS(p->sirq1_idx));
 		}
@@ -137,22 +136,20 @@ static void espi_mec5_pc_isr(const struct device *dev)
 
 void espi_mec5_pc_irq_connect(const struct device *dev)
 {
-/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
-/*	mm_reg_t iob = drvcfg->ioc_base; */
+	/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
+	/*	mm_reg_t iob = drvcfg->ioc_base; */
 	uint32_t pc_ien_msk = BIT(ESPI_GIRQ_PC_POS);
 
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, pc, irq),
-		DT_INST_IRQ_BY_NAME(0, pc, priority),
-		espi_mec5_pc_isr,
-		DEVICE_DT_INST_GET(0), 0);
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, pc, irq), DT_INST_IRQ_BY_NAME(0, pc, priority),
+		    espi_mec5_pc_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, pc, irq));
 	/* TODO mec_hal_espi_pc_girq_ctrl(1); */
 
 	sys_write32(pc_ien_msk, ESPI_GIRQ_ENSET_ADDR);
 }
 
-#define PC_IER_ALL (BIT(ESPI_PC_IER_ABERR_POS) | BIT(ESPI_PC_IER_CHEN_CHG_POS) |\
-		    BIT(ESPI_PC_IER_BMEN_CHG_POS))
+#define PC_IER_ALL                                                                                 \
+	(BIT(ESPI_PC_IER_ABERR_POS) | BIT(ESPI_PC_IER_CHEN_CHG_POS) | BIT(ESPI_PC_IER_BMEN_CHG_POS))
 
 void espi_mec5_pc_erst_config(const struct device *dev, uint8_t n_erst_state)
 {
@@ -192,7 +189,7 @@ int espi_mec5_write_req_api(const struct device *dev, struct espi_request_packet
 }
 
 int espi_mec5_read_lpc_req_api(const struct device *dev, enum lpc_peripheral_opcode op,
-				uint32_t *data)
+			       uint32_t *data)
 {
 	return -ENOTSUP;
 }
