@@ -25,6 +25,10 @@ struct espi_mec5_drv_cfg {
 #endif
 };
 
+/* TODO
+ * Do we need lock semaphores for each channel?
+ * Multi-thread access to these APIs need locks?
+ */
 struct espi_mec5_drv_data {
 	const struct device *dev;
 	volatile uint32_t status;
@@ -33,10 +37,17 @@ struct espi_mec5_drv_data {
 #if defined(CONFIG_ESPI_OOB_CHANNEL)
 	struct k_sem oob_tx_sync;
 	struct k_sem oob_rx_sync;
-	uint32_t oob_tx_status;
-	uint32_t oob_rx_status;
+	volatile uint32_t oob_tx_status;
+	volatile uint32_t oob_rx_status;
 	uint8_t *oob_rxb;
 	uint16_t oob_rx_len;
+#endif
+#if defined(CONFIG_ESPI_FLASH_CHANNEL)
+	uint16_t fc_len;
+	volatile uint32_t fc_status;
+	uint32_t fc_data;
+	uint8_t *fc_buf;
+	struct k_sem fc_sync;
 #endif
 };
 
@@ -50,7 +61,7 @@ int espi_mec5_read_req_api(const struct device *dev, struct espi_request_packet 
 int espi_mec5_write_req_api(const struct device *dev, struct espi_request_packet *req);
 
 int espi_mec5_read_lpc_req_api(const struct device *dev, enum lpc_peripheral_opcode op,
-				uint32_t *data);
+			       uint32_t *data);
 
 int espi_mec5_write_lpc_req_api(const struct device *dev, enum lpc_peripheral_opcode op,
 				uint32_t *data);
