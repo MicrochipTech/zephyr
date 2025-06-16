@@ -4,7 +4,7 @@
 description: |
   Microchip MEC5 eSPI Peripheral Channel device common properties
 
-include: [base.yaml]
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 on-bus: espi
 
