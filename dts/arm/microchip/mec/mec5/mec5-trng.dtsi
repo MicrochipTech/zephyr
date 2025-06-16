@@ -10,5 +10,7 @@
 trng0: trng0@1f214 {
 	reg = <0x1f214 0x2c 0x1f264 0x4 0x1f288 0xc 0x1f2a8 0x4>;
 	interrupts = <67 2>;
+	interrupt-names = "done";
+	girqs = <16 2>;
 	status = "disabled";
 };
