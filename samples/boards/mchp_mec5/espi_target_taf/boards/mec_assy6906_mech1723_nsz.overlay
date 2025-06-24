@@ -1,11 +1,11 @@
 /*
- * Copyright (c) 2023 Microchip Technology Inc.
+ * Copyright (c) 2025 Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* mec_assy6941 EVB with MEC1743Q-LJ daughter card
- * MEC1743 does not have an internal SPI flash.
+/* mec_assy6906 EVB with MEC1723N-SZ daughter card
+ * MEC1723 does not have an internal SPI flash.
  */
 
 #include "mec_common.dtsi"
