@@ -4,15 +4,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-identifier: mec_assy6941_mec1743qlj
-name: MEC174X EVB ASSY 6941 with MEC1743-QLJ
+identifier: mec_assy6906_mech1723_nsz
+name: MEC172x Assembly 6906 EVB with MECH1723-NSZ (MEC1723-NSZ using MEC5 HAL)
 type: mcu
 arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
 ram: 60
-flash: 416
+flash: 352
 supported:
   - gpio
   - pinctrl

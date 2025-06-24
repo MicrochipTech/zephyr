@@ -1,9 +1,8 @@
-boards:
-  - name: mec_assy6906_mech1723nlj
-    vendor: microchip
-    socs:
-      - name: mech1723_nlj
-  - name: mec_assy6906_mech1723nsz
-    vendor: microchip
-    socs:
-      - name: mech1723_nsz
+board:
+  name: mec_assy6906
+  full_name: MECH172xEVB ASSY6906
+  vendor: microchip
+  socs:
+  - name: mech1723_nlj
+  - name: mech1723_nsz
+
