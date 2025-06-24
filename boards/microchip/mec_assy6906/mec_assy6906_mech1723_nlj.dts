@@ -1,17 +1,17 @@
 /*
- * Copyright (c) 2025, Microchip Technology Inc.
+ * Copyright (c) 2024, Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /dts-v1/;
 
-#include <microchip/mec5_mec1753qlj.dtsi>
-#include <microchip/mec5/mec1753qlj-a0-pinctrl.dtsi>
+#include <microchip/mec/mec5_mech1723nlj.dtsi>
+#include <microchip/mec5/mec1723nlj-b0-pinctrl.dtsi>
 
 / {
-	model = "Microchip MEC_ASSY6941_MEC1753QLJ evaluation board";
-	compatible = "microchip,mec_assy6941_mec1753qlj", "microchip,mec_mec1753qlj";
+	model = "Microchip MEC_ASSY6906_MECH1723_NLJ evaluation board";
+	compatible = "microchip,mec_assy6906_mech1723_nlj", "microchip,mec_mech1723_nlj";
 
 	chosen {
 		zephyr,sram = &sram0;
@@ -54,6 +54,11 @@
 
 /* We chose 32-bit basic timer 5 for use by ktimer */
 &timer5 {
+	status = "okay";
+};
+
+&bbram {
+	compatible = "microchip,mec5-bbram";
 	status = "okay";
 };
 
