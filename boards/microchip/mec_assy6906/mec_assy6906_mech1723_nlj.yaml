@@ -1,10 +1,10 @@
 #
-# Copyright (c) 2024, Microchip Technology Inc.
+# Copyright (c) 2025, Microchip Technology Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 #
 
-identifier: mec_assy6906_mech1723nlj
+identifier: mec_assy6906_mech1723_nlj
 name: MEC172x Assembly 6906 EVB with MECH1723H-NLJ (MEC1723-NLJ using MEC5 HAL)
 type: mcu
 arch: arm
@@ -12,7 +12,7 @@ toolchain:
   - zephyr
   - gnuarmemb
 ram: 60
-flash: 416
+flash: 352
 supported:
   - gpio
   - pinctrl
