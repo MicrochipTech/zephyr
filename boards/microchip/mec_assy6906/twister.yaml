@@ -1,0 +1,12 @@
+name: Microchip mec_assy6906 EVB
+type: mcu
+arch: arm
+vendor: microchip
+variants:
+  mec_assy6906/mech1723/nlj:
+    toolchain:
+      - zephyr
+  mec_assy6906/mech1723/nsz:
+    toolchain:
+      - zephyr
+
