@@ -45,7 +45,6 @@
 &qspi0 {
 	compatible="microchip,mec5-qspi";
 	status = "okay";
-	lines = <4>;
 	pinctrl-0 = < &qspi_shd_cs0_n_gpio055 &qspi_shd_clk_gpio056
 		      &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224
 		      &qspi_shd_io2_gpio227 &qspi_shd_io3_gpio016 >;
