@@ -2,10 +2,10 @@ tests:
   boards.mchp_mec.pm_soc:
     build_only: true
     platform_allow:
-      - mec_assy6906_mech1723nsz
-      - mec_assy6906_mech1723nlj
-      - mec_assy6941_mec1743qlj
-      - mec_assy6941_mec1743qsz
-      - mec_assy6941_mec1753qlj
-      - mec_assy6941_mec1753qsz
+      - mec_assy6906/mech1723_nsz
+      - mec_assy6906/mech1723_nlj
+      - mec_assy6941/mec1743_qlj
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
     tags: board pm
