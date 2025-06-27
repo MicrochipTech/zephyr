@@ -5,7 +5,7 @@ description: Microchip MEC5 eSPI Mailbox host facing device
 
 compatible: "microchip,mec5-espi-host-uart"
 
-include: [base.yaml, pinctrl-device.yaml]
+include: ["base.yaml", "pinctrl-device.yaml"]
 
 properties:
   espi-parent:

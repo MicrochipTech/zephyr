@@ -5,7 +5,7 @@ description: Microchip MEC5 eSPI BIOS I/O port capture device
 
 compatible: "microchip,mec5-espi-bdp"
 
-include: [base.yaml]
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:

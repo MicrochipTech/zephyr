@@ -5,7 +5,9 @@ description: Microchip MEC5 HAL based ESPI TAF controller
 
 compatible: "microchip,mec5-espi-taf"
 
-include: espi-controller.yaml
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
+
+on-bus: espi
 
 properties:
   reg:

@@ -5,7 +5,7 @@ description: Microchip MEC5 HAL based Basic Timer
 
 compatible: "microchip,mec5-btmr-counter"
 
-include: base.yaml
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:
