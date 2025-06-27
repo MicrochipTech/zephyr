@@ -3,7 +3,7 @@
 
 description: Microchip MEC5 HAL based watchdog timer
 
-include: base.yaml
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 compatible: "microchip,mec5-watchdog"
 

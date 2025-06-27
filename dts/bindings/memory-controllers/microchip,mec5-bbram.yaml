@@ -5,7 +5,7 @@ description: Microchip MEC5 family Battery Backed RAM node
 
 compatible: "microchip,mec5-bbram"
 
-include: base.yaml
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:

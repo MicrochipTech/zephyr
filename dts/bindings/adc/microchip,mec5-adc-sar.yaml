@@ -5,7 +5,7 @@ description: Microchip MEC5 HAL based ADC SAR controller
 
 compatible: "microchip,mec5-adc-sar"
 
-include: [adc-controller.yaml, pinctrl-device.yaml]
+include: ["adc-controller.yaml", "pinctrl-device.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:

@@ -5,7 +5,7 @@ description: Microchip MEC5 eSPI 8042 Keyboard Controller(KBC) host facing devic
 
 compatible: "microchip,mec5-espi-kbc"
 
-include: [base.yaml]
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:

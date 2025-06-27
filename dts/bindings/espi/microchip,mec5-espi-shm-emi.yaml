@@ -6,7 +6,7 @@ description: |
 
 compatible: "microchip,mec5-espi-shm-emi"
 
-include: [base.yaml]
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:
