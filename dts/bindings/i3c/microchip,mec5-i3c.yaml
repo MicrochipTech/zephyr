@@ -12,7 +12,7 @@ description: Microchip MEC5 I3C controller
 
 compatible: "microchip,mec5-i3c"
 
-include: [i3c-controller.yaml]
+include: ["i3c-controller.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:

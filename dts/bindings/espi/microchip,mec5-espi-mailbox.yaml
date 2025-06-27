@@ -5,7 +5,7 @@ description: Microchip MEC5 eSPI Mailbox host facing device
 
 compatible: "microchip,mec5-espi-mailbox"
 
-include: [base.yaml]
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
 
 properties:
   reg:
