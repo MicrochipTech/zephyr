@@ -17,6 +17,7 @@
 #include "soc_dt.h"
 #include "soc_espi_channels.h"
 #include "soc_gpio.h"
+#include "soc_mmcr.h"
 #include "soc_pcr.h"
 #include "soc_pins.h"
 

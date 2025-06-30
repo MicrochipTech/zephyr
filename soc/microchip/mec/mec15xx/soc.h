@@ -20,6 +20,7 @@
 #include "../common/soc_pcr.h"
 #include "../common/soc_pins.h"
 #include "../common/soc_espi_channels.h"
+#include "../common/soc_mmcr.h"
 #include "soc_espi_saf_v1.h"
 
 /* common peripheral register defines */
