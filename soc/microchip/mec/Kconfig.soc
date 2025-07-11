@@ -9,4 +9,31 @@ config SOC_FAMILY_MICROCHIP_MEC
 config SOC_FAMILY
 	default "microchip_mec" if SOC_FAMILY_MICROCHIP_MEC
 
+config SOC_MICROCHIP_MEC_PKG_144_WFBGA
+	bool
+	help
+	  "WFBGA 144 pin package"
+
+config SOC_MICROCHIP_MEC_PKG_176_WFBGA
+	bool
+	help
+	  "WFBGA 176 pin package"
+
+config SOC_MICROCHIP_MEC_PKG
+	string
+	default "WFBGA-144" if SOC_MICROCHIP_MEC_PKG_144_WFBGA
+	default "WFBGA-176" if SOC_MICROCHIP_MEC_PKG_176_WFBGA
+	help
+	  Microchip MEC SoC package name.
+
+config SOC_MICROCHIP_MEC_PKG_HAS_EEPROM
+	bool
+	help
+	  Microchip MEC SoC include an internal EEPROM
+
+config SOC_MICROCHIP_MEC_PKG_HAS_SPI_FLASH
+	bool
+	help
+	  Microchip MEC SoC include an internal SPI flash
+
 rsource "*/Kconfig.soc"
