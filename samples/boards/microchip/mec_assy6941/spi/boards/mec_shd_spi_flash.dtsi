@@ -1,0 +1,38 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* All MEC1xx3 parts support external SPI flashes
+ * on the shared or private ports. No internal SPI flash.
+ */
+
+/ {
+	aliases {
+		spi0 = &qspi0;
+		spi-flash0 = &shd_spi_flash;
+	};
+};
+
+&qspi0 {
+	compatible = "microchip,mec5-qspi";
+	status = "okay";
+
+	pinctrl-0 = < &qspi_shd_cs0_n_gpio055
+		      &qspi_shd_clk_gpio056
+		      &qspi_shd_io0_gpio223
+		      &qspi_shd_io1_gpio224
+		      &qspi_shd_io2_gpio227
+		      &qspi_shd_io3_gpio016 >;
+	pinctrl-names = "default";
+
+	shd_spi_flash: shd_spi_flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		size = <16777216>;
+		spi-max-frequency = <24000000>;
+		jedec-id = [ ef 40 18 ];
+		status = "okay";
+	};
+};
