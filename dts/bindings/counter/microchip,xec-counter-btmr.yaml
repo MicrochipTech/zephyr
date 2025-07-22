@@ -1,0 +1,45 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC counter driver using two basic timers
+
+compatible: "microchip,xec-counter-btmr"
+
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clock-frequency:
+    type: int
+    required: true
+    const: 48000000
+    description: |
+      XEC basic timers input frequency is 48 MHz. Counter rate is
+      scaled down using a prescaler.
+
+  prescaler:
+    type: int
+    required: true
+    description: |
+      XEC basic timers implement a 16-bit prescaler used to derive
+      the counter frequency.
+      Count frequency = clock_freq / (prescaler + 1)
+
+  alarm-timer:
+    type: phandle
+    required: true
+    description: |
+      A handle to another basic timer hardware node for use as
+      the alarm timer in the counter driver. This node does
+      not need a driver only a binding describing its properties.
+
+  max-value:
+    type: int
+    description: |
+      Maximum counter value. XEC basic timers are implemented with
+      either a 16 or 32 bit counter.

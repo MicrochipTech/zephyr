@@ -10,3 +10,10 @@ config COUNTER_XEC
 	help
 	  Enable counter driver for Microchip XEC MCU series. Such driver
 	  will expose the basic timer devices present on the MCU.
+
+config COUNTER_XEC_BTIMER
+	bool "Microchip XEC series counter driver using basic timer pairs"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_COUNTER_BTMR_ENABLED
+	help
+	  Enable a counter driver using pairs of Microchip XEC basic timers.
