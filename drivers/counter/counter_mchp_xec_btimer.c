@@ -377,6 +377,7 @@ static void counter_xec_bt_isr(const struct device *dev)
 	data->counter_isr_cnt++;
 #endif
 
+	sys_clear_bit(cb + XEC_BT_IER_OFS, XEC_BT_SR_IER_EV_POS);
 	sys_write32(BIT(XEC_BT_SR_IER_EV_POS), cb + XEC_BT_SR_OFS);
 	soc_ecia_girq_status_clear(drvcfg->cntr_girq, drvcfg->cntr_girq_bit);
 
@@ -384,8 +385,6 @@ static void counter_xec_bt_isr(const struct device *dev)
 
 	if (data->top_cb) {
 		data->top_cb(dev, data->user_data);
-	} else {
-		sys_clear_bit(cb + XEC_BT_IER_OFS, XEC_BT_SR_IER_EV_POS);
 	}
 }
 
