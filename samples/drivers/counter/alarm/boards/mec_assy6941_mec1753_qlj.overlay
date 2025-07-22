@@ -1,0 +1,13 @@
+
+&timer0 {
+	compatible = "microchip,xec-btimer";
+	prescaler = <3>; /* 12 MHz */
+	status = "okay";
+};
+
+&timer1 {
+	compatible = "microchip,xec-counter-btmr";
+	prescaler = <3>; /* 12 MHz */
+	alarm-timer = <&timer0>;
+	status = "okay";
+};

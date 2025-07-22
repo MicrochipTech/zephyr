@@ -40,6 +40,7 @@ tests:
       - gd32f407v_start
       - gd32f450v_start
       - gd32f470i_eval
+      - mec_assy6941/mec1753_qlj
       - stm32h735g_disco
       - stm32h573i_dk
       - rpi_pico
