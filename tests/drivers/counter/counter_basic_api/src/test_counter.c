@@ -63,6 +63,7 @@ static const struct device *const devices[] = {
 	DEVS_FOR_DT_COMPAT(arm_cmsdk_timer)
 	DEVS_FOR_DT_COMPAT(arm_cmsdk_dtimer)
 	DEVS_FOR_DT_COMPAT(microchip_xec_timer)
+	DEVS_FOR_DT_COMPAT(microchip_xec_counter_btmr)
 	DEVS_FOR_DT_COMPAT(nxp_imx_epit)
 	DEVS_FOR_DT_COMPAT(nxp_imx_gpt)
 #ifdef CONFIG_COUNTER_MCUX_TPM
@@ -152,6 +153,11 @@ static const struct device *const period_devs[] = {
 #endif
 #ifdef CONFIG_COUNTER_RTC_MAX32
 	DEVS_FOR_DT_COMPAT(adi_max32_rtc_counter)
+#endif
+#if 0
+#ifdef CONFIG_COUNTER_XEC_BTIMER
+	DEVS_FOR_DT_COMPAT(microchip_xec_counter_btmr)
+#endif
 #endif
 };
 
@@ -284,6 +290,10 @@ static void test_set_top_value_with_alarm_instance(const struct device *dev)
 	top_cfg.ticks = counter_us_to_ticks(dev, counter_period_us);
 	err = counter_start(dev);
 	zassert_equal(0, err, "%s: Counter failed to start", dev->name);
+
+	/* MCHP DEBUG */
+	LOG_INF("Set top with alarm: counter_period_us = %u  top_cfg.ticks = %u",
+		counter_period_us, top_cfg.ticks);
 
 	k_busy_wait(5000);
 
@@ -420,9 +430,15 @@ static void test_single_shot_alarm_instance(const struct device *dev, bool set_t
 		.flags = 0
 	};
 
+	/* MCHP DEBUG */
+	LOG_INF("single-shot alarm: set_top=%u", set_top);
+
 	counter_period_us = get_counter_period_us(dev);
 	ticks = counter_us_to_ticks(dev, counter_period_us);
 	top_cfg.ticks = ticks;
+
+	/* MCHP DEBUG */
+	LOG_INF("ss-alarm: counter_period_us=%u ticks=%u", counter_period_us, ticks);
 
 	cntr_alarm_cfg.flags = 0;
 	cntr_alarm_cfg.callback = alarm_handler;
@@ -448,8 +464,8 @@ static void test_single_shot_alarm_instance(const struct device *dev, bool set_t
 		cntr_alarm_cfg.ticks = ticks + 1;
 		err = counter_set_channel_alarm(dev, 0, &cntr_alarm_cfg);
 		zassert_equal(-EINVAL, err,
-			      "%s: Counter should return error because ticks"
-			      " exceeded the limit set alarm", dev->name);
+			      "%s: %u Counter should return error because ticks"
+			      " exceeded the limit set alarm", dev->name, cntr_alarm_cfg.ticks);
 		cntr_alarm_cfg.ticks = ticks - 1;
 	}
 

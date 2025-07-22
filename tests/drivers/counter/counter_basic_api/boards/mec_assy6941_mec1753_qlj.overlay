@@ -1,0 +1,18 @@
+
+/* timers 0 and 1 are 16-bit.
+ * The test expects a maximum counter interval of 20,000 us
+ * Maximum frequency = 65536 / 0.02 = 3276800 Hz.
+ * Set prescaler = 15 for timer frequency = 48MHz / (prescaler + 1) = 3MHz
+ */
+&timer0 {
+	compatible = "microchip,xec-btimer";
+	prescaler = <15>; /* 3 MHz */
+	status = "okay";
+};
+
+&timer1 {
+	compatible = "microchip,xec-counter-btmr";
+	prescaler = <15>; /* 3 MHz */
+	alarm-timer = <&timer0>;
+	status = "okay";
+};
