@@ -8,6 +8,9 @@ zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_MEC172X
 zephyr_library_sources_ifdef(CONFIG_HAS_MEC5_HAL
   soc_cmn_init.c
 )
+zephyr_library_sources_ifdef(CONFIG_ARM_CUSTOM_INTERRUPT_CONTROLLER
+  soc_cust_intc.c
+)
 
 if (DEFINED CONFIG_MCHP_HEADER_VERBOSE_OUTPUT)
     set(MCHP_HEADER_VERBOSE_OPTION "-v")
