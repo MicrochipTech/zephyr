@@ -117,6 +117,19 @@ int soc_ecia_girq_ctrl(uint8_t girq, uint8_t srcpos, uint8_t enable)
 	return soc_ecia_girq_ctrl_bm(girq, bitmap, enable);
 }
 
+uint32_t soc_ecia_girq_get_enable_bm(uint8_t girq)
+{
+	mem_addr_t raddr = MCHP_XEC_ECIA_REG_BASE;
+
+	if ((girq < MCHP_MEC_ECIA_GIRQ_FIRST) || (girq > MCHP_MEC_ECIA_GIRQ_LAST)) {
+		return 0;
+	}
+
+	raddr += MCHP_XEC_ECIA_GIRQ_OFS(girq);
+
+	return sys_read32(raddr);
+}
+
 int soc_ecia_girq_status_clear_bm(uint8_t girq, uint32_t bitmap)
 {
 	mem_addr_t raddr = MCHP_XEC_ECIA_REG_BASE;
