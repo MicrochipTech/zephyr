@@ -11,19 +11,20 @@
 #include "soc_ecia.h"
 
 /* EC Subsystem */
-#define MCHP_XEC_ECS_REG_BASE (mem_addr_t)DT_REG_ADDR(DT_NODELABEL(ecs))
-#define MCHP_XEC_ECS_ICR_OFS  0x18u
+#define MCHP_XEC_ECS_REG_BASE      (mem_addr_t) DT_REG_ADDR(DT_NODELABEL(ecs))
+#define MCHP_XEC_ECS_ICR_OFS       0x18u
 #define MCHP_XEC_ECS_ICR_DM_EN_POS 0 /* direct mode enable */
 
 /* EC Interrupt Aggregator. It is not real interrupt controller. */
-#define MCHP_XEC_ECIA_REG_BASE  (mem_addr_t)DT_REG_ADDR(DT_NODELABEL(ecia))
-#define MCHP_XEC_ECIA_GIRQ_SIZE 20u /* 5 32-bit registers */
-#define MCHP_XEC_ECIA_GIRQ_ALL_MSK GENMASK(MCHP_MEC_ECIA_GIRQ_LAST, MCHP_MEC_ECIA_GIRQ_FIRST)
+#define MCHP_XEC_ECIA_REG_BASE        (mem_addr_t) DT_REG_ADDR(DT_NODELABEL(ecia))
+#define MCHP_XEC_ECIA_GIRQ_SIZE       20u /* 5 32-bit registers */
+#define MCHP_XEC_ECIA_GIRQ_ALL_MSK    GENMASK(MCHP_MEC_ECIA_GIRQ_LAST, MCHP_MEC_ECIA_GIRQ_FIRST)
 #define MCHP_XEC_ECIA_GIRQ_DIRECT_MSK (GENMASK(21, 13) | BIT(23))
-#define MCHP_XEC_ECIA_GIRQ_AGGR_MSK (GENMASK(12, 8) | BIT(22) | GENMASK(26, 24))
+#define MCHP_XEC_ECIA_GIRQ_AGGR_MSK   (GENMASK(12, 8) | BIT(22) | GENMASK(26, 24))
 
 #define MCHP_XEC_ECIA_ZGIRQ_OFS(zgirq) ((uint32_t)(zgirq) * MCHP_XEC_ECIA_GIRQ_SIZE)
-#define MCHP_XEC_ECIA_GIRQ_OFS(girq) MCHP_XEC_ECIA_ZGIRQ_OFS((uint32_t)(girq) - MCHP_MEC_ECIA_GIRQ_FIRST)
+#define MCHP_XEC_ECIA_GIRQ_OFS(girq)                                                               \
+	MCHP_XEC_ECIA_ZGIRQ_OFS((uint32_t)(girq) - MCHP_MEC_ECIA_GIRQ_FIRST)
 
 #define MCHP_XEC_ECIA_GIRQ_SRC_OFS    0
 #define MCHP_XEC_ECIA_GIRQ_ENSET_OFS  4u
@@ -36,19 +37,19 @@
 #define MCHP_XEC_ECIA_AGGR_ENCLR_OFS 0x204u /* r/w1c */
 #define MCHP_XEC_ECIA_AGGR_ACTV_OFS  0x208u /* read-only */
 
-#define MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, regofs)				\
+#define MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, regofs)                                                   \
 	(MCHP_XEC_ECIA_ZGIRQ_OFS((uint32_t)(girq) - MCHP_MEC_ECIA_GIRQ_FIRST) + (uint32_t)regofs)
 
-#define MCHP_XEC_ECIA_GIRQ_SRC_REG_OFS(girq) \
+#define MCHP_XEC_ECIA_GIRQ_SRC_REG_OFS(girq)                                                       \
 	MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, MCHP_XEC_ECIA_GIRQ_SRC_OFS)
 
-#define MCHP_XEC_ECIA_GIRQ_ENSET_REG_OFS(girq) \
+#define MCHP_XEC_ECIA_GIRQ_ENSET_REG_OFS(girq)                                                     \
 	MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, MCHP_XEC_ECIA_GIRQ_ENSET_OFS)
 
-#define MCHP_XEC_ECIA_GIRQ_RESULT_REG_OFS(girq) \
+#define MCHP_XEC_ECIA_GIRQ_RESULT_REG_OFS(girq)                                                    \
 	MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, MCHP_XEC_ECIA_GIRQ_RESULT_OFS)
 
-#define MCHP_XEC_ECIA_GIRQ_ENCLR_REG_OFS(girq) \
+#define MCHP_XEC_ECIA_GIRQ_ENCLR_REG_OFS(girq)                                                     \
 	MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, MCHP_XEC_ECIA_GIRQ_ENCLR_OFS)
 
 int soc_ecia_init(uint32_t aggr_girq_bm, uint32_t direct_girq_bm, uint32_t flags)
