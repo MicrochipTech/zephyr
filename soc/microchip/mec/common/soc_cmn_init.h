@@ -9,7 +9,7 @@
 
 #ifndef _ASMLANGUAGE
 
-int mec5_soc_common_init(void);
+int mec_soc_common_init(void);
 
 #endif
 

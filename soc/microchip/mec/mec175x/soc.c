@@ -12,5 +12,5 @@
 
 void soc_prep_hook(void)
 {
-	mec5_soc_common_init();
+	mec_soc_common_init();
 }
