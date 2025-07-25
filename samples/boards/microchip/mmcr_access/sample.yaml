@@ -1,0 +1,16 @@
+sample:
+  description: Microchip MEC SoC MMCR access
+  name: microchip_mec_soc_mmcr
+tests:
+  sample.board.microchip.mmcr_access:
+    platform_allow:
+      - mec15xxevb_assy6843
+      - mec172xevb_assy6906
+      - mec_assy6941/mec1743_qlj
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: soc mmcr
+    depends_on:
+      - gpio
+      - uart
