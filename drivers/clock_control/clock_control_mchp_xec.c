@@ -16,6 +16,8 @@
 #include <zephyr/irq.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/barrier.h>
+#include "clock_control_mchp_xec.h"
+
 LOG_MODULE_REGISTER(clock_control_xec, LOG_LEVEL_ERR);
 
 #define CLK32K_SIL_OSC_DELAY		256
@@ -72,230 +74,6 @@ enum periph_clk32k_src {
 
 enum clk32k_dest { CLK32K_DEST_PLL = 0, CLK32K_DEST_PERIPH, CLK32K_DEST_MAX };
 
-/* PCR hardware registers for MEC15xx and MEC172x */
-#define XEC_CC_PCR_MAX_SCR 5
-
-#if 0
-struct pcr_hw_regs {
-	volatile uint32_t SYS_SLP_CTRL;
-	volatile uint32_t PROC_CLK_CTRL;
-	volatile uint32_t SLOW_CLK_CTRL;
-	volatile uint32_t OSC_ID;
-	volatile uint32_t PWR_RST_STS;
-	volatile uint32_t PWR_RST_CTRL;
-	volatile uint32_t SYS_RST;
-	volatile uint32_t TURBO_CLK; /* MEC172x only */
-	volatile uint32_t TEST20;
-	uint32_t RSVD1[3];
-	volatile uint32_t SLP_EN[XEC_CC_PCR_MAX_SCR];
-	uint32_t RSVD2[3];
-	volatile uint32_t CLK_REQ[XEC_CC_PCR_MAX_SCR];
-	uint32_t RSVD3[3];
-	volatile uint32_t RST_EN[5];
-	volatile uint32_t RST_EN_LOCK;
-	/* all registers below are MEC172x only */
-	volatile uint32_t VBAT_SRST;
-	volatile uint32_t CLK32K_SRC_VTR;
-	volatile uint32_t TEST90;
-	uint32_t RSVD4[(0x00c0 - 0x0094) / 4];
-	volatile uint32_t CNT32K_PER;
-	volatile uint32_t CNT32K_PULSE_HI;
-	volatile uint32_t CNT32K_PER_MIN;
-	volatile uint32_t CNT32K_PER_MAX;
-	volatile uint32_t CNT32K_DV;
-	volatile uint32_t CNT32K_DV_MAX;
-	volatile uint32_t CNT32K_VALID;
-	volatile uint32_t CNT32K_VALID_MIN;
-	volatile uint32_t CNT32K_CTRL;
-	volatile uint32_t CLK32K_MON_ISTS;
-	volatile uint32_t CLK32K_MON_IEN;
-};
-
-#define XEC_CC_PCR_RST_EN_UNLOCK	0xa6382d4cu
-#define XEC_CC_PCR_RST_EN_LOCK		0xa6382d4du
-
-#define XEC_CC_PCR_OSC_ID_PLL_LOCK	BIT(8)
-#define XEC_CC_PCR_TURBO_CLK_96M	BIT(2)
-
-#define XEC_CC_PCR_CLK32K_SRC_MSK	0x3u
-#define XEC_CC_PCR_CLK32K_SRC_SIL	0u
-#define XEC_CC_PCR_CLK32K_SRC_XTAL	1
-#define XEC_CC_PCR_CLK32K_SRC_PIN	2
-#define XEC_CC_PCR_CLK32K_SRC_OFF	3
-
-#ifdef CONFIG_SOC_SERIES_MEC15XX
-#define XEC_CC_PCR3_CRYPTO_MASK		(BIT(26) | BIT(27) | BIT(28))
-#else
-#define XEC_CC_PCR3_CRYPTO_MASK		BIT(26)
-#endif
-
-/* VBAT powered hardware registers related to clock configuration */
-struct vbatr_hw_regs {
-	volatile uint32_t PFRS;
-	uint32_t RSVD1[1];
-	volatile uint32_t CLK32_SRC;
-	uint32_t RSVD2[2];
-	volatile uint32_t CLK32_TRIM;
-	uint32_t RSVD3[1];
-	volatile uint32_t CLK32_TRIM_CTRL;
-};
-
-/* MEC152x VBAT CLK32_SRC register defines */
-#define XEC_CC15_VBATR_USE_SIL_OSC		0u
-#define XEC_CC15_VBATR_USE_32KIN_PIN		BIT(1)
-#define XEC_CC15_VBATR_USE_PAR_CRYSTAL		BIT(2)
-#define XEC_CC15_VBATR_USE_SE_CRYSTAL		(BIT(2) | BIT(3))
-
-/* MEC150x special requirements */
-#define XEC_CC15_GCFG_DID_DEV_ID_MEC150x	0x0020U
-#define XEC_CC15_TRIM_ENABLE_INT_OSCILLATOR	0x06U
-
-
-/* MEC172x VBAT CLK32_SRC register defines */
-#define XEC_CC_VBATR_CS_SO_EN			BIT(0) /* enable and start silicon OSC */
-#define XEC_CC_VBATR_CS_XTAL_EN			BIT(8) /* enable & start external crystal */
-#define XEC_CC_VBATR_CS_XTAL_SE			BIT(9) /* crystal XTAL2 used as 32KHz input */
-#define XEC_CC_VBATR_CS_XTAL_DHC		BIT(10) /* disable high XTAL startup current */
-#define XEC_CC_VBATR_CS_XTAL_CNTR_MSK		0x1800u /* XTAL amplifier gain control */
-#define XEC_CC_VBATR_CS_XTAL_CNTR_DG		0x0800u
-#define XEC_CC_VBATR_CS_XTAL_CNTR_RG		0x1000u
-#define XEC_CC_VBATR_CS_XTAL_CNTR_MG		0x1800u
-/* MEC172x Select source of peripheral 32KHz clock */
-#define XEC_CC_VBATR_CS_PCS_POS			16
-#define XEC_CC_VBATR_CS_PCS_MSK0		0x3u
-#define XEC_CC_VBATR_CS_PCS_MSK			0x30000u
-#define XEC_CC_VBATR_CS_PCS_VTR_VBAT_SO		0u /* VTR & VBAT use silicon OSC */
-#define XEC_CC_VBATR_CS_PCS_VTR_VBAT_XTAL	0x10000u /* VTR & VBAT use crystal */
-#define XEC_CC_VBATR_CS_PCS_VTR_PIN_SO		0x20000u /* VTR 32KHZ_IN, VBAT silicon OSC */
-#define XEC_CC_VBATR_CS_PCS_VTR_PIN_XTAL	0x30000u /* VTR 32KHZ_IN, VBAT XTAL */
-#define XEC_CC_VBATR_CS_DI32_VTR_OFF		BIT(18) /* disable silicon OSC when VTR off */
-
-#else /* New register defines */
-
-#define XEC_CC_SLP_CR_OFS		0
-#define XEC_CC_SLP_CR_MODE_DS_POS	0 /* if set enter deep sleep when sleep is triggered */
-#define XEC_CC_SLP_CR_SLP_ALL_POS	3 /* trigger sleep */
-#define XEC_CC_SLP_CR_ALLOW_PLL_NLCK	8 /* allow sleep entry when PLL is not locked */
-
-#define XEC_CC_PCLK_CR_OFS		4u
-#define XEC_CC_PCLK_CR_DIV_POS		0
-#define XEC_CC_PCLK_CR_DIV_MSK		GENMASK(7, 0)
-#define XEC_CC_PCLK_CR_DIV_SET(d)	FIELD_PREP(XEC_CC_PCLK_CR_DIV_MSK, (d))
-#define XEC_CC_PCLK_CR_DIV_GET(d)	FIELD_GET(XEC_CC_PCLK_CR_DIV_MSK, (d))
-
-#define XEC_CC_SCLK_CR_OFS		8u
-#define XEC_CC_SCLK_CR_DIV_POS		0
-#define XEC_CC_SCLK_CR_DIV_MSK		GENMASK(9, 0)
-#define XEC_CC_SCLK_CR_DIV_SET(d)	FIELD_PREP(XEC_CC_SCLK_CR_DIV_MSK, (d))
-#define XEC_CC_SCLK_CR_DIV_GET(d)	FIELD_GET(XEC_CC_SCLK_CR_DIV_MSK, (d))
-
-#define XEC_CC_OSC_ID_OFS		0xcu
-#define XEC_CC_OSC_ID_PLL_LOCK_POS	8 /* read-only */
-
-/* MEC172x/4x/5x only */
-#define XEC_CC_TCLK_OFS			0x1cu
-#define XEC_CC_TCLK_FAST_EN_POS		2
-
-#define XEC_CC_SLP_EN_OFS(n)		(0x30u + ((uint32_t)(n) * 4u))
-#define XEC_CC_CLK_REQ_OFS(n)		(0x50u + ((uint32_t)(n) * 4u))
-#define XEC_CC_RST_EN_OFS(n)		(0x70u + ((uint32_t)(n) * 4u))
-
-#define XEC_CC_PERIPH_RST_LOCK_OFS	0x84u
-#define XEC_CC_PERIPH_RST_UNLOCK	0xa6382d4cu
-#define XEC_CC_PERIPH_RST_LOCK		0xa6382d4du
-
-/* All registers below are MEC172x/4x/5x only */
-#define XEC_CC_VTR_CS_OFS		0x88u
-#define XEC_CC_VTR_CS_PLL_SEL_POS	0
-#define XEC_CC_VTR_CS_PLL_SEL_MSK	GENMASK(1, 0)
-#define XEC_CC_VTR_CS_PLL_SEL_SET(p)	FIELD_PREP(XEC_CC_VTR_CS_PLL_SEL_MSK, (p))
-#define XEC_CC_VTR_CS_PLL_SEL_GET(p)	FIELD_GET(XEC_CC_VTR_CS_PLL_SEL_MSK, (p))
-#define XEC_CC_VTR_CS_PLL_LOCKED	8 /* PLL reference clock selection is locked */
-
-#define XEC_CC_32K_PER_CNT_OFS		0xc0u /* read-only */
-#define XEC_CC_32K_PER_CNT_MSK		GENMASK(15, 0)
-
-#define XEC_CC_32K_HP_CNT_OFS		0xc4u /* read-only */
-#define XEC_CC_32K_HP_CNT_MSK		GENMASK(15, 0)
-
-#define XEC_CC_32K_MIN_PER_CNT_OFS	0xc8u
-#define XEC_CC_32K_MIN_PER_CNT_MSK	GENMASK(15, 0)
-
-#define XEC_CC_32K_MAX_PER_CNT_OFS	0xccu
-#define XEC_CC_32K_MAX_PER_CNT_MSK	GENMASK(15, 0)
-
-#define XEC_CC_32K_MAX_DC_VAR_OFS	0xd4u
-#define XEC_CC_32K_MAX_DC_VAR_MSK	GENMASK(15, 0)
-
-/* Number of consecutive valid periods and pulse widths */
-#define XEC_CC_32K_VAL_CNT_OFS		0xd8u /* read-only */
-#define XEC_CC_32K_VAL_CNT_MSK		GENMASK(7, 0)
-
-#define XEC_CC_32K_MIN_VAL_CNT_OFS	0xdcu
-#define XEC_CC_32K_MIN_VAL_CNT_MSK	GENMASK(7, 0)
-
-#define XEC_CC_32K_CCR_OFS		0xe0u /* 32K count control */
-#define XEC_CC_32K_CCR_PER_CNT_EN_POS	0
-#define XEC_CC_32K_CCR_DC_CNT_EN_POS	1
-#define XEC_CC_32K_VAL_CNT_EN_POS	2
-#define XEC_CC_32K_CCR_SRC_SOCS		4 /* 32K source is internal silicon oscillator else XTAL */
-#define XEC_CC_32K_CCR_CLR_POS		24 /* clear all counters */
-
-#define XEC_CC_32K_SR_POS		0xe4u /* R/W1C */
-#define XEC_CC_32K_IER_POS		0xe8u
-#define XEC_CC_32K_SR_IER_ALL_MSK	GENMASK(6, 0)
-#define XEC_CC_32K_SR_PULSE_RDY_POS	0
-#define XEC_CC_32K_SR_PER_PASS_POS	1
-#define XEC_CC_32K_SR_DC_PASS_POS	2
-#define XEC_CC_32K_SR_FAIL_POS		3
-#define XEC_CC_32K_SR_PER_OVFL_POS	4
-#define XEC_CC_32K_SR_VALID_POS		5
-#define XEC_CC_32K_SR_UNWELL_POS	6
-
-/* VBAT 32KHz clock control registers */
-#define XEC_VBR_PFR_SR_OFS		0 /* power-fail-reset-status. R/W1C */
-#define XEC_VBR_PFR_SR_MSK		0xf4u
-#define XEC_VBR_PFR_SR_SOFT_RST_POS	2
-#define XEC_VBR_PFR_SR_RSTI_POS		4
-#define XEC_VBR_PFR_SR_WDT_STS_POS	5
-#define XEC_VBR_PFR_SR_SYSRR_STS_POS	6
-#define XEC_VBR_PFR_SR_VB_RST_STS_POS	7
-
-#define XEC_VBR_CS_OFS			4u
-#define XEC_VBR_CS_SO_EN_POS		0
-#define XEC_VBR_CS_SO_LOCK_POS		7
-#define XEC_VBR_CS_XSTA_POS		8
-#define XEC_VBR_CS_XSE_POS		9
-#define XEC_VBR_CS_XDHSC_POS		10
-#define XEC_VBR_CS_XG_POS		11
-#define XEC_VBR_CS_XG_MSK		GENMASK(12, 11)
-#define XEC_VBR_CS_XG_4X		0
-#define XEC_VBR_CS_XG_3X		1u
-#define XEC_VBR_CS_XG_2X		2u
-#define XEC_VBR_CS_XG_1X		3u
-#define XEC_VBR_CS_XG_SET(g)		FIELD_PREP(XEC_VBR_CS_XG_MSK, (g))
-#define XEC_VBR_CS_XG_GET(g)		FIELD_GET(XEC_VBR_CS_XG_MSK, (g))
-#define XEC_VBR_CS_PCS_POS		16
-#define XEC_VBR_CS_PCS_MSK		GENMASK(17, 16)
-#define XEC_VBR_CS_PCS_SI		0
-#define XEC_VBR_CS_PCS_XTAL		1u
-#define XEC_VBR_CS_PCS_PIN_SI		2u
-#define XEC_VBR_CS_PCS_PIN_XTAL		3u
-#define XEC_VBR_CS_PCS_SET(s)		FIELD_PREP(XEC_VBR_CS_PCS_MSK, (s))
-#define XEC_VBR_CS_PCS_GET(s)		FIELD_GET(XEC_VBR_CS_PCS_MSK, (s))
-#define XEC_VBR_VTR_SI_OFF_EN_POS	18u
-
-#define XEC_VBR_OT_OFS			0x14u
-#define XEC_VBR_TCR_OFS			0x1cu
-
-#endif
-
-#ifdef CONFIG_SOC_SERIES_MEC15XX
-#define XEC_CC_PCR3_CRYPTO_MASK		(BIT(26) | BIT(27) | BIT(28))
-#else
-#define XEC_CC_PCR3_CRYPTO_MASK		BIT(26)
-#endif
-
 enum vbr_clk32k_src {
 	VBR_CLK32K_SRC_SO_SO = 0,
 	VBR_CLK32K_SRC_XTAL_XTAL,
@@ -330,16 +108,20 @@ struct xec_pcr_config {
  * Make sure PCR sleep enables are clear except for crypto
  * which do not have internal clock gating.
  */
-static void pcr_slp_init(struct pcr_hw_regs *pcr)
+static void pcr_slp_init(uintptr_t pcr_base)
 {
-	pcr->SYS_SLP_CTRL = 0U;
-	SCB->SCR &= ~BIT(2);
+	uint32_t scr_msk = (BIT(XEC_CC_SLP_CR_MODE_DS_POS) | BIT(XEC_CC_SLP_CR_SLP_ALL_POS) |
+			    BIT(XEC_CC_SLP_CR_ALLOW_PLL_NL_POS));
 
-	for (int i = 0; i < XEC_CC_PCR_MAX_SCR; i++) {
-		pcr->SLP_EN[i] = 0U;
+	SCB->SCR &= ~BIT(SCB_SCR_SLEEPDEEP_Pos);
+
+	sys_clear_bits(pcr + XEC_CC_SLP_CR_OFS, scr_msk);
+
+	for (uint32_t i = 0; i < XEC_CC_PCR_MAX_SCR; i++) {
+		sys_write32(0, pcr_base + XEC_CC_SLP_EN_OFS(i));
 	}
 
-	pcr->SLP_EN[3] = XEC_CC_PCR3_CRYPTO_MASK;
+	sys_write32(XEC_CC_PCR3_CRYPTO_MASK, pcr_base + XEC_CC_SLP_EN_OFS(3));
 }
 
 /* MEC172x:

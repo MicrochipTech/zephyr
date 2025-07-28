@@ -13,15 +13,19 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/sys_io.>
 LOG_MODULE_REGISTER(clock32k, CONFIG_CLOCK_CONTROL_LOG_LEVEL);
 
 #include <soc.h>
 
+#include XEC_PCR_OSC_ID_OFS	0x0cu
+#include XEC_PCR_PWR_SR_OFS	0x10u
+
 #ifdef CONFIG_SOC_SERIES_MEC15XX
 static void pcr_clock_regs(void)
 {
-	struct pcr_regs *pcr = ((struct pcr_regs *)DT_REG_ADDR_BY_IDX(DT_NODELABEL(pcr), 0));
-	uint32_t r = pcr->PWR_RST_STS;
+	mem_addr_t pcr_base = ((mem_addr_t)DT_REG_ADDR_BY_IDX(DT_NODELABEL(pcr), 0));
+	uint32_t r = sys_read32(pcr_base + XEC_PCR_PWR_SR_OFS);
 
 	LOG_INF("MEC152x PCR registers");
 
