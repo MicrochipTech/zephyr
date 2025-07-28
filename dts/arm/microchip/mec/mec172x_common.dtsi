@@ -12,6 +12,7 @@ pcr: pcr@40080100 {
 	reg = <0x40080100 0x100 0x4000a400 0x100>;
 	reg-names = "pcrr", "vbatr";
 	interrupts = <174 0>;
+	girqs = <20 9>;
 	core-clock-div = <1>;
 	/* MEC172x allows sources to be different */
 	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;

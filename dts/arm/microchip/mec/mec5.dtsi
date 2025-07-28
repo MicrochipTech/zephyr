@@ -32,7 +32,8 @@
 		pcr: pcr@40080100 {
 			reg = <0x40080100 0x100 0x4000a400 0x100>;
 			reg-names = "pcrr", "vbatr";
-			interrupts = <174 0>;
+			interrupts = <174 2>;
+			girqs = <20 9>;
 			status = "disabled";
 		};
 		ecia: ecia@4000e000 {
