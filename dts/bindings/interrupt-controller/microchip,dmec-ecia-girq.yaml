@@ -7,7 +7,6 @@ include: base.yaml
 properties:
   girqs:
     type: array
-    required: true
     description: |
       Many DEC/MEC periperals interrupt signals are direct capable. The signals are
       connected to bits in a GIRQ. Each GIRQ is composed of 5 32-bit registers:
