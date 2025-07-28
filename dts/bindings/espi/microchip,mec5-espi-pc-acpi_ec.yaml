@@ -9,6 +9,13 @@ compatible: "microchip,mec5-espi-pc-acpi_ec"
 include: ["microchip,mec5-espi-pc-common.yaml"]
 
 properties:
+  app-id:
+    type: int
+    required: true
+    description: |
+      An 8-bit application ID value passed via callbacks. The application
+      can identify the peripheral channel device making the callback.
+
   four-byte-data-mode:
     type: boolean
     description: |

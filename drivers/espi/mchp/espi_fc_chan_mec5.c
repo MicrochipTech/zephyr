@@ -46,21 +46,21 @@ static void espi_mec5_fc_isr(const struct device *dev)
 		.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
 		.evt_details = ESPI_CHANNEL_FLASH,
 		.evt_data = 0};
-	uint32_t status = sys_read32(iob + ESPI_FC_SR);
+	uint32_t status = sys_read32(iob + MEC_ESPI_FC_SR_OFS);
 
-	sys_write32(status, iob + ESPI_FC_SR);
+	sys_write32(status, iob + MEC_ESPI_FC_SR_OFS);
 	data->fc_status = status;
 
-	if (status & BIT(ESPI_FC_SR_CHEN_CHG_POS)) {
-		if ((status & BIT(ESPI_FC_SR_CHEN_STATE_POS)) != 0) { /* enabled by Host? */
-			sys_set_bit8(iob + ESPI_FC_READY, ESPI_CHAN_RDY_POS);
+	if (status & BIT(MEC_ESPI_FC_SR_CHEN_CHG_POS)) {
+		if ((status & BIT(MEC_ESPI_FC_SR_CHEN_STATE_POS)) != 0) { /* enabled by Host? */
+			sys_set_bit8(iob + MEC_ESPI_FC_RDY_OFS, MEC_ESPI_CHAN_RDY_POS);
 			evt.evt_data = 1u;
 		}
 
 		espi_send_callbacks(&data->callbacks, dev, evt);
 	}
 
-	if ((status & BIT(ESPI_FC_SR_DONE_POS)) != 0) {
+	if ((status & BIT(MEC_ESPI_FC_SR_DONE_POS)) != 0) {
 		k_sem_give(&data->fc_sync);
 	}
 }
@@ -71,7 +71,7 @@ void espi_mec5_fc_irq_connect(const struct device *dev)
 		    espi_mec5_fc_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, fc, irq));
 
-	sys_write32(ESPI_GIRQ_ENSET_ADDR, BIT(ESPI_GIRQ_FC_POS));
+	sys_write32(MEC_ESPI_GIRQ_ENSET_ADDR, BIT(MEC_ESPI_GIRQ_FC_POS));
 }
 
 void espi_mec5_fc_erst_config(const struct device *dev, uint8_t n_erst_state)
@@ -80,7 +80,7 @@ void espi_mec5_fc_erst_config(const struct device *dev, uint8_t n_erst_state)
 	mm_reg_t iob = drvcfg->ioc_base;
 
 	if (n_erst_state != 0) {
-		sys_write32(BIT(ESPI_FC_IER_CHG_EN_POS), iob + ESPI_FC_IER);
+		sys_write32(BIT(MEC_ESPI_FC_IER_CHG_EN_POS), iob + MEC_ESPI_FC_IER_OFS);
 	}
 }
 
@@ -125,7 +125,7 @@ static bool fc_is_enabled(const struct device *dev)
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
 
-	if (sys_test_bit8(iob + ESPI_FC_READY, ESPI_CHAN_RDY_POS) != 0) {
+	if (sys_test_bit8(iob + MEC_ESPI_FC_RDY_OFS, MEC_ESPI_CHAN_RDY_POS) != 0) {
 		return true;
 	}
 
@@ -137,7 +137,7 @@ static bool fc_is_busy(const struct device *dev)
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
 
-	if (sys_test_bit(iob + ESPI_FC_CFG, ESPI_FC_CFG_BUSY_POS) != 0) {
+	if (sys_test_bit(iob + MEC_ESPI_FC_CFG_OFS, MEC_ESPI_FC_CFG_BUSY_POS) != 0) {
 		return true;
 	}
 
@@ -148,9 +148,10 @@ static uint32_t fc_max_rw_size(const struct device *dev)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
-	uint32_t fcfg = sys_read32(iob + ESPI_FC_CFG);
+	uint32_t fcfg = sys_read32(iob + MEC_ESPI_FC_CFG_OFS);
 
-	fcfg = ESPI_FC_CFG_MPLD_GET(fcfg);
+	fcfg = MEC_ESPI_FC_CFG_MPLD_GET(fcfg);
+
 	return (1u << (fcfg + 5u));
 }
 
@@ -162,13 +163,13 @@ static uint32_t fc_erase_mode(const struct device *dev, uint32_t erase_len)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
-	uint32_t erase_ctrl = ESPI_FC_CR_FUNC_ERASE_SM;
-	uint32_t fcfg = sys_read32(iob + ESPI_FC_CFG);
+	uint32_t erase_ctrl = MEC_ESPI_FC_CR_FUNC_ERASE_SM;
+	uint32_t fcfg = sys_read32(iob + MEC_ESPI_FC_CFG_OFS);
 
-	fcfg = ESPI_FC_CFG_EBSZ_GET(fcfg);
-	if (fcfg == ESPI_FC_CFG_EBSZ_4K_64K_VAL) {
+	fcfg = MEC_ESPI_FC_CFG_EBSZ_GET(fcfg);
+	if (fcfg == MEC_ESPI_FC_CFG_EBSZ_4K_64K_VAL) {
 		if (erase_len > 4096u) {
-			erase_ctrl = ESPI_FC_CR_FUNC_ERASE_LG;
+			erase_ctrl = MEC_ESPI_FC_CR_FUNC_ERASE_LG;
 		}
 	}
 
@@ -180,7 +181,7 @@ static void fc_abort(const struct device *dev, uint8_t op)
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
 
-	sys_set_bit(iob + ESPI_FC_CR, ESPI_FC_CR_ABORT_POS);
+	sys_set_bit(iob + MEC_ESPI_FC_CR_OFS, MEC_ESPI_FC_CR_ABORT_POS);
 }
 
 static int espi_mec5_fc_op(const struct device *dev, struct espi_flash_packet *pckt, uint8_t op)
@@ -211,25 +212,25 @@ static int espi_mec5_fc_op(const struct device *dev, struct espi_flash_packet *p
 
 	buf_addr = (uint32_t)pckt->buf;
 	len = pckt->len;
-	ctrl = ESPI_FC_CR_TAG(FC_EC_TAG) | BIT(ESPI_FC_CR_START_POS);
+	ctrl = MEC_ESPI_FC_CR_TAG_SET(FC_EC_TAG) | BIT(MEC_ESPI_FC_CR_START_POS);
 	if (op == FC_WRITE) {
-		ctrl |= ESPI_FC_CR_FUNC_WRITE;
+		ctrl |= MEC_ESPI_FC_CR_FUNC_WRITE;
 	} else if (op == FC_ERASE) {
 		ctrl |= fc_erase_mode(dev, len);
 		/* Even for erase HW wants non-zero buffer address. No tranfer */
 		buf_addr = (uint32_t)&data->fc_data;
-		len = 1u; /* all erases we need a non-zero value (1 recommended) */
+		len = 1u; /* erase requires non-zero length (1 recommended) */
 	} else {
-		ctrl |= ESPI_FC_CR_FUNC_READ;
+		ctrl |= MEC_ESPI_FC_CR_FUNC_READ;
 	}
 
-	sys_write32(UINT32_MAX, iob + ESPI_FC_SR);
-	sys_write32(pckt->flash_addr, iob + ESPI_FC_FA);
-	sys_write32(buf_addr, iob + ESPI_FC_BA);
-	sys_write32(pckt->len, iob + ESPI_FC_LEN);
+	sys_write32(UINT32_MAX, iob + MEC_ESPI_FC_SR_OFS);
+	sys_write32(pckt->flash_addr, iob + MEC_ESPI_FC_FA_OFS);
+	sys_write32(buf_addr, iob + MEC_ESPI_FC_BA_OFS);
+	sys_write32(pckt->len, iob + MEC_ESPI_FC_LEN_OFS);
 
-	sys_set_bit(iob + ESPI_FC_IER, ESPI_FC_IER_DONE_POS);
-	sys_write32(ctrl, iob + ESPI_FC_CR);
+	sys_set_bit(iob + MEC_ESPI_FC_IER_OFS, MEC_ESPI_FC_IER_DONE_POS);
+	sys_write32(ctrl, iob + MEC_ESPI_FC_CR_OFS);
 
 	rc = k_sem_take(&data->fc_sync, K_MSEC(FC_EC_TIMEOUT_MS));
 	if (rc == -EAGAIN) {
@@ -238,14 +239,14 @@ static int espi_mec5_fc_op(const struct device *dev, struct espi_flash_packet *p
 	}
 
 	if (rc == -EAGAIN) {
-		data->fc_status = sys_read32(iob + ESPI_FC_SR);
+		data->fc_status = sys_read32(iob + MEC_ESPI_FC_SR_OFS);
 		return -ETIMEDOUT;
 	}
 
 	/* interrupt fired */
 	status = data->fc_status;
-	if ((status & FC_ERR_MSK) != 0) {
-		if (status & BIT(ESPI_FC_SR_ABORT_POS)) {
+	if ((status & MEC_ESPI_FC_SR_ERR_ALL_MSK) != 0) {
+		if (status & BIT(MEC_ESPI_FC_SR_ABORT_POS)) {
 			return -ETIMEDOUT;
 		}
 		return -EIO;

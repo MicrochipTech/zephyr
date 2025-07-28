@@ -12,14 +12,21 @@
 #include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/pinctrl.h>
 
+#define MEC5_ESPI_DCFG_FLAG_OD_CAP 0x01u
+
 struct espi_mec5_drv_cfg {
 	uintptr_t ioc_base;
 	uintptr_t memc_base;
 	uintptr_t vwc_base;
 	void (*irq_config)(const struct device *dev);
 	const struct pinctrl_dev_config *pcfg;
+	uint16_t flags;
 	uint8_t freq_id;
 	uint8_t chan_msk;
+#if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
+	uint16_t mem_bar_msw;
+	uint16_t sram_bar_msw;
+#endif
 #if defined(CONFIG_ESPI_OOB_CHANNEL)
 	uint16_t oob_rxb_size;
 #endif
@@ -34,6 +41,10 @@ struct espi_mec5_drv_data {
 	volatile uint32_t status;
 	struct espi_callback vwcb;
 	sys_slist_t callbacks;
+#if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
+	volatile uint32_t pc_status;
+	uintptr_t sram_mem_base[2];
+#endif
 #if defined(CONFIG_ESPI_OOB_CHANNEL)
 	struct k_sem oob_tx_sync;
 	struct k_sem oob_rx_sync;
@@ -52,6 +63,7 @@ struct espi_mec5_drv_data {
 };
 
 #if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
+int espi_mec5_pc_config(const struct device *dev, const void *vend_ext);
 int espi_mec5_pc_pltrst_handler(const struct device *dev, uint8_t pltrst_state);
 void espi_mec5_pc_irq_connect(const struct device *dev);
 void espi_mec5_pc_erst_config(const struct device *dev, uint8_t n_erst_state);

@@ -639,6 +639,7 @@
 			mbox0: mbox@400f0000 {
 				reg = <0x400f0000 0x200>;
 				interrupts = <60 3>;
+				interrupt-names = "h2ec";
 				girqs = <15 20>;
 				status = "disabled";
 			};
@@ -694,24 +695,28 @@
 			glue: glue_logic@400f3c00 {
 				reg = <0x400f3c00 0x200>;
 				interrupts = <172 1>;
+				interrupt-names = "s0ix";
 				girqs = <21 26>;
 				status = "disabled";
 			};
 			emi0: emi@400f4000 {
 				reg = <0x400f4000 0x400>;
 				interrupts = <42 3>;
+				interrupt-names = "h2ec";
 				girqs = <15 2>;
 				status = "disabled";
 			};
 			emi1: emi@400f4400 {
 				reg = <0x400f4400 0x400>;
 				interrupts = <43 3>;
+				interrupt-names = "h2ec";
 				girqs = <15 3>;
 				status = "disabled";
 			};
 			emi2: emi@400f4800 {
 				reg = <0x400f4800 0x400>;
 				interrupts = <44 3>;
+				interrupt-names = "h2ec";
 				girqs = <15 4>;
 				status = "disabled";
 			};
@@ -722,6 +727,7 @@
 			p80bd0: p80bd@400f8000 {
 				reg = <0x400f8000 0x400>;
 				interrupts = <62 0>;
+				interrupt-names = "fifo_thr";
 				girqs = <15 22>;
 				status = "disabled";
 			};

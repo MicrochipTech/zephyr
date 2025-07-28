@@ -140,16 +140,16 @@ static int config_vw(mm_reg_t vwbase, const struct espi_mec5_vwire *vw)
 	mm_reg_t raddr = 0;
 	uint32_t r = 0, temp = 0;
 
-	if ((vw == NULL) || (vw->reg_idx >= ESPI_VW_NGRPS) || (vw->source_bit > 3u)) {
+	if ((vw == NULL) || (vw->reg_idx >= MEC_ESPI_VW_NGRPS) || (vw->source_bit > 3u)) {
 		return -EINVAL;
 	}
 
-	raddr = vwbase + ESPI_HTVW_GRPW(vw->reg_idx, 0);
+	raddr = vwbase + MEC_ESPI_VW_HT_GRPW(vw->reg_idx, 0);
 
-	r = sys_read32(raddr) & (uint32_t)~(ESPI_VW_W0_HI_MSK);
-	r |= (uint32_t)vw->host_idx << ESPI_VW_W0_HI_POS;
+	r = sys_read32(raddr) & (uint32_t)~(MEC_ESPI_VW_W0_HI_MSK);
+	r |= (uint32_t)vw->host_idx << MEC_ESPI_VW_W0_HI_POS;
 	temp = ((vw->flags >> 2) & 0x3u); /* reset source */
-	r |= ((temp << ESPI_VW_W0_RSRC_POS) & ESPI_VW_W0_RSRC_MSK);
+	r |= ((temp << MEC_ESPI_VW_W0_RSRC_POS) & MEC_ESPI_VW_W0_RSRC_MSK);
 	temp = (uint32_t)((vw->flags >> 1) & 0x1u) << vw->source_bit; /* reset state */
 	r |= temp;
 	sys_write32(r, raddr);
@@ -158,9 +158,9 @@ static int config_vw(mm_reg_t vwbase, const struct espi_mec5_vwire *vw)
 		/* configure IRQ_SEL */
 		raddr += 4u;
 		r = sys_read32(raddr);
-		r &= (uint32_t)~(ESPI_VW_H2T_W1_ISEL_MSK(vw->source_bit));
+		r &= (uint32_t)~(MEC_ESPI_VW_H2T_W1_ISEL_MSK(vw->source_bit));
 		temp = MEC5_ESPI_CTVW_FLAGS_IRQSEL(vw->flags);
-		r |= (temp << ESPI_VW_H2T_W1_ISEL_POS(vw->source_bit));
+		r |= (temp << MEC_ESPI_VW_H2T_W1_ISEL_POS(vw->source_bit));
 		sys_write32(r, raddr);
 	}
 
@@ -192,8 +192,8 @@ int espi_mec5_init_vwires(const struct device *dev)
 void espi_mec5_vw_erst_config(const struct device *dev, uint8_t n_erst_state)
 {
 	if (n_erst_state != 0) { /* danger! level low interrupt */
-		sys_write32(ESPI_GIRQ_VW_CHEN_POS, ESPI_GIRQ_STS_ADDR);
-		sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENSET_ADDR);
+		sys_write32(MEC_ESPI_GIRQ_VW_CHEN_POS, MEC_ESPI_GIRQ_STS_ADDR);
+		sys_write32(BIT(MEC_ESPI_GIRQ_VW_CHEN_POS), MEC_ESPI_GIRQ_ENSET_ADDR);
 	}
 }
 
@@ -214,18 +214,18 @@ int espi_mec5_send_vwire_api(const struct device *dev, enum espi_vwire_signal si
 
 	const struct espi_mec5_vwire *vw = &espi_mec5_vw_tbl[signal];
 
-	regaddr += ESPI_THVW_GRPW(vw->reg_idx, 0);
+	regaddr += MEC_ESPI_VW_TH_GRPW(vw->reg_idx, 0);
 	src_word = sys_read32(regaddr + 4u);
 	if (level != 0) {
-		src_word |= BIT(ESPI_VW_STATE_POS(vw->source_bit));
+		src_word |= BIT(MEC_ESPI_VW_STATE_POS(vw->source_bit));
 	} else {
-		src_word &= (uint32_t)~BIT(ESPI_VW_STATE_POS(vw->source_bit));
+		src_word &= (uint32_t)~BIT(MEC_ESPI_VW_STATE_POS(vw->source_bit));
 	}
 
 	sys_write32(src_word, regaddr + 4u);
 
 	if (host_rd_cnt != 0) {
-		while ((sys_read32(regaddr) & BIT(ESPI_VW_T2H_W0_CHG_POS(vw->source_bit))) != 0) {
+		while ((sys_read32(regaddr) & BIT(MEC_ESPI_VW_T2H_W0_CHG_POS(vw->source_bit))) != 0) {
 			k_busy_wait(1);
 			if (host_rd_cnt == 0) {
 				LOG_ERR("VW %d send timeout", signal);
@@ -252,13 +252,13 @@ int espi_mec5_recv_vwire_api(const struct device *dev, enum espi_vwire_signal si
 	const struct espi_mec5_vwire *vw = &espi_mec5_vw_tbl[signal];
 
 	if ((vw->flags & BIT(ESPI_MEC5_VW_FLAG_DIR_POS)) == ESPI_MEC5_VW_FLAG_DIR_H2T) {
-		regaddr += ESPI_HTVW_GRPW(vw->reg_idx, 2);
+		regaddr += MEC_ESPI_VW_HT_GRPW(vw->reg_idx, 2);
 	} else {
-		regaddr += ESPI_THVW_GRPW(vw->reg_idx, 1);
+		regaddr += MEC_ESPI_VW_TH_GRPW(vw->reg_idx, 1);
 	}
 
 	src_word = sys_read32(regaddr);
-	*level = (uint8_t)((src_word >> ESPI_VW_STATE_POS(vw->source_bit)) & BIT(0));
+	*level = (uint8_t)((src_word >> MEC_ESPI_VW_STATE_POS(vw->source_bit)) & BIT(0));
 
 	return 0;
 }
@@ -281,7 +281,7 @@ static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase,
 	unsigned int pos = 0;
 	struct espi_event evt = {ESPI_BUS_EVENT_VWIRE_RECEIVED, 0, 0};
 
-	result = sys_read32(vgbase + ESPI_GIRQ_RESULT_OFS);
+	result = sys_read32(vgbase + MEC_ESPI_GIRQ_RESULT_OFS);
 
 	pos = find_lsb_set(result);
 	if (pos == 0) {
@@ -291,7 +291,7 @@ static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase,
 
 	/* clear latched GIRQ status */
 	--pos;
-	sys_write32(BIT(pos), vgbase + ESPI_GIRQ_STS_OFS);
+	sys_write32(BIT(pos), vgbase + MEC_ESPI_GIRQ_STS_OFS);
 
 	/* compute VW register group index and bit [0, 3] in group */
 	vwidx = pos / 4u;
@@ -300,7 +300,7 @@ static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase,
 		vwidx += 7u;
 	}
 
-	if ((sys_read32(vwb + ESPI_HTVW_GRPW(vwidx, 2u)) & BIT(vwpos * 8u)) != 0) {
+	if ((sys_read32(vwb + MEC_ESPI_VW_HT_GRPW(vwidx, 2u)) & BIT(vwpos * 8u)) != 0) {
 		evt.evt_data = 1u;
 	}
 
@@ -320,12 +320,12 @@ static void espi_mec5_htvw_common_isr(const struct device *dev, uint32_t vgbase,
 
 static void espi_mec5_htvw_0_6_isr(const struct device *dev)
 {
-	espi_mec5_htvw_common_isr(dev, ESPI_GIRQ_VWB0_BASE, 0);
+	espi_mec5_htvw_common_isr(dev, MEC_ESPI_GIRQ_VWB0_BASE, 0);
 }
 
 static void espi_mec5_htvw_7_10_isr(const struct device *dev)
 {
-	espi_mec5_htvw_common_isr(dev, ESPI_GIRQ_VWB1_BASE, 1);
+	espi_mec5_htvw_common_isr(dev, MEC_ESPI_GIRQ_VWB1_BASE, 1);
 }
 
 /* Virtual wire channel enable change interrupt handler
@@ -341,14 +341,14 @@ static void espi_mec5_vw_chen_isr(const struct device *dev)
 				 .evt_details = ESPI_CHANNEL_VWIRE,
 				 .evt_data = 0};
 
-	sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENCLR_ADDR);
-	sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_STS_ADDR);
+	sys_write32(BIT(MEC_ESPI_GIRQ_VW_CHEN_POS), MEC_ESPI_GIRQ_ENCLR_ADDR);
+	sys_write32(BIT(MEC_ESPI_GIRQ_VW_CHEN_POS), MEC_ESPI_GIRQ_STS_ADDR);
 
-	if (sys_test_bit8(iob + ESPI_RESET_SR, ESPI_RESET_SR_STATE_POS) != 0) {
-		sys_set_bit(iob + ESPI_VW_READY, ESPI_CHAN_RDY_POS);
+	if (sys_test_bit8(iob + MEC_ESPI_RESET_SR_OFS, MEC_ESPI_RESET_SR_STATE_POS) != 0) {
+		sys_set_bit(iob + MEC_ESPI_VW_RDY_OFS, MEC_ESPI_CHAN_RDY_POS);
 		evt.evt_data = 1u;
 	} else {
-		sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENSET_ADDR);
+		sys_write32(BIT(MEC_ESPI_GIRQ_VW_CHEN_POS), MEC_ESPI_GIRQ_ENSET_ADDR);
 	}
 
 	espi_send_callbacks(&data->callbacks, dev, evt);
@@ -356,8 +356,8 @@ static void espi_mec5_vw_chen_isr(const struct device *dev)
 
 void espi_mec5_vw_irq_connect(const struct device *dev)
 {
-	uint32_t gvwb0 = ESPI_GIRQ_VWB0_BASE + ESPI_GIRQ_ENSET_OFS;
-	uint32_t gvwb1 = ESPI_GIRQ_VWB1_BASE + ESPI_GIRQ_ENSET_OFS;
+	uint32_t gvwb0 = MEC_ESPI_GIRQ_VWB0_BASE + MEC_ESPI_GIRQ_ENSET_OFS;
+	uint32_t gvwb1 = MEC_ESPI_GIRQ_VWB1_BASE + MEC_ESPI_GIRQ_ENSET_OFS;
 
 	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, vw_chan_en, irq),
 		    DT_INST_IRQ_BY_NAME(0, vw_chan_en, priority), espi_mec5_vw_chen_isr,
@@ -371,7 +371,7 @@ void espi_mec5_vw_irq_connect(const struct device *dev)
 		    DT_INST_IRQ_BY_NAME(0, vwct_7_10, priority), espi_mec5_htvw_7_10_isr,
 		    DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, vwct_7_10, irq));
-	sys_write32(BIT(ESPI_GIRQ_VW_CHEN_POS), ESPI_GIRQ_ENSET_ADDR);
+	sys_write32(BIT(MEC_ESPI_GIRQ_VW_CHEN_POS), MEC_ESPI_GIRQ_ENSET_ADDR);
 	sys_write32(UINT32_MAX, gvwb0);
 	sys_write32(UINT32_MAX, gvwb1);
 }

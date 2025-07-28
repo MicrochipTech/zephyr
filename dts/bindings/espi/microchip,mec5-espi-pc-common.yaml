@@ -15,6 +15,9 @@ properties:
   interrupts:
     required: true
 
+  interrupt-names:
+    required: true
+
   hostinfos:
     type: phandles
     required: true

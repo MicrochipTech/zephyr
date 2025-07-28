@@ -152,6 +152,7 @@ enum espi_bus_event {
 enum espi_pc_event {
 	ESPI_PC_EVT_BUS_CHANNEL_READY = BIT(0),
 	ESPI_PC_EVT_BUS_MASTER_ENABLE = BIT(1),
+	ESPI_PC_EVT_BUS_PRIVATE_START = BIT(2),
 };
 
 /**
@@ -199,6 +200,8 @@ enum espi_virtual_peripheral {
 #if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD)
 	ESPI_PERIPHERAL_EC_HOST_CMD,
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+	ESPI_PERIPHERAL_COMMON_COUNT,
+	ESPI_PERIPHERAL_PRIV_START = ESPI_PERIPHERAL_COMMON_COUNT,
 };
 
 /**
@@ -319,6 +322,11 @@ enum lpc_peripheral_opcode {
 #endif /* CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE */
 };
 
+/* KBC 8042 type: Data */
+#define HOST_KBC_TYPE_DATA 0
+/* KBC 8042 type: Command */
+#define HOST_KBC_TYPE_CMD  1
+
 /* KBC 8042 event: Input Buffer Full */
 #define HOST_KBC_EVT_IBF BIT(0)
 /* KBC 8042 event: Output Buffer Empty */
@@ -332,6 +340,9 @@ struct espi_evt_data_kbc {
 	uint32_t evt:8;
 	uint32_t reserved:8;
 };
+
+#define HOST_ACPI_EC_TYPE_CMD  0
+#define HOST_ACPI_EC_TYPE_DATA 1
 
 /**
  * @brief Bit field definition of evt_data in struct espi_event for ACPI.
@@ -353,6 +364,35 @@ struct espi_event {
 	/** Data associated to the event */
 	uint32_t evt_data;
 };
+
+/* Pack 4 bytes of information into espi_event.evt_details
+ * We do not expect enum espi_virtual_peripheral to have more than 256 values.
+ * This leaves 24-bits for other information.
+ * Example 1: the ACPI specifiction allows the OS to enable a 4-byte data
+ * mode for ACPI-EC.
+ * Example 2: Port80h capture. The host OS can issue 8-bit, 16-bit, or 32-bit
+ * I/O write cycles.
+ * We can use of the evt_details bytes to specify the number of valid bytes in evt_data.
+ */
+#define ESPI_EVENT_DETAILS_PC_DEV_POS   0
+#define ESPI_EVENT_DETAILS_PC_DEV_MSK   0xff
+#define ESPI_EVENT_DETAILS_PC_CMD_POS   4 /* if data is a command this bit is set */
+#define ESPI_EVENT_DETAILS_PC_SZ_POS    8 /* size in bytes 1 to 4 */
+#define ESPI_EVENT_DETAILS_PC_SZ_MSK    0xff00
+#define ESPI_EVENT_DETAILS_PC_MISC0_POS 16
+#define ESPI_EVENT_DETAILS_PC_MISC0_MSK 0xff0000
+#define ESPI_EVENT_DETAILS_PC_MISC1_POS 24
+#define ESPI_EVENT_DETAILS_PC_MISC1_MSK 0xff000000
+
+#define ESPI_EVENT_DETAILS_PC_DEV(d)   FIELD_PREP(ESPI_EVENT_DETAILS_PC_DEV_MSK, (d))
+#define ESPI_EVENT_DETAILS_PC_SZ(sz)   FIELD_PREP(ESPI_EVENT_DETAILS_PC_SZ_MSK, (sz))
+#define ESPI_EVENT_DETAILS_PC_MISC0(m) FIELD_PREP(ESPI_EVENT_DETAILS_PC_MISC0_MSK, (m))
+#define ESPI_EVENT_DETAILS_PC_MISC1(m) FIELD_PREP(ESPI_EVENT_DETAILS_PC_MISC1_MSK, (m))
+
+#define ESPI_EVENT_DETAILS_PC_DEV_GET(d)   FIELD_GET(ESPI_EVENT_DETAILS_PC_DEV_MSK, (d))
+#define ESPI_EVENT_DETAILS_PC_SZ_SET(sz)   FIELD_GET(ESPI_EVENT_DETAILS_PC_SZ_MSK, (sz))
+#define ESPI_EVENT_DETAILS_PC_MISC0_GET(m) FIELD_GET(ESPI_EVENT_DETAILS_PC_MISC0_MSK, (m))
+#define ESPI_EVENT_DETAILS_PC_MISC1_GET(m) FIELD_GET(ESPI_EVENT_DETAILS_PC_MISC1_MSK, (m))
 
 /**
  * @brief eSPI bus configuration parameters
@@ -448,7 +488,9 @@ struct espi_callback {
  *
  * (Internal use only.)
  */
-typedef int (*espi_api_config)(const struct device *dev, struct espi_cfg *cfg);
+typedef int (*espi_api_config)(const struct device *dev, struct espi_cfg *cfg,
+			       const void *vendor_ext);
+
 typedef bool (*espi_api_get_channel_status)(const struct device *dev,
 					    enum espi_channel ch);
 /* Logical Channel 0 APIs */
@@ -549,21 +591,22 @@ __subsystem struct espi_driver_api {
  *
  * @param dev Pointer to the device structure for the driver instance.
  * @param cfg the device runtime configuration for the eSPI controller.
+ * @param vendor_ext Pointer to vendor specific eSPI configuration.
  *
  * @retval 0 If successful.
  * @retval -EIO General input / output error, failed to configure device.
  * @retval -EINVAL invalid capabilities, failed to configure device.
  * @retval -ENOTSUP capability not supported by eSPI target.
  */
-__syscall int espi_config(const struct device *dev, struct espi_cfg *cfg);
+__syscall int espi_config(const struct device *dev, struct espi_cfg *cfg, const void *vendor_ext);
 
 static inline int z_impl_espi_config(const struct device *dev,
-				     struct espi_cfg *cfg)
+				     struct espi_cfg *cfg, const void *vendor_ext)
 {
 	const struct espi_driver_api *api =
 		(const struct espi_driver_api *)dev->api;
 
-	return api->config(dev, cfg);
+	return api->config(dev, cfg, vendor_ext);
 }
 
 /**
