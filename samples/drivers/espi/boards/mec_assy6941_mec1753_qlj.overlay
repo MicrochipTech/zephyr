@@ -34,6 +34,10 @@
 	status = "okay";
 };
 
+&espi_taf0 {
+	status = "disabled";
+};
+
 &mbox0 {
        compatible = "microchip,mec5-espi-pc-mbox";
        hostinfos = <&espi_mbox0>;
@@ -62,6 +66,7 @@
 &acpi_ec0 {
 	compatible = "microchip,mec5-espi-pc-acpi_ec";
 	hostinfos = <&espi_acpi_ec0>;
+	app-id = <0>;
 	status = "okay";
 };
 
@@ -74,6 +79,7 @@
 &acpi_ec1 {
 	compatible = "microchip,mec5-espi-pc-acpi_ec";
 	hostinfos = <&espi_acpi_ec1>;
+	app-id = <1>;
 	status = "okay";
 };
 
@@ -86,6 +92,7 @@
 &acpi_ec2 {
 	compatible = "microchip,mec5-espi-pc-acpi_ec";
 	hostinfos = <&espi_acpi_ec2>;
+	app-id = <2>;
 	four-byte-data-mode;
 	status = "okay";
 };
@@ -108,6 +115,7 @@
 &emi0 {
 	compatible = "microchip,mec5-espi-pc-emi";
 	hostinfos = <&espi_emi0>;
+	app-id = <0>;
 	status = "okay";
 };
 
@@ -121,6 +129,11 @@
 	compatible = "microchip,mec5-espi-pc-uart";
 	hostinfos = <&espi_uart0>;
 	sirqs = <MCHP_ESPI_PC_SIRQ_IDX_UART0 3>;
+	/* If we want to use the external UART clock pin for this UART
+	 * use-ext-clock;
+	 *
+	 * Add &uart_clk_gpio025 to eSPI driver pinctrl-0 list above.
+	 */
 	status = "okay";
 };
 
