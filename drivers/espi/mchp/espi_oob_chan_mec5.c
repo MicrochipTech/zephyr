@@ -44,16 +44,16 @@ static uint32_t mec5_oob_get_max_payload_size(const struct device *dev)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = drvcfg->ioc_base;
-	uint32_t msize = sys_read8(iob + ESPI_CAP_OOB);
+	uint32_t msize = sys_read8(iob + MEC_ESPI_CAP_OOB_OFS);
 
-	msize = ESPI_CAP_OOB_MPLD(msize);
+	msize = MEC_ESPI_CAP_OOB_MPLD_SET(msize);
 	switch (msize) {
 	case 2u:
-		return 128u + ESPI_OOB_ADDED_SIZE;
+		return 128u + MEC_ESPI_OOB_ADDED_SIZE;
 	case 3u:
-		return 256u + ESPI_OOB_ADDED_SIZE;
+		return 256u + MEC_ESPI_OOB_ADDED_SIZE;
 	default:
-		return 64u + ESPI_OOB_ADDED_SIZE;
+		return 64u + MEC_ESPI_OOB_ADDED_SIZE;
 	}
 }
 
@@ -68,22 +68,22 @@ static void espi_mec5_oob_config(const struct device *dev)
 	mm_reg_t iob = drvcfg->ioc_base;
 	uint32_t r = 0;
 
-	sys_write32((uint32_t)data->oob_rxb, iob + ESPI_OOB_RX_BA);
+	sys_write32((uint32_t)data->oob_rxb, iob + MEC_ESPI_OOB_RX_BA_OFS);
 
 	/* set OOB RX buffer maximum size */
-	r = sys_read32(iob + ESPI_OOB_RXL);
-	r &= (uint32_t)~(ESPI_OOB_RXL_BLEN_MSK);
-	r |= ESPI_OOB_RXL_BLEN((uint32_t)drvcfg->oob_rxb_size);
-	sys_write32(r, iob + ESPI_OOB_RXL);
+	r = sys_read32(iob + MEC_ESPI_OOB_RXL_OFS);
+	r &= (uint32_t)~(MEC_ESPI_OOB_RXL_BLEN_MSK);
+	r |= MEC_ESPI_OOB_RXL_BLEN_SET((uint32_t)drvcfg->oob_rxb_size);
+	sys_write32(r, iob + MEC_ESPI_OOB_RXL_OFS);
 
 	/* set RX buffer available */
-	sys_set_bit(iob + ESPI_OOB_RX_CR, ESPI_OOB_RX_CR_SRA_POS);
+	sys_set_bit(iob + MEC_ESPI_OOB_RX_CR_OFS, MEC_ESPI_OOB_RX_CR_SRA_POS);
 
 	/* enable OOB channel RX interrupt */
-	sys_set_bit(iob + ESPI_OOB_RX_IER, ESPI_OOB_RX_IER_DONE_POS);
+	sys_set_bit(iob + MEC_ESPI_OOB_RX_IER_OFS, MEC_ESPI_OOB_RX_IER_DONE_POS);
 
 	/* Inform Host OOB channel is ready to use */
-	sys_set_bit8(iob + ESPI_OOB_READY, ESPI_CHAN_RDY_POS);
+	sys_set_bit8(iob + MEC_ESPI_OOB_RDY_OFS, MEC_ESPI_CHAN_RDY_POS);
 }
 
 /* OOB channel upstream data transfer (Target to Host) and OOB channel enable change */
@@ -97,19 +97,19 @@ static void espi_mec5_oob_up_isr(const struct device *dev)
 		.evt_details = ESPI_CHANNEL_OOB,
 		.evt_data = 0,
 	};
-	uint32_t oob_tx_sts = sys_read32(iob + ESPI_OOB_TX_SR);
+	uint32_t oob_tx_sts = sys_read32(iob + MEC_ESPI_OOB_TX_SR_OFS);
 
-	sys_write32(oob_tx_sts, iob + ESPI_OOB_TX_SR);
-	sys_write32(BIT(ESPI_GIRQ_OOB_UP_POS), ESPI_GIRQ_STS_ADDR);
+	sys_write32(oob_tx_sts, iob + MEC_ESPI_OOB_TX_SR_OFS);
+	sys_write32(BIT(MEC_ESPI_GIRQ_OOB_UP_POS), MEC_ESPI_GIRQ_STS_ADDR);
 
 	data->oob_tx_status = oob_tx_sts;
 
-	if (oob_tx_sts & BIT(ESPI_OOB_TX_SR_DONE_POS)) {
+	if (oob_tx_sts & BIT(MEC_ESPI_OOB_TX_SR_DONE_POS)) {
 		k_sem_give(&data->oob_tx_sync);
 	}
 
-	if (oob_tx_sts & BIT(ESPI_OOB_TX_SR_CENC_POS)) {
-		if (oob_tx_sts & BIT(ESPI_OOB_TX_SR_CHEN_POS)) { /* channel was enabled? */
+	if (oob_tx_sts & BIT(MEC_ESPI_OOB_TX_SR_CENC_POS)) {
+		if (oob_tx_sts & BIT(MEC_ESPI_OOB_TX_SR_CHEN_POS)) { /* channel was enabled? */
 			espi_mec5_oob_config(dev);
 			evt.evt_data = 1;
 		} else {
@@ -131,14 +131,14 @@ static void espi_mec5_oob_dn_isr(const struct device *dev)
 	struct espi_event evt = {
 		.evt_type = ESPI_BUS_EVENT_OOB_RECEIVED, .evt_details = 0, .evt_data = 0};
 #endif
-	uint32_t oob_rx_sts = sys_read32(iob + ESPI_OOB_RX_SR);
+	uint32_t oob_rx_sts = sys_read32(iob + MEC_ESPI_OOB_RX_SR_OFS);
 
-	sys_write32(oob_rx_sts, iob + ESPI_OOB_RX_SR);
-	sys_write32(BIT(ESPI_GIRQ_OOB_DN_POS), ESPI_GIRQ_STS_ADDR);
+	sys_write32(oob_rx_sts, iob + MEC_ESPI_OOB_RX_SR_OFS);
+	sys_write32(BIT(MEC_ESPI_GIRQ_OOB_DN_POS), MEC_ESPI_GIRQ_STS_ADDR);
 
 	data->oob_rx_status = oob_rx_sts;
 
-	if (oob_rx_sts & BIT(ESPI_OOB_RX_SR_DONE_POS)) {
+	if (oob_rx_sts & BIT(MEC_ESPI_OOB_RX_SR_DONE_POS)) {
 #ifdef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
 		evt.evt_details = mec_hal_espi_oob_received_len(iob);
 		espi_send_callbacks(&data->callbacks, dev, evt);
@@ -150,7 +150,7 @@ static void espi_mec5_oob_dn_isr(const struct device *dev)
 
 void espi_mec5_oob_irq_connect(const struct device *dev)
 {
-	uint32_t oob_ien_msk = BIT(ESPI_GIRQ_OOB_UP_POS) | BIT(ESPI_GIRQ_OOB_DN_POS);
+	uint32_t oob_ien_msk = BIT(MEC_ESPI_GIRQ_OOB_UP_POS) | BIT(MEC_ESPI_GIRQ_OOB_DN_POS);
 
 	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(0, oob_up, irq), DT_INST_IRQ_BY_NAME(0, oob_up, priority),
 		    espi_mec5_oob_up_isr, DEVICE_DT_INST_GET(0), 0);
@@ -160,7 +160,7 @@ void espi_mec5_oob_irq_connect(const struct device *dev)
 		    espi_mec5_oob_dn_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, oob_dn, irq));
 
-	sys_write32(oob_ien_msk, ESPI_GIRQ_ENSET_ADDR);
+	sys_write32(oob_ien_msk, MEC_ESPI_GIRQ_ENSET_ADDR);
 }
 
 /* Called by core driver nESPI_RESET handler.
@@ -172,7 +172,7 @@ void espi_mec5_oob_erst_config(const struct device *dev, uint8_t n_erst_state)
 	mm_reg_t iob = drvcfg->ioc_base;
 
 	if (n_erst_state != 0) {
-		sys_write32(iob + ESPI_OOB_TX_IER, BIT(ESPI_OOB_TX_IER_CENC_POS));
+		sys_write32(iob + MEC_ESPI_OOB_TX_IER_OFS, BIT(MEC_ESPI_OOB_TX_IER_CENC_POS));
 	}
 }
 
@@ -193,31 +193,31 @@ int espi_mec5_send_oob_api(const struct device *dev, struct espi_oob_packet *pck
 		return 0;
 	}
 
-	if (sys_test_bit8(iob + ESPI_OOB_READY, ESPI_CHAN_RDY_POS) == 0) {
+	if (sys_test_bit8(iob + MEC_ESPI_OOB_RDY_OFS, MEC_ESPI_CHAN_RDY_POS) == 0) {
 		return -EIO; /* OOB channel not ready */
 	}
 
-	status = sys_read32(iob + ESPI_OOB_TX_SR);
-	if ((status & BIT(ESPI_OOB_TX_SR_BUSY_POS)) != 0) {
+	status = sys_read32(iob + MEC_ESPI_OOB_TX_SR_OFS);
+	if ((status & BIT(MEC_ESPI_OOB_TX_SR_BUSY_POS)) != 0) {
 		return -EBUSY;
 	}
 
-	sys_write32(iob + ESPI_OOB_TX_SR, status);
-	sys_write32(iob + ESPI_OOB_TX_BA, (uint32_t)pckt->buf);
-	sys_write32(iob + ESPI_OOB_TX_LEN, pckt->len);
-	sys_set_bit(iob + ESPI_OOB_TX_IER, ESPI_OOB_TX_IER_DONE_POS);
-	sys_write32(iob + ESPI_OOB_TX_CR,
-		    (ESPI_OOB_TX_TAG(OOB_TARGET_TAG_NUM) | BIT(ESPI_OOB_TX_CR_START_POS)));
+	sys_write32(iob + MEC_ESPI_OOB_TX_SR_OFS, status);
+	sys_write32(iob + MEC_ESPI_OOB_TX_BA_OFS, (uint32_t)pckt->buf);
+	sys_write32(iob + MEC_ESPI_OOB_TXL_OFS, pckt->len);
+	sys_set_bit(iob + MEC_ESPI_OOB_TX_IER_OFS, MEC_ESPI_OOB_TX_IER_DONE_POS);
+	sys_write32(iob + MEC_ESPI_OOB_TX_CR_OFS,
+		    (MEC_ESPI_OOB_TX_TAG_SET(OOB_TARGET_TAG_NUM) | BIT(MEC_ESPI_OOB_TX_CR_START_POS)));
 
 	rc = k_sem_take(&data->oob_tx_sync, K_MSEC(OOB_TX_MAX_TIMEOUT_MS));
 	if (rc == -EAGAIN) {
-		status = sys_read32(iob + ESPI_OOB_TX_SR);
-		sys_write32(iob + ESPI_OOB_TX_SR, UINT32_MAX);
+		status = sys_read32(iob + MEC_ESPI_OOB_TX_SR_OFS);
+		sys_write32(iob + MEC_ESPI_OOB_TX_SR_OFS, UINT32_MAX);
 		LOG_ERR("TX failed: HW status 0x%0x", status);
 		return -EIO;
 	}
 
-	if ((data->oob_tx_status & OOB_TX_ANY_ERROR) != 0) {
+	if ((data->oob_tx_status & MEC_ESPI_OOB_TX_SR_ALL_ERR_MSK) != 0) {
 		return -EIO;
 	}
 
@@ -231,23 +231,23 @@ static void espi_mec5_oob_rx_prep(const struct device *dev)
 	mm_reg_t iob = drvcfg->ioc_base;
 	uint32_t r = 0;
 
-	sys_clear_bit(iob + ESPI_OOB_RX_IER, ESPI_OOB_RX_IER_DONE_POS);
-	sys_clear_bit(iob + ESPI_OOB_RX_CR, ESPI_OOB_RX_CR_SRA_POS);
-	sys_write32(UINT32_MAX, iob + ESPI_OOB_RX_SR);
+	sys_clear_bit(iob + MEC_ESPI_OOB_RX_IER_OFS, MEC_ESPI_OOB_RX_IER_DONE_POS);
+	sys_clear_bit(iob + MEC_ESPI_OOB_RX_CR_OFS, MEC_ESPI_OOB_RX_CR_SRA_POS);
+	sys_write32(UINT32_MAX, iob + MEC_ESPI_OOB_RX_SR_OFS);
 
 	memset(data->oob_rxb, 0, drvcfg->oob_rxb_size);
 
-	sys_write32((uint32_t)data->oob_rxb, iob + ESPI_OOB_RX_BA);
-	r = sys_read32(iob + ESPI_OOB_RXL);
-	r &= (uint32_t)~(ESPI_OOB_RXL_BLEN_MSK);
-	r |= ESPI_OOB_RXL_BLEN((uint32_t)drvcfg->oob_rxb_size);
-	sys_write32(r, iob + ESPI_OOB_RXL);
+	sys_write32((uint32_t)data->oob_rxb, iob + MEC_ESPI_OOB_RX_BA_OFS);
+	r = sys_read32(iob + MEC_ESPI_OOB_RXL_OFS);
+	r &= (uint32_t)~(MEC_ESPI_OOB_RXL_BLEN_MSK);
+	r |= MEC_ESPI_OOB_RXL_BLEN_SET((uint32_t)drvcfg->oob_rxb_size);
+	sys_write32(r, iob + MEC_ESPI_OOB_RXL_OFS);
 
 	/* enable OOB channel RX interrupt */
-	sys_set_bit(iob + ESPI_OOB_RX_IER, ESPI_OOB_RX_IER_DONE_POS);
+	sys_set_bit(iob + MEC_ESPI_OOB_RX_IER_OFS, MEC_ESPI_OOB_RX_IER_DONE_POS);
 
 	/* set RX buffer available */
-	sys_set_bit(iob + ESPI_OOB_RX_CR, ESPI_OOB_RX_CR_SRA_POS);
+	sys_set_bit(iob + MEC_ESPI_OOB_RX_CR_OFS, MEC_ESPI_OOB_RX_CR_SRA_POS);
 }
 
 int espi_mec5_recv_oob_api(const struct device *dev, struct espi_oob_packet *pckt)
@@ -261,8 +261,8 @@ int espi_mec5_recv_oob_api(const struct device *dev, struct espi_oob_packet *pck
 		return -EINVAL;
 	}
 
-	status = sys_read32(iob + ESPI_OOB_RX_SR);
-	if (status & OOB_RX_ANY_ERROR) {
+	status = sys_read32(iob + MEC_ESPI_OOB_RX_SR_OFS);
+	if (status & MEC_ESPI_OOB_RX_SR_ALL_ERR_MSK) {
 		LOG_ERR("RX error 0x%0x", status);
 		return -EIO;
 	}
@@ -274,7 +274,7 @@ int espi_mec5_recv_oob_api(const struct device *dev, struct espi_oob_packet *pck
 		return -ETIMEDOUT;
 	}
 #endif
-	if (data->oob_rx_status & OOB_RX_ANY_ERROR) {
+	if (data->oob_rx_status & MEC_ESPI_OOB_RX_SR_ALL_ERR_MSK) {
 		LOG_ERR("RX error 0x%0x", data->oob_rx_status);
 		data->oob_rx_status = 0;
 		espi_mec5_oob_rx_prep(dev);

@@ -28,6 +28,8 @@ LOG_MODULE_REGISTER(espi, CONFIG_ESPI_LOG_LEVEL);
 #include "espi_mchp_mec5.h"
 #include "mchp/espi_mchp_regs.h"
 
+// espi_alert_od_capable
+
 /* If SoC was configured for Boot-ROM to load Zephyr application from
  * eSPI CAF then the eSPI link is up and Host has enabled VW channel.
  */
@@ -36,8 +38,8 @@ static bool is_espi_bootrom_config(const struct device *dev)
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = (mm_reg_t)drvcfg->ioc_base;
 
-	if ((sys_test_bit8(iob + ESPI_ACTV, ESPI_ACTV_EN_POS) != 0) &&
-	    (sys_test_bit8(iob + ESPI_VW_READY, ESPI_CHAN_RDY_POS) != 0)) {
+	if ((sys_test_bit8(iob + MEC_ESPI_ACTV_OFS, MEC_ESPI_ACTV_EN_POS) != 0) &&
+	    (sys_test_bit8(iob + MEC_ESPI_VW_RDY_OFS, MEC_ESPI_CHAN_RDY_POS) != 0)) {
 		return true;
 	}
 
@@ -53,9 +55,9 @@ static void espi_mec5_ereset_isr(const struct device *dev)
 	struct espi_event evt = {ESPI_BUS_RESET, 0, 0};
 	uint8_t erst_sts = 0, n_erst_state = 0;
 
-	erst_sts = sys_read8(iob + ESPI_RESET_SR);
-	sys_write8(iob + ESPI_RESET_SR, erst_sts);
-	n_erst_state = (erst_sts >> ESPI_RESET_SR_STATE_POS) & BIT(0);
+	erst_sts = sys_read8(iob + MEC_ESPI_RESET_SR_OFS);
+	sys_write8(iob + MEC_ESPI_RESET_SR_OFS, erst_sts);
+	n_erst_state = (erst_sts >> MEC_ESPI_RESET_SR_STATE_POS) & BIT(0);
 	evt.evt_data = n_erst_state;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
@@ -86,29 +88,32 @@ struct espi_iom_enc {
 };
 
 const struct espi_iom_enc espi_iom_enc_tbl[] = {
-	{.iom = ESPI_IO_MODE_SINGLE_LINE, .iom_enc = ESPI_GC_CAP1_IOM_S_VAL},
+	{
+		.iom = ESPI_IO_MODE_SINGLE_LINE,
+		.iom_enc = MEC_ESPI_CAP1_IOM_S_VAL
+	},
 	{
 		.iom = ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_DUAL_LINES,
-		.iom_enc = ESPI_GC_CAP1_IOM_SD_VAL,
+		.iom_enc = MEC_ESPI_CAP1_IOM_SD_VAL,
 	},
 	{
 		.iom = ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_QUAD_LINES,
-		.iom_enc = ESPI_GC_CAP1_IOM_SQ_VAL,
+		.iom_enc = MEC_ESPI_CAP1_IOM_SQ_VAL,
 	},
 	{
 		.iom = ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_DUAL_LINES | ESPI_IO_MODE_QUAD_LINES,
-		.iom_enc = ESPI_GC_CAP1_IOM_SDQ_VAL,
+		.iom_enc = MEC_ESPI_CAP1_IOM_SDQ_VAL,
 	},
 };
 
-static uint32_t espi_mec5_encode_io_mode(enum espi_io_mode mode)
+static uint8_t espi_mec5_encode_io_mode(enum espi_io_mode mode)
 {
-	uint32_t iom_enc = UINT32_MAX;
+	uint8_t iom_enc = UINT8_MAX;
 
 	for (size_t n = 0; n < ARRAY_SIZE(espi_iom_enc_tbl); n++) {
 		if (mode == espi_iom_enc_tbl[n].iom) {
 			iom_enc = espi_iom_enc_tbl[n].iom_enc;
-			iom_enc <<= ESPI_GC_CAP1_IOM_POS;
+			iom_enc <<= MEC_ESPI_CAP1_IOM_POS;
 			break;
 		}
 	}
@@ -116,81 +121,92 @@ static uint32_t espi_mec5_encode_io_mode(enum espi_io_mode mode)
 	return iom_enc;
 }
 
-static uint32_t espi_mec5_encode_channel_support(enum espi_channel channels)
+static uint8_t espi_mec5_encode_channel_support(enum espi_channel channels)
 {
 	uint32_t chan_enc = 0;
 
 	if ((channels & ESPI_CHANNEL_PERIPHERAL) != 0) {
-		chan_enc |= BIT(ESPI_GC_CAP0_PC_SUPP_POS);
+		chan_enc |= BIT(MEC_ESPI_CAP0_PC_SUPP_POS);
 	}
 
 	if ((channels & ESPI_CHANNEL_VWIRE) != 0) {
-		chan_enc |= BIT(ESPI_GC_CAP0_VW_SUPP_POS);
+		chan_enc |= BIT(MEC_ESPI_CAP0_VW_SUPP_POS);
 	}
 
 	if ((channels & ESPI_CHANNEL_OOB) != 0) {
-		chan_enc |= BIT(ESPI_GC_CAP0_OOB_SUPP_POS);
+		chan_enc |= BIT(MEC_ESPI_CAP0_OOB_SUPP_POS);
 	}
 
 	if ((channels & ESPI_CHANNEL_FLASH) != 0) {
-		chan_enc |= BIT(ESPI_GC_CAP0_FC_SUPP_POS);
+		chan_enc |= BIT(MEC_ESPI_CAP0_FC_SUPP_POS);
 	}
 
 	return chan_enc;
 }
 
-static uint32_t espi_mec5_encode_max_freq(uint8_t max_freq_mhz)
+static uint8_t espi_mec5_encode_max_freq(uint8_t max_freq_mhz)
 {
 	uint32_t encf = 0;
 
 	switch (max_freq_mhz) {
 	case 25u:
-		encf = ESPI_GC_CAP1_MAX_FREQ_25M;
+		encf = MEC_ESPI_CAP1_MAX_FREQ_25M;
 		break;
 	case 33u:
-		encf = ESPI_GC_CAP1_MAX_FREQ_33M;
+		encf = MEC_ESPI_CAP1_MAX_FREQ_33M;
 		break;
 	case 50u:
-		encf = ESPI_GC_CAP1_MAX_FREQ_50M;
+		encf = MEC_ESPI_CAP1_MAX_FREQ_50M;
 		break;
 	case 66u:
-		encf = ESPI_GC_CAP1_MAX_FREQ_66M;
+		encf = MEC_ESPI_CAP1_MAX_FREQ_66M;
 		break;
 	default:
-		encf = ESPI_GC_CAP1_MAX_FREQ_20M;
+		encf = MEC_ESPI_CAP1_MAX_FREQ_20M;
 		break;
 	}
 
 	return encf;
 }
 
-static int espi_mec5_config_api(const struct device *dev, struct espi_cfg *cfg)
+static int espi_mec5_config_api(const struct device *dev, struct espi_cfg *cfg,
+				const void *vend_ext)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iob = (mm_reg_t)drvcfg->ioc_base;
-	uint32_t caps = 0, temp = 0;
+	uint8_t cap0 = 0, cap1 = 0;
 
 	if (cfg == NULL) {
 		return -EINVAL;
 	}
 
-	caps = espi_mec5_encode_max_freq(cfg->max_freq);
-	caps |= espi_mec5_encode_channel_support(cfg->channel_caps);
-	temp = espi_mec5_encode_io_mode(cfg->io_caps);
-	if (temp == UINT32_MAX) {
+	cap0 = espi_mec5_encode_channel_support(cfg->channel_caps);
+	sys_write8(cap0, iob + MEC_ESPI_CAP0_OFS);
+
+	cap1 = espi_mec5_encode_io_mode(cfg->io_caps);
+	if (cap1 == UINT8_MAX) {
 		return -EINVAL;
 	}
 
-	caps |= temp;
+	cap1 |= espi_mec5_encode_max_freq(cfg->max_freq);
 
-	temp = sys_read32(iob + ESPI_GC);
-	temp &= (uint32_t)~(ESPI_GC_CAP0_SUPP_MSK | ESPI_GC_CAP1_MAX_FREQ_MSK |
-			    ESPI_GC_CAP1_IOM_MSK);
-	temp |= caps;
-	sys_write32(caps, iob + ESPI_GC);
+	if ((drvcfg->flags & MEC5_ESPI_DCFG_FLAG_OD_CAP) != 0) {
+		cap1 |= MEC_BIT(MEC_ESPI_CAP1_ALERT_OD_CAP_POS);
+	}
 
+	sys_write8(cap1, iob + MEC_ESPI_CAP1_OFS);
+
+#if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
+	if ((cfg->channel_caps & ESPI_CHANNEL_PERIPHERAL) != 0) {
+		int rc = espi_mec5_pc_config(dev, vend_ext);
+
+		if (rc != 0) {
+			return rc;
+		}
+	}
+#endif
 	/* activate eSPI device */
-	sys_set_bit8(iob + ESPI_ACTV, ESPI_ACTV_EN_POS);
+	sys_set_bit8(iob + MEC_ESPI_ACTV_OFS, MEC_ESPI_ACTV_EN_POS);
 
 	return 0;
 }
@@ -202,18 +218,18 @@ static bool espi_mec5_get_chan_status_api(const struct device *dev, enum espi_ch
 	uint32_t ofs = 0;
 
 	if (ch == ESPI_CHANNEL_PERIPHERAL) {
-		ofs = ESPI_PC_READY;
+		ofs = MEC_ESPI_PC_RDY_OFS;
 	} else if (ch == ESPI_CHANNEL_VWIRE) {
-		ofs = ESPI_VW_READY;
+		ofs = MEC_ESPI_VW_RDY_OFS;
 	} else if (ch == ESPI_CHANNEL_OOB) {
-		ofs = ESPI_OOB_READY;
+		ofs = MEC_ESPI_OOB_RDY_OFS;
 	} else if (ch == ESPI_CHANNEL_FLASH) {
-		ofs = ESPI_FC_READY;
+		ofs = MEC_ESPI_FC_RDY_OFS;
 	} else {
 		return false;
 	}
 
-	if (sys_test_bit8(iob + ofs, ESPI_CHAN_RDY_POS)) {
+	if (sys_test_bit8(iob + ofs, MEC_ESPI_CHAN_RDY_POS)) {
 		return true;
 	}
 
@@ -302,7 +318,7 @@ static DEVICE_API(espi, espi_mec5_driver_api) = {
 		    DT_INST_IRQ_BY_NAME(inst, erst, priority), espi_mec5_ereset_isr,               \
 		    DEVICE_DT_INST_GET(inst), 0);                                                  \
 	irq_enable(DT_INST_IRQ_BY_NAME(inst, erst, irq));                                          \
-	sys_write32(BIT(ESPI_GIRQ_ERST_POS), ESPI_GIRQ_ENSET_ADDR);
+	sys_write32(BIT(MEC_ESPI_GIRQ_ERST_POS), MEC_ESPI_GIRQ_ENSET_ADDR);
 
 #ifdef CONFIG_ESPI_VWIRE_CHANNEL
 #define MEC5_ESPI_VW_IRQ_CONNECT(dev) espi_mec5_vw_irq_connect(dev);
@@ -312,8 +328,12 @@ static DEVICE_API(espi, espi_mec5_driver_api) = {
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
 #define MEC5_ESPI_PC_IRQ_CONNECT(dev) espi_mec5_pc_irq_connect(dev);
+#define MEC5_ESPI_PC_DCFG(inst)                                                                    \
+	.mem_bar_msw = (uint16_t)DT_INST_PROP_OR(inst, host_memmap_addr_high, 0),                  \
+	.sram_bar_msw = (uint16_t)DT_INST_PROP_OR(inst, sram_bar_addr_high, 0),
 #else
 #define MEC5_ESPI_PC_IRQ_CONNECT(dev)
+#define MEC5_ESPI_PC_DCFG(inst)
 #endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
 #ifdef CONFIG_ESPI_OOB_CHANNEL
@@ -342,6 +362,9 @@ static DEVICE_API(espi, espi_mec5_driver_api) = {
 #define MEC5_ESPI_FLASH_DATA_INIT(int)
 #endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
+#define MEC5_ESPI_FLAGS_DCFG(inst) \
+	COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, espi_alert_od_capable), (0x1u), (0))
+
 #define MEC5_ESPI_DEVICE(inst)                                                                     \
 	PINCTRL_DT_INST_DEFINE(inst);                                                              \
 	static void espi_mec5_irq_config_##inst(const struct device *dev)                          \
@@ -363,6 +386,8 @@ static DEVICE_API(espi, espi_mec5_driver_api) = {
 		.vwc_base = DT_INST_REG_ADDR_BY_NAME(inst, vw),                                    \
 		.irq_config = espi_mec5_irq_config_##inst,                                         \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                      \
+		.flags = MEC5_ESPI_FLAGS_DCFG(inst),                                               \
+		MEC5_ESPI_PC_DCFG(inst)                                                            \
 		MEC5_ESPI_OOB_DCFG(inst)};                                                         \
 	PM_DEVICE_DT_INST_DEFINE(inst, espi_mec5_pm_action);                                       \
 	DEVICE_DT_INST_DEFINE(inst, &espi_mec5_driver_init, PM_DEVICE_DT_INST_GET(inst),           \

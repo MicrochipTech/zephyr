@@ -17,6 +17,18 @@ config ESPI_OOB_CHANNEL
 config ESPI_FLASH_CHANNEL
 	default y
 
+config ESPI_PERIPHERAL_ZEPHYR_MBOX
+       bool "Use Zephyr MEC mbox driver for PC devices"
+       default n
+       depends on ESPI_PERIPHERAL_CHANNEL
+       help
+         Use a Zephyr mbox driver for MEC eSPI peripheral
+	 channel devices. If enabled, the eSPI driver will
+	 only configure peripheral channel BARs. The mbox
+	 driver will be responsible for sub-device interrupts
+	 and data flow. The application will use the Zephyr
+	 mbox driver API's for the sub-devices.
+
 config ESPI_VWIRE_SEND_TIMEOUT
        int "eSPI send VWire to host timeout in microseconds"
        default 1000
@@ -59,5 +71,23 @@ config ESPI_FLASH_TIMEOUT_MS
        help
          Driver timeout for eSPI flash channel read, write, and erase
 	 operations. Value is in milliseconds.
+
+if ESPI_PERIPHERAL_CHANNEL
+
+config ESPI_MEC5_ACPI_EC
+	bool "Microchip MEC5 eSPI peripheral channel ACPI_EC driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_ESPI_PC_ACPI_EC_ENABLED
+	help
+	  Enable the driver for ACPI-EC on eSPI bus peripheral channel
+
+config ESPI_MEC5_EMI
+	bool "Microchip MEC5 eSPI peripheral channel EMI driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC5_ESPI_PC_EMI_ENABLED
+	help
+	  Enable the driver for EMI on eSPI bus peripheral channel
+
+endif # ESPI_PERIPHERAL_CHANNEL
 
 endif # ESPI_MCHP_MEC5
