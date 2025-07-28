@@ -47,7 +47,7 @@ struct mec5_mbox_data {
 	uint8_t host_to_ec;
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
 	mchp_espi_pc_mbox_callback_t cb;
-	void *cb_data;
+	void *user_data;
 #endif
 };
 
@@ -107,20 +107,25 @@ static void mec5_mbox_isr(const struct device *dev)
 	const struct mec5_mbox_devcfg *const devcfg = dev->config;
 	struct mec_mbox_regs *const regs = devcfg->regs;
 	struct mec5_mbox_data *data = dev->data;
+	uint32_t mbox_info = 0;
 
 	data->isr_count++;
 
-	mec_hal_mbox_get_host_to_ec(regs, &data->host_to_ec);
+	mbox_info = regs->H2EC;
+	mbox_info <<= 8;
+	mbox_info = regs->HINDEX;
 
 	LOG_DBG("ISR: MBOX: h2ec = 0x%02x", data->host_to_ec);
 
 #ifdef ESPI_MEC5_MAILBOX_CALLBACK
-	/* TODO */
+	if (data->cb) {
+		data->cb(dev, mbox_info, cb->user_data);
+	}
 #else
 	struct espi_event evt = {
 		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
 		.evt_details = ESPI_PERIPHERAL_HOST_MAILBOX,
-		.evt_data = data->host_to_ec,
+		.evt_data = mbox_info,
 	};
 
 	espi_mec5_send_callbacks(devcfg->parent, evt);
