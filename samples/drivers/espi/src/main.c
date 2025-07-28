@@ -13,6 +13,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/tracing/tracing.h>
 /* OOB operations will be attempted regardless of channel enabled or not */
 #include "espi_oob_handler.h"
 
@@ -879,7 +880,7 @@ int espi_init(void)
 	cfg.max_freq = ESPI_FREQ_25MHZ;
 #endif
 
-	ret = espi_config(espi_dev, &cfg);
+	ret = espi_config(espi_dev, &cfg, NULL);
 	if (ret) {
 		LOG_ERR("Failed to configure eSPI target channels:%x err: %d", cfg.channel_caps,
 			ret);
@@ -1339,6 +1340,7 @@ int espi_test(void)
 
 int main(void)
 {
+	LOG_INF("eSPI driver sample");
 	espi_test();
 	return 0;
 }
