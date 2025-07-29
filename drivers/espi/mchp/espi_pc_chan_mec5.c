@@ -33,8 +33,10 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 #include "espi_mchp_pcd_regs.h"
 
 /* -------- Peripheral Channel -------- */
+
+#define MEC_ESPI_PC_MAX_SIRQ_PER_DEV	2
+
 #define PC_MBOX0_NODE DT_NODELABEL(mbox0)
-#define PC_KBC0_NODE  DT_NODELABEL(kbc0)
 #define PC_AEC0_NODE  DT_NODELABEL(acpi_ec0)
 #define PC_AEC1_NODE  DT_NODELABEL(acpi_ec1)
 #define PC_AEC2_NODE  DT_NODELABEL(acpi_ec2)
@@ -45,10 +47,6 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 #define PC_EMI1_NODE  DT_NODELABEL(emi1)
 #define PC_EMI2_NODE  DT_NODELABEL(emi2)
 #define PC_BDP0_NODE  DT_NODELABEL(p80bd0)
-#define PC_UART0_NODE DT_NODELABEL(uart0)
-#define PC_UART1_NODE DT_NODELABEL(uart1)
-#define PC_UART2_NODE DT_NODELABEL(uart2)
-#define PC_UART3_NODE DT_NODELABLE(uart3)
 
 #define ESPI_MEC5_NID DT_NODELABEL(espi0)
 #define ESPI_MEC5_PC_DEV_PATH DT_PATH(mchp_mec5_espi_pc_host_dev)
@@ -59,13 +57,12 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
 struct espi_mec5_pc_hi {
 	uint32_t haddr_lsw;
-	uint8_t sirq0_idx;
-	uint8_t sirq0_slot;
-	uint8_t sirq1_idx;
-	uint8_t sirq1_slot;
 	uint8_t ldn;
-	uint8_t flags;
-	uint8_t rsvd[2];
+	uint8_t iob_cfg_idx;
+	uint8_t memb_cfg_idx;
+	uint8_t nsirqs;
+	uint8_t sirq_cfgs[MEC_ESPI_PC_MAX_SIRQ_PER_DEV];
+	uint8_t sirq_vals[MEC_ESPI_PC_MAX_SIRQ_PER_DEV];
 };
 
 struct espi_mec_pc_sram_bar {
@@ -88,13 +85,9 @@ struct espi_mec5_pc_device {
 	uint8_t girqs[MEC5_PC_DEV_MAX_NIRQ * 2]; /* array of (girq num, bit pos) */
 };
 
-#define MEC5_PC_DEV_FLAG_HAS_SIRQ BIT(4)
-
-#define MEC5_PC_DEV_FLAGS(nid)                                                                     \
-	COND_CODE_1(DT_NODE_HAS_PROP(nid, sirqs), (MEC5_PC_DEV_FLAG_HAS_SIRQ), (0))
-
 #define MEC5_PC_DEV_NUM_IRQS(nid) \
-	COND_CODE_1(DT_NODE_HAS_PROP(nid, interrupt_names), (DT_PROP_LEN(nid, interrupt_names)), (1u))
+	COND_CODE_1(DT_NODE_HAS_PROP(nid, interrupt_names), \
+		   (DT_PROP_LEN(nid, interrupt_names)), (1u))
 
 #define MEC5_PC_DEV_IRQN_ELEM(nid, prop, idx) DT_IRQ_BY_IDX(nid, idx, irq),
 #define MEC5_PC_DEV_IRQP_ELEM(nid, prop, idx) DT_IRQ_BY_IDX(nid, idx, priority),
@@ -127,19 +120,32 @@ struct espi_mec5_pc_device {
 
 #define MEC5_PC_DEV(nid) COND_CODE_1(DT_NODE_HAS_PROP(nid, hostinfos), (MEC5_PC_DEV_WITH_HI(nid)), ())
 
-/* nid = node ID, i in [0, 1] */
-#define MEC5_PC_SIRQ_VAL(nid, i) DT_PROP_BY_IDX(nid, sirqs, i)
+#define MEC_ESPI_PC_NSIRQS_VAL(nid) DT_PROP_LEN(nid, sirq_config_indexes)
 
-#define MEC5_PC_SIRQ(nid, i)                                                                       \
-	COND_CODE_1(DT_NODE_HAS_PROP(nid, sirqs), (MEC5_PC_SIRQ_VAL(nid, i)), (0xffu))
+#define MEC_ESPI_PC_NSIRQS(nid) \
+	COND_CODE_1(DT_NODE_HAS_PROP(nid, sirq_config_indexes), (MEC_ESPI_PC_NSIRQS_VAL(nid)), (0))
+
+#define MEC5_PC_SIRQ_VAL(nid, prop, i) \
+	COND_CODE_1(DT_PROP_HAS_IDX(nid, prop, i), (DT_PROP_BY_IDX(nid, prop, i)), (0))
+
+#define MEC5_PC_SIRQ(n, prop, i) \
+	COND_CODE_1(DT_NODE_HAS_PROP(n, prop), (MEC5_PC_SIRQ_VAL(n, prop, i)), (0))
+
+
+
+// DT_PROP_HAS_IDX(node_id, prop, idx)
 
 #define ESPI_MEC5_PC_DEV_BAR_SIRQ(node_id)                                                         \
 	{                                                                                          \
 		.haddr_lsw = DT_PROP(node_id, host_address),                                       \
 		.ldn = DT_PROP(node_id, ldn),                                                      \
-		.sirq0_slot = MEC5_PC_SIRQ(node_id, 0),                                            \
-		.sirq1_slot = MEC5_PC_SIRQ(node_id, 1),                                            \
-		.flags = MEC5_PC_DEV_FLAGS(nid),                                                   \
+		.iob_cfg_idx = DT_PROP(node_id, host_io_config_index),                             \
+		.memb_cfg_idx = DT_PROP(node_id, host_mem_config_index),                           \
+		.nsirqs = MEC_ESPI_PC_NSIRQS(node_id), \
+		.sirq_cfgs = { MEC5_PC_SIRQ(node_id, sirq_config_indexes, 0), \
+				MEC5_PC_SIRQ(node_id, sirq_config_indexes, 1), \
+		}, \
+		.sirq_vals = { MEC5_PC_SIRQ(node_id, sirqs, 0), MEC5_PC_SIRQ(node_id, sirqs, 1) }, \
 	},
 
 #define MEC5_PC_SRAM_BAR(nid) \
@@ -174,18 +180,35 @@ static int mec5_pc_config_bars(const struct device *dev)
 	const struct espi_mec5_drv_cfg *devcfg = dev->config;
 	mm_reg_t ioregb = devcfg->ioc_base;
 	mm_reg_t memregb = devcfg->memc_base;
-	int ret = 0;
+	uint32_t ofs = 0, val = 0;
+
+	/* Extended Host memory BAR register: host address b[47:32] */
+	sys_write32(devcfg->mem_bar_msw, memregb + MEC_ESPI_MC_MBAR_HA_EXT);
 
 	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_pc_hitbl); n++) {
 		const struct espi_mec5_pc_hi *p = &espi_mec5_pc_hitbl[n];
 
-		if (p->haddr_lsw > UINT16_MAX) {
-			LOG_DBG("LDN[%u] MBAR = 0x%0x", p->ldn, p->haddr_lsw);
-			ret = mec_hal_espi_mbar_cfg(memregb, p->ldn, p->haddr_lsw, 1u);
-		} else {
-			LOG_DBG("LDN[%u] IOBAR = 0x%0x", p->ldn, p->haddr_lsw);
-			ret = mec_hal_espi_iobar_cfg(ioregb, p->ldn,
-						     (uint16_t)p->haddr_lsw & UINT16_MAX, 1);
+		if (p->haddr_lsw > UINT16_MAX) { /* Program logical device memory bar */
+			LOG_DBG("LDN[%u] MBAR @ 0x%02x = 0x%0x", p->ldn, p->memb_cfg_idx,
+				p->haddr_lsw);
+
+			ofs = MEC_ESPI_MEMB_HOST_OFS(p->iob_cfg_idx);
+			val = MEC_ESPI_IOB_HOST_HADDR_SET(p->haddr_lsw);
+
+			sys_write16(0, memregb + ofs); /* disable */
+			sys_write16(val, memregb + ofs + 2u); /* host addr bits[15:0] */
+			sys_write16((val >> 16), memregb + ofs + 4u); /* host addr bits[31:16] */
+			sys_write16(BIT(MEC_ESPI_MC_BAR_CFG_VAL_POS), memregb + ofs); /* enable */
+
+		} else { /* program logical device I/O bar */
+			LOG_DBG("LDN[%u] IOBAR @ 0x%02x = 0x%0x", p->ldn, p->iob_cfg_idx,
+				p->haddr_lsw);
+
+			ofs = MEC_ESPI_IOB_HOST_OFS(p->iob_cfg_idx);
+			sys_write32(0, ioregb + ofs); /* clear and disable */
+			val = MEC_ESPI_IOB_HOST_HADDR_SET(p->haddr_lsw);
+			val |= BIT(MEC_ESPI_IOB_HOST_VALID_POS);
+			sys_write32(val, ioregb + ofs);
 		}
 	}
 
@@ -203,15 +226,17 @@ static int mec5_pc_config_sirqs(const struct device *dev)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t iobase = (mm_reg_t)drvcfg->ioc_base;
+	uint32_t ofs = 0;
 
 	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_pc_hitbl); n++) {
 		const struct espi_mec5_pc_hi *p = &espi_mec5_pc_hitbl[n];
 
-		if ((p->flags & MEC5_PC_DEV_FLAG_HAS_SIRQ) != 0) {
-			LOG_DBG("LDN[%u] SIRQ0[%u]=0x%02x SIRQ1[%u]=0x%02x", p->ldn, p->sirq0_idx,
-				p->sirq0_slot, p->sirq1_idx, p->sirq1_slot);
-			sys_write8(p->sirq0_slot, iobase + MEC_ESPI_SIRQ_OFS(p->sirq0_idx));
-			sys_write8(p->sirq1_slot, iobase + MEC_ESPI_SIRQ_OFS(p->sirq1_idx));
+		for (uint8_t m = 0; m < p->nsirqs; m++) {
+			LOG_DBG("LDN[%u] SIRQ[%u] idx=0x%02x val=0x%02x", p->ldn, m,
+				p->sirq_cfgs[m], p->sirq_vals[m]);
+
+			ofs = MEC_ESPI_SIRQ_OFS_FROM_HCFG(p->sirq_cfgs[m]);
+			sys_write8(p->sirq_vals[m], iobase + ofs);
 		}
 	}
 
@@ -221,33 +246,43 @@ static int mec5_pc_config_sirqs(const struct device *dev)
 /* Host address register fields of the two SRAM BARs held in reset state by
  * nESPI_RESET, nPLTRST, or VCC_PWRGD.
  * When nPLTRST de-asserts we can program the SRAM BARs' host address fields.
+ * Other fields: EC SRAM base address, size, access and valid are not affected
+ * by nPLTRST or VCC_PWRGD.
  */
 static int mec5_pc_config_sram_bars(const struct device *dev)
 {
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	mm_reg_t mbase = (mm_reg_t)drvcfg->memc_base;
-	int rc1 = 0, rc2 = 0;
+	uint32_t ofs = 0, ofs_cfg = 0, temp = 0;
 
-	rc1 = mec_hal_espi_mbar_extended_addr_set(mbase, drvcfg->sram_bar_msw);
-	if (rc1 != MEC_RET_OK) {
-		rc2 = -EIO;
-	}
+	sys_write32(drvcfg->sram_bar_msw, mbase + MEC_ESPI_MC_SBAR_HA_EXT);
 
 	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_pc_sram_bar_tbl); n++) {
 		const struct espi_mec_pc_sram_bar *pb = &espi_mec5_pc_sram_bar_tbl[n];
 
-		rc1 = mec_hal_espi_sram_bar_host_addr_set(mbase, pb->bar_id, pb->host_addr_lsw);
-		if (rc1 == MEC_RET_OK) {
-			mec_hal_espi_sram_bar_enable(mbase, pb->bar_id, 1u);
-		} else {
-			rc2 = -EIO;
+		ofs = MEC_ESPI_MC_SBAR0;
+		ofs_cfg = MEC_ESPI_MC_SBAR0_CFG;
+		if (pb->bar_id != 0) {
+			ofs = MEC_ESPI_MC_SBAR1_CFG;
+			ofs_cfg = MEC_ESPI_MC_SBAR1_CFG;
 		}
+
+		soc_mmcr_clear_bit16(mbase + ofs, 0); /* disable */
+
+		temp = pb->host_addr_lsw;
+		sys_write16(temp, mbase + ofs_cfg + 2u);
+		sys_write16((temp >> 16), mbase + ofs_cfg + 4u);
+
+		soc_mmcr_set_bit16(mbase + ofs, 0);
 	}
 
-	return rc2;
+	return 0;
 }
 
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc) != 0
+
+#define PC_KBC0_NODE  DT_NODELABEL(kbc0)
+
 static void mec5_pc_pltrst_kbc(const struct device *dev)
 {
 	mm_reg_t kbc0_base = (mm_reg_t)DT_REG_ADDR_BY_NAME(PC_KBC0_NODE, kbc);
@@ -258,6 +293,11 @@ static void mec5_pc_pltrst_kbc(const struct device *dev)
 }
 #else
 static void mec5_pc_pltrst_kbc(const struct device *dev) {}
+#endif
+
+/* BIOS Debug I/O port capture (BDP) */
+#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_bdp) != 0
+
 #endif
 
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_gl) != 0
@@ -428,6 +468,7 @@ void mec5_pc_mbox_irq_connect(const struct device *dev)
 #else
 void mec5_pc_mbox_irq_connect(const struct device *dev) {}
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_mbox) */
+#endif /* !CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX */
 
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc)
 
@@ -495,41 +536,6 @@ struct mec5_espi_pc_device {
 };
 
 /* common ISR handler and read/write routines */
-#if 0
-static void mec5_pc_aec_common_isr(const struct mec5_espi_pc_device *pc_dev)
-{
-	uintptr_t aecrb = pc_dev->pc_dev_reg_base;
-	const struct device *espi_dev = pc_dev->parent;
-}
-#endif
-
-#if 0
-#define MEC5_PC_ACPI_EC_DEV(i)                                                                     \
-	{                                                                                          \
-		.pc_dev_reg_base = (uintptr_t)DT_INST_REG_ADDR(i),	\
-		.parent = NULL,                                        \
-		.girq = 2u,                                          \
-			.girq_pos = 3u,				     \
-	},
-
-#define MEC5_DT_INST_FOREACH_STATUS_OKAY(compat, fn)			\
-	COND_CODE_1(DT_HAS_COMPAT_STATUS_OKAY(compat),			\
-		    (UTIL_CAT(DT_FOREACH_OKAY_INST_, compat)(fn)),	\
-		    ())
-
-const struct mec5_espi_pc_device aec_pc_dev[] = {
-	MEC5_DT_INST_FOREACH_STATUS_OKAY(microchip_mec5_espi_pc_acpi_ec, MEC5_PC_ACPI_EC_DEV)
-};
-#endif
-#define MEC5_PC_AEC_IRQCON(nid) /* TODO */
-
-void mec5_pc_aec_irq_connect(const struct device *dev)
-{
-	DT_FOREACH_STATUS_OKAY(microchip_mec5_espi_pc_acpi_ec, MEC5_PC_AEC_IRQCON)
-}
-#else
-void mec5_pc_aec_irq_connect(const struct device *dev) {}
-#endif
 
 #endif /* #ifndef CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX */
 
@@ -543,9 +549,14 @@ void mec5_pc_aec_irq_connect(const struct device *dev) {}
 	mec_hal_girq_bm_en(DT_PROP_BY_IDX(nid, girqs, 0), \
 			   BIT(DT_PROP_BY_IDX(nid, girqs, 1)), 1u);
 
+/* SRAM BAR 0 & 1: EC SRAM address, size, access and valid are on RESET_SYS
+ * These fields can be set before ESPI_nRESET is de-asserted. Also not affected
+ * by VCC_PWRGD.
+ */
 static int mec5_sram_bar_config(const struct device *dev, const struct mchp_mec_sram_cfg *psram,
 				uint8_t num_sram_cfgs)
 {
+#if 0 /* TODO */
 	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
 	struct espi_mec5_drv_data *data = dev->data;
 	mm_reg_t memregb = drvcfg->memc_base;
@@ -572,11 +583,14 @@ static int mec5_sram_bar_config(const struct device *dev, const struct mchp_mec_
 	}
 
 	return rc2;
+#endif /* 0 */
+	return 0;
 }
 
 static int mec5_emi_mem_config(const struct device *dev, struct mchp_mec_emi_mem_cfg *pemi,
 			       uint8_t num_emi_mem_cfgs)
 {
+#if 0 /* TODO */
 	uintptr_t emi_reg_base = 0; /* TODO */
 	int rc1 = 0, rc2 = 0;
 	uint32_t rwsz = 0;
@@ -601,7 +615,7 @@ static int mec5_emi_mem_config(const struct device *dev, struct mchp_mec_emi_mem
 		pemi++;
 		n--;
 	}
-
+#endif
 	return 0;
 }
 

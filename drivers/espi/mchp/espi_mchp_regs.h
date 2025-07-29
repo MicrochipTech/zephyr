@@ -234,23 +234,30 @@
 #define MEC_ESPI_MEM_HBV_MAX   10
 
 /* EC-only Host I/O BAR: mask and LDN read-only */
-#define MEC_ESPI_ECB_OFS(n)        (0x134u + ((uint32_t)(n) * 4u))
-#define MEC_ESPI_ECB_AMSK_POS      0 /* address mask */
-#define MEC_ESPI_ECB_AMSK_MSK      GENMASK(7, 0)
-#define MEC_ESPI_ECB_AMSK_SET(n)   FIELD_PREP(MEC_ESPI_ECB_AMSK_MSK, (n))
-#define MEC_ESPI_ECB_AMSK_GET(n)   FIELD_GET(MEC_ESPI_ECB_AMSK_MSK, (n))
-#define MEC_ESPI_ECB_LD_POS        8
-#define MEC_ESPI_ECB_LD_MSK        GENMASK(13, 8)
-#define MEC_ESPI_ECB_LD_MSK_GET(n) FIELD_GET(MEC_ESPI_ECB_LD_MSK, (n))
 
-/* host I/O base address bits[15:0] in bits[31:16] and valid flag at bit[0] */
-#define MEC_ESPI_HBV_OFS(n)         (0x334u + ((uint32_t)(n) * 4u))
-#define MEC_ESPI_HBV_VALID_EN_POS   0
-#define MEC_ESPI_HBV_BASE_POS       16
-#define MEC_ESPI_HBV_BASE_MSK0      GENMASK(15, 0)
-#define MEC_ESPI_HBV_BASE_MSK       GENMASK(31, 16)
-#define MEC_ESPI_HBV_BASE_SET(b)    FIELD_PREP(MEC_ESPI_HBV_BASE_MSK, (b))
-#define MEC_ESPI_HBV_BASE_GET(h)    FIELD_GET(MEC_ESPI_HBV_BASE_MSK, (b))
+/* input is host config index from eSPI I/O base address register table in data sheet
+ * EC-only IO BAR contains I/O address mask and logical device number all read-only
+ * Host accessible IO BAR contains 16-bit Host I/O address and valid(enable) bit all read-write
+ */
+#define MEC_ESPI_IOB_EC_OFS(cfg_idx)	(0x300u + (uint32_t)(cfg_idx))
+#define MEC_ESPI_IOB_HOST_OFS(cfg_idx)	(0x100u + (uint32_t)(cfg_idx))
+
+#define MEC_ESPI_IOB_EC_AMSK_POS		0
+#define MEC_ESPI_IOB_EC_AMSK_MSK		GENMASK(7, 0)
+#define MEC_ESPI_IOB_EC_AMSK_SET(m)		FIELD_PREP(MEC_ESPI_IOB_EC_AMSK_MSK, (m))
+#define MEC_ESPI_IOB_EC_AMSK_GET(m)		FIELD_GET(MEC_ESPI_IOB_EC_AMSK_MSK, (m))
+
+#define MEC_ESPI_IOB_EC_LDN_POS			8
+#define MEC_ESPI_IOB_EC_LDN_MSK			GENMASK(13, 8)
+#define MEC_ESPI_IOB_EC_LDN_SET(ldn)	FIELD_PREP(MEC_ESPI_IOB_EC_LDN_MSK, (ldn))
+#define MEC_ESPI_IOB_EC_LDN_GET(ldn)	FIELD_GET(MEC_ESPI_IOB_EC_LDN_MSK, (ldn))
+
+#define MEC_ESPI_IOB_HOST_VALID_POS		0
+#define MEC_ESPI_IOB_HOST_HADDR_POS		16
+#define MEC_ESPI_IOB_HOST_HADDR_MSK0	GENMASK(15, 0)
+#define MEC_ESPI_IOB_HOST_HADDR_MSK		GENMASK(31, 16)
+#define MEC_ESPI_IOB_HOST_HADDR_SET(a)	FIELD_PREP(MEC_ESPI_IOB_HOST_HADDR_MSK, (a))
+#define MEC_ESPI_IOB_HOST_HADDR_GET(a)	FIELD_GET(MEC_ESPI_IOB_HOST_HADDR_MSK, (a))
 
 /* Serial-IRQ slot index */
 #define MEC_SIRQ_IDX_MBOX_E2H 0
@@ -278,6 +285,8 @@
 #define MEC_SIRQ_IDX_MAX      22u
 
 #define MEC_ESPI_SIRQ_OFS(n)  (0x3acu + (n))
+
+#define MEC_ESPI_SIRQ_OFS_FROM_HCFG(hcfg) (0x300u + (uint32_t)(hcfg))
 
 /* ---- Peripheral channel ---- */
 #define MEC_ESPI_PC_LC_ADDR_LSW_OFS   0x100u
@@ -539,6 +548,16 @@
 
 #define MEC_ESPI_MC_BAR_CFG_REG_OFS(id, hw) \
     (MEC_ESPI_MC_BAR_CFG_OFS + ((uint32_t)(id) * 10u) + ((hw) * 2u))
+
+/* input is host config index from eSPI I/O base address register table in data sheet
+ * EC-only Memory BAR contains host memory address mask and logical device number all read-only.
+ * Host accessible Memory BAR contains bits[31:0] of the Host memory address and valid(enable) bit
+ * all read-write. Bits[47:32] of the Host address is common to all memory BARs and is located in
+ * the Host Address Extended register.
+ * NOTE: Memory BARs are aligned on 16-bit boundaries.
+ */
+#define MEC_ESPI_MEMB_EC_OFS(cfg_idx)	(0x300u + (uint32_t)(cfg_idx))
+#define MEC_ESPI_MEMB_HOST_OFS(cfg_idx)	(0x100u + (uint32_t)(cfg_idx))
 
 /* values of hw (half-word) for register at MEC_ESPI_MC_BAR_OFS */
 #define MEC_ESPI_MC_BAR_AMLD_HW 0 /* half-word 0 contains address mask and LDN */

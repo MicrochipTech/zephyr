@@ -10,6 +10,7 @@
 		compatible = "microchip,mec5-espi-sram-bar";
 		espi_sram_bar0: espi_sram_bar0 {
 			id = <0>;
+			host-mem-config-index = <0xac>;
 			host-address-lsw = <0>;
 			region-size = "256B";
 			access = "DISABLED";
@@ -17,6 +18,7 @@
 		};
 		espi_sram_bar1: espi_sram_bar1 {
 			id = <1>;
+			host-mem-config-index = <0xb6>;
 			host-address-lsw = <0>;
 			region-size = "256B";
 			access = "DISABLED";
