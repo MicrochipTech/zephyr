@@ -16,6 +16,14 @@ child-binding:
       description: |
         Zero based SRAM BAR identification.
 
+    host-mem-config-index:
+      type: int
+      required: true
+      description: |
+        Hardware host configuration index of the SRAM BAR.
+        The index is an 8-bit unsigned value. Refer to eSPI SRAM base
+        base address register table in the data sheet.
+
     host-address-lsw:
       type: int
       required: true

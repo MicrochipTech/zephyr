@@ -645,6 +645,7 @@
 			};
 			kbc0: kbc@400f0400 {
 				reg = <0x400f0400 0x400>, <0x400f2000 0x400>;
+				reg-names = "kbc", "fkbc";
 				interrupts = <59 3>, <58 3>;
 				interrupt-names = "ibf", "obe";
 				girqs = <15 19>, <15 18>;

@@ -23,14 +23,6 @@
 #include "../espi_mchp_mec5.h"
 #include "espi_mchp_pcd_regs.h"
 
-/* MEC5 HAL */
-#include <device_mec5.h>
-#include <mec_retval.h>
-#include <mec_pcr_api.h>
-#include <mec_ecia_api.h>
-#include <mec_espi_api.h>
-#include <mec_acpi_ec_api.h>
-
 LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
 #define ESPI_MEC5_PC_AEC_4B_DATA_MODE 0x01u
@@ -75,7 +67,7 @@ static void espi_mec5_pc_aec_isr(const struct device *dev)
 		.evt_data = ESPI_PERIPHERAL_NODATA,
 	};
 	uintptr_t rb = drvcfg->regbase;
-	uint32_t cd = 0, girq_result = 0;
+	uint32_t cd = 0;
 	uint8_t status = 0;
 	uint8_t size = 1u;
 
@@ -87,15 +79,17 @@ static void espi_mec5_pc_aec_isr(const struct device *dev)
 	if ((status & BIT(MEC_AEC_SR_IBF_POS)) != 0) {
 		cd = sys_read32(rb + MEC_AEC_H2E_DATA0_OFS);
 		aec_evt.evt_data = cd;
+
 		if ((status & BIT(MEC_AEC_SR_CMD_POS)) != 0) {
 			aec_evt.evt_details |= BIT(ESPI_EVENT_DETAILS_PC_CMD_POS);
 		}
+
 		aec_evt.evt_details |= ESPI_EVENT_DETAILS_PC_SZ(size);
-		mec_hal_girq_bm_clr_src(drvcfg->ibf_girq, BIT(drvcfg->ibf_girq_pos));
+		soc_ecia_girq_status_clear_bm(drvcfg->ibf_girq, BIT(drvcfg->ibf_girq_pos));
 	} else {
-		girq_result = mec_hal_girq_result_get(drvcfg->obe_girq);
-		if (girq_result & BIT(drvcfg->obe_girq_pos)) {
-			mec_hal_girq_bm_clr_src(drvcfg->obe_girq, BIT(drvcfg->obe_girq_pos));
+		if (soc_ecia_girq_is_result(drvcfg->obe_girq, BIT(drvcfg->obe_girq_pos)) != 0) {
+			soc_ecia_girq_status_clear_bm(drvcfg->obe_girq, BIT(drvcfg->obe_girq_pos));
+			aec_evt.evt_details |= ESPI_EVENT_DETAILS_PC_MISC1(1);
 		}
 	}
 
@@ -107,15 +101,11 @@ static int espi_mec5_pc_aec_init(const struct device *dev)
 {
 	const struct espi_mec5_pc_aec_devcfg *drvcfg = dev->config;
 
-	/* TODO init */
-
 	if ((drvcfg->flags & ESPI_MEC5_PC_AEC_4B_DATA_MODE) != 0) {
 		soc_mmcr_set_bit8(drvcfg->regbase + MEC_AEC_BC_OFS, MEC_AEC_BC_4BEN_POS);
 	} else {
 		soc_mmcr_clear_bit8(drvcfg->regbase + MEC_AEC_BC_OFS, MEC_AEC_BC_4BEN_POS);
 	}
-
-/*	int rc = mec_hal_acpi_ec_init(drvcfg->regbase, flags); */
 
 	if (drvcfg->irq_config_func) {
 		drvcfg->irq_config_func();
