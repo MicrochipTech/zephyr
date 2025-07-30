@@ -440,11 +440,76 @@ static void mec5_pc_pltrst_uart(const struct device *dev) {}
 #define PC_BDP0_ALIAS_BL	DT_PROP_OR(PC_BDP0_NODE, alias_byte_lane, 1)
 #define PC_BDP0_ALIAS_ENABLED	DT_NODE_HAS_STATUS_OKAY(PC_BDP0_ALIAS_CFG_NODE)
 
+static int mec_bdp_get_io(const struct device *dev, struct espi_mec_host_io_data *hiod,
+			  uint32_t *nread)
+{
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t bdp_base = (mm_reg_t)DT_REG_ADDR(PC_BDP0_NODE);
+	uint32_t da = 0, nr = 0;
+	bool io_complete = false;
+	uint8_t io_width = 0, io_msk = 0;
+
+	if (hiod == NULL) {
+		return -EINVAL;
+	}
+
+	da = sys_read32(bdp_base + MEC_BDP_DA_OFS);
+	nr++;
+
+	while ((da & BIT(MEC_BDP_DA_NE_POS)) != 0) {
+		uint8_t lane = MEC_BDP_DA_LANE_GET(da);
+		uint8_t iosz = MEC_BDP_DA_LEN_GET(da)
+
+		io_msk |= BIT(lane);
+		hiod->data |= (MEC_BDP_DA_DATA_GET(da) << lane);
+		hiod->flags = 0;
+
+		if (iosz == MEC_BDP_DA_LEN_1C) {
+			if (io_width == 0) {
+				hiod->start_byte_lane = lane;
+				io_width = 1u;
+				io_complete = true;
+			} else if (io_width == 2u) {
+				io_complete = true; /* second byte of 16-bit cycle */
+			} else if ((io_width == 4u) && (lane == 3u)) {
+				io_complete = true; /* fourth byte of 32-bit cycles */
+			}
+		} else if (iosz == MEC_BDP_DA_LEN_1_OF_2) {
+			io_width = 2u;
+			hiod->start_byte_lane = lane;
+		} else if (iosz == MEC_BDP_DA_LEN_1_OF_4) {
+			io_width = 4u;
+			hiod->start_byte_lane = lane;
+		} else { /* invalid orphan byte. discard */
+			io_complete = true;
+			io_width = iosz;
+			hiod->start_byte_lane = lane;
+			hiod->flags |= BIT(ESPI_IO_CAP_EVENT_OVERRUN_POS);
+		}
+
+		if (io_complete == true) {
+			hiod->size = io_width;
+			hiod->msk = io_msk;
+			break;
+		}
+
+		da = sys_read32(bdp_base + MEC_BDP_DA_OFS);
+		nr++;
+	}
+
+	if (nread != NULL) {
+		*nread = nr;
+	}
+
+	return 0;
+}
+
 static void espi_mec_pc_bdp_isr(const struct device *dev)
 {
 /*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
 	mm_reg_t bdp_base = (mm_reg_t)DT_REG_ADDR(PC_BDP0_NODE);
 	uint32_t da = sys_read32(bdp_base + MEC_BDP_DA_OFS);
+	int rc = 0;
 	uint8_t iodata[4] = {0};
 	uint8_t ioflags = 0, iosize = 0, iowidth = 0, blane = 0;
 
@@ -452,6 +517,9 @@ static void espi_mec_pc_bdp_isr(const struct device *dev)
 	 * an array of up to 32 entries:
 	 * each entry: I/O location, number of bytes (1-4), and bytes
 	 */
+	rc = mec_bdp_get_io(dev, struct espi_mec_host_io_data *hiod,
+			  uint32_t *nread)
+
 	while ((da & BIT(MEC_BDP_DA_NE_POS)) != 0) {
 		blane = MEC_BDP_DA_LANE_GET(da);
 		iosize = MEC_BDP_DA_LEN_GET(da);
