@@ -36,18 +36,6 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
 #define MEC_ESPI_PC_MAX_SIRQ_PER_DEV	2
 
-#define PC_MBOX0_NODE DT_NODELABEL(mbox0)
-#define PC_AEC0_NODE  DT_NODELABEL(acpi_ec0)
-#define PC_AEC1_NODE  DT_NODELABEL(acpi_ec1)
-#define PC_AEC2_NODE  DT_NODELABEL(acpi_ec2)
-#define PC_AEC3_NODE  DT_NODELABEL(acpi_ec3)
-#define PC_AEC4_NODE  DT_NODELABEL(acpi_ec4)
-#define PC_GLUE_NODE  DT_NODELABEL(glue)
-#define PC_EMI0_NODE  DT_NODELABEL(emi0)
-#define PC_EMI1_NODE  DT_NODELABEL(emi1)
-#define PC_EMI2_NODE  DT_NODELABEL(emi2)
-#define PC_BDP0_NODE  DT_NODELABEL(p80bd0)
-
 #define ESPI_MEC5_NID DT_NODELABEL(espi0)
 #define ESPI_MEC5_PC_DEV_PATH DT_PATH(mchp_mec5_espi_pc_host_dev)
 #define ESPI_MEC5_PC_SRAM_BAR_DT_PATH DT_PATH(mchp_mec5_espi_sram_bars)
@@ -108,17 +96,18 @@ struct espi_mec5_pc_device {
 		DT_FOREACH_PROP_ELEM(nid, girqs, MEC5_PC_DEV_GIRQ_ELEM) \
 	}
 
-#define MEC5_PC_DEV_WITH_HI(nid)					\
+#define MEC5_PC_DEV_WITH_HI(nid)                                                                   \
 	{                                                                                          \
-		.regbase = DT_REG_ADDR(nid), \
-		.parent = DEVICE_DT_GET(DT_PARENT(nid)), \
-		.num_irqs = MEC5_PC_DEV_NUM_IRQS(nid), \
-		.irqn = MEC5_PC_DEV_IRQN(nid),	\
-		.irqp = MEC5_PC_DEV_IRQP(nid), \
-		.girqs = MEC5_PC_DEV_GIRQS(nid), \
+		.regbase = DT_REG_ADDR(nid),                                                       \
+		.parent = DEVICE_DT_GET(DT_PARENT(nid)),                                           \
+		.num_irqs = MEC5_PC_DEV_NUM_IRQS(nid),                                             \
+		.irqn = MEC5_PC_DEV_IRQN(nid),                                                     \
+		.irqp = MEC5_PC_DEV_IRQP(nid),                                                     \
+		.girqs = MEC5_PC_DEV_GIRQS(nid),                                                   \
 	},
 
-#define MEC5_PC_DEV(nid) COND_CODE_1(DT_NODE_HAS_PROP(nid, hostinfos), (MEC5_PC_DEV_WITH_HI(nid)), ())
+#define MEC5_PC_DEV(nid)                                                                           \
+	COND_CODE_1(DT_NODE_HAS_PROP(nid, hostinfos), (MEC5_PC_DEV_WITH_HI(nid)), ())
 
 #define MEC_ESPI_PC_NSIRQS_VAL(nid) DT_PROP_LEN(nid, sirq_config_indexes)
 
@@ -131,29 +120,25 @@ struct espi_mec5_pc_device {
 #define MEC5_PC_SIRQ(n, prop, i) \
 	COND_CODE_1(DT_NODE_HAS_PROP(n, prop), (MEC5_PC_SIRQ_VAL(n, prop, i)), (0))
 
-
-
-// DT_PROP_HAS_IDX(node_id, prop, idx)
-
 #define ESPI_MEC5_PC_DEV_BAR_SIRQ(node_id)                                                         \
 	{                                                                                          \
 		.haddr_lsw = DT_PROP(node_id, host_address),                                       \
 		.ldn = DT_PROP(node_id, ldn),                                                      \
 		.iob_cfg_idx = DT_PROP(node_id, host_io_config_index),                             \
 		.memb_cfg_idx = DT_PROP(node_id, host_mem_config_index),                           \
-		.nsirqs = MEC_ESPI_PC_NSIRQS(node_id), \
-		.sirq_cfgs = { MEC5_PC_SIRQ(node_id, sirq_config_indexes, 0), \
-				MEC5_PC_SIRQ(node_id, sirq_config_indexes, 1), \
-		}, \
+		.nsirqs = MEC_ESPI_PC_NSIRQS(node_id),                                             \
+		.sirq_cfgs = { MEC5_PC_SIRQ(node_id, sirq_config_indexes, 0),                      \
+				MEC5_PC_SIRQ(node_id, sirq_config_indexes, 1),                     \
+		},                                                                                 \
 		.sirq_vals = { MEC5_PC_SIRQ(node_id, sirqs, 0), MEC5_PC_SIRQ(node_id, sirqs, 1) }, \
 	},
 
-#define MEC5_PC_SRAM_BAR(nid) \
-	{						\
-	.host_addr_lsw = DT_PROP(nid, host_addr_lsw),\
-	.bar_id = DT_PROP(nid, id), \
-	.enc_sz = DT_ENUM_IDX(nid, region_size), \
-	.access = DT_ENUM_IDX(nid, access), \
+#define MEC5_PC_SRAM_BAR(nid)                                                                      \
+	{                                                                                          \
+		.host_addr_lsw = DT_PROP(nid, host_addr_lsw),                                      \
+		.bar_id = DT_PROP(nid, id),                                                        \
+		.enc_sz = DT_ENUM_IDX(nid, region_size),                                           \
+		.access = DT_ENUM_IDX(nid, access),                                                \
 	},
 
 /* PC device BAR and Serial-IRQ table */
@@ -279,7 +264,64 @@ static int mec5_pc_config_sram_bars(const struct device *dev)
 	return 0;
 }
 
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc) != 0
+/* -------- Peripheral Channel Devices -------- */
+
+/* Mailbox */
+#ifndef CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX
+#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_mbox)
+
+#define PC_MBOX0_NODE		DT_NODELABEL(mbox0)
+#define PC_MBOX0_GIRQ		DT_PROP_BY_IDX(PC_MBOX0_NODE, girqs, 0)
+#define PC_MBOX0_GIRQ_POS	DT_PROP_BY_IDX(PC_MBOX0_NODE, girqs, 1)
+
+/* ISSUE:
+ * MBOX generates an interrupt when the Host writes a byte to the Host-to-EC
+ * mailbox register. MBOX has 32 more 8-bit registers which do not generate
+ * any status to the EC if the Host accesses them.
+ * If the Host writes one or more of the 32 generic mailbox registers and then
+ * writes to Host-to-EC we get an interrupt but do not know how many of the
+ * generic 8-bit registers were changed.
+ * TODO - Investigate using Zephyr mbox driver for our MBOX HW. Zephry mbox
+ * driver has concept of channels that we can map to the 32 8-bit HW mailboxes.
+ * If we can use Zephyr mbox driver then we only need to handle MBOX BAR configuration
+ * on nPLTRST de-assertion.
+ */
+static void espi_mec_pc_mbox_isr(const struct device *dev)
+{
+	struct espi_mec5_drv_data *data = dev->data;
+	mm_reg_t iob = (mm_reg_t)DT_REG_ADDR(PC_MBOX0_NODE);
+	struct espi_event mbev = {
+		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		.evt_details = ESPI_PC_MCHP_MEC_MBOX0,
+		.evt_data = 0,
+	};
+	uint8_t h2ec_cmd = sys_read8(iob + MEC_MBOX_H2EC_REG_OFS); /* clears interrupt signal */
+
+	soc_ecia_girq_status_clear(PC_MBOX0_GIRQ, PC_MBOX0_GIRQ_POS);
+
+	mbev.evt_data = h2ec_cmd;
+	espi_send_callbacks(&data->callbacks, dev, mbev);
+}
+
+void mec5_pc_mbox_irq_connect(const struct device *dev)
+{
+	IRQ_CONNECT(DT_IRQ(PC_MBOX0_NODE, irq), DT_IRQ(PC_MBOX0_NODE, priority),
+		    espi_mec_pc_mbox_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_IRQ(PC_MBOX0_NODE, irq));
+
+	soc_ecia_girq_ctrl(PC_MBOX0_GIRQ, PC_MBOX0_GIRQ_POS, 1u);
+}
+#else
+void mec5_pc_mbox_irq_connect(const struct device *dev) {}
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_mbox) */
+#endif /* !CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX */
+
+/* 8042 Keyboard Controller */
+/* !!! TODO create Zephyr input driver for 8042-KBC. If input driver is enabled
+ * then it handles 8042-KBC and this code is not used. NOTE: input driver must
+ * register for VWire reception to handle nPLTRST
+ */
+#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc)
 
 #define PC_KBC0_NODE  DT_NODELABEL(kbc0)
 
@@ -291,16 +333,64 @@ static void mec5_pc_pltrst_kbc(const struct device *dev)
 	sys_set_bit8(kbc0_base + LD_CFG_ACTV_REG_OFS, LD_CFG_ACTV_POS);
 	sys_set_bit8(fkbc0_base + LD_CFG_ACTV_REG_OFS, LD_CFG_ACTV_POS);
 }
+
+static void espi_mec_pc_kbc0_isr(const struct device *dev)
+{
+	struct espi_mec5_drv_data *data = dev->data;
+	mm_reg_t iob = (mm_reg_t)DT_REG_ADDR(PC_KBC0_NODE);
+	struct espi_event kbev = {
+		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		.evt_details = ESPI_PERIPHERAL_8042_KBC,
+		.evt_data = ESPI_PERIPHERAL_NODATA,
+	};
+	struct espi_evt_data_kbc *kbc_evt = (struct espi_evt_data_kbc *)&kbev.evt_data;
+	uint32_t girq_sts = 0;
+	uint8_t status = 0, cd = 0;
+
+	girq_sts = mec_hal_girq_result_get(MEC_KBC0_GIRQ);
+	status = sys_read8(iob + MEC_KBC_SR_OFS);
+	if ((status & BIT(MEC_KBC_SR_IBF_POS)) != 0) {
+		cd = sys_read8(iob + MEC_KBC_H2EC_DCR_OFS); /* clears IBF */
+		kbc_evt->type = HOST_KBC_TYPE_DATA;
+		if ((status & BIT(MEC_KBC_SR_CMD_POS)) != 0) {
+			kbc_evt->type = HOST_KBC_TYPE_CMD;
+		}
+		kbc_evt->data = cd;
+		kbc_evt->evt = HOST_KBC_EVT_IBF;
+		mec_hal_girq_bm_clr_src(MEC_KBC0_GIRQ, BIT(MEC_KBC0_IBF_GIRQ_POS));
+	} else if ((girq_sts & BIT(MEC_KBC0_OBE_GIRQ_POS)) != 0) {
+		kbc_evt->evt = HOST_KBC_EVT_OBE;
+		mec_hal_girq_bm_en(MEC_KBC0_GIRQ, BIT(MEC_KBC0_OBE_GIRQ_POS), 0);
+		mec_hal_girq_bm_clr_src(MEC_KBC0_GIRQ, BIT(MEC_KBC0_OBE_GIRQ_POS));
+	}
+
+	espi_send_callbacks(&data->callbacks, dev, kbev);
+}
+
+void mec5_pc_kbc_irq_connect(const struct device *dev)
+{
+	/* NOTE: OK to register same function in two different IRQ_CONNECTS */
+	IRQ_CONNECT(DT_IRQ_BY_NAME(PC_KBC0_NODE, ibf, irq),
+		    DT_IRQ_BY_NAME(PC_KBC0_NODE, ibf, priority),
+		    espi_mec_pc_kbc0_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_IRQ(PC_KBC0_NODE, irq));
+
+	IRQ_CONNECT(DT_IRQ_BY_NAME(PC_KBC0_NODE, obe, irq),
+		    DT_IRQ_BY_NAME(PC_KBC0_NODE, obe, priority),
+		    espi_mec_pc_kbc0_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_IRQ(PC_KBC0_NODE, irq));
+
+	/* Only enable IBF. Application will call an eSPI driver API to enable OBE */
+	mec_hal_girq_bm_en(MEC_KBC0_GIRQ, BIT(MEC_KBC0_IBF_GIRQ_POS), 1u);
+}
 #else
 static void mec5_pc_pltrst_kbc(const struct device *dev) {}
-#endif
-
-/* BIOS Debug I/O port capture (BDP) */
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_bdp) != 0
-
-#endif
+void mec5_pc_kbc_irq_connect(const struct device *dev) {}
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc) */
 
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_gl) != 0
+
+#define PC_GLUE_NODE  DT_NODELABEL(glue)
 
 static void mec5_pc_pltrst_gl(const struct device *dev)
 {
@@ -318,15 +408,15 @@ static void mec5_pc_pltrst_gl(const struct device *dev) {}
 /* One or more UARTs are mapped to Host I/O space. Host OS driver owns them.
  * TODO - DT_COMPAT_GET_ANY_STATUS_OKAY(compat)
  */
-#define MEC5_PC_UART_CFG_SEL(nid) \
-	(((uint8_t)DT_PROP_OR(nid, ext_clk_sel, 0) & 0x01u) |		\
+#define MEC5_PC_UART_CFG_SEL(nid)                                                                  \
+	(((uint8_t)DT_PROP_OR(nid, ext_clk_sel, 0) & 0x01u) |                                      \
 	 (((uint8_t)DT_PROP_OR(nid, invert_polarity, 0) & 0x01u) << 1u))
 
-#define MEC5_PC_PLTRST_UART(nid)                                          \
-	mm_reg_t regbase = (mm_reg_t)DT_REG_ADDR(nid);                    \
-	uint8_t cv = sys_read8(regbase + LD_CFG_SEL_REG_OFS) & BIT(1);    \
-	cv |= MEC5_PC_UART_CFG_SEL(nid);                                  \
-	sys_write8(cv, regbase + LD_CFG_SEL_REG_OFS);                     \
+#define MEC5_PC_PLTRST_UART(nid)                                                                   \
+	mm_reg_t regbase = (mm_reg_t)DT_REG_ADDR(nid);                                             \
+	uint8_t cv = sys_read8(regbase + LD_CFG_SEL_REG_OFS) & BIT(1);                             \
+	cv |= MEC5_PC_UART_CFG_SEL(nid);                                                           \
+	sys_write8(cv, regbase + LD_CFG_SEL_REG_OFS);                                              \
 	sys_set_bit8(regbase + LD_CFG_ACTV_REG_OFS, LD_CFG_ACTV_REG_OFS);
 
 static void mec5_pc_pltrst_uart(const struct device *dev)
@@ -336,6 +426,58 @@ static void mec5_pc_pltrst_uart(const struct device *dev)
 #else
 static void mec5_pc_pltrst_uart(const struct device *dev) {}
 #endif
+
+/* BIOS Debug I/O port capture (BDP) */
+#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_bdp) != 0
+
+#define PC_BDP0_NODE		DT_NODELABEL(p80bd0)
+#define PC_BDP0_ALIAS_CFG_NODE	DT_NODELABEL(espi_bdpa0)
+#define PC_BDP0_GIRQ		DT_PROP_BY_IDX(PC_BDP0_NODE, girqs, 0)
+#define PC_BDP0_GIRQ_POS	DT_PROP_BY_IDX(PC_BDP0_NODE, girqs, 1)
+#define PC_BDP0_FIFO_THR	DT_ENUM_IDX_OR(PC_BDP0_NODE, fifo_threshold, MEC_BDP_CFG_THR_16)
+#define PC_BDP0_ALIAS_BL	DT_PROP_OR(PC_BDP0_NODE, alias_byte_lane, 1)
+#define PC_BDP0_ALIAS_ENABLED	DT_NODE_HAS_STATUS_OKAY(PC_BDP0_ALIAS_CFG_NODE)
+
+static void espi_mec_pc_bdp_isr(const struct device *dev)
+{
+
+}
+
+static void mec_espi_pc_bdp_irq_connect(const struct device *dev)
+{
+	IRQ_CONNECT(DT_IRQ(PC_BDP0_NODE, irq), DT_IRQ(PC_BDP0_NODE, priority),
+		    espi_mec_pc_bdp_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_IRQ(PC_BDP0_NODE, irq));
+
+	soc_ecia_girq_ctrl(PC_BDP0_GIRQ, PC_BDP0_GIRQ_POS, 1u);
+}
+
+static void mec_espi_pc_bdp_init(const struct device *dev)
+{
+	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+	mm_reg_t bdp_base = (mm_reg_t)DT_REG_ADDR(PC_BDP0_NODE);
+	uint32_t temp = 0;
+
+	sys_set_bit(bdp_base + MEC_BDP_CFG_OFS, MEC_BDP_CFG_SRST_POS);
+
+	temp = MEC_BDP_CFG_THR_SET(PC_BDP0_FIFO_THR);
+	sys_write32(temp, bdp_base + MEC_BDP_CFG_OFS);
+
+	soc_mmcr_set_bit8(bdp_base + MEC_BDP_IER_OFS, MEC_BDP_IER_THR_POS);
+	sys_set_bit(bdp_base + MEC_BDP_ACTV_OFS, MEC_BDP_ACTV_EN_POS);
+
+#if PC_BDP0_ALIAS_ENABLED != 0
+	temp = MEC_BDP_ALIAS_BL_SET(PC_BDP0_ALIAS_BL);
+	sys_write8(temp, bdp_base + MEC_BDP_ALIAS_BL_OFS);
+	soc_mmcr_set_bit8(bdp_base + MEC_BDP_ALIAS_ACTV_OFS, MEC_BDP_ACTV_EN_POS);
+#endif
+
+	mec_espi_pc_bdp_irq_connect(dev);
+}
+
+#else
+static void mec_espi_pc_bdp_init(const struct device *dev) {}
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_bdp) */
 
 /* PC devices with configuration reset by nPLTRST must be reconfigured on de-assertion */
 static void mec5_pc_pltrst_misc_config(const struct device *dev)
@@ -427,127 +569,10 @@ int espi_mec5_pc_pltrst_handler(const struct device *dev, uint8_t pltrst_state)
 	return rc;
 }
 
-#ifndef CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX
 
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_mbox)
-/* ISSUE:
- * MBOX generates an interrupt when the Host writes a byte to the Host-to-EC
- * mailbox register. MBOX has 32 more 8-bit registers which do not generate
- * any status to the EC if the Host accesses them.
- * If the Host writes one or more of the 32 generic mailbox registers and then
- * writes to Host-to-EC we get an interrupt but do not know how many of the
- * generic 8-bit registers were changed.
- * TODO - Investigate using Zephyr mbox driver for our MBOX HW. Zephry mbox
- * driver has concept of channels that we can map to the 32 8-bit HW mailboxes.
- * If we can use Zephyr mbox driver then we only need to handle MBOX BAR configuration
- * on nPLTRST de-assertion.
- */
-static void espi_mec_pc_mbox_isr(const struct device *dev)
-{
-	struct espi_mec5_drv_data *data = dev->data;
-	mm_reg_t iob = (mm_reg_t)DT_REG_ADDR(PC_MBOX0_NODE);
-	struct espi_event mbev = {
-		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		.evt_details = ESPI_PC_MCHP_MEC_MBOX0,
-		.evt_data = 0,
-	};
-	uint8_t h2ec_cmd = sys_read8(iob + MEC_MBOX_H2EC_REG_OFS); /* clears interrupt signal */
 
-	mbev.evt_data = h2ec_cmd;
-	espi_send_callbacks(&data->callbacks, dev, mbev);
-}
 
-void mec5_pc_mbox_irq_connect(const struct device *dev)
-{
-	IRQ_CONNECT(DT_IRQ(PC_MBOX0_NODE, irq), DT_IRQ(PC_MBOX0_NODE, priority),
-		    espi_mec_pc_mbox_isr, DEVICE_DT_INST_GET(0), 0);
-	irq_enable(DT_IRQ(PC_MBOX0_NODE, irq));
-
-	mec_hal_girq_bm_en(MEC_MBOX0_GIRQ, BIT(MEC_MBOX0_GIRQ_POS), 1u);
-}
-#else
-void mec5_pc_mbox_irq_connect(const struct device *dev) {}
-#endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_mbox) */
-#endif /* !CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX */
-
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc)
-
-static void espi_mec_pc_kbc0_isr(const struct device *dev)
-{
-	struct espi_mec5_drv_data *data = dev->data;
-	mm_reg_t iob = (mm_reg_t)DT_REG_ADDR(PC_KBC0_NODE);
-	struct espi_event kbev = {
-		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		.evt_details = ESPI_PERIPHERAL_8042_KBC,
-		.evt_data = ESPI_PERIPHERAL_NODATA,
-	};
-	struct espi_evt_data_kbc *kbc_evt = (struct espi_evt_data_kbc *)&kbev.evt_data;
-	uint32_t girq_sts = 0;
-	uint8_t status = 0, cd = 0;
-
-	girq_sts = mec_hal_girq_result_get(MEC_KBC0_GIRQ);
-	status = sys_read8(iob + MEC_KBC_SR_OFS);
-	if ((status & BIT(MEC_KBC_SR_IBF_POS)) != 0) {
-		cd = sys_read8(iob + MEC_KBC_H2EC_DCR_OFS); /* clears IBF */
-		kbc_evt->type = HOST_KBC_TYPE_DATA;
-		if ((status & BIT(MEC_KBC_SR_CMD_POS)) != 0) {
-			kbc_evt->type = HOST_KBC_TYPE_CMD;
-		}
-		kbc_evt->data = cd;
-		kbc_evt->evt = HOST_KBC_EVT_IBF;
-		mec_hal_girq_bm_clr_src(MEC_KBC0_GIRQ, BIT(MEC_KBC0_IBF_GIRQ_POS));
-	} else if ((girq_sts & BIT(MEC_KBC0_OBE_GIRQ_POS)) != 0) {
-		kbc_evt->evt = HOST_KBC_EVT_OBE;
-		mec_hal_girq_bm_en(MEC_KBC0_GIRQ, BIT(MEC_KBC0_OBE_GIRQ_POS), 0);
-		mec_hal_girq_bm_clr_src(MEC_KBC0_GIRQ, BIT(MEC_KBC0_OBE_GIRQ_POS));
-	}
-
-	espi_send_callbacks(&data->callbacks, dev, kbev);
-}
-
-void mec5_pc_kbc_irq_connect(const struct device *dev)
-{
-	/* NOTE: OK to register same function in two different IRQ_CONNECTS */
-	IRQ_CONNECT(DT_IRQ_BY_NAME(PC_KBC0_NODE, ibf, irq),
-		    DT_IRQ_BY_NAME(PC_KBC0_NODE, ibf, priority),
-		    espi_mec_pc_kbc0_isr, DEVICE_DT_INST_GET(0), 0);
-	irq_enable(DT_IRQ(PC_KBC0_NODE, irq));
-
-	IRQ_CONNECT(DT_IRQ_BY_NAME(PC_KBC0_NODE, obe, irq),
-		    DT_IRQ_BY_NAME(PC_KBC0_NODE, obe, priority),
-		    espi_mec_pc_kbc0_isr, DEVICE_DT_INST_GET(0), 0);
-	irq_enable(DT_IRQ(PC_KBC0_NODE, irq));
-
-	/* Only enable IBF. Application will call an eSPI driver API to enable OBE */
-	mec_hal_girq_bm_en(MEC_KBC0_GIRQ, BIT(MEC_KBC0_IBF_GIRQ_POS), 1u);
-}
-#else
-void mec5_pc_kbc_irq_connect(const struct device *dev) {}
-#endif /* DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_kbc) */
-
-/* One ore more ACPI_EC devices enabled and use this compatible */
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_acpi_ec)
-
-struct mec5_espi_pc_device {
-	uintptr_t pc_dev_reg_base;
-	const struct device *parent;
-	uint8_t girq;
-	uint8_t girq_pos;
-};
-
-/* common ISR handler and read/write routines */
-
-#endif /* #ifndef CONFIG_ESPI_PERIPHERAL_ZEPHYR_MBOX */
-
-#define MEC5_PC_MBOX_ICONN_DEF(nid) \
-	static espi_mec_pc_mbox_##?##_isr(const struct device *dev);
-
-#define MEC5_PC_MBOX_ICONN(nid) \
-	IRQ_CONNECT(DT_IRQ(nid, irq), DT_IRQ(nid, priority), \
-		    espi_mec_pc_mbox_##?##_isr, DEVICE_DT_INST_GET(0), 0); \
-	irq_enable(DT_IRQ(nid, irq)); \
-	mec_hal_girq_bm_en(DT_PROP_BY_IDX(nid, girqs, 0), \
-			   BIT(DT_PROP_BY_IDX(nid, girqs, 1)), 1u);
+/* --- SRAM BARs ---- */
 
 /* SRAM BAR 0 & 1: EC SRAM address, size, access and valid are on RESET_SYS
  * These fields can be set before ESPI_nRESET is de-asserted. Also not affected
@@ -630,9 +655,8 @@ void espi_mec5_pc_irq_connect(const struct device *dev)
 
 	sys_write32(pc_ien_msk, MEC_ESPI_GIRQ_ENSET_ADDR);
 
-	// DT_NUM_INST_STATUS_OKAY(compat)
-
-	// DT_FOREACH_STATUS_OKAY(microchip_mec5_espi_pc_mbox, MEC5_PC_MBOX_ICONN)
+	mec5_pc_mbox_irq_connect(dev);
+	mec5_pc_kbc_irq_connect(dev);
 
 	for (size_t n = 0; n < ARRAY_SIZE(espi_mec5_pc_devtbl); n++) {
 		const struct espi_mec5_pc_device *pd = &espi_mec5_pc_devtbl[n];

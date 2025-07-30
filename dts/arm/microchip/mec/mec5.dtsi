@@ -726,7 +726,7 @@
 			 * to one of the 4-byte locations.
 			 */
 			p80bd0: p80bd@400f8000 {
-				reg = <0x400f8000 0x400>;
+				reg = <0x400f8000 0x800>;
 				interrupts = <62 0>;
 				interrupt-names = "fifo_thr";
 				girqs = <15 22>;
