@@ -430,6 +430,8 @@ static void mec5_pc_pltrst_uart(const struct device *dev) {}
 /* BIOS Debug I/O port capture (BDP) */
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_mec5_espi_pc_bdp) != 0
 
+/* TODO API to enable/disable interrupts */
+
 #define PC_BDP0_NODE		DT_NODELABEL(p80bd0)
 #define PC_BDP0_ALIAS_CFG_NODE	DT_NODELABEL(espi_bdpa0)
 #define PC_BDP0_GIRQ		DT_PROP_BY_IDX(PC_BDP0_NODE, girqs, 0)
@@ -440,7 +442,48 @@ static void mec5_pc_pltrst_uart(const struct device *dev) {}
 
 static void espi_mec_pc_bdp_isr(const struct device *dev)
 {
+/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
+	mm_reg_t bdp_base = (mm_reg_t)DT_REG_ADDR(PC_BDP0_NODE);
+	uint32_t da = sys_read32(bdp_base + MEC_BDP_DA_OFS);
+	uint8_t iodata[4] = {0};
+	uint8_t ioflags = 0, iosize = 0, iowidth = 0, blane = 0;
 
+	/* Callback needs to pass pointer to structure containing
+	 * an array of up to 32 entries:
+	 * each entry: I/O location, number of bytes (1-4), and bytes
+	 */
+	while ((da & BIT(MEC_BDP_DA_NE_POS)) != 0) {
+		blane = MEC_BDP_DA_LANE_GET(da);
+		iosize = MEC_BDP_DA_LEN_GET(da);
+
+		if (iosize == MEC_BDP_DA_LEN_1C) {
+			iodata[blane] = da & 0xffu;
+			ioflags |= BIT(blane);
+			if (iowidth == 0) { /* single 8-bit I/O write */
+				iowidth = 1u;
+				break;
+			} else if (iowidth == 2) {
+				break;
+			} else if ((iowidth == 4u) && (blane == 3u)) {
+				break;
+			}
+		} else if (iosize == MEC_BDP_DA_LEN_1_OF_2) {
+			iowidth = 2u;
+			iodata[blane] = da & 0xffu;
+			ioflags |= BIT(blane);
+		} else if (iosize == MEC_BDP_DA_LEN_1_OF_4) {
+			iowidth = 4u;
+			iodata[blane] = da & 0xffu;
+			ioflags |= BIT(blane);
+		} else {
+			ioflags &= (uint8_t)~BIT(blane);
+			break;
+		}
+
+		da = sys_read32(bdp_base + MEC_BDP_DA_OFS);
+	}
+
+	soc_ecia_girq_status_clear(PC_BDP0_GIRQ, PC_BDP0_GIRQ_POS);
 }
 
 static void mec_espi_pc_bdp_irq_connect(const struct device *dev)
@@ -454,7 +497,7 @@ static void mec_espi_pc_bdp_irq_connect(const struct device *dev)
 
 static void mec_espi_pc_bdp_init(const struct device *dev)
 {
-	const struct espi_mec5_drv_cfg *drvcfg = dev->config;
+/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
 	mm_reg_t bdp_base = (mm_reg_t)DT_REG_ADDR(PC_BDP0_NODE);
 	uint32_t temp = 0;
 
@@ -693,6 +736,17 @@ int espi_mec5_pc_config(const struct device *dev, const void *vend_ext)
 	}
 
 	return rc2;
+}
+
+/* Called from core eSPI driver initialization */
+int espi_mec_pc_init(const struct device *dev)
+{
+/*	const struct espi_mec5_drv_cfg *drvcfg = dev->config; */
+/*	struct espi_mec5_drv_data *data = dev->data; */
+
+	mec_espi_pc_bdp_init(dev);
+
+	return 0;
 }
 
 /* ---- Driver public API ---- */

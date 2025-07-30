@@ -273,6 +273,13 @@ static int espi_mec5_driver_init(const struct device *dev)
 	}
 #endif
 
+#ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
+	ret = espi_mec_pc_init(dev);
+	if (ret != 0) {
+		return ret;
+	}
+#endif
+
 	if (drvcfg->irq_config) {
 		drvcfg->irq_config(dev);
 	}

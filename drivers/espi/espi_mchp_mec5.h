@@ -63,6 +63,7 @@ struct espi_mec5_drv_data {
 };
 
 #if defined(CONFIG_ESPI_PERIPHERAL_CHANNEL)
+int espi_mec_pc_init(const struct device *dev);
 int espi_mec5_pc_config(const struct device *dev, const void *vend_ext);
 int espi_mec5_pc_pltrst_handler(const struct device *dev, uint8_t pltrst_state);
 void espi_mec5_pc_irq_connect(const struct device *dev);
