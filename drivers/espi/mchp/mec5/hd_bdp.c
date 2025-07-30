@@ -13,7 +13,6 @@
 
 #include <zephyr/kernel.h>
 #include <soc.h>
-#include <errno.h>
 #include <zephyr/arch/common/ffs.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -36,7 +35,9 @@
 
 LOG_MODULE_REGISTER(espi_bdp, CONFIG_ESPI_LOG_LEVEL);
 
-#define MEC5_BDP_FIFO_INTR_THRH_LVL CONFIG_ESPI_MEC5_BDP_FIFO_THRESHOLD_LEVEL
+/* #define MEC_BDP_DEBUG */
+
+#define MEC_BDP_FIFO_SIZE 32u /* FIFO size in bytes */
 
 struct mec5_bdp_devcfg {
 	struct mec_bdp_regs *regs;
@@ -46,22 +47,97 @@ struct mec5_bdp_devcfg {
 	uint8_t alias_byte_lane;
 	uint8_t ldn;
 	uint8_t ldn_alias;
+	uint8_t fifo_thr;
 	void (*irq_config_func)(void);
 };
 
 struct mec5_bdp_data {
+#ifdef MEC_BDP_DEBUG
 	uint32_t isr_count;
-	uint32_t hwstatus;
+#endif
 	struct espi_ld_host_addr ha;
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
+	struct host_io_data hiod;
 	mchp_espi_pc_bdp_callback_t cb;
 	void *cb_data;
 	struct host_io_data cb_hiod;
-#endif
-	uint16_t capdata[MEC5_BDP_FIFO_INTR_THRH_LVL];
 };
 
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
+const uint8_t fifo_thr_xlat_tbl[] = {
+	1u, 4u, 8u, 16u, 20u, 24u, 28u, 30u
+};
+
+static uint32_t mec_bdp_fifo_thr_to_bytes(uint8_t fifo_thr)
+{
+	if (fifo_thr >= 8u) {
+		return 30u;
+	}
+
+	return (uint32_t)fifo_thr_xlat_tbl[fifo_thr];
+}
+
+static int mec_bdp_get_io(const struct device *dev, struct host_io_data *hiod, uint32_t *nread)
+{
+	const struct mec5_bdp_devcfg *const devcfg = dev->config;
+	struct mec_bdp_regs *const regs = devcfg->regs;
+	uint32_t da = 0, nr = 0;
+	bool io_complete = false;
+	uint8_t io_width = 0, io_msk = 0;
+
+	if (hiod == NULL) {
+		return -EINVAL;
+	}
+
+	da = regs->DATRB;
+	nr++;
+
+	while ((da & BIT(MEC_BDP_DATRB_NOT_EMPTY_Pos)) != 0) {
+		uint8_t lane = (da & MEC_BDP_DATRB_LANE_Msk) >> MEC_BDP_DATRB_LANE_Pos;
+		uint8_t iosz = (da & MEC_BDP_DATRB_LEN_Msk) >> MEC_BDP_DATRB_LEN_Pos;
+
+		io_msk |= BIT(lane);
+		hiod->data |= ((da & 0xffu) << lane);
+		hiod->flags = 0;
+
+		if (iosz == MEC_BDP_DATRB_LEN_IO8) {
+			if (io_width == 0) {
+				hiod->start_byte_lane = lane;
+				io_width = 1u;
+				io_complete = true;
+			} else if (io_width == 2u) {
+				io_complete = true; /* second byte of 16-bit cycle */
+			} else if ((io_width == 4u) && (lane == 3u)) {
+				io_complete = true; /* fourth byte of 32-bit cycles */
+			}
+		} else if (iosz == MEC_BDP_DATRB_LEN_IO16B0) {
+			io_width = 2u;
+			hiod->start_byte_lane = lane;
+		} else if (iosz == MEC_BDP_DATRB_LEN_IO32B0) {
+			io_width = 4u;
+			hiod->start_byte_lane = lane;
+		} else { /* invalid orphan byte. discard */
+			io_complete = true;
+			io_width = iosz;
+			hiod->start_byte_lane = lane;
+			hiod->flags |= BIT(MEC5_BDP_EVENT_OVERRUN_POS);
+		}
+
+		if (io_complete == true) {
+			hiod->size = io_width;
+			hiod->msk = io_msk;
+			break;
+		}
+
+		da = regs->DATRB;
+		nr++;
+	}
+
+	if (nread != NULL) {
+		*nread = nr;
+	}
+
+	return 0;
+}
+
 static int mec5_bdp_set_callback(const struct device *dev,
 				 mchp_espi_pc_bdp_callback_t callback,
 				 void *user_data)
@@ -76,7 +152,6 @@ static int mec5_bdp_set_callback(const struct device *dev,
 
 	return 0;
 }
-#endif
 
 static int mec5_bdp_intr_enable(const struct device *dev, int intr_en, uint32_t flags)
 {
@@ -101,21 +176,13 @@ static int mec5_bdp_has_data(const struct device *dev)
 	return 0;
 }
 
-static int mec5_bdp_get_data(const struct device *dev, struct host_io_data *data)
+static int mec5_bdp_get_data(const struct device *dev, struct host_io_data *hiod)
 {
-	const struct mec5_bdp_devcfg *const devcfg = dev->config;
-	struct mec_bdp_regs *const regs = devcfg->regs;
-	struct mec_bdp_io capio = {0};
-
-	int ret = mec_hal_bdp_get_host_io(regs, &capio);
+	int ret = mec_bdp_get_io(dev, hiod, NULL);
 
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
-
-	data->data = capio.data;
-	data->start_byte_lane = (capio.flags & MEC_BDP_IO_LANE_MSK) >> MEC_BDP_IO_LANE_POS;
-	data->size = (capio.flags & MEC_BDP_IO_SIZE_MSK) >> MEC_BDP_IO_SIZE_POS;
 
 	return 0;
 }
@@ -138,45 +205,28 @@ static void mec5_bdp_isr(const struct device *dev)
 	const struct mec5_bdp_devcfg *const devcfg = dev->config;
 	struct mec_bdp_regs *const regs = devcfg->regs;
 	struct mec5_bdp_data *data = dev->data;
-	int ret = 0;
-	struct mec_bdp_io mio = {0};
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
 	struct host_io_data *hiod = &data->cb_hiod;
-#else
-	struct espi_event evt = {
-		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		.evt_details = ESPI_PERIPHERAL_DEBUG_PORT80,
-		.evt_data = ESPI_PERIPHERAL_NODATA,
-	};
-#endif
+	int ret = 0;
+	uint32_t nr = 0, fifo_thr_nb = 0, cap_nb = 0;
+
+#ifdef MEC_BDB_DEBUG
 	data->isr_count++;
-
 	LOG_DBG("ISR: BDP: cnt=%u", data->isr_count);
+#endif
+	fifo_thr_nb = mec_bdp_fifo_thr_to_bytes(devcfg->fifo_thr);
 
-	for (uint8_t n = 0; n < MEC_BDP_FIFO_MAX_ENTRIES; n++) {
-		ret = mec_hal_bdp_get_host_io(regs, &mio);
-		if (ret != MEC_RET_OK) { /* disable interrupt and exit */
-			mec_hal_bdp_intr_en(regs, 0);
-			return;
-		}
-
-		if (!mio.flags) { /* No more data */
+	while (cap_nb < fifo_thr_nb) {
+		nr = 0;
+		ret = mec_bdp_get_io(dev, hiod, &nr);
+		if (ret != MEC_RET_OK) {
 			break;
 		}
 
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
-		if (data->cb) {
-			hiod->data = mio.data;
-			hiod->start_byte_lane =
-				(mio.flags & MEC_BDP_IO_LANE_MSK) >> MEC_BDP_IO_LANE_POS;
-			hiod->size = (mio.flags & MEC_BDP_IO_SIZE_MSK) >> MEC_BDP_IO_SIZE_POS;
+		cap_nb += nr;
+
+		if (data->cb != NULL) {
 			data->cb(dev, hiod, data->cb_data);
 		}
-#else
-		evt.evt_details |= ((uint32_t)mio.flags << 16);
-		evt.evt_data = mio.data;
-		espi_mec5_send_callbacks(devcfg->parent, evt);
-#endif
 	}
 
 	mec_hal_bdp_girq_status_clr(regs);
@@ -186,9 +236,7 @@ static const struct mchp_espi_pc_bdp_driver_api mec5_bdp_drv_api = {
 	.intr_enable = mec5_bdp_intr_enable,
 	.has_data = mec5_bdp_has_data,
 	.get_data = mec5_bdp_get_data,
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
 	.set_callback = mec5_bdp_set_callback,
-#endif
 };
 
 /* Called by Zephyr kernel during driver initialization */
@@ -196,10 +244,15 @@ static int mec5_bdp_init(const struct device *dev)
 {
 	const struct mec5_bdp_devcfg *const devcfg = dev->config;
 	struct mec_bdp_regs *const regs = devcfg->regs;
-	struct mec5_bdp_data *data = dev->data;
-	uint32_t cfg_flags = MEC5_BDP_FIFO_INTR_THRH_LVL | BIT(MEC5_BDP_CFG_THRH_IEN_POS);
+	uint32_t cfg_flags = 0;
 
+#ifdef MEC_BDP_DEBUG
 	data->isr_count = 0;
+#endif
+
+	cfg_flags = (((uint32_t)devcfg->fifo_thr << MEC5_BDP_CFG_FIFO_THRES_POS) &
+		     MEC5_BDP_CFG_FIFO_THRES_MSK);
+	cfg_flags |= BIT(MEC5_BDP_CFG_THRH_IEN_POS);
 
 	if (devcfg->host_io_alias) {
 		cfg_flags |= BIT(MEC5_BDP_CFG_ALIAS_EN_POS);
@@ -253,6 +306,7 @@ static int mec5_bdp_init(const struct device *dev)
 		.alias_byte_lane = MEC5_DT_BDPA_ABL(inst),			\
 		.ldn = MEC5_DT_BDP_LDN(inst),					\
 		.ldn_alias = MEC5_DT_BDPA_LDN(inst),				\
+		.fifo_thr = DT_INST_ENUM_IDX_OR(inst, fifo_threshold, 0),       \
 		.irq_config_func = mec5_bdp_irq_config_func_##inst,		\
 	};									\
 	DEVICE_DT_INST_DEFINE(inst, mec5_bdp_init, NULL,			\

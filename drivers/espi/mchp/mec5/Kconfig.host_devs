@@ -84,28 +84,6 @@ config ESPI_MEC5_MAILBOX_CALLBACK
 
 endif # ESPI_MEC5_MAILBOX
 
-if ESPI_MEC5_BDP
-
-config ESPI_MEC5_BDP_FIFO_THRESHOLD_LEVEL
-	int "ESPI Host I/O write capture peripheral FIFO threshold"
-	range 0 7
-	default 0
-	help
-	  BDP contains a 32 entry capture FIFO capable of generating
-	  an interrupt to the EC when the number of entries is equal
-	  to or above a threshold value. Threshold encoding is
-	  [0, 7] -> [1, 4, 8, 16, 20, 24, 28, 30]
-
-config ESPI_MEC5_BDP_CALLBACK
-	bool "BDP driver uses its own single callback"
-	default n
-	help
-	  Selects whether the BDP driver manages/implements
-	  its own callback. If not defined the BDP driver will
-	  use its parent (eSPI) driver callbacks.
-
-endif # ESPI_MEC5_BDP
-
 if ESPI_MEC5_KBC
 
 config ESPI_MEC5_KBC_CALLBACK

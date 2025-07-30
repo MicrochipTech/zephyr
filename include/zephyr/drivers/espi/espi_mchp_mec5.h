@@ -130,16 +130,18 @@ static inline int espi_pc_intr_enable(const struct device *dev, uint8_t en, uint
 }
 
 /* ---- Host Device BDP ---- */
-enum mec5_bdp_event {
-	MEC5_BDP_EVENT_NONE = 0,
-	MEC5_BDP_EVENT_IO,
-	MEC5_BDP_EVENT_OVERRUN,
+enum mec5_bdp_event_pos {
+	MEC5_BDP_EVENT_INCOMPLETE_POS = 0,
+	MEC5_BDP_EVENT_OVERRUN_POS,
+	MEC5_BDP_EVENT_ERROR_POS
 };
 
 struct host_io_data {
 	uint32_t data;
 	uint8_t start_byte_lane;
 	uint8_t size;
+	uint8_t msk;
+	uint8_t flags;
 };
 
 typedef void (*mchp_espi_pc_bdp_callback_t)(const struct device *dev,
@@ -150,10 +152,8 @@ struct mchp_espi_pc_bdp_driver_api {
 	int (*intr_enable)(const struct device *dev, int intr_en, uint32_t flags);
 	int (*has_data)(const struct device *dev);
 	int (*get_data)(const struct device *dev, struct host_io_data *data);
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
 	int (*set_callback)(const struct device *dev, mchp_espi_pc_bdp_callback_t cb,
 			    void *user_data);
-#endif
 };
 
 static inline int mchp_espi_pc_bdp_intr_enable(const struct device *dev, int intr_en,
@@ -193,7 +193,6 @@ static inline int mchp_espi_pc_bdp_get_data(const struct device *dev, struct hos
 	return api->get_data(dev, hiod);
 }
 
-#ifdef CONFIG_ESPI_MEC5_BDP_CALLBACK
 static inline int mchp_espi_pc_bdp_set_callback(const struct device *dev,
 						mchp_espi_pc_bdp_callback_t callback,
 						void *user_data)
@@ -207,7 +206,6 @@ static inline int mchp_espi_pc_bdp_set_callback(const struct device *dev,
 
 	return api->set_callback(dev, callback, user_data);
 }
-#endif
 
 /* Legacy 8042 Keyboard controller on eSPI peripheral channel */
 
