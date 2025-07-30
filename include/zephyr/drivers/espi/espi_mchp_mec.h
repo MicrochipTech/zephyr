@@ -52,4 +52,18 @@ struct espi_cfg_mchp_mec {
 	uint8_t num_emi_mem_cfgs;
 };
 
+enum espi_mec_io_capture_event_pos {
+	ESPI_IO_CAP_EVENT_INCOMPLETE_POS = 0,
+	ESPI_IO_CAP_EVENT_OVERRUN_POS,
+	ESPI_IO_CAP_EVENT_ERROR_POS
+};
+
+struct espi_mec_host_io_data {
+	uint32_t data;
+	uint8_t start_byte_lane;
+	uint8_t size;
+	uint8_t msk;
+	uint8_t flags;
+};
+
 #endif /* ZEPHYR_INCLUDE_DRIVERS_ESPI_MCHP_MEC_H__ */

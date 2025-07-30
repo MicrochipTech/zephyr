@@ -107,9 +107,9 @@
 #define MEC_BDP_DA_LEN_ORPHAN		3u
 #define MEC_BDP_DA_LEN_SET(len)		FIELD_PREP(MEC_BDP_DA_LEN_MSK, (len))
 #define MEC_BDP_DA_LEN_GET(len)		FIELD_GET(MEC_BDP_DA_LEN_MSK, (len))
-#define MEC_BDP_DA_NE_POS		4u /* not empty */
-#define MEC_BDP_DA_OVR_POS		5u /* overrun */
-#define MEC_BDP_DA_THR_POS		6u /* FIFO data at or above threshold */
+#define MEC_BDP_DA_NE_POS		12u /* not empty */
+#define MEC_BDP_DA_OVR_POS		13u /* overrun */
+#define MEC_BDP_DA_THR_POS		18u /* FIFO data at or above threshold */
 
 #define MEC_BDP_CFG_OFS			0x104u
 #define MEC_BDP_CFG_FF_POS		0 /* fifo flush (WO) */
