@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Microchip Technologies Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC peripheral device common properites
+
+include: base.yaml
+
+properties:
+  girqs:
+    type: array
+    description: |
+      XEC peripherals with interrupt capability route their interrupt
+      signal(s) through the EC Interrupt Aggregator (ECIA). The peripheral
+      interrupt signal(s) and corresponding enables in the ECIA GIRQ are
+      combined to produce a result signal. Most result signals are connected
+      directly to the Cortex-M NVIC. Each peripheral with interrupts needs
+      the ECIA GIRQ number(s) and bit position(s).
