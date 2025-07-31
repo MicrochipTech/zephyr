@@ -1,0 +1,46 @@
+#
+# Copyright (c) 2025 Microchip Technology Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+include: ["base.yaml", "mailbox-controller.yaml", "microchip,xec-peripheral.yaml"]
+
+on-bus: espi
+
+properties:
+  compatible:
+    const: microchip,xec-mailbox
+
+  reg:
+    - items:
+        - description: mailbox control registers
+        - description: mailbox interrupt registers
+
+  interrupts:
+    maxItems: 1
+
+  "#mbox-cells":
+    const: 1
+
+mbox-cells:
+  - channel
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - "#mbox-cells"
+
+examples:
+  - |
+    soc {
+      #address-cells = <1>;
+      #size-cells = <1>;
+      mbox0: mailbox@400f0000 {
+        compatible = "microchip,xec-mailbox";
+        reg = <0x400f0000 0x130>;
+        interrupts = <60 3>;
+        girqs = <15 20>;
+        #mbox-cells = <1>;
+      };
+    };

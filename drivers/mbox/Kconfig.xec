@@ -1,0 +1,9 @@
+# Copyright 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MBOX_MICROCHIP_XEC_MAILBOX
+	bool "Microchip XEC Mailbox driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_MAILBOX_ENABLED
+	help
+	  Driver for Microchip XEC family mailbox on eSPI bus.
