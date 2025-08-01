@@ -7,3 +7,17 @@ config MBOX_MICROCHIP_XEC_MAILBOX
 	depends on DT_HAS_MICROCHIP_XEC_MAILBOX_ENABLED
 	help
 	  Driver for Microchip XEC family mailbox on eSPI bus.
+
+if MBOX_MICROCHIP_XEC_MAILBOX
+
+config MBOX_MICROCHIP_XEC_SEND_TIMEOUT_MS
+	int "Timeout in milliseconds waitng for Host to acknowledge message"
+	default 10
+	help
+	  Host acknowleges receipt of a message sent by EC by clearing to
+	  EC-to-Host mailbox hardware register. Mailbox hardware does not
+	  generate an interrupt when register is cleared. The driver must
+	  poll until Host clears EC-to-Host.  A value of 0 disables polling
+	  and the driver returns immediately.
+
+endif # MBOX_MICROCHIP_XEC_MAILBOX

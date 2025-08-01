@@ -9,15 +9,23 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/mbox.h>
 #include <zephyr/irq.h>
-
-#define LOG_LEVEL CONFIG_MBOX_LOG_LEVEL
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(microchip_xec_mailbox);
+#include <zephyr/sys/barrier.h>
+
+LOG_MODULE_REGISTER(mbox_xec, CONFIG_MBOX_LOG_LEVEL);
 
 #define DT_DRV_COMPAT microchip,xec-mailbox
 
-/* XEC Mailbox peripheral has 32 8-bit mailbox registers */
-#define XEC_MBOX_MAX_CHANNELS	32
+/* XEC Mailbox peripheral has 32 8-bit mailbox registers
+ * Drivers support 8 channels defined as:
+ * channel 0: data transport
+ * channels 1 - 7: signal only
+ */
+#define XEC_MBOX_MAX_CHANNELS	8
+#define XEC_MBOX_MAX_MSG_LEN	36
+#define XEC_MBOX_MSG_DATA_OFS	4
+#define XEC_MBOX_MSG_MAX_WORDS	((32 / 4) + 1)
 
 /* XEC Mailbox hardware registers */
 #define XEC_MBX_INDEX_OFS	0
@@ -54,11 +62,12 @@ struct xec_mbox_drv_config {
 };
 
 struct xec_mbox_drv_data {
-	k_sem lock;
-	uint32_t chan_enables;
-	mbox_channel_id_t cb_chan_id[XEC_MBOX_MAX_CHANNELS];
-	mbox_callback_t cb[XEC_MBOX_MAX_CHANNELS];
-	void *cb_user_data[XEC_MBOX_MAX_CHANNELS];
+	struct k_sem lock;
+	mbox_channel_id_t cb_chan_id;
+	mbox_callback_t cb;
+	void *cb_user_data;
+	struct mbox_msg msg;
+	uint32_t msgbuf[XEC_MBOX_MSG_MAX_WORDS];
 };
 
 #if 0
@@ -67,9 +76,43 @@ typedef void (*mbox_callback_t)(const struct device *dev,
 				struct mbox_msg *data);
 #endif
 
+/* Host wrote value to Host-to-EC 8-bit register.
+ * Host may have updates any of the other MBox registers before writing Host-to-EC.
+ */
 static void xec_mbox_isr(const struct device *dev)
 {
-	/* TODO */
+	struct xec_mbox_drv_data *drvdat = dev->data;
+	const struct xec_mbox_drv_config *drvcfg = dev->config;
+	mem_addr_t ba = drvcfg->regbase;
+	struct mbox_msg *msg = &drvdat->msg;
+	uint32_t *mbuf = drvdat->msgbuf;
+	uint32_t ofs = 0, temp = 0;
+
+	temp = sys_read8(ba + XEC_MBX_H2E_MB_OFS);
+	temp |= ((uint32_t)sys_read8(ba + XEC_MBX_E2H_MB_OFS) << 8);
+	temp |= ((uint32_t)sys_read8(ba + XEC_MBX_SS_OFS) << 16);
+	temp |= ((uint32_t)sys_read8(ba + XEC_MBX_SM_OFS) << 24);
+	*mbuf++ = temp;
+
+	ofs = XEC_MBX_DATA_MB_OFS(0);
+	while (ofs < XEC_MBX_DATA_MB_OFS(32u)) {
+		*mbuf++ = sys_read32(ba + ofs);
+		ofs += 4u;
+	}
+
+	if (drvdat->cb != NULL) {
+		msg->data = (const void *)drvdat->msgbuf;
+		msg->size = XEC_MBOX_MAX_MSG_LEN;
+		drvdat->cb(dev, cb->cb_chan_id, drvdat->cb_user_data, msg);
+	}
+
+	/* clear MBox GIRQ latched status. Spec says reading Host-to-EC clears the HW interrupt
+	 * signal from MBox block.
+	 */
+	soc_ecia_girq_status_clear(drvcfg->girq, drvcfg->girq_pos);
+
+	/* signal host we have received and handled message */
+	sys_write8(XEC_MBX_H2E_MB_CLR_VAL, ba + XEC_MBX_H2E_MB_OFS);
 
 	/* Add for ARM errata 838869, affects Cortex-M4, Cortex-M4F
 	 * Store immediate overlapping exception return operation
@@ -91,57 +134,52 @@ static int xec_mbox_register_callback(const struct device *dev, mbox_channel_id_
 
 	k_sem_take(&dd->lock, K_FOREVER);
 
-	dd->cb_chan_id[chan_id] = chan_id;
-	dd->cb[chan_id] = cb;
-	dd->cb_user_data[chan_id] = user_data;
+	dd->cb_chan_id = chan_id;
+	dd->cb = cb;
+	dd->cb_user_data = user_data;
 
 	k_sem_give(&dd->lock);
 
 	return -ENOTSUP;
 }
 
+/* Send message to external Host.
+ * Requires eSPI driver has configured MBox Serial-IRQ(s).
+ * Channel 0: data mode only
+ * Channels 1 - 7: signal or data mode.
+ */
 static int xec_mbox_send(const struct device *dev, mbox_channel_id_t chan_id,
 			 const struct mbox_msg *msg)
 {
 	const struct xec_mbox_drv_config *drvcfg = dev->config;
-	struct xec_mbox_drv_data *dd = dev->data;
+	struct xec_mbox_drv_data *drvdat = dev->data;
 	mem_addr_t ba = drvcfg->regbase;
 
 	if (chan_id >= XEC_MBOX_MAX_CHANNELS) {
 		return -EINVAL;
 	}
 
-	k_sem_take(&dd->lock, K_FOREVER);
+	if ((chan_id == 0) && (msg == NULL)) {
+		return -EINVAL;
+	}
+
+	k_sem_take(&drvdat->lock, K_FOREVER);
 
 	if (msg == NULL) { /* signalling mode? */
-		/* write chan_id to EC-to-Host register.
-		 * If Serial-IRQ has been configured by eSPI driver on VWire nPLTRST
-		 * de-assertion then HW will send the MBox EC-to-Host SIRQ to the Host.
-		 */
-		sys_write8((uint8_t)(chan_id & 0xffu), ba + XEC_MBX_E2H_MB_OFS);
-		k_sem_give(&dd->lock);
+		soc_mmcr_set_bit8(ba + XEC_MBX_SS_OFS, BIT(chan_id));
+		k_sem_give(&drvdat->lock);
 		return 0;
 	}
 
-	/* data send:
-	 * Option 1:
-	 *   Translate channel ID to HW mbox index.
-	 *   Write data to HW mbox index ... index + len(data)
-	 *   Must check we don't overrun HW mbox index range.
-	 *   Write channel ID to EC-to-Host MBX HW reg to trigger interrupt to Host.
-	 * Option 2:
-	 *   Translate channel ID to HW mbox index.
-	 *   for byte in msg->data
-	 *     write byte to HW mbox index
-	 *     Write channel ID to EC-to-Host MBX HW reg to trigger interrupt to Host.
-	 *     Poll for Host to acknowledge (Host clears EC-to-Host MBX reg)
-	 *    end for
-	 * Option 3:
-	 *    if msg is not NULL
-	 *      write msg->data to mbox data [0..31]
-	 *    endif
-	 *    write channel ID to EC-to-Host MBX HW reg
-	 *
+	/* Copy message bytes into data mbox registers */
+
+	/* Write value to EC-to-Host register. Write triggers Serial-IRQ(s) to Host.
+	 * Issue: HW was designed for a polling mode where EC writes a non-zero value to
+	 * the EC-to-Host register. EC and then poll on this register waiting for Host to
+	 * clear it. (Host writes 0xFF to the register to clear it.
+	 * ISSUE 1: channel ID may be 0 which doesn't work with this HW scheme.
+	 * ISSUE 2: Polling is blocking. We need timeout.
+	 *          HW does not generate an interrupt when Host clears this register.
 	 */
 	return -ENOTSUP;
 }
@@ -154,12 +192,12 @@ static int xec_mbox_send(const struct device *dev, mbox_channel_id_t chan_id,
  */
 static int xec_mbox_mtu_get(const struct device *dev)
 {
-	return XEC_MBOX_MAX_CHANNELS;
+	return XEC_MBOX_MAX_MSG_LEN;
 }
 
 static uint32_t xec_mbox_max_channels_get(const struct device *dev)
 {
-	return XEC_MBOX_MAX_CHANNELS;
+	return (uint32_t)XEC_MBOX_MAX_CHANNELS;
 }
 
 static int xec_mbox_set_enabled(const struct device *dev, mbox_channel_id_t chan_id, bool enabled)
