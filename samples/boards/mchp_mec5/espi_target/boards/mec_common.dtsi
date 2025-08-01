@@ -121,7 +121,7 @@
 	chosen {
 		espi,os-acpi = &acpi_ec0;
 		espi,host-cmd-acpi = &acpi_ec1;
-		espi,host-mailbox = &mbox0;
+/*		espi,host-mailbox = &mbox0; */
 		espi,host-shm = &emi0;
 		espi,host-em8042 = &kbc0;
 		espi,host-uart = &uart0;
@@ -320,10 +320,20 @@
 };
 
 /* Use eSPI Mailbox driver and map mailbox to Host I/O space */
+/*
 &mbox0 {
 	compatible="microchip,mec5-espi-mailbox";
+	compatible = "microchip,xec-mailbox";
 	espi-parent = <&espi0>;
 	host-infos = <&espi_mbox0>;
+	status = "okay";
+};
+*/
+
+&mbox0 {
+	compatible = "microchip,xec-mailbox";
+	#mbox-cells = <1>;
+	girqs = <15 20>;
 	status = "okay";
 };
 
