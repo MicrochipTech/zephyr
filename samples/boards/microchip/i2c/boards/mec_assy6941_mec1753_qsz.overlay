@@ -1,0 +1,116 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		i2c0 = &i2c_smb_0;
+		i2c-0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_1;
+		i2c-1 = &i2c_smb_1;
+		i2c2 = &i2c_smb_2;
+		i2c-2 = &i2c_smb_2;
+	};
+
+	zephyr,user {
+		pinctrl-0 = <&tst_clk_out_gpio060>;
+		pinctrl-names = "default";
+	};
+};
+
+/* I2C Port 0 */
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 4 */
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+&i2c04_scl_gpio144 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 5 */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-ctrl";
+	pcrs = < 1 10 >;
+	port_sel = < 0 >;
+	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-names = "default";
+
+	pca9555_evb: pca9555@26 {
+		/* Zephyr will load NXP PCA9555 driver after MEC5 I2C because it calls MEC5 I2C during init */
+		compatible = "nxp,pca9555";
+		reg = <0x26>;
+		ngpios = <16>;
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+
+	ltc2489_evb: ltc2489@34 {
+		/* No Zephyr driver exists */
+		reg = <0x34>;
+		#io-channels-cells = <1>;
+	};
+
+	status = "okay";
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-ctrl";
+	pcrs = < 3, 13 >;
+	port_sel = < 4 >;
+	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
+	pinctrl-names = "default";
+
+	/* External Fujitsu MB85RC256V 256KB (32K x 8) FRAM */
+	mb85rc256v: mb85rc256v@50 {
+		/* No Zephyr driver exists */
+		reg = <0x50>;
+	};
+
+	status = "okay";
+};
+
+&i2c_smb_2 {
+	compatible = "microchip,xec-i2c-ctrl";
+	pcrs = < 3, 14 >;
+	interrupts = <22 3>; /* lower priority than default priority of DMA channels */
+	port_sel = < 5 >;
+	pinctrl-0 = < &i2c05_sda_gpio141 &i2c05_scl_gpio142 >;
+	pinctrl-names = "default";
+/*	dmas = <&dmac 4 0x5>, <&dmac 5 0x4>; */
+/*	dma-names = "cm", "tm"; */
+	status = "okay";
+};
