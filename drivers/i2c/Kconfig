@@ -68,6 +68,12 @@ config I2C_ALLOW_NO_STOP_TRANSACTIONS
 	  unsupported and can leave the bus in an unexpected state. The option
 	  will be removed in Zephyr 4.1.
 
+config I2C_PORT_SELECT
+	bool "I2C port configuration item"
+	help
+	  Add a field in the I2C configuration work to select the I2C port
+	  the controller will use.
+
 config I2C_RTIO
 	bool "I2C RTIO API"
 	select EXPERIMENTAL

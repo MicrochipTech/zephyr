@@ -1,0 +1,61 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip I2C Controller byte-mode driver
+
+compatible: "microchip,xec-i2c-ctrl"
+
+include:
+  - "base.yaml"
+  - "pinctrl-device.yaml"
+  - "microchip,dmec-ecia-girq.yaml"
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  port-sel:
+    type: int
+    required: true
+    description: |
+      SoC I2C port pins the controller is connected to at driver
+      initialization time. Note pinctrl-0 must contain the pins
+      for the selected port. If CONFIG_I2C_PORT_SELECT is enable
+      pinctrl-0 should contain pins for all the ports that will
+      be used.
+
+  pcrs:
+    type: array
+    required: true
+    description: |
+      I2C controller PCR sleep register index and bit position.
+      Please refer to the SoC data sheet.
+
+child-binding:
+  description: I2C frequency timings
+
+  properties:
+    freq-timings:
+      type: array
+      description: |
+        Array of tuples expressing non-default I2C controller timings.
+        Each tuple contains 6 values, the desired I2C bus frequency
+        followed by 5 controller timing register values. The driver
+        supports standard I2C frequencies 100 KHz, 400 KHz, and 1 MHz.
+
+freq-timing-cells:
+  - i2c_freq
+  - bus-timing
+  - data-timing
+  - start-hold-time
+  - idle-scale
+  - timeout-scale

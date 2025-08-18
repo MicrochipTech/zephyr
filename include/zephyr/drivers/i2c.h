@@ -68,6 +68,15 @@ extern "C" {
 /** Peripheral to act as Controller. */
 #define I2C_MODE_CONTROLLER		BIT(4)
 
+#ifdef CONFIG_I2C_PORT_SELECT
+/** I2C port. Controller configures the port connected to the controller */
+#define I2C_PORT_POS			(16U)
+#define I2C_PORT_MSK0			(0x1FU)
+#define I2C_PORT_MSK			(I2C_PORT_MSK0 << I2C_PORT_POS)
+#define I2C_PORT_SET(port)		(((port) & I2C_PORT_MSK0) << I2C_PORT_POS)
+#define I2C_PORT_GET(cfg)		(((cfg) & I2C_PORT_MSK) << I2C_PORT_POS)
+#endif
+
 /**
  * @brief Complete I2C DT information
  *
