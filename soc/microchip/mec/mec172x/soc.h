@@ -291,5 +291,8 @@ typedef enum {
 /* MEC172x SAF V2 */
 #include "soc_espi_saf_v2.h"
 
+#define XEC_DMAC_MAX_CHAN 16u
+#define XEC_DMAC_CHAN_MSK 0xffffu
+
 #endif
 #endif

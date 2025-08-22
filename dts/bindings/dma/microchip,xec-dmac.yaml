@@ -1,8 +1,10 @@
-description: Microchip XEC DMA controller
+description: Microchip XEC Central DMA controller
 
 compatible: "microchip,xec-dmac"
 
-include: dma-controller.yaml
+include:
+  - "dma-controller.yaml"
+  - "microchip,dmec-ecia-girq.yaml"
 
 properties:
   reg:
@@ -11,31 +13,7 @@ properties:
   interrupts:
     required: true
 
-  pcrs:
-    type: array
-    required: true
-    description: PCR register index and bit position
-
-  girqs:
-    type: array
-    required: true
-    description: Encoded interrupt information
-
-  aggregated-girq:
-    type: phandle
-    description: |
-      If DMA driver uses aggregated interrupt mode
-      provide the handle to the GIRQ.
-
   "#dma-cells":
-    const: 2
-
-  "pcr-cells":
-    type: int
-    const: 2
-
-  "girq-cells":
-    type: int
     const: 2
 
 # #dma-cells : Must be <2>.
@@ -61,11 +39,3 @@ properties:
 dma-cells:
   - channel
   - trigsrc
-
-pcr-cells:
-  - regidx
-  - bitpos
-
-girq-cells:
-  - girqno
-  - girqpos
