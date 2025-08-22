@@ -22,5 +22,8 @@
 #include <soc_pcr.h>
 #include <soc_pins.h>
 
+#define XEC_DMAC_MAX_CHAN 20u
+#define XEC_DMAC_CHAN_MSK 0xfffffu
+
 #endif
 #endif
