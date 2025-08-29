@@ -20,31 +20,53 @@
 	hibtimer-handle = <&hibtimer1>;
 
 	core-clock-div = <1>;
+	/* observing on my MEC1753 part period counter = 0x5b4(1460)
+	 * 0x59b = 1435
+	 * 0x5d7 = 1495
+	 * manually program and test with the values here:
+	 * period counter = 0x5b2, 0x5b1
+	 * pulse high counter = 0x2ba, 0x2bb
+	 * ctrl = 0x7
+	 * sts  = 0x27
+	 * b[0]=PulseRdy=1
+	 * b[1]=PassPeriod=1
+	 * b[2]=PassDuty=1
+	 * b[3]=Fail=0
+	 * b[4]=Stall=0
+	 * b[5]=Valid=1
+	 * b[6]=Unwell=0
+	 * measured freq = 32573 Hz (-0.6%)
+	 */
 	clk32kmon-period-min = <1435>;
 	clk32kmon-period-max = <1495>;
-	clk32kmon-duty-cycle-var-max = <192>;
+	clk32kmon-duty-cycle-var-max = <212>;
 	clk32kmon-valid-min = <4>;
+	/* adjust? hibernation timer at 32768Hz max internal is 2 seconds */
 	xtal-enable-delay-ms = <10>;
-/*	xtal-monitor-max-ms = <300>; */
 	pll-lock-timeout-ms = <30>;
 
-	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	/* pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>; */
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_XTAL>;
 	/* periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>; */
 	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_XTAL_XTAL>;
+
+	xtal-gain = "2X";
+	/* xtal-hi-startup-current-disable; */
+
 	/* xtal-single-ended; */
 	/* internal-osc-disable; */
 
 	/* debug only, not using 32KHZ_IN pin */
-	/* pinctrl-0 = <&tst_clk_out_gpio060 &clk_32khz_out_gpio221>; */
+	pinctrl-0 = <&tst_clk_out_gpio060 &clk_32khz_out_gpio221>;
 
 	/* 32KHZ_IN is a clock source and no debug */
 	/* pinctrl-0 = <&clk_32khz_in_gpio165>; */
 
 	/* 32KHZ_IN is a clock source with debug */
-	pinctrl-0 = <&clk_32khz_in_gpio165
+	/* pinctrl-0 = <&clk_32khz_in_gpio165
 			&tst_clk_out_gpio060
 			&clk_32khz_out_gpio221>;
-
+	*/
 	pinctrl-names = "default";
 
 	status = "okay";
