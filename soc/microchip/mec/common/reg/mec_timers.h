@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _MEC_TIMERS_H
-#define _MEC_TIMERS_H
+#ifndef _SOC_MICROCHIP_MEC_COMMON_REG_MEC_TIMERS_H
+#define _SOC_MICROCHIP_MEC_COMMON_REG_MEC_TIMERS_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -88,6 +88,17 @@ struct btmr_regs {
  * 0 = 30.5 us (32786 Hz)
  * 1 = 125 ms (8 Hz)
  */
+#define MCHP_XEC_HTMR_PRLD_OFS		0u /* preload, write 0 to stop counter */
+#define MCHP_XEC_HTMR_PRLD_MSK		GENMASK(15, 0)
+
+#define MCHP_XEC_HTMR_CR_OFS		4u
+#define MCHP_XEC_HTMR_CR_MSK		0x01u
+#define MCHP_XEC_HTMR_CR_8HZ_MODE_POS	0
+
+#define MCHP_XEC_HTMR_CNT_OFS		8u /* RO */
+#define MCHP_XEC_HTMR_CNT_MSK		GENMASK(15, 0)
+
+/* to be deprecated */
 #define MCHP_HTMR_CTRL_REG_MASK		0x01u
 #define MCHP_HTMR_CTRL_RESOL_POS	0u
 #define MCHP_HTMR_CTRL_RESOL_MASK	BIT(MCHP_HTMR_CTRL_EN_POS)
@@ -270,4 +281,4 @@ struct wktmr_regs {
 	volatile uint32_t BGPO_RST;
 };
 
-#endif	/* #ifndef _MEC_TIMERS_H */
+#endif	/* _SOC_MICROCHIP_MEC_COMMON_REG_MEC_TIMERS_H */
