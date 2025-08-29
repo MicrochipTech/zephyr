@@ -6,6 +6,7 @@
 #ifndef ZEPHYR_INCLUDE_DRIVERS_CLOCK_CONTROL_MCHP_XEC_H_
 #define ZEPHYR_INCLUDE_DRIVERS_CLOCK_CONTROL_MCHP_XEC_H_
 
+#include <zephyr/device.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
 
@@ -17,6 +18,9 @@ int z_mchp_xec_pcr_periph_sleep(uint8_t slp_idx, uint8_t slp_pos,
 				uint8_t slp_en);
 
 int z_mchp_xec_pcr_periph_reset(uint8_t slp_idx, uint8_t slp_pos);
+
+/* Configure PLL and its 32KHz clock sources */
+int z_mchp_xec_pcr_vb_pll_init(void);
 
 #if defined(CONFIG_PM)
 void mchp_xec_clk_ctrl_sys_sleep_enable(bool is_deep);
