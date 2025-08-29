@@ -126,7 +126,7 @@ uint32_t soc_ecia_girq_get_enable_bm(uint8_t girq)
 		return 0;
 	}
 
-	raddr += MCHP_XEC_ECIA_GIRQ_OFS(girq);
+	raddr += MCHP_XEC_ECIA_GIRQ_ENSET_REG_OFS(girq);
 
 	return sys_read32(raddr);
 }
@@ -161,7 +161,7 @@ int soc_ecia_girq_status(uint8_t girq, uint32_t *status)
 		return -EINVAL;
 	}
 
-	raddr += MCHP_XEC_ECIA_GIRQ_RESULT_REG_OFS(girq);
+	raddr += MCHP_XEC_ECIA_GIRQ_SRC_REG_OFS(girq);
 
 	if (status != NULL) {
 		*status = sys_read32(raddr);
