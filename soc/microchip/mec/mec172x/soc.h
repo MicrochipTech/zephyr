@@ -277,6 +277,7 @@ typedef enum {
 #include <reg/mec_vci.h>
 #include <reg/mec_wdt.h>
 #include <reg/mec_gpio.h>
+#include <reg/mec_pcr_vbr.h>
 
 /* common SoC API */
 #include <soc_dt.h>

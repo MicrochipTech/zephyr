@@ -25,6 +25,7 @@
 
 /* common peripheral register defines */
 #include <reg/mec_gpio.h>
+#include <reg/mec_pcr_vbr.h>
 
 #include "soc_espi_saf_v1.h"
 

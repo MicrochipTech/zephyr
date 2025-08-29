@@ -12,6 +12,7 @@ config SOC_SERIES_MEC175X
 	select HAS_SWO
 	select HAS_MEC5_HAL
 	select SOC_PREP_HOOK
+	select SOC_EARLY_INIT_HOOK
 
 if SOC_SERIES_MEC175X
 

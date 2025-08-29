@@ -21,6 +21,11 @@
 #include <soc_mmcr.h>
 #include <soc_pcr.h>
 #include <soc_pins.h>
+/* common registers */
+#include <reg/mec_global_cfg.h>
+#include <reg/mec_gpio.h>
+#include <reg/mec_timers.h>
+#include <reg/mec_pcr_vbr.h>
 
 #endif
 #endif
