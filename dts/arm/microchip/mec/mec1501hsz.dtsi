@@ -544,6 +544,10 @@
 			pcrs = <3 18>;
 			status = "disabled";
 		};
+		glblcfg0: glblcfg@400fff00 {
+			reg = <0x400fff00 0x40>;
+			status = "disabled";
+		};
 	};
 };
 
