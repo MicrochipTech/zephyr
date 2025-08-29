@@ -41,6 +41,20 @@ extern "C" {
 #define MCHP_XEC_CLK_SRC_SET(v, c)	(((v) & ~MCHP_XEC_CLK_SRC_MASK) |\
 	(((c) << MCHP_XEC_CLK_SRC_POS) & MCHP_XEC_CLK_SRC_MASK))
 
+enum xec_pll_clk32k_src {
+	XEC_PLL_CLK32K_SRC_NONE = 0,
+	XEC_PLL_CLK32K_SRC_SI,
+	XEC_PLL_CLK32K_SRC_XTAL,
+	XEC_PLL_CLK32K_SRC_PIN,
+};
+
+enum xec_periph_clk32k_src {
+	XEC_PERIPH_CLK32K_SRC_SI_SI,
+	XEC_PERIPH_CLK32K_SRC_XTAL_XTAL,
+	XEC_PERIPH_CLK32K_SRC_PIN_SI,
+	XEC_PERIPH_CLK32K_SRC_PIN_XTAL,
+};
+
 /*
  * b[31:24] = clock source
  * b[23:0] = clock source specific format
