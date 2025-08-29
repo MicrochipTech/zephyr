@@ -33,6 +33,7 @@
 			reg = <0x40080100 0x100 0x4000a400 0x100>;
 			reg-names = "pcrr", "vbatr";
 			interrupts = <174 0>;
+			girqs = <20 9>;
 			status = "disabled";
 		};
 		ecia: ecia@4000e000 {
@@ -302,11 +303,13 @@
 		hibtimer0: timer@40009800 {
 			reg = <0x40009800 0x20>;
 			interrupts = <112 0>;
+			girqs = <23 16>;
 			status = "disabled";
 		};
 		hibtimer1: timer@40009820 {
 			reg = <0x40009820 0x20>;
 			interrupts = <113 0>;
+			girqs = <23 17>;
 			status = "disabled";
 		};
 		weektmr0: timer@4000ac80 {
