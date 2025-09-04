@@ -24,6 +24,7 @@
 
 /* common peripheral register defines */
 #include "../common/reg/mec_gpio.h"
+#include "../common/reg/xec_i2c_regs.h"
 
 #endif
 
