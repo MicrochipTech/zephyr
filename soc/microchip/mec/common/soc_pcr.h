@@ -12,6 +12,8 @@ extern "C" {
 #endif
 
 #include <zephyr/arch/cpu.h>
+#include <zephyr/sys/sys_io.h>
+#include <zephyr/arch/common/sys_bitops.h>
 
 /* slp_idx = [0, 4], bitpos = [0, 31] */
 #define MCHP_XEC_ENC_PCR_SCR(slp_idx, bitpos)					\
