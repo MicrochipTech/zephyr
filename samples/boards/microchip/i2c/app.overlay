@@ -45,19 +45,16 @@
 	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
 	pinctrl-names = "default";
 
-/*
 	pca9555_evb: pca9555@26 {
-
-		compatible = "nxp,pca9555";
+		/* compatible = "nxp,pca9555"; */
 		reg = <0x26>;
-		ngpios = <16>;
-		gpio-controller;
-		#gpio-cells = <2>;
+		/* ngpios = <16>; */
+		/* gpio-controller; */
+		/* #gpio-cells = <2>; */
 	};
 
 	ltc2489_evb: ltc2489@34 {
 		reg = <0x34>;
 		#io-channels-cells = <1>;
 	};
-*/
 };
