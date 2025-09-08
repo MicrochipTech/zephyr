@@ -18,10 +18,15 @@
 #include <zephyr/ztest.h>
 #include <zephyr/tc_util.h>
 
-#define RAM_ADDR (0b10100010 >> 1)
-
 #if DT_NODE_HAS_STATUS_OKAY(DT_ALIAS(i2c_ram))
 #define I2C_DEV_NODE	DT_ALIAS(i2c_ram)
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(fram))
+#define RAM_ADDR DT_REG_ADDR(DT_NODELABEL(fram))
+#else
+#define RAM_ADDR (0b10100010 >> 1)
+#endif
+
 #define TX_DATA_OFFSET 2
 static uint8_t tx_data[9] = {0x00, 0x00, 'Z', 'e', 'p', 'h', 'y', 'r', '\n'};
 static uint8_t rx_cmd[2] = {0x00, 0x00};

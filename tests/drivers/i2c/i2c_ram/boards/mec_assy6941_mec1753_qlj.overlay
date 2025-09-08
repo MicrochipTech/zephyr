@@ -1,0 +1,41 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		i2c-ram = &i2c_smb_2;
+	};
+};
+
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_scl_gpio144 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c_smb_2 {
+	compatible = "microchip,xec-i2c";
+	status = "okay";
+
+	port-sel = <4>;
+	sda-gpios = <MCHP_GPIO_DECODE_143 0>;
+	scl-gpios = <MCHP_GPIO_DECODE_144 0>;
+
+	pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
+	pinctrl-names = "default";
+
+	/* External Fujitsu MB85RC256V 256KB (32K x 8) FRAM */
+	fram: mb85rc256v@50 {
+		reg = <0x50>;
+	};
+};
