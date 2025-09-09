@@ -19,6 +19,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(dma_mchp_xec, CONFIG_DMA_LOG_LEVEL);
 
+#if 0
 #define XEC_DMA_MAIN_REGS_SIZE			0x40
 #define XEC_DMA_CHAN_REGS_SIZE			0x40
 
@@ -89,6 +90,7 @@ LOG_MODULE_REGISTER(dma_mchp_xec, CONFIG_DMA_LOG_LEVEL);
 #define XEC_DMA_CHAN_FSM_CST_RD_ACT_POS	2u
 #define XEC_DMA_CHAN_FSM_CST_WR_ACT_POS	3u
 #define XEC_DMA_CHAN_FSM_CST_WD_POS	4u
+#endif
 
 #define XEC_DMA_CFG_FLAG_INCR_SRC_ADDR	BIT(0)
 #define XEC_DMA_CFG_FLAG_INCR_DST_ADDR	BIT(1)
