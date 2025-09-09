@@ -1,0 +1,13 @@
+sample:
+  description: Microchip EVB I2C test
+  name: i2c
+tests:
+  sample.board.mec172xevb_assy6906.qmspi_ldma:
+    harness: spi
+    platform_allow:
+      - mec172xevb_assy6906
+      - mec_assy6941/mec1753_qlj
+    tags: i2c
+    depends_on:
+      - i2c
+      - gpio
