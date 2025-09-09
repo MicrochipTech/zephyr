@@ -69,6 +69,14 @@ extern "C" {
 /** Peripheral to act as Controller. */
 #define I2C_MODE_CONTROLLER		BIT(4)
 
+/** I2C port for hardware with built-in port multiplexer */
+#ifdef CONFIG_I2C_PORT_MUX
+#define I2C_PORT_MUX_POS		(16U)
+#define I2C_PORT_MUX_MASK		((0x3FU) << I2C_PORT_MUX_POS)
+#define I2C_PORT_MUX_SET(port)		(((port) << I2C_PORT_MUX_POS) & I2C_PORT_MUX_MASK)
+#define I2C_PORT_MUX_GET(cfg)		(((cfg) & I2C_PORT_MUX_MASK) >> I2C_PORT_MUX_POS)
+#endif
+
 /**
  * @brief Complete I2C DT information
  *
