@@ -1,11 +1,14 @@
-# Copyright (c) 2019 Intel Corporation
+# Copyright (c) 2025 Microchip Technology Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-description: Microchip I2C/SMB V2 controller
+description: Microchip I2C with Network layer DMA controller
 
-compatible: "microchip,xec-i2c-v2"
+compatible: "microchip,xec-i2c-nl"
 
-include: [i2c-controller.yaml, pinctrl-device.yaml]
+include:
+  - "i2c-controller.yaml"
+  - "pinctrl-device.yaml"
+  - "microchip,dmec-ecia-girq.yaml"
 
 properties:
   reg:
@@ -13,21 +16,42 @@ properties:
 
   port-sel:
     type: int
-    description: soc block mapping to pin
     required: true
+    description: |
+      Default I2C port the controller is connect to at driver initialization time.
 
-  girqs:
-    type: array
+  pcr:
+    type: int
     required: true
-    description: array of GIRQ numbers [8:26] and bit positions [0:31]
-
-  pcrs:
-    type: array
-    required: true
-    description: PCR sleep register index and bit position
+    description: |
+      Encoded PCR index and bit position used for peripheral sleep enable
+      and reset.
 
   pinctrl-0:
     required: true
 
   pinctrl-names:
     required: true
+
+  dmas:
+    required: true
+
+  dma-names:
+    required: true
+
+  cm-buffer-size:
+    type: int
+    description: |
+      I2C-NL hardware requires the layout: target I2C address, data,
+      and optional repeated start I2C address. The driver uses a buffer
+      to build the packet. The size specified by cm-buffer-size is padded
+      by 4 to provide space for start and repeated start addresses. Maximum
+      size is limited to 0xFFFC bytes.
+
+  tm-rx-buffer-size:
+    type: int
+    description: |
+      Target mode receive buffer for storing data written by the external I2C
+      host controller. Default size is 8 bytes. Maximum size is limited to
+      0xFFFC bytes.
+

@@ -5,9 +5,10 @@
  */
 
 #include <arm/armv7-m.dtsi>
+#include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
-#include <zephyr/dt-bindings/interrupt-controller/microchip-xec-ecia.h>
+#include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <freq.h>
 #include <mem.h>
@@ -224,7 +225,8 @@
 			compatible = "microchip,xec-rtos-timer";
 			reg = <0x40007400 0x10>;
 			interrupts = <111 0>;
-			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(23, 10)>;
+			/* girqs = <MCHP_XEC_ECIA_GIRQ_ENC(23, 10)>; */
+			girqs = <23 10>;
 			clock-frequency = <32768>;
 			busy-wait-timer = <&timer5>;
 			status = "disabled";
@@ -374,6 +376,7 @@
 			clock-frequency = <I2C_BITRATE_STANDARD>;
 			interrupts = <20 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 0)>;
+			pcr = <MCHP_XEC_SCR_ENCODE(1, 10)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -383,6 +386,7 @@
 			clock-frequency = <I2C_BITRATE_STANDARD>;
 			interrupts = <21 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 1)>;
+			pcr = <MCHP_XEC_SCR_ENCODE(3, 13)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -392,6 +396,7 @@
 			clock-frequency = <I2C_BITRATE_STANDARD>;
 			interrupts = <22 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 2)>;
+			pcr = <MCHP_XEC_SCR_ENCODE(3, 14)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -401,6 +406,7 @@
 			clock-frequency = <I2C_BITRATE_STANDARD>;
 			interrupts = <23 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 3)>;
+			pcr = <MCHP_XEC_SCR_ENCODE(3, 15)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -410,6 +416,7 @@
 			clock-frequency = <I2C_BITRATE_STANDARD>;
 			interrupts = <158 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 4)>;
+			pcr = <MCHP_XEC_SCR_ENCODE(3, 20)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
@@ -491,14 +498,16 @@
 			#size-cells = <0>;
 			status = "disabled";
 		};
+/*
 		tach3: tach@40006030 {
 			reg = <0x40006030 0x10>;
-			interrupts = <159, 3>;
+			interrupts = <159 3>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(17, 4)>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "disabled";
 		};
+*/
 		rpmfan0: rpmfan@4000a000 {
 			reg = <0x4000a000 0x80>;
 			interrupts = <74 3>, <75 3>;
