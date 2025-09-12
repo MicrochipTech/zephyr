@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "reg/xec_i2c_regs.h"
 #define DT_DRV_COMPAT microchip_xec_i2c_v3
 
 #include <soc.h>
@@ -1131,37 +1132,91 @@ static int i2c_xec_next_msg(struct i2c_xec_data *data)
 }
 
 #ifdef CONFIG_I2C_TARGET
+/* On entry I2C.DATA still contains the target address.
+ * We need to read and discard I2C.DATA which releases SCL allowing external Host to generate
+ * clocks for next data byte it reads from us.
+ * Code logic depends on CONFIG_I2C_TARGET_BUFFER_MODE
+ * 	Enabled:
+ * 		call buf_read_requested supplied by app.
+ * 			store pointer and length from app.
+ * 		if return value is != 0 then we must NAK bytes from external Host.
+ * 			clear ACK bit in I2C.CR register
+ * 		read and discard target address from I2C.DATA. HW releases SCL.
+ *		return next state = I2C_XEC_ISR_STATE_EXIT_1
+ * 	Disabled:
+ * 		call read_requested supplied by app.
+ *
+ */
+#if 0
+ struct i2c_xec_cm_xfr {
+	volatile uint8_t *mbuf;
+	volatile size_t mlen;
+	volatile uint8_t xfr_sts;
+	uint8_t mdir;
+	uint8_t target_addr;
+	uint8_t mflags;
+ };
+ can we use struct i2c_xec_cm_xfr for target mode?
+ Host read from target (target transmitter mode)
+ we get buffer ptr and its length from callback
+ set mbuf = buffer ptr
+ set mlen = buffer len
+ set mdir = XEC_I2C_DIR_WR
+ set target_addr = data->targ_addr
+ set mflags = 0
+ we will fall into logic that sets I2C_XEC_ISR_STATE_NEXT_MSG
+ we have to call buf_read_requested again to handle more data from Host?
+ What about target not built for buffer mode?
+ We have to invoke read_processed() to get the byte to transmit and handle
+ its return value. Return < 0 means ignore. Due to HW we must transmit
+ a dummy value (0xff).
+#endif
 static int tm_read_req(struct i2c_xec_data *data)
 {
 	const struct device *dev = data->dev;
 	const struct i2c_xec_config *devcfg = dev->config;
 	mem_addr_t rb = devcfg->base;
 	struct i2c_target_config *tcfg = data->curr_target;
+	const struct i2c_target_callbacks *tcbs = tcfg->callbacks;
+	struct i2c_xec_cm_xfr *xfr = &data->cm_xfr;
 	int next_state = I2C_XEC_ISR_STATE_WR_DATA;
+	int rc = 0;
 
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC1);
 
-#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
-	int rc = tcfg->buf_read_requested(tcfg, &data->read_buf_ptr, &data->read_buf_len);
+	data->targ_ignore = 0;
+	data->cm_xfr.xfr_sts = 0;
+	data->cm_xfr.mdir = XEC_I2C_DIR_WR;
+	data->cm_xfr.target_addr = (uint8_t)(data->targ_addr & 0xffu);
+	data->cm_xfr.mflags = 0;
 
-	if (rc == 0) {
-		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC3);
-		data->targ_ignore = 0;
-		sys_write8(*data->read_buf_ptr, rb + XEC_I2C_DATA_OFS);
-		data->read_buf_ptr++;
-		data->read_buf_len--;
-	} else {
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC3);
+	rc = tcbs->buf_read_requested(tcfg, (uint8_t **)&data->cm_xfr.mbuf,
+				      (uint32_t *)&data->cm_xfr.mlen);
+	if (rc != 0) {
 		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC4);
 		data->targ_ignore = 1;
-		sys_write8(0xffu, rb + XEC_I2C_DATA_OFS);
 	}
 #else
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC2);
-	data->targ_data = 0;
-	rc = tcfg->read_requested(tcfg, &data->targ_data);
-	data->targ_ignore = (rc == 0) ? 0 : 1u;
-	sys_write8(data->targ_data, rb + XEC_I2C_DATA_OFS);
+	data->targ_data = 0xffu;
+	data->cm_xfr.mbuf = (volatile uint8_t *)&data->targ_data;
+	data->cm_xfr.mlen = 1u;
+	/* ask app for first data byte to supply to host
+	 * if return value is != 0 means we ignore bus operations until STOP.
+	 * All we can do with this I2C HW is supply a 0xFFu each time.
+	 * We must write data to clear AAT status.
+	 */
+	rc = tcbs->read_requested(tcfg, &data->targ_data);
+	if (rc == 0) {
+		data->targ_ignore = 0;
+	} else {
+		data->targ_ignore = 1u;
+	}
 #endif
+	sys_read8(rb + XEC_I2C_DATA_OFS); /* read and discard target address */
+
 	return next_state;
 }
 
@@ -1171,6 +1226,7 @@ static int tm_write_req(struct i2c_xec_data *data)
 	const struct i2c_xec_config *devcfg = dev->config;
 	mem_addr_t rb = devcfg->base;
 	struct i2c_target_config *tcfg = data->curr_target;
+	const struct i2c_target_callbacks *tcbs = tcfg->callbacks;
 	int next_state = I2C_XEC_ISR_STATE_WR_DATA;
 	int rc = 0;
 
@@ -1180,13 +1236,19 @@ static int tm_write_req(struct i2c_xec_data *data)
 
 #else
 	/* rc == 0 -> ACK next byte received else NACK next bytes until STOP */
-	rc = tcfg->write_requested(tcfg);
-	data->ignore = (rc == 0) ? 0 : 1;
-	/* TODO clear ACK bit in I2C.CTRL */
+	rc = tcbs->write_requested(tcfg);
+	data->targ_ignore = (rc == 0) ? 0 : 1;
 #endif
 	return next_state;
 }
 
+/* On entry I2C target detected START, clocked in 8-bits, compared bits[7:1] to
+ * enabled target addresses, if compare is true HW generates an ACK on the 9th clock
+ * and drives SCL low (clock stretching) to hold the bus. If the address does not match
+ * HW does not drive SDA on the 9th clock. HW signals sets AAT status and PIN interrupt
+ * only for ACK (address match). We get the target address by reading it from the address
+ * shadow register which does not cause HW FSM to change state(generate clocks for next byte).
+ */
 static int state_check_ack_tm(struct i2c_xec_data *data)
 {
 	const struct device *dev = data->dev;
@@ -1204,13 +1266,17 @@ static int state_check_ack_tm(struct i2c_xec_data *data)
 	 * MEC174x/5x has v3.8 HW with address and data shadow regs
 	 */
 	data->targ_active = 1u;
-	data->targ_addr = sys_read8(rb + XEC_I2C_DATA_OFS);
+	/* data->targ_addr = sys_read8(rb + XEC_I2C_DATA_OFS);
+	 * Reading data causes clocks for next byte to be generated due to auto-ACK enabled.
+	 * We can get target address from shadow address capture register which does not cause
+	 * cause clock generation. Shadow address and data regs present in v3.7/3.8 HW.
+	 */
+	data->targ_addr = sys_read8(rb + XEC_I2C_IAS_OFS);
 	data->curr_target = find_target(data, data->targ_addr);
 
 	if ((data->targ_addr & BIT(0)) != 0) { /* Host requesting read from target */
 		next_state = tm_read_req(data);
 	} else { /* Host requesting write to target */
-		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC8);
 		next_state = tm_write_req(data);
 	}
 
@@ -1244,6 +1310,31 @@ static int state_check_ack(struct i2c_xec_data *data)
 
 	return next_state;
 }
+
+#if 0
+struct i2c_xec_cm_xfr {
+	volatile uint8_t *mbuf;
+	volatile size_t mlen;
+	volatile uint8_t xfr_sts;
+	uint8_t mdir;
+	uint8_t target_addr;
+	uint8_t mflags;
+};
+can we use struct i2c_xec_cm_xfr for target mode?
+Host read from target (target transmitter mode)
+we get buffer ptr and its length from callback
+set mbuf = buffer ptr
+set mlen = buffer len
+set mdir = XEC_I2C_DIR_WR
+set target_addr = data->targ_addr
+set mflags = 0
+we will fall into logic that sets I2C_XEC_ISR_STATE_NEXT_MSG
+we have to call buf_read_requested again to handle more data from Host?
+What about target not built for buffer mode?
+We have to invoke read_processed() to get the byte to transmit and handle
+its return value. Return < 0 means ignore. Due to HW we must transmit
+a dummy value (0xff).
+#endif
 
 static int state_data_wr(struct i2c_xec_data *data)
 {
@@ -1387,6 +1478,7 @@ static int state_next_msg(struct i2c_xec_data *data)
 
 #ifdef CONFIG_I2C_TARGET
 
+#if 0
 /* TODO: Spec says AAT is set and FW must poll for PIN==0
  * This imples HW fires interrupt immediately on address match not waiting
  * for 9th clock.
@@ -1446,7 +1538,9 @@ static int state_tm_aat(struct i2c_xec_data *data)
 #endif
 	return next_state;
 }
+#endif /* 0 */
 
+#if 0
 /* Service external Host I2C Read. We transmit data to Host */
 static int state_tm_targ_tx(struct i2c_xec_data *data)
 {
@@ -1481,7 +1575,7 @@ static int state_tm_target_rx(struct i2c_xec_data *data)
 
 	return next_state;
 }
-
+#endif /* 0 */
 #endif /* CONFIG_I2C_TARGET */
 
 static void xec_i2c_kwork_thread(struct k_work *work)
