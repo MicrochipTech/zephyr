@@ -11,6 +11,8 @@
 	aliases {
 		i2c0 = &i2c_smb_0;
 		i2c-0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_1;
+		i2c-1 = &i2c_smb_1;
 	};
 };
 
@@ -23,6 +25,21 @@
 };
 
 &i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 4 */
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_scl_gpio144 {
 	drive-open-drain;
 	output-enable;
 	output-high;
@@ -57,4 +74,18 @@
 		reg = <0x34>;
 		#io-channels-cells = <1>;
 	};
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c";
+	status = "okay";
+
+	port-sel = < 4 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
+
+	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
+	pinctrl-names = "default";
+
 };
