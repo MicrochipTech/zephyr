@@ -19,6 +19,7 @@
 #include "soc_gpio.h"
 #include "soc_pcr.h"
 #include "soc_pins.h"
+#include "reg/xec_i2c_regs.h"
 
 #endif
 
