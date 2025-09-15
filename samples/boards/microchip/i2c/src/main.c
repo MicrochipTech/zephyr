@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "sys/errno.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,10 +32,27 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 static const struct device *i2c0_dev = DEVICE_DT_GET(DT_ALIAS(i2c0));
 static const struct device *i2c1_dev = DEVICE_DT_GET(DT_ALIAS(i2c1));
 
+volatile uint32_t spin_val;
+
 uint8_t i2c_wr_buf[64];
 uint8_t i2c_rd_buf[64];
 
 #ifdef CONFIG_I2C_TARGET
+
+#define I2C1_TARG_ADDR1 0x40u
+#define I2C1_TARG_ADDR2 0x41u
+
+uint32_t target_i2c_addr1_rx_idx;
+uint32_t target_i2c_addr1_tx_idx;
+uint32_t target_i2c_addr2_rx_idx;
+uint32_t target_i2c_addr2_tx_idx;
+uint8_t target_i2c_addr1_rx_buf[256];
+uint8_t target_i2c_addr1_tx_buf[256];
+uint8_t target_i2c_addr2_rx_buf[256];
+uint8_t target_i2c_addr2_tx_buf[256];
+
+uint8_t i2c0_tx_buf[256];
+uint8_t i2c0_rx_buf[256];
 
 static int i2c1_targ_read_req_cb(struct i2c_target_config *config, uint8_t *val);
 static int i2c1_targ_read_proc_cb(struct i2c_target_config *config, uint8_t *val);
@@ -66,18 +84,21 @@ const struct i2c_target_callbacks i2c1_targ_cbs = {
 struct i2c_target_config app_i2c_targets[] = {
 	{
 		.flags = 0,
-		.address = 0x40u,
+		.address = I2C1_TARG_ADDR1,
 		.callbacks = &i2c1_targ_cbs,
 	},
 	{
 		.flags = 0,
-		.address = 0x41u,
+		.address = I2C1_TARG_ADDR2,
 		.callbacks = &i2c1_targ_cbs,
 	},
 };
 
 static int config_i2c_as_target(const struct device *i2c_dev, struct i2c_target_config *targets,
 				uint8_t num_targets);
+
+static int fill_buf(uint8_t *buf, uint32_t buflen, uint8_t val, uint8_t flags);
+
 #endif /* CONFIG_I2C_TARGET */
 
 int main(void)
@@ -125,10 +146,48 @@ int main(void)
 	}
 
 #ifdef CONFIG_I2C_TARGET
+	spin_val = 0xDEADBEEFU;
+
+	target_i2c_addr1_rx_idx = 0;
+	target_i2c_addr1_tx_idx = 0;
+	target_i2c_addr2_rx_idx = 0;
+	target_i2c_addr2_tx_idx = 0;
+
+	fill_buf(target_i2c_addr1_rx_buf, sizeof(target_i2c_addr1_rx_buf), 0x55u, 0);
+	fill_buf(target_i2c_addr2_rx_buf, sizeof(target_i2c_addr2_rx_buf), 0x55u, 0);
+	fill_buf(target_i2c_addr1_tx_buf, sizeof(target_i2c_addr1_tx_buf), 0, 1);
+	fill_buf(target_i2c_addr1_tx_buf, sizeof(target_i2c_addr1_tx_buf), 0, 1);
+
 	rc = config_i2c_as_target(i2c1_dev, app_i2c_targets, 2u);
 	if (rc != 0) {
 		LOG_ERR("Configuring %s as I2C target failed: (%d)", i2c1_dev->name, rc);
 		return -5;
+	}
+
+	/* I2C0 write to I2C1 */
+	fill_buf(i2c0_tx_buf, 4u, 0x11u, 1u);
+
+	LOG_INF("Write 4 bytes to I2C target address 0x%0x", I2C1_TARG_ADDR1);
+	LOG_HEXDUMP_INF(i2c0_tx_buf, 4, "i2c0_tx_buf");
+
+	rc = i2c_write(i2c0_dev, i2c0_tx_buf, 4u, I2C1_TARG_ADDR1);
+	LOG_INF("I2C Write API returned (%d)", rc);
+
+	while (rc != 0) {
+		;
+	}
+
+	/* I2C0 read from I2C1 */
+	fill_buf(i2c0_rx_buf, sizeof(i2c0_rx_buf), 0x55u, 0);
+	LOG_INF("Read 8 bytes from I2C target address 0x%0x", I2C1_TARG_ADDR1);
+
+	rc = i2c_read(i2c0_dev, i2c0_rx_buf, 8u, I2C1_TARG_ADDR1);
+	if (rc != 0) {
+		LOG_ERR("I2C Read API returned error (%d)", rc);
+	}
+
+	while (spin_val) {
+		;
 	}
 #endif
 
@@ -138,6 +197,24 @@ int main(void)
 }
 
 #ifdef CONFIG_I2C_TARGET
+
+static int fill_buf(uint8_t *buf, uint32_t buflen, uint8_t val, uint8_t flags)
+{
+	if ((buf == NULL) || (buflen == 0)) {
+		return -EINVAL;
+	}
+
+	if (flags == 0) {
+		memset((void *)buf, val, buflen);
+	} else {
+		for (uint32_t n = 0; n < buflen; n++) {
+			buf[n] = val;
+			val++;
+		}
+	}
+
+	return 0;
+}
 
 static int config_i2c_as_target(const struct device *i2c_dev, struct i2c_target_config *targets,
 				uint8_t num_targets)
@@ -161,27 +238,143 @@ static int config_i2c_as_target(const struct device *i2c_dev, struct i2c_target_
 
 static int i2c1_targ_read_req_cb(struct i2c_target_config *config, uint8_t *val)
 {
-	return -ENOTSUP;
+	int rc = 0;
+	uint16_t targ_addr = 0xffffu;
+	uint8_t targ_data = 0xffu;
+
+	if (config != NULL) {
+		targ_addr = config->address;
+	}
+
+	if (targ_addr == I2C1_TARG_ADDR1) {
+		if (target_i2c_addr1_rx_idx < 256u) {
+			targ_data = target_i2c_addr1_rx_buf[target_i2c_addr1_rx_idx];
+			target_i2c_addr1_rx_idx++;
+		}
+	} else if (targ_addr == I2C1_TARG_ADDR2) {
+		if (target_i2c_addr2_rx_idx < 256u) {
+			targ_data = target_i2c_addr2_rx_buf[target_i2c_addr2_rx_idx];
+			target_i2c_addr2_rx_idx++;
+		}
+	} else {
+		rc = -ENXIO;
+	}
+
+	if (val != NULL) {
+		*val = targ_data;
+	}
+
+	LOG_INF("Ext Host I2C Read Request from 0x%0x: data = 0x%02x", targ_addr, targ_data);
+
+	return rc;
 }
 
 static int i2c1_targ_read_proc_cb(struct i2c_target_config *config, uint8_t *val)
 {
-	return -ENOTSUP;
+	int rc = 0;
+	uint16_t targ_addr = 0xffffu;
+	uint8_t targ_data = 0xffu;
+
+	if (config != NULL) {
+		targ_addr = config->address;
+	}
+
+	if (targ_addr == I2C1_TARG_ADDR1) {
+		if (target_i2c_addr1_rx_idx < 256u) {
+			targ_data = target_i2c_addr1_rx_buf[target_i2c_addr1_rx_idx];
+			target_i2c_addr1_rx_idx++;
+		} else {
+			rc = -E2BIG;
+		}
+	} else if (targ_addr == I2C1_TARG_ADDR2) {
+		if (target_i2c_addr2_rx_idx < 256u) {
+			targ_data = target_i2c_addr2_rx_buf[target_i2c_addr2_rx_idx];
+			target_i2c_addr2_rx_idx++;
+		} else {
+			rc = -E2BIG;
+		}
+	} else {
+		rc = -ENXIO;
+	}
+
+	if (val != NULL) {
+		*val = targ_data;
+	}
+
+	LOG_INF("Ext Host I2C Read processed from 0x%0x: data = 0x%02x", targ_addr, targ_data);
+
+	return rc;
 }
 
 static int i2c1_targ_write_req_cb(struct i2c_target_config *config)
 {
-	return -ENOTSUP;
+	int rc = 0;
+	uint16_t targ_addr = 0xffffu;
+
+	if (config != NULL) {
+		targ_addr = config->address;
+	}
+
+	if (targ_addr == I2C1_TARG_ADDR1) {
+		if (target_i2c_addr1_tx_idx >= 256u) {
+			rc = -E2BIG;
+		}
+	} else if (targ_addr == I2C1_TARG_ADDR2) {
+		if (target_i2c_addr2_tx_idx >= 256u) {
+			rc = -E2BIG;
+		}
+	} else {
+		rc = -ENXIO;
+	}
+
+	LOG_INF("Ext Host I2C Write Request to 0x%0x", targ_addr);
+
+	return rc;
 }
 
 static int i2c1_targ_write_recv_cb(struct i2c_target_config *config, uint8_t val)
 {
-	return -ENOTSUP;
+	int rc = 0;
+	uint16_t targ_addr = 0xffffu;
+
+	if (config != NULL) {
+		targ_addr = config->address;
+	}
+
+	if (targ_addr == I2C1_TARG_ADDR1) {
+		if (target_i2c_addr1_tx_idx < 256u) {
+			target_i2c_addr1_tx_buf[target_i2c_addr1_tx_idx] = val;
+			target_i2c_addr1_tx_idx++;
+		} else {
+			rc = -E2BIG;
+		}
+	} else if (targ_addr == I2C1_TARG_ADDR2) {
+		if (target_i2c_addr2_tx_idx < 256u) {
+			target_i2c_addr2_tx_buf[target_i2c_addr2_tx_idx] = val;
+			target_i2c_addr2_tx_idx++;
+		} else {
+			rc = -E2BIG;
+		}
+	} else {
+		rc = -ENXIO;
+	}
+
+	LOG_INF("Ext Host I2C Write Request to 0x%0x", targ_addr);
+
+	return rc;
 }
 
 static int i2c1_targ_stop_cb(struct i2c_target_config *config)
 {
-	return -ENOTSUP;
+	uint16_t targ_addr = 0xffffu;
+
+	if (config != NULL) {
+		targ_addr = config->address;
+	}
+
+	LOG_INF("Target I2C at address 0x%0x detected STOP from external Host", targ_addr);
+
+	return 0;
 }
 
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
