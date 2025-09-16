@@ -248,13 +248,13 @@ static int i2c1_targ_read_req_cb(struct i2c_target_config *config, uint8_t *val)
 
 	if (targ_addr == I2C1_TARG_ADDR1) {
 		if (target_i2c_addr1_rx_idx < 256u) {
-			targ_data = target_i2c_addr1_rx_buf[target_i2c_addr1_rx_idx];
-			target_i2c_addr1_rx_idx++;
+			targ_data = target_i2c_addr1_tx_buf[target_i2c_addr1_tx_idx];
+			target_i2c_addr1_tx_idx++;
 		}
 	} else if (targ_addr == I2C1_TARG_ADDR2) {
 		if (target_i2c_addr2_rx_idx < 256u) {
-			targ_data = target_i2c_addr2_rx_buf[target_i2c_addr2_rx_idx];
-			target_i2c_addr2_rx_idx++;
+			targ_data = target_i2c_addr2_tx_buf[target_i2c_addr2_tx_idx];
+			target_i2c_addr2_tx_idx++;
 		}
 	} else {
 		rc = -ENXIO;
@@ -264,7 +264,7 @@ static int i2c1_targ_read_req_cb(struct i2c_target_config *config, uint8_t *val)
 		*val = targ_data;
 	}
 
-	LOG_INF("Ext Host I2C Read Request from 0x%0x: data = 0x%02x", targ_addr, targ_data);
+	LOG_INF("Ext Host I2C Read Request from 0x%0x: app data = 0x%02x", targ_addr, targ_data);
 
 	return rc;
 }
@@ -281,15 +281,15 @@ static int i2c1_targ_read_proc_cb(struct i2c_target_config *config, uint8_t *val
 
 	if (targ_addr == I2C1_TARG_ADDR1) {
 		if (target_i2c_addr1_rx_idx < 256u) {
-			targ_data = target_i2c_addr1_rx_buf[target_i2c_addr1_rx_idx];
-			target_i2c_addr1_rx_idx++;
+			targ_data = target_i2c_addr1_tx_buf[target_i2c_addr1_tx_idx];
+			target_i2c_addr1_tx_idx++;
 		} else {
 			rc = -E2BIG;
 		}
 	} else if (targ_addr == I2C1_TARG_ADDR2) {
-		if (target_i2c_addr2_rx_idx < 256u) {
-			targ_data = target_i2c_addr2_rx_buf[target_i2c_addr2_rx_idx];
-			target_i2c_addr2_rx_idx++;
+		if (target_i2c_addr2_tx_idx < 256u) {
+			targ_data = target_i2c_addr2_tx_buf[target_i2c_addr2_tx_idx];
+			target_i2c_addr2_tx_idx++;
 		} else {
 			rc = -E2BIG;
 		}
@@ -301,7 +301,7 @@ static int i2c1_targ_read_proc_cb(struct i2c_target_config *config, uint8_t *val
 		*val = targ_data;
 	}
 
-	LOG_INF("Ext Host I2C Read processed from 0x%0x: data = 0x%02x", targ_addr, targ_data);
+	LOG_INF("Ext Host I2C Read processed from 0x%0x: app data = 0x%02x", targ_addr, targ_data);
 
 	return rc;
 }
@@ -342,16 +342,16 @@ static int i2c1_targ_write_recv_cb(struct i2c_target_config *config, uint8_t val
 	}
 
 	if (targ_addr == I2C1_TARG_ADDR1) {
-		if (target_i2c_addr1_tx_idx < 256u) {
-			target_i2c_addr1_tx_buf[target_i2c_addr1_tx_idx] = val;
-			target_i2c_addr1_tx_idx++;
+		if (target_i2c_addr1_rx_idx < 256u) {
+			target_i2c_addr1_rx_buf[target_i2c_addr1_rx_idx] = val;
+			target_i2c_addr1_rx_idx++;
 		} else {
 			rc = -E2BIG;
 		}
 	} else if (targ_addr == I2C1_TARG_ADDR2) {
-		if (target_i2c_addr2_tx_idx < 256u) {
-			target_i2c_addr2_tx_buf[target_i2c_addr2_tx_idx] = val;
-			target_i2c_addr2_tx_idx++;
+		if (target_i2c_addr2_rx_idx < 256u) {
+			target_i2c_addr2_rx_buf[target_i2c_addr2_rx_idx] = val;
+			target_i2c_addr2_rx_idx++;
 		} else {
 			rc = -E2BIG;
 		}
@@ -359,7 +359,7 @@ static int i2c1_targ_write_recv_cb(struct i2c_target_config *config, uint8_t val
 		rc = -ENXIO;
 	}
 
-	LOG_INF("Ext Host I2C Write Request to 0x%0x", targ_addr);
+	LOG_INF("Ext Host I2C Write Received to 0x%0x of data 0x%02x", targ_addr, val);
 
 	return rc;
 }
