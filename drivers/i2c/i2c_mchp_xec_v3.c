@@ -1498,6 +1498,7 @@ static int state_tm_stop_event(struct i2c_xec_data *data)
 	 * STOP detect status in I2C.SR.
 	 */
 	sys_read8(rb + XEC_I2C_DATA_OFS);
+	sys_write8(XEC_I2C_CR_PIN_ESO_ENI_ACK, rb + XEC_I2C_DATA_OFS);
 
 	if ((tcbs != NULL) && (tcbs->stop != NULL)) {
 		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xD1);
@@ -1505,10 +1506,6 @@ static int state_tm_stop_event(struct i2c_xec_data *data)
 	}
 
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xD2);
-	if ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_NBB_POS)) == 0) {
-		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
-		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xD3);
-	}
 
 	return I2C_XEC_ISR_STATE_EXIT_1;
 }
@@ -1614,6 +1611,7 @@ static void xec_i2c_kwork_thread(struct k_work *work)
 			data->targ_ignore = 0;
 			data->curr_target = NULL;
 			sys_read8(rb + XEC_I2C_DATA_OFS);
+			sys_write8(XEC_I2C_CR_PIN_ESO_ENI_ACK, rb + XEC_I2C_DATA_OFS);
 #endif
 			break;
 		case I2C_XEC_ISR_STATE_NEXT_MSG:
