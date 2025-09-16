@@ -53,3 +53,12 @@ properties:
     type: phandle-array
     description: |
       Refer to the description of sda-gpios.
+
+  target-buf-write-req-buffer-size:
+    type: int
+    default: 8
+    description: |
+      The property allows each instance of the driver to have
+      a unique target buffer write request buffer size in bytes.
+      This property is only used if the driver is built with
+      I2C target buffer mode enabled.
