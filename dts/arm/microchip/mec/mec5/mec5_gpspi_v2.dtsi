@@ -11,11 +11,13 @@
 gpspi0: spi@40009400 {
 	reg = <0x40009400 0x80>;
 	interrupts = <92 2>;
+	girqs = < MCHP_XEC_ECIA_GIRQ_ENC(18, 2) >;
 	status = "disabled";
 };
 
 gpspi1: spi@40009480 {
 	reg = <0x40009480 0x80>;
 	interrupts = <94 2>;
+	girqs = < MCHP_XEC_ECIA_GIRQ_ENC(18, 4) >;
 	status = "disabled";
 };
