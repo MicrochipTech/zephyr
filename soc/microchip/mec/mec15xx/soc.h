@@ -29,5 +29,8 @@
 
 #include "soc_espi_saf_v1.h"
 
+#define XEC_DMAC_MAX_CHAN 12u
+#define XEC_DMAC_CHAN_MSK 0xfffu
+
 #endif
 #endif
