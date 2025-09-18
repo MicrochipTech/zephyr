@@ -21,7 +21,11 @@
 #include <soc_mmcr.h>
 #include <soc_pcr.h>
 #include <soc_pins.h>
+#include <reg/xec_dmac_regs.h>
 #include <reg/xec_i2c_regs.h>
+
+#define XEC_DMAC_MAX_CHAN 16u
+#define XEC_DMAC_CHAN_MSK 0xffffu
 
 #endif
 #endif
