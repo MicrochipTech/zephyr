@@ -26,3 +26,24 @@ config I2C_XEC_V3
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V3 driver.
+
+config I2C_XEC_NL
+	bool "Microchip XEC I2C network layer plus DMA driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select PINCTRL
+	select DMA
+	select I2C_PORT_MUX
+	help
+	  Enable the Microchip I2C Network layer driver with DMA
+
+if I2C_XEC_NL
+
+config I2C_XEC_NL_USE_KWORKQUEUE
+	bool "Enable use of Zephyr kernel workqueue in ISR"
+	default n
+	help
+	  Enable create of kernel workqueue's for each instance
+	  to offload message processing from the ISR.
+
+endif # I2C_XEC_NL
