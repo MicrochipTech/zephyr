@@ -34,6 +34,7 @@
 
 /* common SoC API */
 #include <soc_dt.h>
+#include <soc_dmac.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
 #include <soc_gpio.h>
