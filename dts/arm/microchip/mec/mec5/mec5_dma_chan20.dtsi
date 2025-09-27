@@ -12,8 +12,9 @@ dmac: dmac@40002400 {
 
 	dma-channels = <20>;
 	dma-requests = <20>;
-	dma-channel-mask = <0xfffff>;
 	#dma-cells = <2>;
+
+	pcr = <MCHP_XEC_SCR_ENCODE(1, 6)>;
 
 	interrupts = <24 2>, <25 2>, <26 2>, <27 2>,
 		     <28 2>, <29 2>, <30 2>, <31 2>,

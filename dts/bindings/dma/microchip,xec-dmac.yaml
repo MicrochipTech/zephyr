@@ -1,3 +1,6 @@
+# Copyright 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 description: Microchip XEC DMA controller
 
 compatible: "microchip,xec-dmac"
@@ -11,8 +14,8 @@ properties:
   interrupts:
     required: true
 
-  pcrs:
-    type: array
+  pcr:
+    type: int
     required: true
     description: PCR register index and bit position
 
@@ -21,21 +24,7 @@ properties:
     required: true
     description: Encoded interrupt information
 
-  aggregated-girq:
-    type: phandle
-    description: |
-      If DMA driver uses aggregated interrupt mode
-      provide the handle to the GIRQ.
-
   "#dma-cells":
-    const: 2
-
-  "pcr-cells":
-    type: int
-    const: 2
-
-  "girq-cells":
-    type: int
     const: 2
 
 # #dma-cells : Must be <2>.
@@ -61,11 +50,3 @@ properties:
 dma-cells:
   - channel
   - trigsrc
-
-pcr-cells:
-  - regidx
-  - bitpos
-
-girq-cells:
-  - girqno
-  - girqpos
