@@ -18,6 +18,17 @@
 	((uintptr_t)(dma_base) + XEC_DMA_CHANNELS_OFS_FROM_BASE +	\
 	 ((uintptr_t)(chan) * XEC_DMA_CHAN_REGS_SIZE))
 
+#if defined(CONFIG_SOC_SERIES_MEC175X)
+#define XEC_DMAC_MAX_CHANNELS 20
+#define XEC_DMAC_CHAN_ALL_MASK 0xfffffu
+#elif defined(CONFIG_SOC_SERIES_MEC15XX)
+#define XEC_DMAC_MAX_CHANNELS 12
+#define XEC_DMAC_CHAN_ALL_MASK 0xfffu
+#else
+#define XEC_DMAC_MAX_CHANNELS 16
+#define XEC_DMAC_CHAN_ALL_MASK 0xffffu
+#endif
+
 /* main control */
 #define XEC_DMA_MAIN_CR_OFS		0
 #define XEC_DMA_MAIN_CR_MSK		GENMASK(1, 0)
