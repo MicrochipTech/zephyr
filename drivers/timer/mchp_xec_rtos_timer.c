@@ -11,6 +11,7 @@
 #include <soc.h>
 #include <zephyr/arch/common/sys_io.h>
 #include <zephyr/drivers/timer/system_timer.h>
+#include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/sys_clock.h>
 #include <zephyr/spinlock.h>
 #include <cmsis_core.h>
@@ -72,8 +73,8 @@ BUILD_ASSERT(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC == 32768,
 #define CYCLES_PER_TICK (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / CONFIG_SYS_CLOCK_TICKS_PER_SEC)
 
 #define TIMER_BASE        (mm_reg_t) DT_INST_REG_ADDR(0)
-#define TIMER_GIRQ_NUM    DT_INST_PROP_BY_IDX(0, girqs, 0)
-#define TIMER_GIRQ_BITPOS DT_INST_PROP_BY_IDX(0, girqs, 1)
+#define TIMER_GIRQ_NUM    MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(0, girqs, 0))
+#define TIMER_GIRQ_BITPOS MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(0, girqs, 0))
 /* data sheet GIRQ numbers start at 8 */
 #define TIMER_GIRQ_BASE                                                                            \
 	(mm_reg_t)(DT_REG_ADDR(DT_NODELABEL(ecia)) + (GIRQ_SIZE * (TIMER_GIRQ_NUM - 8u)))
