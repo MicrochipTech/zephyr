@@ -15,12 +15,15 @@
 
 /* common SoC API */
 #include <soc_dt.h>
+#include <soc_dmac.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
 #include <soc_gpio.h>
 #include <soc_mmcr.h>
 #include <soc_pcr.h>
 #include <soc_pins.h>
+#include <reg/xec_dmac_regs.h>
+#include <reg/xec_i2c_regs.h>
 
 #define XEC_DMAC_MAX_CHAN 16u
 #define XEC_DMAC_CHAN_MSK 0xffffu
