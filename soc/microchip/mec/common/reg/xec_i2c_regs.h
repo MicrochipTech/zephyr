@@ -68,7 +68,7 @@
 #define XEC_I2C_HCMD_RUN_POS    0
 #define XEC_I2C_HCMD_PROC_POS   1
 #define XEC_I2C_HCMD_START0_POS 8
-#define XEC_I2C_HCDM_STARTN_POS 9
+#define XEC_I2C_HCMD_STARTN_POS 9
 #define XEC_I2C_HCMD_STOP_POS   10
 #define XEC_I2C_HCMD_PEC_TX_POS 11
 #define XEC_I2C_HCMD_RDM_POS    12
@@ -82,7 +82,7 @@
 #define XEC_I2C_HCMD_RCL_SET(n) FIELD_PREP(XEC_I2C_HCMD_RCL_MSK, (n))
 #define XEC_I2C_HCMD_RCL_GET(r) FIELD_GET(XEC_I2C_HCMD_RCL_MSK, (r))
 
-#define XEC_I2C_TC_OFS          0x10u /* network layer target command */
+#define XEC_I2C_TCMD_OFS        0x10u /* network layer target command */
 #define XEC_I2C_TCMD_RUN_POS    0
 #define XEC_I2C_TCMD_PROC_POS   1
 #define XEC_I2C_TCMD_TX_PEC_POS 2
