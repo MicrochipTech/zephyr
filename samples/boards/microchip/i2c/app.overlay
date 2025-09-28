@@ -1,0 +1,130 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/ {
+	aliases {
+		i2c0 = &i2c_smb_0;
+		i2c-0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_1;
+		i2c-1 = &i2c_smb_1;
+		i2c-nl = &i2c_smb_2;
+	};
+};
+
+/* Central DMA controller */
+&dmac {
+	compatible = "microchip,xec-dmac";
+	status = "okay";
+};
+
+/* I2C Port 0 */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 4 */
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_scl_gpio144 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 5 */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* Zephyr will load NXP PCA9555 driver after i2c_smb_0 driver
+ * Zephyr does not have a driver for ltc2489 I2C delta-sigma ADC
+ */
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+
+	port-sel = < 0 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_003 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_004 0 >;
+
+	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-names = "default";
+
+	pca9555_evb: pca9555@26 {
+		/* compatible = "nxp,pca9555"; */
+		reg = <0x26>;
+		/* ngpios = <16>; */
+		/* gpio-controller; */
+		/* #gpio-cells = <2>; */
+	};
+
+	ltc2489_evb: ltc2489@34 {
+		reg = <0x34>;
+		#io-channels-cells = <1>;
+	};
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+
+	port-sel = < 4 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
+
+	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
+	pinctrl-names = "default";
+
+};
+
+&i2c_smb_2 {
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	port-sel = < 5 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_141 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_142 0 >;
+
+	pinctrl-0 = < &i2c05_sda_gpio141 &i2c05_scl_gpio142 >;
+	pinctrl-names = "default";
+
+	dmas = <&dmac 4 5>, <&dmac 5 4>;
+	dma-names = "host_mode", "target_mode";
+};
