@@ -5,7 +5,10 @@ description: Microchip XEC I2C-SMB controller byte mode driver version 3
 
 compatible: "microchip,xec-i2c-v3"
 
-include: [i2c-controller.yaml, pinctrl-device.yaml]
+include:
+  - "microchip,dmec-ecia-girq.yaml"
+  - "i2c-controller.yaml"
+  - "pinctrl-device.yaml"
 
 properties:
   reg:
@@ -20,12 +23,6 @@ properties:
       mode using PINCTRL. The driver can then select the pins
       by programming the port select register field in the
       controller's configuration register.
-
-  girq:
-    type: int
-    required: true
-    description: |
-      I2C controller GIRQ and GIRQ bit position encoded in an integer.
 
   pcr:
     type: int
