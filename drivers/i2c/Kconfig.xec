@@ -24,6 +24,7 @@ config I2C_XEC_V3
 	default y
 	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_ENABLED
 	select PINCTRL
+	select I2C_PORT_MUX
 	help
 	  Enable the Microchip XEC I2C V3 driver.
 
