@@ -52,6 +52,9 @@ properties:
 
   dma-names:
     required: true
+    description: |
+      One DMA channel is used for host most and a second channel for
+      target mode. The expected names are host_mode and target_mode.
 
   xfr-buffer-size:
     type: int
