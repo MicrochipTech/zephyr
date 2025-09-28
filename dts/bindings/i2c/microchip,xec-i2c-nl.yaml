@@ -1,0 +1,69 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip I2C with Network layer DMA controller
+
+compatible: "microchip,xec-i2c-nl"
+
+include:
+  - "i2c-controller.yaml"
+  - "pinctrl-device.yaml"
+  - "microchip,dmec-ecia-girq.yaml"
+
+properties:
+  reg:
+    required: true
+
+  port-sel:
+    type: int
+    required: true
+    description: |
+      Default I2C port the controller is connect to at driver initialization time.
+
+  pcr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR index and bit position used for peripheral sleep enable
+      and reset.
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  sda-gpios:
+    type: phandle-array
+    description: |
+      I2C controller versions older than v3.8 do not make pin
+      state monitoring visible in the bit-bang register without
+      switching the pins from I2C control to bit-bang control.
+      This can cause disruption of an open I2C session. For older
+      hardware access pin state using the GPIO driver.
+
+  scl-gpios:
+    type: phandle-array
+    description: |
+      Refer to the description of sda-gpios.
+
+  dmas:
+    required: true
+
+  dma-names:
+    required: true
+
+  xfr-buffer-size:
+    type: int
+    default: 32
+    description: |
+      I2C-NL hardware uses DMA to transfer packets containing the target
+      I2C formatted 7-bit address and data to/from I2C-NL and memory. The
+      driver allocated a transfer buffer of this size padded by 4 bytes
+      for START, RPT-START, and HW PEC bytes. If a message does not fit
+      in this buffer, the driver will use multiple DMA transfers when
+      transmitted to an external device/Host.  This buffer is also
+      used in Target mode when the external Host performs a write
+      to a target address registered with this I2C-NL controller. If
+      target mode will be used this buffer must be sized for the largest
+      message the external Host will write.
