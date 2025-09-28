@@ -4,80 +4,61 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "stdbool.h"
-#include "sys/errno.h"
 #define DT_DRV_COMPAT microchip_xec_i2c_nl
 
-#define LOG_LEVEL CONFIG_I2C_LOG_LEVEL
-#include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(i2c_mchp_xec_nl);
-
+#include <soc.h>
 #include <zephyr/arch/cpu.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/dma.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_xec_i2c.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/pm/policy.h>
 #include <zephyr/sys/atomic.h>
+#include "zephyr/sys/slist.h"
+#include "zephyr/sys/sys_io.h"
 #include <zephyr/sys/util.h>
 
-#include <soc.h>
+#define LOG_LEVEL CONFIG_I2C_LOG_LEVEL
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(i2c_mchp_xec_nl);
+
 #include "i2c-priv.h"
 
 #define XEC_DMAC_BASE (mem_addr_t)(DT_REG_ADDR(DT_NODELABEL(dmac)))
 
-#define XEC_I2C_NL_TARGET_ADDR_NONE	0xf800u
+#define XEC_I2C_NL_TARGET_ADDR_NONE 0xf800u
 
-#define XEC_I2C_NL_CFG_TM		BIT(0)
+#define XEC_I2C_NL_TX_BUF_SZ       16u
+#define XEC_I2C_NL_TX_BUF_PAD_SZ   4u
+#define XEC_I2C_NL_TX_BUF_TOTAL_SZ (XEC_I2C_NL_TX_BUF_SZ + XEC_I2C_NL_TX_BUF_PAD_SZ)
 
-#define I2C_XEC_BB_EN_SCL_DRIVE_LO	\
+#define XEC_I2C_NL_XFRBUF_PAD_SZ 8
+
+#define XEC_I2C_NL_CFG_TM BIT(0)
+
+#define I2C_XEC_BB_EN_SCL_DRIVE_LO                                                                 \
 	(BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CD_POS) | BIT(XEC_I2C_BBCR_CM_POS))
-#define I2C_XEC_BB_EN_SCL_TRI_STATE	(BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CM_POS))
+#define I2C_XEC_BB_EN_SCL_TRI_STATE (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CM_POS))
 
-#define I2C_XEC_BB_EN_SDA_DRIVE_LO	\
+#define I2C_XEC_BB_EN_SDA_DRIVE_LO                                                                 \
 	(BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_DD_POS) | BIT(XEC_I2C_BBCR_CM_POS))
-#define I2C_XEC_BB_EN_SDA_TRI_STATE	(BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CM_POS))
+#define I2C_XEC_BB_EN_SDA_TRI_STATE (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CM_POS))
 
-#define I2C_XEC_BB_SCL_SDA_HIGH_MSK	\
-	(BIT(XEC_I2C_BBCR_SCL_IN_POS) | BIT(XEC_I2C_BBCR_SDA_IN_POS))
+#define I2C_XEC_BB_SCL_SDA_HIGH_MSK (BIT(XEC_I2C_BBCR_SCL_IN_POS) | BIT(XEC_I2C_BBCR_SDA_IN_POS))
 
-/* workqueue for offloading complex I2C processing from the ISR
- * https://docs.zephyrproject.org/latest/kernel/services/threads/workqueue.html
- * Instantiate one struct k_thread and one function thread_main
- * Modify xec_i2c_nl_init to call k_sem_init() and k_thread_create()
- * k_thread_create() is passed same parameters except for pointer to
- * I2C-NL instance struct device.
- * We are using the same thread handler for each I2C-NL instance.
- * Also the same thread stack is used. Must be big enough for pre-emption
- * What is k_thread_create() allocating individually for each call?
- * !!! Example sensor/bosch/bmp388/bmp388_trigger.c uses two different thread styles
- * !!! CONFIG_BMP388_TRIGGER_GLOBAL_THREAD
- * 	driver data structure has struct k_work work in it
- * 	driver data structure has const struct device *dev pointint to this device
- * 	Implements bmp388_work_handler(struct k_work *work) calls bmp388_handler_interrupts(data->dev)
- * 	driver init sets data->work.handler = bmp388_work_handler
- * 	uses GPIO interrupt callback to call k_work_submit(&data->work)
- * 	This is using the system workqueue so we don't need to define a workqueue stack
- * 	The work function should not use blocking operations. If it does or takes too much time
- * 	then the driver will need to create its own workqueue with stack, a significant overhead
- * !!! vs
- * !!! CONFIG_BMP388_TRIGGER_OWN_THREAD
- * 	driver data structure has struct k_sem sem in it
- * 	allocates thread stack one in driver file
- * 	calls k_thread_create() in driver init function
- * 	Implements bmp388_thread_main() an infinite loop with semaphore take then call to bmp388_handler_interrupts(dev)
- * 	uses GPIO interrupt callback to call k_sem_give(&data->sem)
- * Alternative:
- * drivers/adc/adc_tla202x.c uses K_THREAD_DEFINE() invoked in
- * DT_FOREACH_STATUS_OK() driver macro.
- * This method creates an individual stack for each driver instantiation.
- */
-#define XEC_I2C_NL_WQ_STACK_SIZE 256
-#define XEC_I2C_NL_WQ_PRIORITY   5
+#define XEC_I2C_NL_DMA_BLOCK_MAX 3
 
+#define XEC_I2C_NL_DMA_CFG_HC  BIT(0)
+#define XEC_I2C_NL_DMA_CFG_M2D BIT(1)
+
+enum xec_i2c_nl_dir {
+	XEC_I2C_NL_DIR_DEV_TO_MEM = 0,
+	XEC_I2C_NL_DIR_MEM_TO_DEV,
+};
 
 enum xec_i2c_nl_cm_state {
 	XEC_CM_STATE_CLOSED = 0,
@@ -85,54 +66,130 @@ enum xec_i2c_nl_cm_state {
 	XEC_CM_STATE_DATA_RX,
 };
 
+enum xec_i2c_nl_protocol {
+	XEC_I2C_NL_PROTO_WR = 0,
+	XEC_I2C_NL_PROTO_RD,
+	XEC_I2C_NL_PROTO_WR_WR,
+	XEC_I2C_NL_PROTO_WR_RD,
+	XEC_I2C_NL_PROTO_MAX,
+};
+
 struct xec_i2c_nl_msg_group {
-	struct i2c_msg *msg1;
-	struct i2c_msg *msg2;
+	struct i2c_msg *m; /* starting message in group */
+	uint8_t nmsgs;     /* number of messages in group */
+};
+
+struct xec_i2c_nl_xfr {
+	uint32_t txb_addr;
+	uint32_t rxb_addr;
+	uint16_t ntx;
+	uint16_t nrx;
+	uint16_t i2c_addr;
+	uint16_t flags;
 };
 
 struct xec_i2c_nl_config {
 	mem_addr_t i2c_base;
 	uint32_t bitrate;
 	const struct pinctrl_dev_config *pin_cfg;
-	void (*irq_config)(const struct device *);
-	const struct device *cm_dma_dev;
-	volatile uint8_t *cm_buf;
-	uint16_t cm_buf_size;
-	uint8_t cm_dma_chan;
-	uint8_t cm_dma_trigsrc;
+	void (*irq_config)(void);
+	const struct device *hc_dma_dev;
+	uint8_t hc_dma_chan;
+	uint8_t hc_dma_trigsrc;
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint8_t pcr;
 	uint8_t port;
+	volatile uint8_t *xfrbuf;
+	uint32_t xfrbuf_sz;
 #ifdef CONFIG_I2C_TARGET
-	const struct device *tm_dma_dev;
-	volatile uint8_t *tm_rx_buf;
-	uint16_t tm_rx_buf_size;
-	uint8_t tm_dma_chan;
-	uint8_t tm_dma_trigsrc;
+	sys_slist_t target_list;
+	struct i2c_target_config *curr_target;
+	const struct device *tc_dma_dev;
+	uint8_t tc_dma_chan;
+	uint8_t tc_dma_trigsrc;
+	uint8_t ntargets;
 #endif
 };
 
+/* alternate method 1: use one struct dma_clock_config
+ *  requires DMA callback to reload m2d channel if tx data doesn't fit driver tx buffer
+ *      struct dma_config m2d_cfg;         32 bytes
+ *	struct dma_config d2m_cfg;         32 bytes
+ *	struct dma_block_config dcfg;      28 bytes
+ * 	struct i2c_msg m2d_msgs[3];        3 * 12 bytes = 36
+ *	struct i2c_msg d2m_msg;            12 bytes
+ *                                  total  140 bytes
+ *
+ * alternate method 1: use one struct dma_clock_config
+ *  requires DMA callback to reload m2d channel if tx data doesn't fit driver tx buffer
+ *      struct dma_config m2d_cfg;         32 bytes
+ *	struct dma_config d2m_cfg;         32 bytes
+ *	struct dma_block_config dcfg;      28 bytes
+ *      flags (16 or 32 bits)			1 byte
+ * 		bit[0] = driver tx buffer
+ * 		bit[1] = struct i2c_msg.
+ * 		bit[2] = driver tx buffer end last byte of driver tx buffer contains RPT-START addr
+ *      driver tx buffer len (32 bits or 16 bits)?  2 or 4 bytes
+ * 	uint8_t index for bit[1]			1 byte
+ *				total = 92 + 1 + 4 + 1 = 98 bytes
+ *
+ * Will the above alternate methods work for all message combinations implemented in zephyr i2c.h
+ * One write msg 	OK
+ * 	DMA driver tx buffer, len=msg.len + 1
+ * 		OR
+ * 	DMA write address, len=1
+ * 	DMA msg, len=msg.len
+ * One read msg		OK
+ * 	DMA driver tx buffer = read address, len=1
+ * 	DMA to msg.buf, len=msg.len uses d2m
+ * Two write msgs	?
+ * 	worst case both are larger than driver buffer
+ * 	DMA write address, len=1	setup/start in transfer API
+ * 	DMA msg[0], len=msg[0].len	m2d callback
+ * 	DMA msg[1], len=msg[1].len	m2d callback
+ *
+ * One write, one read	?
+ * 	DMA tx buffer, len=1+msg[0].len		m2d callback on done, no reload
+ * 	DMA msg[1], len=msg[1].len		d2m callback on done, no reload
+ * 		OR
+ *	DMA tx buffer = write address, len=1	m2d callback on done, reload msg[0]
+ * 	DMA msg[0], len=msg[0].len	m2d callback on done, no reload
+ * 	DMA msg[1], len=msg[1].len	d2m callback on done, no reload
+ */
+
 struct xec_i2c_nl_data {
-	uint32_t i2c_config;
-	volatile uint32_t i2c_status;
-	uint16_t i2c_addr_fmt;
-	uint8_t i2c_cr;
-	struct k_mutex lock_mutex;
+	const struct device *dev;
+	struct k_mutex lock_mut;
 	struct k_sem sync_sem;
-	struct xec_i2c_nl_msg_group mgrp;
+	uint32_t i2c_config;
+#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
+	struct k_work kwq;
+#endif
+	volatile uint32_t i2c_status;
+	uint16_t i2c_addr;
+	uint8_t i2c_cr;
+	uint8_t target_mode;
+	uint8_t port_sel;
+	struct dma_config dma_cfg;           /* 32 bytes */
+	struct dma_block_config dma_blk_cfg; /* 28 bytes */
 	struct i2c_msg *msgs;
-	struct i2c_msg *mc;
-	struct i2c_msg *mend;
+	struct i2c_msg *cmsg;
+	uint8_t *read_phase_buf;
+	uint32_t read_phase_len;
+	uint32_t htcmd;
 	uint8_t num_msgs;
 	uint8_t midx;
-	uint8_t cm_state;
-#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
-	struct k_work isr_work;
-#endif
+	uint8_t num_msgs_xfr;
+	uint8_t htm_state;
+	uint8_t protocol;
+	uint8_t hflags;
+	uint16_t wrcnt;
+	uint16_t rdcnt;
 #ifdef CONFIG_I2C_TARGET
-	atomic_t num_targets_registered;
-	struct i2c_target_config *targets[XEC_I2C_MAX_TARGETS];
+	sys_slist_t target_list;
+	struct i2c_target_config *curr_target;
+	uint8_t ntargets;
 #endif
 };
 
@@ -142,24 +199,16 @@ struct xec_i2c_nl_timing {
 	uint32_t idle_scaling;
 	uint32_t timeout_scaling;
 	uint16_t bus_clock;
-	uint8_t  rpt_sta_hold_tm;
+	uint8_t rpt_sta_hold_tm;
 };
 
-#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
-
-static void xec_i2c_nl_isr_kworker(struct k_work *work)
-{
-	/* TODO */
-}
-#endif /* CONFIG_I2C_XEC_NL_USE_KWORKQUEUE */
-
 static const struct xec_i2c_nl_timing xec_i2c_nl_timing_tbl[] = {
-	{ KHZ(100), XEC_I2C_SMB_DATA_TM_100K, XEC_I2C_SMB_IDLE_SC_100K, XEC_I2C_SMB_TMO_SC_100K,
-	  XEC_I2C_SMB_BUS_CLK_100K, XEC_I2C_SMB_RSHT_100K },
-	{ KHZ(400), XEC_I2C_SMB_DATA_TM_400K, XEC_I2C_SMB_IDLE_SC_400K, XEC_I2C_SMB_TMO_SC_400K,
-	  XEC_I2C_SMB_BUS_CLK_400K, XEC_I2C_SMB_RSHT_400K },
-	{ MHZ(1), XEC_I2C_SMB_DATA_TM_1M, XEC_I2C_SMB_IDLE_SC_1M, XEC_I2C_SMB_TMO_SC_1M,
-	  XEC_I2C_SMB_BUS_CLK_1M, XEC_I2C_SMB_RSHT_1M },
+	{KHZ(100), XEC_I2C_SMB_DATA_TM_100K, XEC_I2C_SMB_IDLE_SC_100K, XEC_I2C_SMB_TMO_SC_100K,
+	 XEC_I2C_SMB_BUS_CLK_100K, XEC_I2C_SMB_RSHT_100K},
+	{KHZ(400), XEC_I2C_SMB_DATA_TM_400K, XEC_I2C_SMB_IDLE_SC_400K, XEC_I2C_SMB_TMO_SC_400K,
+	 XEC_I2C_SMB_BUS_CLK_400K, XEC_I2C_SMB_RSHT_400K},
+	{MHZ(1), XEC_I2C_SMB_DATA_TM_1M, XEC_I2C_SMB_IDLE_SC_1M, XEC_I2C_SMB_TMO_SC_1M,
+	 XEC_I2C_SMB_BUS_CLK_1M, XEC_I2C_SMB_RSHT_1M},
 };
 
 static int xec_i2c_nl_prog_standard_timing(const struct device *dev, uint32_t freq_hz)
@@ -186,7 +235,7 @@ static int xec_i2c_nl_prog_standard_timing(const struct device *dev, uint32_t fr
 
 static uint32_t xec_i2c_status_get(mem_addr_t i2c_base)
 {
-	uint32_t v = sys_read32(i2c_base + XEC_I2C_COMP_OFS);
+	uint32_t v = sys_read32(i2c_base + XEC_I2C_CMPL_OFS);
 
 	v &= ~GENMASK(7, 0);
 	v |= sys_read8(i2c_base + XEC_I2C_SR_OFS);
@@ -199,49 +248,59 @@ static bool xec_i2c_nl_is_tm(const struct device *dev)
 {
 	struct xec_i2c_nl_data *const data = dev->data;
 
-	if (atomic_get(&data->num_targets_registered) != 0) {
+	if (data->ntargets != 0) {
 		return true;
 	}
 
 	return false;
 }
 
-static void prog_target_addresses(const struct device *dev)
+static uint32_t prog_target_addresses(const struct device *dev)
 {
 	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *const data = dev->data;
-	mem_addr_t i2c_base = devcfg->i2c_base;
-	uint32_t ntargets = (uint32_t)atomic_get(&data->num_targets_registered);
-	uint32_t v = sys_read32(i2c_base + XEC_I2C_OA_OFS);
-	uint32_t n = 0, tidx = 0;
+	mem_addr_t rb = devcfg->i2c_base;
+	sys_snode_t *sn = NULL;
+	uint32_t val = 0, n = 0;
 
-	for (n = 0; n < ntargets; n++) { /* hardware supports two target addresses */
-		struct i2c_target_config *p = data->targets[n];
+	SYS_SLIST_FOR_EACH_NODE(&data->target_list, sn) {
+		struct i2c_target_config *ptc = CONTAINER_OF(sn, struct i2c_target_config, node);
 
-		if (p == NULL) {
-			continue;
+		if (ptc != NULL) {
+			n++;
+			if (ptc->address == 0) {
+				sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
+			} else if ((ptc->address == 0x08u) || (ptc->address == 0x61u)) {
+				sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_DSA_POS);
+			} else {
+				if (val == 0) {
+					val |= XEC_I2C_OA_1_SET(ptc->address);
+				} else {
+					val |= XEC_I2C_OA_2_SET(ptc->address);
+				}
+			}
 		}
 
-		v |= XEC_I2C_OA_SET(tidx, p->address);
-		tidx++;
+		if (val != 0) {
+			sys_write32(val, rb + XEC_I2C_OA_OFS);
+		}
 	}
 
-	sys_write32(v, i2c_base + XEC_I2C_OA_OFS);
-}
-
-static void xec_i2c_nl_tm_cfg1(const struct device *dev)
-{
-	/* TODO after I2C-NL controller reset and configuration we need to
-	 * configure DMA channel used by target mode.
-	 */
+	return n;
 }
 #endif
 
-static void xec_i2c_nl_cm_cfg1(const struct device *dev)
+/* After I2C-NL controller reset and configuration we need to
+ * configure DMA channel used by controller host mode.
+ */
+static void xec_i2c_nl_dma_clear(const struct device *dev)
 {
-	/* TODO after I2C-NL controller reset and configuration we need to
-	 * configure DMA channel used by controller mode.
-	 */
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+
+	soc_xec_dmac_chan_clear(devcfg->hc_dma_chan);
+#ifdef CONFIG_I2C_TARGET
+	soc_xec_dmac_chan_clear(devcfg->tc_dma_chan);
+#endif
 }
 
 static int xec_i2c_nl_hw_cfg(const struct device *dev, uint32_t bitrate, uint8_t port,
@@ -258,6 +317,8 @@ static int xec_i2c_nl_hw_cfg(const struct device *dev, uint32_t bitrate, uint8_t
 
 	xec_pcr_sleep_en_clear(devcfg->pcr);
 	xec_pcr_reset_en(devcfg->pcr);
+
+	xec_i2c_nl_dma_clear(dev);
 
 	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
 
@@ -290,8 +351,6 @@ static int xec_i2c_nl_hw_cfg(const struct device *dev, uint32_t bitrate, uint8_t
 
 	/* enable bit-bang continuous pin monitor. v3.8 HW only */
 	sys_set_bit(i2c_base + XEC_I2C_BBCR_OFS, XEC_I2C_BBCR_CM_POS);
-
-	xec_i2c_nl_cm_cfg1(dev);
 
 #ifdef CONFIG_I2C_TARGET_MODE
 	if (xec_i2c_nl_is_tm(dev) == true) {
@@ -336,20 +395,16 @@ static int xec_i2c_nl_configure(const struct device *dev, uint32_t i2c_config)
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_I2C_PORT_MUX
-	port = I2C_PORT_MUX_GET(i2c_config);
-#else
-	port = devcfg->port;
-#endif
+	port = data->port_sel;
 
-	k_mutex_lock(&data->lock_mutex, K_FOREVER);
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
 
 	rc = xec_i2c_nl_hw_cfg(dev, bitrate, port, cfg_flags);
 	if (rc == 0) {
 		data->i2c_config = i2c_config;
 	}
 
-	k_mutex_unlock(&data->lock_mutex);
+	k_mutex_unlock(&data->lock_mut);
 
 	return rc;
 }
@@ -357,93 +412,152 @@ static int xec_i2c_nl_configure(const struct device *dev, uint32_t i2c_config)
 static int xec_i2c_nl_get_config(const struct device *dev, uint32_t *i2c_config)
 {
 	struct xec_i2c_nl_data *const data = dev->data;
+	uint32_t cfg = 0;
 
-	if (i2c_config != NULL) {
-		/* TODO more */
-		/* I2C_MODE_CONTROLLER */
-		*i2c_config = data->i2c_config;
+	if (i2c_config == NULL) {
+		return -EINVAL;
 	}
+
+	cfg = data->i2c_config;
+#ifdef CONFIG_I2C_TARGET
+	if (data->ntargets != 0) {
+		cfg &= ~I2C_MODE_CONTROLLER;
+	} else {
+		cfg |= I2C_MODE_CONTROLLER;
+	}
+#endif
+	*i2c_config = cfg;
 
 	return 0;
 }
 
 /* TODO mutex/semaphore while changing? */
-static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_target_config *cfg)
-{
 #ifdef CONFIG_I2C_TARGET
-	const struct xec_i2c_nl_config *devcfg = dev->config;
-	struct xec_i2c_nl_data *const data = dev->data;
-	mem_addr_t i2c_base = devcfg->i2c_base;
-	uint32_t v = sys_read32(i2c_base + XEC_I2C_OA_OFS);
-	uint32_t ntargets = 0;
-	uint16_t taddr = 0;
+static struct i2c_target_config *find_target(struct xec_i2c_nl_data *data, uint16_t i2c_addr)
+{
+	sys_snode_t *sn = NULL;
 
-	if ((cfg == NULL) || (cfg->address > 0x7FU)) {
-		return -EINVAL;
-	}
+	SYS_SLIST_FOR_EACH_NODE(&data->target_list, sn) {
+		struct i2c_target_config *ptc = CONTAINER_OF(sn, struct i2c_target_config, node);
 
-	ntargets = (uint32_t)atomic_get(&data->num_targets_registered);
-	if (ntargets >= XEC_I2C_MAX_TARGETS) {
-		return -EBUSY;
-	}
-
-	for (unsigned i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
-		taddr = XEC_I2C_OA_GET(i, v);
-
-		if (taddr == 0) {
-			v |= XEC_I2C_OA_SET(i, cfg->address);
-			sys_write32(v, i2c_base + XEC_I2C_OA_OFS);
-			atomic_inc(&data->num_targets_registered);
-			break;
+		if ((ptc != NULL) && (ptc->address == i2c_addr)) {
+			return ptc;
 		}
 	}
 
-	return 0;
-#else
-	return -ENOTSUP;
-#endif
+	return NULL;
 }
 
-static int xec_i2c_nl_target_unregister(const struct device *dev, struct i2c_target_config *cfg)
+static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_target_config *cfg)
 {
-#ifdef CONFIG_I2C_TARGET
 	const struct xec_i2c_nl_config *devcfg = dev->config;
-	struct xec_i2c_nl_data *const data = dev->data;
-	mem_addr_t i2c_base = devcfg->i2c_base;
-	uint32_t v = sys_read32(i2c_base + XEC_I2C_OA_OFS);
-	uint32_t ntargets = 0;
-	uint16_t taddr = 0;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t rb = devcfg->i2c_base;
+	uint32_t oaval = 0;
+	int rc = 0;
 
 	if (cfg == NULL) {
 		return -EINVAL;
 	}
 
-	ntargets = (uint32_t)atomic_get(&data->num_targets_registered);
-	if (ntargets == 0) {
-		return 0;
+	if (((cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0) || (cfg->address > 0x7FU)) {
+		return -EINVAL;
 	}
 
-	for (unsigned i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
-		if (data->targets[i] == cfg) {
-			for (unsigned j = 0; j < XEC_I2C_MAX_TARGETS; j++) {
-				taddr = XEC_I2C_OA_GET(i, v);
-				if (taddr == cfg->address) {
-					v &= ~XEC_I2C_OA_MSK(i);
-					sys_write32(v, i2c_base + XEC_I2C_OA_OFS);
-					break;
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
+
+	rc = -ENFILE;
+	if (data->ntargets < 5) {
+		struct i2c_target_config *ptc = find_target(data, cfg->address);
+
+		if (ptc == NULL) {
+			data->ntargets++;
+			sys_slist_append(&data->target_list, &cfg->node);
+			if (cfg->address == 0) {
+				/* enable general call */
+				sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
+			} else if ((cfg->address == 0x08u) || (cfg->address == 0x61u)) {
+				/* enable DSA */
+				sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_DSA_POS);
+			} else { /* use one of the two own addresses */
+				oaval = sys_read32(rb + XEC_I2C_OA_OFS);
+				if (XEC_I2C_OA_1_GET(oaval) == 0) {
+					oaval |= XEC_I2C_OA_1_SET(cfg->address);
+					sys_write32(oaval, rb + XEC_I2C_OA_OFS);
+				} else if (XEC_I2C_OA_2_GET(oaval) == 0) {
+					oaval |= XEC_I2C_OA_2_SET(cfg->address);
+					sys_write32(oaval, rb + XEC_I2C_OA_OFS);
 				}
 			}
-
-			atomic_dec(&data->num_targets_registered);
-			break;
+			rc = 0;
 		}
 	}
 
+	if (rc == 0) {
+		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+	}
+
+	k_mutex_unlock(&data->lock_mut);
+
 	return 0;
-#else
-	return -ENOTSUP;
-#endif
 }
+
+/* TODO refactor */
+static int xec_i2c_nl_target_unregister(const struct device *dev, struct i2c_target_config *cfg)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t rb = devcfg->i2c_base;
+	uint32_t oaval = 0;
+	uint16_t taddr1 = 0, taddr2 = 0;
+	int rc = 0;
+	bool removed = false;
+
+	if (cfg == NULL) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
+
+	if (data->ntargets == 0) {
+		goto targ_unreg_release_lock;
+	}
+
+	removed = sys_slist_find_and_remove(&data->target_list, &cfg->node);
+
+	if (removed == false) {
+		rc = -ENOSYS;
+		goto targ_unreg_release_lock;
+	}
+
+	data->ntargets--;
+
+	if (cfg->address == 0) { /* disable general call */
+		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
+	} else if ((cfg->address == 0x08u) || (cfg->address == 0x61u)) {
+		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_DSA_POS);
+	} else { /* one of the own addresses */
+		oaval = sys_read32(rb + XEC_I2C_OA_OFS);
+		taddr1 = XEC_I2C_OA_1_GET(oaval);
+		taddr2 = XEC_I2C_OA_2_GET(oaval);
+		if (taddr1 == (uint32_t)cfg->address) {
+			oaval &= ~XEC_I2C_OA_1_MSK;
+			sys_write32(oaval, rb + XEC_I2C_OA_OFS);
+		} else if (taddr2 == (uint32_t)cfg->address) {
+			oaval &= ~XEC_I2C_OA_2_MSK;
+			sys_write32(oaval, rb + XEC_I2C_OA_OFS);
+		}
+	}
+
+targ_unreg_release_lock:
+	/* TODO if all targets removed then call k_work_cancel_sync() to
+	 * remove target mode worker thread.
+	 */
+	k_mutex_unlock(&data->lock_mut);
+
+	return rc;
+}
+#endif /* CONFIG_I2C_TARGET */
 
 /* How can we detect if this controller is driving the bus or an external
  * device is driving SCL and/or SDA low?
@@ -546,7 +660,7 @@ static int xec_i2c_nl_recover_bus(const struct device *dev)
 	/* turn off bit-bang mode. I2C SCL and SDA are re-connect to I2C controller logic */
 	sys_write8(BIT(XEC_I2C_BBCR_CM_POS), i2c_base + XEC_I2C_BBCR_OFS);
 
-	if ((bbcr & I2C_XEC_BB_SCL_SDA_HIGH_MSK) != I2C_XEC_BB_SCL_SDA_HIGH_MSK)  {
+	if ((bbcr & I2C_XEC_BB_SCL_SDA_HIGH_MSK) != I2C_XEC_BB_SCL_SDA_HIGH_MSK) {
 		return -EIO;
 	}
 
@@ -554,27 +668,6 @@ static int xec_i2c_nl_recover_bus(const struct device *dev)
 
 	return 0;
 }
-
-#if 0
-struct i2c_msg {
-	/** Data buffer in bytes */
-	uint8_t		*buf;
-
-	/** Length of buffer in bytes */
-	uint32_t	len;
-
-	/** Flags for this message */
-	uint8_t		flags;
-};
-
-	data->msgs = msgs;
-	data->mc = msgs;
-	data->mremptr = NULL;
-	data->mremlen = 0;
-	data->num_msgs = num_msgs;
-	data->midx = 0;
-	data->state = 0;
-#endif
 
 /* Closed, I2C Write + STOP
  * 	ntx = 1 + msg->len
@@ -651,89 +744,340 @@ struct i2c_msg {
  * 	Read Nr bytes
  *
  */
-#if 0
-struct xec_i2c_nl_msg_group {
-	struct i2c_msg *msg1;
-	struct i2c_msg *msg2;
-};
-#endif
-
-#if 0
-struct xec_i2c_nl_msg_group mgrp;
-struct i2c_msg *msgs;
-struct i2c_msg *mc;
-struct i2c_msg *mend;
-#endif
-static int xfr_msg_group_sync(const struct device *dev)
-{
-	/* TODO */
-	return 0;
-}
-
-static bool i2c_nl_skip_msg(struct i2c_msg *m)
-{
-	if (m == NULL) {
-		return true;
-	}
-
-	if (m->buf == NULL) {
-		return true;
-	}
-
-	if (m->len == 0) {
-		return true;
-	}
-
-	return true;
-}
-
-static bool is_msg_write(struct i2c_msg *m)
-{
-	if ((m != NULL) && ((m->flags & I2C_MSG_READ) == 0)) {
-		return true;
-	}
-
-	return false;
-}
-
-static bool is_msg_read(struct i2c_msg *m)
-{
-	if ((m != NULL) && ((m->flags & I2C_MSG_READ) != 0)) {
-		return true;
-	}
-
-	return false;
-}
-
-static int add_msg_to_group(struct xec_i2c_nl_msg_group *g, struct i2c_msg *m)
-{
-	if (g->msg1 == NULL) {
-		g->msg1 = m;
-	} else if (g->msg2 == NULL) {
-		g->msg2 = m;
-		return 1; /* group is full */
-	} else {
-		return -ENOSPC;
-	}
-
-	return 0;
-}
 
 /* API wrapper in i2c.h returns on num_msgs == 0. It also accesses msgs[] without checking for
  * NULL which will result in a fault if msgs is NULL.
  * This routine will perform a complete I2C transaction from START to STOP.
  * If no START flag is present on the first message, the driver adds START.
  * If no STOP flag is present in the last message, the driver adds STOP.
+ * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ * We must handle i2c_write, i2c_read, i2c_write_read, i2c_burst_write, etc wrappers
+ * in i2c.h
+ * One read or write msg with stop. -> START wrAddr wrData STOP or START rdAddr [rdData] STOP
+ * Two write msgs, second with stop. -> START wrAddr msg0_wrData msg1_wrData STOP
+ * Two msgs: write then read with stop. -> START wrAddr wrData RPT-START rdAddr [rdData] STOP
+ * Option A: no double buffering
+ * 	4 structures containing info for each phase
+ * 	I2C Write 1
+ * 		struct[0] START plus target write address, src=data->fmt_target_addr, len=1
+ *              struct[1] target data, src=msg[m0]->buf, len=msg[0]->len
+ * 		hw_flags = START0 | STOP
+ * 	I2C Write 2
+ * 		struct[0] START plus target write address, src=data->fmt_target_addr, len=1
+ *              struct[1] target data msg[0], src=msg[0]->buf, len=msg[0]->len
+ *		struct[2] target data msg[1], src=msg[1]->buf, len=msg[1]->len
+ * 		hw_flags = START0 | STOP
+ * 	I2C Read 1
+ * 		struct[0] START plus target read address, src=data->fmt_target_addr, len=1
+ * 		struct[1] dest=msg[0].buf, len=msg[0]->len
+ * 		hw_flags = START0 | STOP
+ * 	I2C Write-Read
+ * 		struct[0] START plus target write address, src=data->fmt_target_addr, len=1
+ * 		struct[1] target data, src=msg[m0]->buf, len=msg[0]->len
+ * 		struct[2] target read address, src=data->fmt_target_addr2, len=1
+ * 		struct[3] dest=msg[1].buf, len=msg[1]->len
+ *
+ * TODO
+ * #define XEC_I2C_NL_TX_BUF_SZ     16u
+ * #define XEC_I2C_NL_TX_BUF_PAD_SZ 4u
+ * if tx message < (16 - 4u) then put it all in data->xfrbuf[] and use one m2d DMA
+ *
  */
+static int xec_i2c_nl_msgs_valid(struct i2c_msg *msgs, uint8_t num_msgs)
+{
+	if ((msgs == NULL) || (num_msgs == 0)) {
+		return -EINVAL;
+	}
+
+	for (uint8_t n = 0; n < num_msgs; n++) {
+		struct i2c_msg *m = &msgs[n];
+
+		if ((m->buf == NULL) || (m->len == 0)) {
+			return -EINVAL;
+		}
+
+		if ((m->flags & I2C_MSG_ADDR_10_BITS) != 0) {
+			return -ENOTSUP;
+		}
+
+		if (m->len > XEC_I2C_NL_MAX_LEN) {
+			return -E2BIG;
+		}
+	}
+
+	return 0;
+}
+
+/* Sets driver data:
+ * I2C-NL control flagsh: hflags: START0 and STOP
+ * I2C-NL write count: wrnct
+ * I2C-NL read count: rdcnt
+ * Number of struct soc_xec_dma_chan_cfg's used
+ * filled in the struct soc_xec_dma_chan_cfg's
+ */
+static bool is_xfr_one_msg(struct i2c_msg *m, struct i2c_msg *mnext)
+{
+	if ((mnext == NULL) || ((m->flags & I2C_MSG_STOP) != 0) ||
+	    ((m->flags & I2C_MSG_READ) != 0)) {
+		return true;
+	}
+
+	return false;
+}
+
+static bool is_xfr_wr_rd(struct i2c_msg *m, struct i2c_msg *mnext)
+{
+	if ((mnext != NULL) && ((m->flags & I2C_MSG_READ) == 0) &&
+	    ((mnext->flags & I2C_MSG_READ) != 0)) {
+		return true;
+	}
+
+	return false;
+}
+
+static void pr_msg(struct i2c_msg *m)
+{
+	LOG_DBG("I2C msg @ %p", m);
+	if (m == NULL) {
+		return;
+	}
+
+	LOG_DBG("  buf   = %p", (void *)m->buf);
+	LOG_DBG("  len   = %u", m->len);
+	LOG_DBG("  flags = 0x%02x", m->flags);
+}
+
+static void pr_xfr_data(struct xec_i2c_nl_data *data)
+{
+	if (data == NULL) {
+		return;
+	}
+
+	LOG_DBG("I2C-NL data @ %p", (void *)data);
+	LOG_DBG("  i2c_addr = 0x%0x", data->i2c_addr);
+	LOG_DBG("  msgs = %p", (void *)data->msgs);
+	LOG_DBG("  num_msgs = %u", data->num_msgs);
+	LOG_DBG("  midx = %u", data->midx);
+	LOG_DBG("  num_msgs_xfr = %u", data->num_msgs_xfr);
+	LOG_DBG("  hflags = 0x%0x", data->hflags);
+	LOG_DBG("  wrcnt = 0x%0x", data->wrcnt);
+	LOG_DBG("  rdcnt = 0x%0x", data->rdcnt);
+}
+
+static void xec_i2c_nl_hc_cb(const struct device *dev, void *user_data, uint32_t chan, int status)
+{
+	return;
+}
+
+#ifdef CONFIG_I2C_TARGET
+static void xec_i2c_nl_tc_cb(const struct device *dev, void *user_data, uint32_t chan, int status)
+{
+	return;
+}
+#endif
+
+static void xec_i2c_nl_dma_cfg_init(const struct device *dev, struct dma_config *dcfg,
+				    uint8_t flags)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *const data = dev->data;
+
+	dcfg->complete_callback_en = 0u; /* callback on completion only */
+	dcfg->error_callback_dis = 0u;   /* allow callback on errro */
+	dcfg->source_handshake = 0u;     /* HW handshake */
+	dcfg->dest_handshake = 0u;       /* HW handshake */
+	dcfg->channel_priority = 0u;     /* N/A */
+	dcfg->source_chaining_en = 0u;   /* N/A */
+	dcfg->dest_chaining_en = 0u;     /* N/A */
+	dcfg->linked_channel = 0u;       /* N/A */
+	dcfg->cyclic = 0u;               /* N/A */
+	dcfg->source_data_size = 1u;     /* I2C data register is byte sized */
+	dcfg->dest_data_size = 1u;       /* I2C data register is byte sized */
+	dcfg->source_burst_length = 0u;  /* N/A */
+	dcfg->dest_burst_length = 0u;    /* N/A */
+	dcfg->block_count = 1u;          /* this driver implements one struct dma_block_config */
+	dcfg->user_data = (void *)data;  /* point to I2C driver data */
+
+	dcfg->head_block = &data->dma_blk_cfg;
+
+#ifdef CONFIG_I2C_TARGET
+	if ((flags & XEC_I2C_NL_DMA_CFG_HC) != 0) {
+		dcfg->dma_slot = devcfg->hc_dma_trigsrc;
+		dcfg->dma_callback = xec_i2c_nl_hc_cb;
+	} else {
+		dcfg->dma_slot = devcfg->tc_dma_trigsrc;
+		dcfg->dma_callback = xec_i2c_nl_tc_cb;
+	}
+#else
+	dcfg->dma_slot = devcfg->hc_dma_trigsrc;
+	dcfg->dma_callback = xec_i2c_nl_hc_cb;
+#endif
+	if ((flags & XEC_I2C_NL_DMA_CFG_M2D) != 0) {
+		dcfg->channel_direction = MEMORY_TO_PERIPHERAL;
+	} else {
+		dcfg->channel_direction = PERIPHERAL_TO_MEMORY;
+	}
+}
+
+static void xec_i2c_nl_dma_cfg_block(const struct device *dev, struct dma_block_config *blkcfg,
+				     void *buf, uint32_t len, uint8_t dir)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t rb = devcfg->i2c_base;
+
+	if (dir == XEC_I2C_NL_DIR_MEM_TO_DEV) {
+		blkcfg->source_address = (uint32_t)buf;
+		if (data->target_mode == 0) {
+			blkcfg->dest_address = (uint32_t)(rb + XEC_I2C_HTX_OFS);
+		} else {
+			blkcfg->dest_address = (uint32_t)(rb + XEC_I2C_TTX_OFS);
+		}
+		blkcfg->source_addr_adj = DMA_ADDR_ADJ_INCREMENT;
+		blkcfg->dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+	} else {
+		if (data->target_mode) {
+			blkcfg->source_address = (uint32_t)(rb + XEC_I2C_HRX_OFS);
+		} else {
+			blkcfg->source_address = (uint32_t)(rb + XEC_I2C_TRX_OFS);
+		}
+		blkcfg->dest_address = (uint32_t)buf;
+		blkcfg->source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+		blkcfg->dest_addr_adj = DMA_ADDR_ADJ_INCREMENT;
+	}
+
+	blkcfg->source_gather_interval = 0;
+	blkcfg->dest_scatter_interval = 0;
+	blkcfg->dest_scatter_count = 0;
+	blkcfg->source_gather_count = 0;
+	blkcfg->block_size = len;
+	blkcfg->next_block = NULL;
+	blkcfg->source_gather_en = 0;
+	blkcfg->dest_scatter_en = 0;
+	blkcfg->dest_reload_en = 0;
+	blkcfg->fifo_mode_control = 0;
+	blkcfg->flow_control_mode = 0;
+}
+
+static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	volatile uint8_t *xfrbuf = devcfg->xfrbuf;
+	uint32_t ntx = 0, nrx = 0;
+
+	if (m->len > (devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ)) {
+		data->num_msgs_xfr = 0;
+		return -E2BIG;
+	}
+
+	data->hflags = BIT(0) | BIT(2); /* START0 | STOP */
+	ntx = 1u;
+	xfrbuf[0] = (data->i2c_addr & 0x7Fu) << 1;
+	if ((m->flags & I2C_MSG_READ) != 0) {
+		xfrbuf[0] |= BIT(0);
+		data->protocol = XEC_I2C_NL_PROTO_RD;
+		data->read_phase_buf = m->buf;
+		data->read_phase_len = m->len;
+	} else {
+		ntx += m->len;
+		data->protocol = XEC_I2C_NL_PROTO_WR;
+		memcpy((void *)&xfrbuf[1], m->buf, m->len);
+	}
+
+	data->wrcnt = (uint16_t)ntx;
+	data->rdcnt = (uint16_t)nrx;
+
+	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, XEC_I2C_NL_DIR_MEM_TO_DEV);
+	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)xfrbuf, ntx,
+				 XEC_I2C_NL_DIR_MEM_TO_DEV);
+
+	data->num_msgs_xfr = 1u;
+
+	return 0;
+}
+
+#define XEC_I2C_NL_HM_CFG_FLUSH BIT(XEC_I2C_CFG_FHTX_POS) | BIT(XEC_I2C_CFG_FHRX_POS)
+#define XEC_I2C_NL_HM_CFG_IEN   BIT(XEC_I2C_CFG_HD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS)
+#define XEC_I2C_NL_TM_CFG_FLUSH BIT(XEC_I2C_CFG_FTTX_POS) | BIT(XEC_I2C_CFG_FTRX_POS)
+#define XEC_I2C_NL_TM_CFG_IEN   BIT(XEC_I2C_CFG_TD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS)
+
+static int xec_i2c_nl_xfr_trigger(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t rb = devcfg->i2c_base;
+	uint32_t cmd = 0, cmd_ofs = 0, extlen = 0, cfg_flush = 0, cfg_ien = 0;
+	int rc = 0;
+
+	/* configure and start DMA channel */
+	rc = dma_config(devcfg->hc_dma_dev, devcfg->hc_dma_chan, &data->dma_cfg);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL xfr trigger DMA config error (%d)", rc);
+		return rc;
+	}
+
+	sys_set_bits(rb + XEC_I2C_CFG_OFS, cfg_flush);
+	sys_write32(XEC_I2C_CMPL_RW1C_MSK, rb + XEC_I2C_CMPL_OFS);
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->target_mode == 0) {
+		cmd_ofs = XEC_I2C_HCMD_OFS;
+		cfg_flush = XEC_I2C_NL_HM_CFG_FLUSH;
+		cfg_ien = XEC_I2C_NL_HM_CFG_IEN;
+		cmd = data->hflags;
+		cmd <<= XEC_I2C_HCMD_START0_POS;
+		cmd |= BIT(XEC_I2C_HCMD_RUN_POS) | BIT(XEC_I2C_HCMD_PROC_POS);
+		cmd |= XEC_I2C_HCMD_WCL_SET((uint32_t)data->wrcnt);
+		cmd |= XEC_I2C_HCMD_RCL_SET((uint32_t)data->rdcnt);
+		extlen = XEC_I2C_ELEN_HWR_SET((uint32_t)data->wrcnt) |
+			 XEC_I2C_ELEN_HRD_SET((uint32_t)data->rdcnt);
+
+		dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
+	} else {
+		cmd_ofs = XEC_I2C_TCMD_OFS;
+		cfg_flush = XEC_I2C_NL_TM_CFG_FLUSH;
+		cmd = BIT(XEC_I2C_TCMD_RUN_POS) | BIT(XEC_I2C_TCMD_PROC_POS);
+		cmd |= XEC_I2C_TCMD_WCL_SET((uint32_t)data->wrcnt);
+		cmd |= XEC_I2C_TCMD_RCL_SET((uint32_t)data->rdcnt);
+		extlen = XEC_I2C_ELEN_TWR_SET((uint32_t)data->wrcnt) |
+			 XEC_I2C_ELEN_TRD_SET((uint32_t)data->rdcnt);
+
+		dma_start(devcfg->tc_dma_dev, devcfg->tc_dma_chan);
+	}
+#else
+	cmd_ofs = XEC_I2C_HCMD_OFS;
+	cfg_flush = XEC_I2C_NL_HM_CFG_FLUSH;
+	cfg_ien = XEC_I2C_NL_HM_CFG_IEN;
+	cmd = data->hflags;
+	cmd <<= XEC_I2C_HCMD_START0_POS;
+	cmd |= BIT(XEC_I2C_HCMD_RUN_POS) | BIT(XEC_I2C_HCMD_PROC_POS);
+	cmd |= XEC_I2C_HCMD_WCL_SET((uint32_t)data->wrcnt);
+	cmd |= XEC_I2C_HCMD_RCL_SET((uint32_t)data->rdcnt);
+	extlen = XEC_I2C_ELEN_HWR_SET((uint32_t)data->wrcnt) |
+		 XEC_I2C_ELEN_HRD_SET((uint32_t)data->rdcnt);
+
+	dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
+#endif
+	data->htcmd = cmd;
+	sys_set_bits(rb + XEC_I2C_CFG_OFS, cfg_ien);
+	sys_write32(cmd, rb + cmd_ofs); /* triggers HW */
+
+	return 0;
+}
+
 static int xec_i2c_nl_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
 			       uint16_t addr)
 {
 	struct xec_i2c_nl_data *const data = dev->data;
-	struct xec_i2c_nl_msg_group *g = &data->mgrp;
+#if 0
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct soc_xec_dma_chan_cfg *dma_cfgs = &data->dcfg[0];
+	mem_addr_t i2c_base = devcfg->i2c_base
+#endif
 	struct i2c_msg *m = NULL;
 	struct i2c_msg *mnext = NULL;
 	int rc = 0;
-	bool xfr_group = false;
 
 #ifdef CONFIG_I2C_TARGET
 	if (xec_i2c_nl_is_tm(dev) == true) {
@@ -744,63 +1088,69 @@ static int xec_i2c_nl_transfer(const struct device *dev, struct i2c_msg *msgs, u
 		return -EINVAL; /* hardware only supports 7-bit I2C addresses */
 	}
 
-	k_mutex_lock(&data->lock_mutex, K_FOREVER);
-	pm_device_busy_set(dev);
-
-	data->msgs = msgs;
-	data->mc = msgs;
-	data->mend = msgs + num_msgs;
-	data->num_msgs = num_msgs;
-	data->midx = 0;
-	data->cm_state = 0;
-
-	g->msg1 = NULL;
-	g->msg2 = NULL;
-
-	while (data->mc < data->mend) {
-		m = data->mc;
-		mnext = m + 1;
-		if (mnext >= data->mend) {
-			mnext = NULL;
-		}
-
-		/* ISSUE: if group has one msg in it and next message is skip
-		 * then we won't transmit the msg in the group!
-		 */
-#if 0
-		if (i2c_nl_skip_msg(m) == true) {
-			data->midx++;
-			m++;
-			continue;
-		}
-#endif
-
-		if (((is_msg_write(m) == true) && (is_msg_read(mnext) == true)) {
-			xfr_group = true;
-		}
-
-		if (xfr_group == true) {
-			rc = xfr_msg_group_sync(dev);
-			if (rc != 0) {
-				break;
-			}
-			xfr_group = false;
-			data->midx++;
-			m++;
-			if (g->msg2 != NULL) {
-				data->midx++;
-				m++;
-			}
-			g->msg1 = NULL;
-			g->msg2 = NULL;
-		} else {
-			data->midx++;
-			m++;
-		}
+	/* TODO check array of struct i2c_msg for NULL ptrs and lengths */
+	rc = xec_i2c_nl_msgs_valid(msgs, num_msgs);
+	if (rc != 0) {
+		LOG_DBG("Found invalid I2C message");
+		return rc;
 	}
 
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
+	pm_device_busy_set(dev);
+
+	data->i2c_addr = addr;
+	data->msgs = msgs;
+	data->num_msgs = num_msgs;
+	data->midx = 0;
+	data->htm_state = 0;
+
+	while (data->midx < data->num_msgs) {
+		m = &msgs[data->midx];
+		mnext = NULL;
+
+		if ((data->num_msgs - data->midx) > 1u) {
+			mnext = m + 1u;
+		}
+
+		data->num_msgs_xfr = 0;
+
+		if (is_xfr_one_msg(m, mnext) == true) {
+			rc = xfr_cfg_one_msg(dev, m);
+		} else {
+			LOG_ERR("I2C-NL supports one I2C write or one I2C read at this time");
+			rc = -EBADMSG;
+		}
+
+		/* do transfer */
+		if (rc != 0) {
+			LOG_ERR("Message processing error (%d)", rc);
+			break;
+		}
+
+		LOG_DBG("xfr config rc = (%d)", rc);
+		LOG_DBG("data msg index = %u", data->midx);
+		LOG_DBG("m = %p", m);
+		pr_msg(m);
+		LOG_DBG("mnext = %p", mnext);
+		pr_msg(mnext);
+		pr_xfr_data(data);
+
+		LOG_DBG("I2C-NL trigger xfr");
+
+		k_sem_reset(&data->sync_sem);
+
+		xec_i2c_nl_xfr_trigger(dev);
+
+		k_sem_take(&data->sync_sem, K_FOREVER);
+		LOG_DBG("I2C-NL sync_sem taken");
+		LOG_DBG("I2C-NL I2C status = 0x%0x", data->i2c_status);
+
+		data->midx += data->num_msgs_xfr;
+
+	} /* end for num_msgs */
+
 	pm_device_busy_clear(dev);
-	k_mutex_unlock(&data->lock_mutex);
+	k_mutex_unlock(&data->lock_mut);
 
 	return rc;
 }
@@ -810,7 +1160,7 @@ static int xec_i2c_nl_transfer_cb(const struct device *dev, struct i2c_msg *msgs
 				  uint16_t addr, i2c_callback_t cb, void *userdata)
 {
 	/* TODO */
-	return 0;
+	return -ENOTSUP;
 }
 #endif
 
@@ -818,50 +1168,212 @@ static int xec_i2c_nl_transfer_cb(const struct device *dev, struct i2c_msg *msgs
 static int xec_i2c_nl_iodev_submit(const struct device *dev, struct rtio_iodev_sqe *iodev_sqe)
 {
 	/* TODO */
+	return -ENOTSUP;
+}
+#endif
+
+/* I2C-NL interrupt helper Host mode */
+#ifdef CONFIG_I2C_TARGET
+/* Entered if I2C-NL HW has set TM_DONE status bit */
+static void xec_i2c_nl_tm_handler(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t tcmd = sys_read32(i2c_base + XEC_I2C_TCMD_OFS);
+
+	if ((tcmd & 0x03u) == 0x01u) { /* HW pause state? */
+		data->htm_state = 0x81u;
+		LOG_DBG("TM Pause");
+	} else if ((tcmd & 0x03u) == 0) {
+		data->htm_state = 0x80u;
+		LOG_DBG("TM all done");
+	} else {
+		data->htm_state = 0x83u;
+		LOG_DBG("TM Unknown not 00b or 01b !");
+	}
+}
+#endif
+
+static void xec_i2c_nl_handler(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t hcmd = 0;
+
+#ifdef CONFIG_I2C_TARGET
+	if ((data->i2c_status & BIT(XEC_I2C_CMPL_TDONE_POS)) != 0) {
+		return xec_i2c_nl_tm_handler(dev);
+	}
+#endif
+
+	sys_write32(XEC_I2C_CMPL_RW1C_MSK, i2c_base + XEC_I2C_CMPL_OFS);
+	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
+
+	hcmd = sys_read32(i2c_base + XEC_I2C_HCMD_OFS);
+	if ((hcmd & 0x03u) == 0) {
+		k_sem_give(&data->sync_sem);
+	} else if ((hcmd & 0x03u) == 0x01u) { /* turn-around for read phase? */
+		xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, XEC_I2C_NL_DMA_CFG_HC);
+		xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)data->read_phase_buf,
+					 data->read_phase_len, XEC_I2C_NL_DIR_DEV_TO_MEM);
+		dma_config(devcfg->hc_dma_dev, devcfg->hc_dma_chan, &data->dma_cfg);
+		dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
+		sys_write32(hcmd | BIT(XEC_I2C_HCMD_PROC_POS), i2c_base + XEC_I2C_HCMD_OFS);
+		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+	} else {
+		/* TODO can we get an interrupt with bits[1:0]=11b ? */
+	}
+}
+
+#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
+
+static void xec_i2c_nl_kworker(struct k_work *work)
+{
+	/* TODO */
+#ifdef CONFIG_I2C_TARGET
+	/* TODO */
+#endif
+}
+#endif /* CONFIG_I2C_XEC_NL_USE_KWORKQUEUE */
+
+/* I2C-NL interrupt handler */
+#ifdef CONFIG_I2C_TARGET
+static void xec_i2c_nl_isr(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+
+	data->i2c_status = xec_i2c_status_get(i2c_base);
+
+	sys_write32(XEC_I2C_CMPL_RW1C_MSK, i2c_base + XEC_I2C_CMPL_OFS);
+
+	if ((data->i2c_status & (BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_LAB_POS))) != 0) {
+		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 0);
+		return;
+	}
+
+#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
+	k_work_submit(&data->kwq);
+#else
+	xec_i2c_nl_handler(dev);
+#endif
+	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
+}
+#else
+static void xec_i2c_nl_isr(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+
+	data->i2c_status = xec_i2c_status_get(i2c_base);
+
+	sys_write32(XEC_I2C_CMPL_RW1C_MSK, i2c_base + XEC_I2C_CMPL_OFS);
+
+	if ((data->i2c_status & (BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_LAB_POS) |
+				 BIT(XEC_I2C_CMPL_HNAKX_POS))) != 0) {
+		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 0);
+		soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
+		k_sem_give(&data->sync_sem);
+		return;
+	}
+
+#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
+	k_work_submit(&data->hm_kworkq);
+#else
+	xec_i2c_nl_handler(dev);
+#endif
+	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
+}
+#endif /* CONFIG_I2C_TARGET */
+
+#ifdef CONFIG_PM_DEVICE
+/* TODO Add logic to enable I2C wake if target mode is active.
+ * For deep sleep this requires enabling GIRQ22 wake clocks feature.
+ */
+static int i2c_xec_nl_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+
+	LOG_DBG("PM action: %d", (int)action);
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		sys_clear_bit(i2c_base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		sys_set_bit(i2c_base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
 	return 0;
 }
 #endif
 
 /* Driver initialization */
+static int xec_i2c_nl_dma_init(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *const data = dev->data;
+	int rc = 0, requested_chan = 0;
+
+	if (device_is_ready(devcfg->hc_dma_dev) == false) {
+		LOG_ERR("Host mode DMA driver not ready!");
+		return -ENODEV;
+	}
+
+	requested_chan = (int)devcfg->hc_dma_chan;
+	rc = dma_request_channel(devcfg->hc_dma_dev, (void *)&requested_chan);
+	if ((rc < 0) || (rc != requested_chan)) {
+		LOG_ERR("Requested chan (%u) got (%d)", devcfg->hc_dma_chan, rc);
+		return -EAGAIN;
+	}
+
+#ifdef CONFIG_I2C_TARGET
+	if (device_is_ready(devcfg->tc_dma_dev) == false) {
+		LOG_ERR("Target mode DMA driver not ready");
+		return -ENODEV;
+	}
+
+	requested_chan = (int)devcfg->tc_dma_chan;
+	rc = dma_request_channel(devcfg->tc_dma_dev, (void *)&requested_chan);
+	if ((rc < 0) || (rc != requested_chan)) {
+		LOG_ERR("Requested chan (%u) got (%d)", devcfg->tc_dma_chan, rc);
+		return -EAGAIN;
+	}
+#endif
+	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg,
+				(XEC_I2C_NL_DMA_CFG_HC | XEC_I2C_NL_DMA_CFG_M2D));
+
+	return 0;
+}
+
 static int xec_i2c_nl_init(const struct device *dev)
 {
 	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *const data = dev->data;
-	enum dma_channel_filter dma_filter = DMA_CHANNEL_NORMAL;
 	int rc = 0;
 
 	data->i2c_config = I2C_SPEED_SET(I2C_SPEED_STANDARD) | I2C_MODE_CONTROLLER;
-#ifdef CONFIG_I2C_PORT_MUX
-	data->i2c_config |= I2C_PORT_MUX_SET(devcfg->port);
-#endif
-#ifdef CONFIG_I2C_TARGET
-	for (unsigned n = 0; n < XEC_I2C_MAX_TARGETS; n++) {
-		data->targets[n] = NULL;
-	}
-#endif
+	data->port_sel = devcfg->port;
 
-	k_mutex_init(&data->lock_mutex);
+	k_mutex_init(&data->lock_mut);
 	k_sem_init(&data->sync_sem, 0, K_SEM_MAX_LIMIT);
-
-	if (device_is_ready(devcfg->cm_dma_dev) != 0) {
-		/* Check our DMA channels are not owned by DMA driver */
-		if (dma_chan_filter(devcfg->cm_dma_dev, (int)devcfg->cm_dma_chan,
-		    (void *)&dma_filter) == true) {
-			LOG_ERR("CM DMA channel owned by DMA driver!");
-			return -ENODEV;
-		}
-
-#ifdef CONFIG_I2C_TARGET
-		if (dma_chan_filter(devcfg->tm_dma_dev, (int)devcfg->tm_dma_chan,
-		    (void *)&dma_filter) == true) {
-			LOG_ERR("TM DMA channel owned by DMA driver!");
-			return -ENODEV;
-		}
+#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
+	k_work_init(&data->kwq, &xec_i2c_nl_kworker);
 #endif
-	} else { /* No driver for central DMA, we initialize it */
-		sys_set_bit(XEC_DMAC_BASE + XEC_DMA_MAIN_CR_OFS, XEC_DMA_MAIN_CR_SRST_POS);
-		sys_write32(0, XEC_DMAC_BASE + XEC_DMA_MAIN_DPKT_OFS);
-		sys_set_bit(XEC_DMAC_BASE + XEC_DMA_MAIN_CR_OFS, XEC_DMA_MAIN_CR_EN_POS);
+#ifdef CONFIG_I2C_TARGET
+	sys_slist_init(&data->target_list);
+#endif
+	rc = xec_i2c_nl_dma_init(dev);
+	if (rc != 0) {
+		return rc;
 	}
 
 	rc = pinctrl_apply_state(devcfg->pin_cfg, PINCTRL_STATE_DEFAULT);
@@ -878,66 +1390,24 @@ static int xec_i2c_nl_init(const struct device *dev)
 	}
 
 	if (devcfg->irq_config != NULL) {
-		devcfg->irq_config(dev);
+		devcfg->irq_config();
+		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
 	}
 
-#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
-	k_work_init(&data->isr_work, &xec_i2c_nl_isr_kworker);
-#endif
 	return 0;
-}
-
-/* I2C-NL interrupt helper Host mode */
-static void xec_i2c_nl_hm_handler(const struct device *dev)
-{
-	/* TODO */
-}
-
-#ifdef CONFIG_I2C_TARGET
-static void xec_i2c_nl_tm_handler(const struct device *dev)
-{
-	/* TODO */
-}
-#endif
-
-/* I2C-NL interrupt handler */
-static void xec_i2c_nl_isr(const struct device *dev)
-{
-	const struct xec_i2c_nl_config *devcfg = dev->config;
-	struct xec_i2c_nl_data *data = dev->data;
-	mem_addr_t i2c_base = devcfg->i2c_base;
-
-	data->i2c_status = xec_i2c_status_get(i2c_base);
-
-	sys_write32(XEC_I2C_COMP_RW1C_MSK, i2c_base + XEC_I2C_COMP_OFS);
-	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
-
-	if (data->i2c_status & BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_LAB_POS)) {
-		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 0);
-		return;
-	}
-
-#ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
-	k_work_submit(&data->isr_work);
-#else
-#ifdef CONFIG_I2C_TARGET
-	if ((data->i2c_status & BIT(XEC_I2C_COMP_TDONE_POS)) != 0) {
-		xec_i2c_nl_tm_handler(dev);
-	} else {
-		xec_i2c_nl_hm_handler(dev);
-	}
-#else
-	xec_i2c_nl_hm_handler(dev);
-#endif
-#endif /* CONFIG_I2C_XEC_NL_USE_KWORKQUEUE */
 }
 
 static DEVICE_API(i2c, xec_i2c_nl_driver_api) = {
 	.configure = xec_i2c_nl_configure,
 	.get_config = xec_i2c_nl_get_config,
 	.transfer = xec_i2c_nl_transfer,
+#ifdef CONFIG_I2C_TARGET
 	.target_register = xec_i2c_nl_target_register,
 	.target_unregister = xec_i2c_nl_target_unregister,
+#else
+	.target_register = NULL,
+	.target_unregister = NULL,
+#endif
 #ifdef CONFIG_I2C_CALLBACK
 	.transfer_cb = xec_i2c_nl_transfer_cb,
 #endif
@@ -947,68 +1417,65 @@ static DEVICE_API(i2c, xec_i2c_nl_driver_api) = {
 	.recover_bus = xec_i2c_nl_recover_bus,
 };
 
-#define XEC_I2C_GIRQ_DT(inst) MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define XEC_I2C_GIRQ_DT(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 #define XEC_I2C_GIRQ_POS_DT(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 
-#define XEC_I2C_CMB_SZ(inst) DT_INST_PROP_OR(inst, cm_buffer_size, 8u)
-
-#define XEC_I2C_NL_DMA_NODE(i, name) DT_INST_DMAS_CTLR_BY_NAME(i, name)
-#define XEC_I2C_NL_DMA_DEVICE(i, name) DEVICE_DT_GET(XEC_I2C_NL_DMA_NODE(i, name))
-#define XEC_I2C_NL_DMA_CHAN(i, name) DT_INST_DMAS_CELL_BY_NAME(i, name, channel)
+#define XEC_I2C_NL_DMA_NODE(i, name)    DT_INST_DMAS_CTLR_BY_NAME(i, name)
+#define XEC_I2C_NL_DMA_DEVICE(i, name)  DEVICE_DT_GET(XEC_I2C_NL_DMA_NODE(i, name))
+#define XEC_I2C_NL_DMA_CHAN(i, name)    DT_INST_DMAS_CELL_BY_NAME(i, name, channel)
 #define XEC_I2C_NL_DMA_TRIGSRC(i, name) DT_INST_DMAS_CELL_BY_NAME(i, name, trigsrc)
 
+#define XEC_I2C_NL_DMA_IRQN(i, name)                                                               \
+	DT_IRQ_BY_IDX(XEC_I2C_NL_DMA_NODE(i, name), XEC_I2C_NL_DMA_CHAN(i, name), irq)
+
+#define XEC_I2C_NL_DMA_IRQP(i, name)                                                               \
+	DT_IRQ_BY_IDX(XEC_I2C_NL_DMA_NODE(i, name), XEC_I2C_NL_DMA_CHAN(i, name), priority)
+
+#define XEC_I2C_NL_XFRBUF_SIZE(i)                                                                  \
+	(DT_INST_PROP_OR(i, xfr_buffer_size, 32) + XEC_I2C_NL_XFRBUF_PAD_SZ)
+
+#define XEC_I2C_NL_XFRBUF_DEFINE(i)                                                                \
+	static volatile uint8_t xec_i2c_nl##i##_xfrbuf[XEC_I2C_NL_XFRBUF_SIZE(i)] __aligned(4)
+
+#define XEC_I2C_DATA_DEFINE(i) struct xec_i2c_nl_data xec_i2c_nl##i##_data
+
 #ifdef CONFIG_I2C_TARGET
-#define XEC_I2C_TMRB_SZ(i) DT_INST_PROP_OR(i, tm_rx_buffer_size, 8u)
-
-#define XEC_I2C_TMRB_DEF(i) \
-	static volatile uint8_t xec_i2c_nl##i##_tm_rx_buf[XEC_I2C_TMRB_SZ(i)] __aligned(4)
-
-#define XEC_I2C_NL_TM_DMA_INFO(i, name) \
-	.tm_dma_dev = XEC_I2C_NL_DMA_DEVICE(i, name), \
-	.tm_rx_buf = xec_i2c_nl##i##_tm_rx_buf, \
-	.tm_rx_buf_size = XEC_I2C_TMRB_SZ(i), \
-	.tm_dma_chan = XEC_I2C_NL_DMA_CHAN(i, name), \
-	.tm_dma_trigsrc = XEC_I2C_NL_DMA_TRIGSRC(i, name),
-
+#define XEC_I2C_NL_TM_DMA_INFO(inst)                                                               \
+	.tc_dma_dev = XEC_I2C_NL_DMA_DEVICE(inst, target_mode),                                    \
+	.tc_dma_chan = XEC_I2C_NL_DMA_CHAN(inst, target_mode),                                     \
+	.tc_dma_trigsrc = XEC_I2C_NL_DMA_TRIGSRC(inst, target_mode),
 #else
-#define XEC_I2C_TMRB_SZ(i)
-#define XEC_I2C_TMRB_DEF(i)
-#define XEC_I2C_NL_TM_DMA_INFO(i, name)
+#define XEC_I2C_NL_TM_DMA_INFO(inst)
 #endif
 
-#define XEC_I2C_NL_DEVICE(inst)									\
-	struct xec_i2c_nl_data xec_i2c_nl##inst##_data;						\
-	static volatile uint8_t xec_i2c_nl##inst##cm_buf[XEC_I2C_CMB_SZ(inst)] __aligned(4);	\
-	XEC_I2C_TMRB_DEF(inst);									\
-	PINCTRL_DT_INST_DEFINE(inst);								\
-	static void xec_i2c_nl##inst##_irq_config(const struct device *dev) {			\
-		const struct xec_i2c_nl_config *devcfg = dev->config;				\
-		IRQ_CONNECT(DT_INST_IRQN(inst),							\
-			    DT_INST_IRQ(inst, priority),					\
-			    xec_i2c_nl_isr,							\
-			    DEVICE_DT_INST_GET(inst), 0);					\
-		irq_enable(DT_INST_IRQN(inst));							\
-		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);				\
-	}											\
-	static const struct xec_i2c_nl_config xec_i2c_nl##inst##_cfg = {			\
-		.i2c_base = (mem_addr_t)DT_INST_REG_ADDR(inst),					\
-		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD),	\
-		.pin_cfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),				\
-		.irq_config = xec_i2c_nl##inst##_irq_config,					\
-		.cm_dma_dev = XEC_I2C_NL_DMA_DEVICE(inst, cm),					\
-		.cm_buf = xec_i2c_nl##inst##cm_buf,						\
-		.cm_buf_size = XEC_I2C_CMB_SZ(inst),						\
-		.cm_dma_chan = XEC_I2C_NL_DMA_CHAN(inst, cm),					\
-		.cm_dma_trigsrc = XEC_I2C_NL_DMA_TRIGSRC(inst, cm),				\
-		.girq = XEC_I2C_GIRQ_DT(inst),							\
-		.girq_pos = XEC_I2C_GIRQ_POS_DT(inst),						\
-		.pcr = DT_INST_PROP(inst, pcr),							\
-		.port = DT_INST_PROP(inst, port_sel),						\
-		XEC_I2C_NL_TM_DMA_INFO(inst, tm)						\
-	};											\
-	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_init, NULL,					\
-		&xec_i2c_nl##inst##_data, &xec_i2c_nl##inst##_cfg,				\
-		POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,						\
-		&xec_i2c_nl_driver_api);
+#define XEC_I2C_NL_DEVICE(inst)                                                                    \
+	XEC_I2C_NL_XFRBUF_DEFINE(inst);                                                            \
+	XEC_I2C_DATA_DEFINE(inst);                                                                 \
+	PINCTRL_DT_INST_DEFINE(inst);                                                              \
+	static void xec_i2c_nl##inst##_irq_config(void)                                            \
+	{                                                                                          \
+		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), xec_i2c_nl_isr,       \
+			    DEVICE_DT_INST_GET(inst), 0);                                          \
+		irq_enable(DT_INST_IRQN(inst));                                                    \
+	}                                                                                          \
+	static const struct xec_i2c_nl_config xec_i2c_nl##inst##_cfg = {                           \
+		.i2c_base = (mem_addr_t)DT_INST_REG_ADDR(inst),                                    \
+		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD),           \
+		.pin_cfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                   \
+		.irq_config = xec_i2c_nl##inst##_irq_config,                                       \
+		.hc_dma_dev = XEC_I2C_NL_DMA_DEVICE(inst, host_mode),                              \
+		.hc_dma_chan = XEC_I2C_NL_DMA_CHAN(inst, host_mode),                               \
+		.hc_dma_trigsrc = XEC_I2C_NL_DMA_TRIGSRC(inst, host_mode),                         \
+		.girq = XEC_I2C_GIRQ_DT(inst),                                                     \
+		.girq_pos = XEC_I2C_GIRQ_POS_DT(inst),                                             \
+		.pcr = DT_INST_PROP(inst, pcr),                                                    \
+		.port = DT_INST_PROP(inst, port_sel),                                              \
+		.xfrbuf_sz = XEC_I2C_NL_XFRBUF_SIZE(inst),                                         \
+		.xfrbuf = xec_i2c_nl##inst##_xfrbuf,                                               \
+		XEC_I2C_NL_TM_DMA_INFO(inst)};                                                     \
+	PM_DEVICE_DT_INST_DEFINE(inst, i2c_xec_nl_pm_action);                                      \
+	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_init, PM_DEVICE_DT_INST_GET(inst),              \
+				  &xec_i2c_nl##inst##_data, &xec_i2c_nl##inst##_cfg, POST_KERNEL,  \
+				  CONFIG_I2C_INIT_PRIORITY, &xec_i2c_nl_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_DEVICE)
