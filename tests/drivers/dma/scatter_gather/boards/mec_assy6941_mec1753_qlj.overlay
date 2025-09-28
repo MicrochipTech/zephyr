@@ -1,0 +1,15 @@
+/*
+ * Copyright 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&dmac {
+	status = "okay";
+};
+
+/ {
+	aliases {
+		dma0 = &dmac;
+	};
+};
