@@ -1,0 +1,20 @@
+sample:
+  description: Microchip MEC EVB I2C sample
+  name: microchip_mec_i2c
+tests:
+  sample.board.i2c:
+    platform_allow:
+      - mec1501modular_assy6885
+      - mec15xxevb_assy6853
+      - mec172xevb_assy6906
+      - mec172xmodular_assy6930
+      - mec_assy6941/mec1743_qlj
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: i2c
+    depends_on:
+      - gpio
+      - pinctrl
+      - i2c
+
