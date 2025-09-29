@@ -28,6 +28,8 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl);
 
 #include "i2c-priv.h"
 
+#define XEC_I2C_NL_DEBUG_ISR
+
 #define XEC_DMAC_BASE (mem_addr_t)(DT_REG_ADDR(DT_NODELABEL(dmac)))
 
 #define XEC_I2C_NL_TARGET_ADDR_NONE 0xf800u
@@ -54,6 +56,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl);
 
 #define XEC_I2C_NL_DMA_CFG_HC  BIT(0)
 #define XEC_I2C_NL_DMA_CFG_M2D BIT(1)
+#define XEC_I2C_NL_DMA_CFG_D2M 0
 
 enum xec_i2c_nl_dir {
 	XEC_I2C_NL_DIR_DEV_TO_MEM = 0,
@@ -170,7 +173,6 @@ struct xec_i2c_nl_data {
 	uint16_t i2c_addr;
 	uint8_t i2c_cr;
 	uint8_t target_mode;
-	uint8_t port_sel;
 	struct dma_config dma_cfg;           /* 32 bytes */
 	struct dma_block_config dma_blk_cfg; /* 28 bytes */
 	struct i2c_msg *msgs;
@@ -190,6 +192,11 @@ struct xec_i2c_nl_data {
 	sys_slist_t target_list;
 	struct i2c_target_config *curr_target;
 	uint8_t ntargets;
+#endif
+#ifdef XEC_I2C_NL_DEBUG_ISR
+	volatile uint32_t isr_count;
+	volatile uint32_t hcmd;
+	volatile uint32_t tcmd;
 #endif
 };
 
@@ -241,6 +248,18 @@ static uint32_t xec_i2c_status_get(mem_addr_t i2c_base)
 	v |= sys_read8(i2c_base + XEC_I2C_SR_OFS);
 
 	return v;
+}
+
+static bool xec_i2c_nl_bus_is_idle(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	mem_addr_t rb = devcfg->i2c_base;
+
+	if (soc_test_bit8(rb + XEC_I2C_SR_OFS, XEC_I2C_SR_NBB_POS) != 0) {
+		return true;
+	}
+
+	return false;
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -385,6 +404,7 @@ static uint32_t i2c_bitrate_from_config(uint32_t i2c_config)
 /* Public API */
 static int xec_i2c_nl_configure(const struct device *dev, uint32_t i2c_config)
 {
+	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *const data = dev->data;
 	int rc = 0;
 	uint32_t bitrate = 0, cfg_flags = 0;
@@ -395,9 +415,15 @@ static int xec_i2c_nl_configure(const struct device *dev, uint32_t i2c_config)
 		return -EINVAL;
 	}
 
-	port = data->port_sel;
+	rc = k_mutex_lock(&data->lock_mut, K_NO_WAIT);
+	if (rc != 0) {
+		return rc;
+	}
 
-	k_mutex_lock(&data->lock_mut, K_FOREVER);
+	port = devcfg->port;
+#ifdef CONFIG_I2C_XEC_PORT_MUX
+	port = I2C_XEC_PORT_GET(i2c_config);
+#endif
 
 	rc = xec_i2c_nl_hw_cfg(dev, bitrate, port, cfg_flags);
 	if (rc == 0) {
@@ -920,13 +946,13 @@ static void xec_i2c_nl_dma_cfg_init(const struct device *dev, struct dma_config 
 }
 
 static void xec_i2c_nl_dma_cfg_block(const struct device *dev, struct dma_block_config *blkcfg,
-				     void *buf, uint32_t len, uint8_t dir)
+				     void *buf, uint32_t len, uint8_t flags)
 {
 	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *data = dev->data;
 	mem_addr_t rb = devcfg->i2c_base;
 
-	if (dir == XEC_I2C_NL_DIR_MEM_TO_DEV) {
+	if ((flags & XEC_I2C_NL_DMA_CFG_M2D) != 0) {
 		blkcfg->source_address = (uint32_t)buf;
 		if (data->target_mode == 0) {
 			blkcfg->dest_address = (uint32_t)(rb + XEC_I2C_HTX_OFS);
@@ -936,7 +962,7 @@ static void xec_i2c_nl_dma_cfg_block(const struct device *dev, struct dma_block_
 		blkcfg->source_addr_adj = DMA_ADDR_ADJ_INCREMENT;
 		blkcfg->dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
 	} else {
-		if (data->target_mode) {
+		if (data->target_mode == 0) {
 			blkcfg->source_address = (uint32_t)(rb + XEC_I2C_HRX_OFS);
 		} else {
 			blkcfg->source_address = (uint32_t)(rb + XEC_I2C_TRX_OFS);
@@ -964,6 +990,7 @@ static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *data = dev->data;
 	volatile uint8_t *xfrbuf = devcfg->xfrbuf;
+	uint32_t dma_flags = XEC_I2C_NL_DMA_CFG_HC | XEC_I2C_NL_DMA_CFG_M2D;
 	uint32_t ntx = 0, nrx = 0;
 
 	if (m->len > (devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ)) {
@@ -976,6 +1003,7 @@ static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 	xfrbuf[0] = (data->i2c_addr & 0x7Fu) << 1;
 	if ((m->flags & I2C_MSG_READ) != 0) {
 		xfrbuf[0] |= BIT(0);
+		nrx = m->len;
 		data->protocol = XEC_I2C_NL_PROTO_RD;
 		data->read_phase_buf = m->buf;
 		data->read_phase_len = m->len;
@@ -988,9 +1016,8 @@ static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 	data->wrcnt = (uint16_t)ntx;
 	data->rdcnt = (uint16_t)nrx;
 
-	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, XEC_I2C_NL_DIR_MEM_TO_DEV);
-	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)xfrbuf, ntx,
-				 XEC_I2C_NL_DIR_MEM_TO_DEV);
+	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
+	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)xfrbuf, ntx, dma_flags);
 
 	data->num_msgs_xfr = 1u;
 
@@ -1079,15 +1106,6 @@ static int xec_i2c_nl_transfer(const struct device *dev, struct i2c_msg *msgs, u
 	struct i2c_msg *mnext = NULL;
 	int rc = 0;
 
-#ifdef CONFIG_I2C_TARGET
-	if (xec_i2c_nl_is_tm(dev) == true) {
-		return -EBUSY;
-	}
-#endif
-	if (addr > XEC_I2C_TARGET_ADDR_MSK) {
-		return -EINVAL; /* hardware only supports 7-bit I2C addresses */
-	}
-
 	/* TODO check array of struct i2c_msg for NULL ptrs and lengths */
 	rc = xec_i2c_nl_msgs_valid(msgs, num_msgs);
 	if (rc != 0) {
@@ -1096,13 +1114,40 @@ static int xec_i2c_nl_transfer(const struct device *dev, struct i2c_msg *msgs, u
 	}
 
 	k_mutex_lock(&data->lock_mut, K_FOREVER);
+
+#ifdef XEC_I2C_NL_DEBUG_ISR
+	data->isr_count = 0;
+	data->hcmd = 0;
+	data->tcmd = 0;
+#endif
+#ifdef CONFIG_I2C_TARGET
+	if (xec_i2c_nl_is_tm(dev) == true) {
+		k_mutex_unlock(&data->lock_mut);
+		return -EBUSY;
+	}
+#endif
+	if (addr > XEC_I2C_TARGET_ADDR_MSK) {
+		k_mutex_unlock(&data->lock_mut);
+		return -EINVAL; /* hardware only supports 7-bit I2C addresses */
+	}
+
 	pm_device_busy_set(dev);
+
+	if (xec_i2c_nl_bus_is_idle(dev) == false) {
+		LOG_DBG("I2C-NL xfr bus is not idle");
+		pm_device_busy_clear(dev);
+		k_mutex_unlock(&data->lock_mut);
+		return -EIO;
+	}
 
 	data->i2c_addr = addr;
 	data->msgs = msgs;
 	data->num_msgs = num_msgs;
 	data->midx = 0;
 	data->htm_state = 0;
+	data->wrcnt = 0;
+	data->rdcnt = 0;
+	data->htcmd = 0;
 
 	while (data->midx < data->num_msgs) {
 		m = &msgs[data->midx];
@@ -1116,8 +1161,11 @@ static int xec_i2c_nl_transfer(const struct device *dev, struct i2c_msg *msgs, u
 
 		if (is_xfr_one_msg(m, mnext) == true) {
 			rc = xfr_cfg_one_msg(dev, m);
+		} else if (is_xfr_wr_rd(m, mnext) == true) {
+			LOG_ERR("I2C-NL driver does not support Write-Read at this time");
+			rc = -EBADMSG;
 		} else {
-			LOG_ERR("I2C-NL supports one I2C write or one I2C read at this time");
+			LOG_ERR("I2C-NL driver does not support Write-Write at this time");
 			rc = -EBADMSG;
 		}
 
@@ -1200,7 +1248,14 @@ static void xec_i2c_nl_handler(const struct device *dev)
 	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *data = dev->data;
 	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t dma_flags = XEC_I2C_NL_DMA_CFG_HC | XEC_I2C_NL_DMA_CFG_D2M;
 	uint32_t hcmd = 0;
+
+#ifdef XEC_I2C_NL_DEBUG_ISR
+	data->isr_count++;
+	data->hcmd = sys_read32(i2c_base + XEC_I2C_HCMD_OFS);
+	data->tcmd = sys_read32(i2c_base + XEC_I2C_TCMD_OFS);
+#endif
 
 #ifdef CONFIG_I2C_TARGET
 	if ((data->i2c_status & BIT(XEC_I2C_CMPL_TDONE_POS)) != 0) {
@@ -1215,9 +1270,11 @@ static void xec_i2c_nl_handler(const struct device *dev)
 	if ((hcmd & 0x03u) == 0) {
 		k_sem_give(&data->sync_sem);
 	} else if ((hcmd & 0x03u) == 0x01u) { /* turn-around for read phase? */
-		xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, XEC_I2C_NL_DMA_CFG_HC);
+		LOG_DBG("I2C-NL ISR: turn-around: status=0x%0x HCmd=0x%0x",
+			data->i2c_status, hcmd);
+		xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
 		xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)data->read_phase_buf,
-					 data->read_phase_len, XEC_I2C_NL_DIR_DEV_TO_MEM);
+					 data->read_phase_len, dma_flags);
 		dma_config(devcfg->hc_dma_dev, devcfg->hc_dma_chan, &data->dma_cfg);
 		dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
 		sys_write32(hcmd | BIT(XEC_I2C_HCMD_PROC_POS), i2c_base + XEC_I2C_HCMD_OFS);
@@ -1361,7 +1418,9 @@ static int xec_i2c_nl_init(const struct device *dev)
 	int rc = 0;
 
 	data->i2c_config = I2C_SPEED_SET(I2C_SPEED_STANDARD) | I2C_MODE_CONTROLLER;
-	data->port_sel = devcfg->port;
+#ifdef CONFIG_I2C_XEC_PORT_MUX
+	data->i2c_config |= I2C_XEC_PORT_SET(devcfg->port);
+#endif
 
 	k_mutex_init(&data->lock_mut);
 	k_sem_init(&data->sync_sem, 0, K_SEM_MAX_LIMIT);
