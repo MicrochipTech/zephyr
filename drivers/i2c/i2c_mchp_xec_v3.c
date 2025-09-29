@@ -168,7 +168,7 @@ struct i2c_xec_data {
 	const struct device *dev;
 	struct k_mutex lock_mut;
 	struct k_sem sync_sem;
-	uint32_t i2c_api_config;
+	uint32_t i2c_config;
 	uint32_t clock_freq;
 	uint32_t i2c_compl;
 	uint8_t i2c_cr_shadow;
@@ -469,7 +469,6 @@ static int i2c_xec_reset_config(const struct device *dev, uint8_t port)
 	data->i2c_compl = 0;
 	data->read_discard = 0;
 	data->mdone = 0;
-	data->port_sel = port & (XEC_I2C_CFG_PORT_MSK >> XEC_I2C_CFG_PORT_POS);
 
 	/* reset I2C controller using PCR reset feature */
 	xec_pcr_reset_en(devcfg->pcr);
@@ -491,7 +490,7 @@ static int i2c_xec_reset_config(const struct device *dev, uint8_t port)
 	xec_i2c_cr_write(dev, crval);
 
 	/* port and filter enable */
-	val = XEC_I2C_CFG_PORT_SET(data->port_sel);
+	val = XEC_I2C_CFG_PORT_SET((uint32_t)port);
 	val |= BIT(XEC_I2C_CFG_FEN_POS);
 	sys_write32(val, rb + XEC_I2C_CFG_OFS);
 
@@ -628,7 +627,9 @@ static int i2c_xec_recover_bus(const struct device *dev)
 
 static int i2c_xec_cfg(const struct device *dev, uint32_t dev_config_raw)
 {
+	const struct i2c_xec_config *devcfg = dev->config;
 	struct i2c_xec_data *const data = dev->data;
+	uint8_t port = devcfg->port;
 
 	switch (I2C_SPEED_GET(dev_config_raw)) {
 	case I2C_SPEED_STANDARD:
@@ -644,9 +645,12 @@ static int i2c_xec_cfg(const struct device *dev, uint32_t dev_config_raw)
 		return -EINVAL;
 	}
 
-	data->i2c_api_config = dev_config_raw;
+	data->i2c_config = dev_config_raw;
+#ifdef CONFIG_I2C_XEC_PORT_MUX
+	port = I2C_XEC_PORT_GET(dev_config_raw);
+#endif
 
-	return i2c_xec_reset_config(dev, data->port_sel);
+	return i2c_xec_reset_config(dev, port);
 }
 
 /* i2c_configure API */
@@ -654,7 +658,6 @@ static int i2c_xec_configure(const struct device *dev, uint32_t dev_config_raw)
 {
 	struct i2c_xec_data *const data = dev->data;
 	int rc = 0;
-	uint8_t port = 0;
 
 	if (!(dev_config_raw & I2C_MODE_CONTROLLER)) {
 		return -ENOTSUP;
@@ -664,8 +667,6 @@ static int i2c_xec_configure(const struct device *dev, uint32_t dev_config_raw)
 	if (rc != 0) {
 		return rc;
 	}
-
-	port = data->port_sel;
 
 	rc = i2c_xec_cfg(dev, dev_config_raw);
 
@@ -684,7 +685,7 @@ static int i2c_xec_get_config(const struct device *dev, uint32_t *dev_config)
 		return -EINVAL;
 	}
 
-	dcfg = data->i2c_api_config;
+	dcfg = data->i2c_config;
 
 #ifdef CONFIG_I2C_TARGET
 	if (data->ntargets == 0) {
@@ -698,50 +699,6 @@ static int i2c_xec_get_config(const struct device *dev, uint32_t *dev_config)
 	*dev_config = dcfg;
 
 	return 0;
-}
-
-int i2c_mchp_xec_port_get(const struct device *dev, uint8_t *port)
-{
-	if ((dev == NULL) || (port == NULL)) {
-		return -EINVAL;
-	}
-
-	struct i2c_xec_data *const data = dev->data;
-
-	*port = data->port_sel;
-
-	return 0;
-}
-
-int i2c_mchp_xec_port_set(const struct device *dev, uint8_t port, uint8_t new_cfg,
-			  uint32_t i2c_devconfig)
-{
-	if ((dev == NULL) || (port > MCHP_I2C_NUM_PORTS)) {
-		return -EINVAL;
-	}
-
-	struct i2c_xec_data *const data = dev->data;
-	uint32_t i2c_dev_config = data->i2c_api_config;
-	int rc = k_mutex_lock(&data->lock_mut, K_NO_WAIT);
-
-	if (rc != 0) {
-		return rc;
-	}
-
-	data->port_sel = port & 0xfu;
-
-	if (new_cfg != 0) {
-		i2c_dev_config = i2c_devconfig;
-	}
-
-	/* always reset controller when switching ports to
-	 * ensure controller resyncs to new SCL/SDA lines.
-	 */
-	rc = i2c_xec_cfg(dev, i2c_dev_config);
-
-	k_mutex_unlock(&data->lock_mut);
-
-	return rc;
 }
 
 /* XEC I2C controller support 7-bit addressing only.
@@ -1978,7 +1935,7 @@ static int i2c_xec_init(const struct device *dev)
 	const struct i2c_xec_config *cfg = dev->config;
 	struct i2c_xec_data *data = dev->data;
 	int rc = 0;
-	uint32_t bitrate_cfg;
+	uint32_t i2c_config = 0;
 
 	i2c_mchp_xec_v3_debug_init(dev);
 
@@ -1995,13 +1952,17 @@ static int i2c_xec_init(const struct device *dev)
 		return rc;
 	}
 
-	bitrate_cfg = i2c_map_dt_bitrate(cfg->clock_freq);
-	if (bitrate_cfg == 0) {
+	i2c_config = i2c_map_dt_bitrate(cfg->clock_freq);
+	if (i2c_config == 0) {
 		return -EINVAL;
 	}
 
+	i2c_config |= I2C_MODE_CONTROLLER;
+#ifdef CONFIG_I2C_XEC_PORT_MUX
+	i2c_config |= I2C_XEC_PORT_SET((uint32_t)cfg->port);
+#endif
 	/* Default configuration */
-	rc = i2c_xec_configure(dev, I2C_MODE_CONTROLLER | bitrate_cfg);
+	rc = i2c_xec_configure(dev, i2c_config);
 	if (rc != 0) {
 		return rc;
 	}
