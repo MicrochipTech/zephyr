@@ -111,9 +111,23 @@
 
 };
 
+/* I2C-NL and Central DMA controller race condition.
+ * We must ensure DMA channel interrupt priorities are higher
+ * than device drivers using DMA channels. The DMA driver interrupt
+ * handler must run and complete before the peripheral driver using
+ * DMA driver. Why? Peripheral driver may call DMA driver to reload
+ * a channel from its ISR. If the DMA driver interrupt handler then
+ * runs it will be out of sync with the reloaded channel!
+ * Chip DTSI sets all interrupt priorities of dmac to 2.
+ * We set any I2C controller using microchip,xec-i2c-nl driver to
+ * priority 3 to 7(lowest).
+ */
 &i2c_smb_2 {
 	compatible = "microchip,xec-i2c-nl";
 	status = "okay";
+
+	/* We must set I2C-NL interrupt for a lesser priority than DMA channels */
+	interrupts = <22 3>;
 
 	clock-frequency = <I2C_BITRATE_STANDARD>;
 
