@@ -14,6 +14,8 @@
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/pm/policy.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util_macro.h>
 
 #include <zephyr/logging/log.h>
@@ -271,15 +273,16 @@ static bool xec_dma_chan_is_busy(mem_addr_t chan_base)
 
 static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t dest, size_t nbytes)
 {
-	uint32_t msa = 0, mea = 0, deva = 0;
-	uint32_t mend = sys_read32(chan_base + XEC_DMA_CHAN_MEA_OFS);
+	uint32_t ctrl = 0, msa = 0, mea = 0, deva = 0;
 
-	/* ensure HW is "done" by mstart == mend */
-	sys_write32(mend, chan_base + XEC_DMA_CHAN_MSA_OFS);
-	/* keep mend <= mstart */
+	sys_write32(0, chan_base + XEC_DMA_CHAN_ACTV_OFS);
+	ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_CR_OFS);
 	sys_write32(0, chan_base + XEC_DMA_CHAN_MEA_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_MSA_OFS);
+	sys_write32(0xff, chan_base + XEC_DMA_CHAN_SR_OFS);
 
-	if (sys_test_bit(chan_base + XEC_DMA_CHAN_CR_OFS, XEC_DMA_CHAN_CR_M2D_POS) != 0) {
+	if ((ctrl & BIT(XEC_DMA_CHAN_CR_M2D_POS)) != 0) {
 		msa = src;
 		mea = src + nbytes;
 		deva = dest;
@@ -289,10 +292,11 @@ static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t d
 		deva = src;
 	}
 
-	/* order: deva, msa, the mea */
-	sys_write32(deva, chan_base + XEC_DMA_CHAN_DEVA_OFS);
 	sys_write32(msa, chan_base + XEC_DMA_CHAN_MSA_OFS);
 	sys_write32(mea, chan_base + XEC_DMA_CHAN_MEA_OFS);
+	sys_write32(deva, chan_base + XEC_DMA_CHAN_DEVA_OFS);
+	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(1u, chan_base + XEC_DMA_CHAN_ACTV_OFS);
 }
 
 /*
@@ -502,8 +506,14 @@ static void xec_dma_chan_configure(const struct device *dev, struct xec_dma_chan
 
 	chan_base = xec_dma_chan_base(dev, chan);
 
-	ctrl = XEC_DMA_CHAN_CR_XU_SET(usz);
+	/* ensure channel is inactive and internal FSM is cleared */
+	sys_write32(0, chan_base + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_IER_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_MEA_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_MSA_OFS);
+	sys_write32(0xffu, chan_base + XEC_DMA_CHAN_SR_OFS);
 
+	ctrl = XEC_DMA_CHAN_CR_XU_SET(usz);
 	if (cfg->dir == XEC_DMA_CFG_DIR_MEM_TO_DEV) {
 		ctrl |= BIT(XEC_DMA_CHAN_CR_M2D_POS);
 
