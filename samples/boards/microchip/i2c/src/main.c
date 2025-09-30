@@ -144,6 +144,9 @@ static int fill_buf(uint8_t *buf, uint32_t buflen, uint8_t val, uint8_t flags)
 }
 
 #ifdef APP_HAS_I2C_NL
+#define TEST_ORDER_WR_RD
+ /* HW issue exists independent of transaction order. */
+
 static int i2c_nl_test1(const struct device *i2c_dev)
 {
 	struct i2c_msg msgs[4] = {0};
@@ -153,6 +156,7 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 
 	fill_buf(i2c0_tx_buf, 16u, 0x11u, 1u);
 
+#ifdef TEST_ORDER_WR_RD
 	LOG_INF("Test I2C-NL one write message");
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 1u;
@@ -176,7 +180,31 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
-#if 0
+#else
+	LOG_INF("Test I2C-NL one read message");
+	memset((void *)i2c0_rx_buf, 0xAA, 8);
+
+	i2c_addr = FRAM_I2C_ADDR;
+	nmsgs = 1u;
+
+	msgs[0].buf = i2c0_rx_buf;
+	msgs[0].len = 4u;
+	msgs[0].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API returned (%d)", rc);
+
+	LOG_INF("Test I2C-NL one write message");
+	i2c_addr = FRAM_I2C_ADDR;
+	nmsgs = 1u;
+
+	msgs[0].buf = i2c0_tx_buf;
+	msgs[0].len = 4u;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API returned (%d)", rc);
+#endif
 	LOG_INF("Test I2C-NL two write messages");
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 2u;
@@ -206,7 +234,20 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
-#endif /* 0 */
+
+	LOG_INF("Test I2C-NL Write message > driver xfrbuf size");
+	fill_buf(i2c0_tx_buf, 66u, 0, 1);
+
+	i2c_addr = FRAM_I2C_ADDR;
+	nmsgs = 1u;
+
+	msgs[0].buf = i2c0_tx_buf;
+	msgs[0].len = 66u;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API returned (%d)", rc);
+
 	return 0;
 }
 #endif /* APP_HAS_I2C_NL */
