@@ -538,10 +538,11 @@ static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_targe
 		if (ptc == NULL) {
 			data->ntargets++;
 			sys_slist_append(&data->target_list, &cfg->node);
-			if (cfg->address == 0) {
+			if (cfg->address == XEC_I2C_GEN_CALL_ADDR) {
 				/* enable general call */
 				sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
-			} else if ((cfg->address == 0x08u) || (cfg->address == 0x61u)) {
+			} else if ((cfg->address == XEC_I2C_SMB_HOST_ADDR) ||
+				   (cfg->address == XEC_I2C_SMB_DEVICE_ADDR)) {
 				/* enable DSA */
 				sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_DSA_POS);
 			} else { /* use one of the two own addresses */
@@ -597,9 +598,9 @@ static int xec_i2c_nl_target_unregister(const struct device *dev, struct i2c_tar
 
 	data->ntargets--;
 
-	if (cfg->address == 0) { /* disable general call */
+	if (cfg->address == XEC_I2C_GEN_CALL_ADDR) { /* disable general call */
 		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
-	} else if ((cfg->address == 0x08u) || (cfg->address == 0x61u)) {
+	} else if ((cfg->address == XEC_I2C_SMB_HOST_ADDR) || (cfg->address == XEC_I2C_SMB_DEVICE_ADDR)) {
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_DSA_POS);
 	} else { /* one of the own addresses */
 		oaval = sys_read32(rb + XEC_I2C_OA_OFS);
