@@ -47,6 +47,32 @@
 #define XEC_I2C_SR_SAD_POS     6
 #define XEC_I2C_SR_PIN_POS     7
 
+/* XEC I2C hardare can match the following addresses in addition
+ * to the two programmable 7-bit OWN addresses.
+ * I2C general call 7-bit address 0x00. I2C.CONFIG.GC_DIS bit = 0
+ * SMBus Host and Device addresses 0x08 and 0x61. I2C.CONFIG.DSA bit = 1
+ * Detection using I2C.STATUS register.
+ * AAT SAD LRB/AD0 address
+ *  1   1   0      0x08 SMBus Host address
+ *  1   1   1      0x61 SMBus Device address
+ *  1   0   1      0x00 I2C general call address
+ *  1   0   0      One of the two programmable OWN addresses.
+ * The actual address can be viewed without side-effect by reading I2C.SHAD_ADDR
+ * register. It can be read from I2C.DATA with side-effect of clearing AAT, SAD, and LRB/AD0.
+ * In network layer mode the HW stores the address via DMA into the configured memory buffer.
+ */
+#define XEC_I2C_GEN_CALL_ADDR 0u
+#define XEC_I2C_SMB_HOST_ADDR 0x08u
+#define XEC_I2C_SMB_DEVICE_ADDR 0x61u
+
+#define XEC_I2C_SR_ADDR_MATCH_MSK                                                                  \
+	(BIT(XEC_I2C_SR_PIN_POS) | BIT(XEC_I2C_SR_SAD_POS) | BIT(XEC_I2C_SR_LRB_AD0_POS) |         \
+	 BIT(XEC_I2C_SR_AAT_POS))
+#define XEC_I2C_SR_ADDR_MATCH_GEN_CALL (BIT(XEC_I2C_SR_LRB_AD0_POS) | BIT(XEC_I2C_SR_AAT_POS))
+#define XEC_I2C_SR_ADDR_MATCH_SMB_HOST (BIT(XEC_I2C_SR_SAD_POS) | BIT(XEC_I2C_SR_AAT_POS))
+#define XEC_I2C_SR_ADDR_MATCH_SMB_DEV                                                              \
+	(BIT(XEC_I2C_SR_SAD_POS) | BIT(XEC_I2C_SR_LRB_AD0_POS) | BIT(XEC_I2C_SR_AAT_POS))
+
 #define XEC_I2C_OA_OFS       0x4u /* own(target) address */
 #define XEC_I2C_OA_1_POS     0
 #define XEC_I2C_OA_2_POS     8
