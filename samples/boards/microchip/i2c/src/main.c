@@ -248,6 +248,52 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
 
+	/* Large Write-Write */
+	LOG_INF("Test I2C-NL Write-Write 64 bytes to FRAM address 0x2000");
+	i2c_addr = FRAM_I2C_ADDR;
+	nmsgs = 2u;
+
+	fill_buf(&i2c0_tx_buf[2], 64, 0, 1);
+
+	i2c0_tx_buf[0] = 0x20u; /* address MSB */
+	i2c0_tx_buf[1] = 0u; /* address LSB */
+
+	msgs[0].buf = i2c0_tx_buf;
+	msgs[0].len = 2u;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = &i2c0_tx_buf[2];
+	msgs[1].len = 64u;
+	msgs[1].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API returned (%d)", rc);
+
+
+	/* Large Write-Read */
+	LOG_INF("Test I2C-NL Write-Read 64 bytes from FRAM address 0x2000");
+	i2c_addr = FRAM_I2C_ADDR;
+	nmsgs = 2u;
+
+	fill_buf(i2c0_rx_buf, 64, 0x55, 0);
+
+	i2c0_tx_buf[0] = 0x20u; /* address MSB */
+	i2c0_tx_buf[1] = 0u; /* address LSB */
+
+	msgs[0].buf = i2c0_tx_buf;
+	msgs[0].len = 2u;
+	msgs[0].flags = I2C_MSG_WRITE;
+
+	msgs[1].buf = i2c0_rx_buf;
+	msgs[1].len = 64u;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API returned (%d)", rc);
+
+	rc = memcmp(&i2c0_tx_buf[2], i2c0_rx_buf, 64);
+	LOG_INF("Mem compare 64 byte TX data with RX data is (%d)", rc);
+
 	return 0;
 }
 #endif /* APP_HAS_I2C_NL */
