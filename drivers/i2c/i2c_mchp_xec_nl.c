@@ -163,6 +163,10 @@ struct xec_i2c_nl_config {
  * 	DMA msg[1], len=msg[1].len	d2m callback on done, no reload
  */
 
+#define XEC_AFLAG_WR_PH_BUF_POS  0
+#define XEC_AFLAG_WR_PH_BUF2_POS 1
+#define XEC_AFLAG_RD_PH_BUF_POS  2
+
 struct xec_i2c_nl_data {
 	const struct device *dev;
 	struct k_mutex lock_mut;
@@ -181,8 +185,11 @@ struct xec_i2c_nl_data {
 	struct i2c_msg *cmsg;
 	uint8_t *write_phase_buf;
 	uint32_t write_phase_len;
+	uint8_t *write_phase_buf2;
+	uint32_t write_phase_len2;
 	uint8_t *read_phase_buf;
 	uint32_t read_phase_len;
+	ATOMIC_DEFINE(aflags, 32);
 	uint32_t htcmd;
 	uint8_t num_msgs;
 	uint8_t midx;
@@ -932,23 +939,40 @@ static void xec_i2c_nl_hc_cb(const struct device *dev, void *user_data, uint32_t
 	const struct xec_i2c_nl_config *devcfg = i2c_dev->config;
 	mem_addr_t i2c_base = devcfg->i2c_base;
 	uint32_t dst = (uint32_t)(i2c_base + XEC_I2C_HTX_OFS);
-	uint32_t src = (uint32_t)data->write_phase_buf;
-	uint32_t len = data->write_phase_len;
+	struct dma_status dma_status = {0};
+	uint32_t src = 0, len = 0;
 	int rc = 0;
 
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF0);
 
-	if ((status == 0) && (src != 0) && (len != 0)) {
-		data->write_phase_buf = 0;
-		data->write_phase_len = 0;
+	if (status == 0) {
 		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF1);
-		rc = dma_reload(dev, chan, src, dst, len);
-		if (rc != 0) {
-			XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF2);
+
+		dma_get_status(dev, chan, &dma_status);
+
+		if (dma_status.dir == MEMORY_TO_PERIPHERAL) {
+			if (atomic_test_and_clear_bit(data->aflags, XEC_AFLAG_WR_PH_BUF_POS) ==
+			    true) {
+				XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF2);
+				src = (uint32_t)data->write_phase_buf;
+				len = data->write_phase_len;
+			} else if (atomic_test_and_clear_bit(data->aflags, XEC_AFLAG_WR_PH_BUF2_POS)
+				   == true) {
+				XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF3);
+				src = (uint32_t)data->write_phase_buf2;
+				len = data->write_phase_len2;
+			}
+
+			if ((src != 0) && (len != 0)) {
+				rc = dma_reload(dev, chan, src, dst, len);
+				if (rc != 0) {
+					XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF4);
+				}
+			}
 		}
 	}
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF3);
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xF5);
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -1054,6 +1078,23 @@ static void xec_i2c_nl_dma_cfg_block(const struct device *dev, struct dma_block_
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x3D);
 }
 
+static void xfr_cfg_set_atomic_flags(const struct device *dev)
+{
+	struct xec_i2c_nl_data *data = dev->data;
+
+	if ((data->write_phase_buf != NULL) && (data->write_phase_len != 0)) {
+		atomic_set_bit(data->aflags, XEC_AFLAG_WR_PH_BUF_POS);
+	}
+
+	if ((data->write_phase_buf2 != NULL) && (data->write_phase_len2 != 0)) {
+		atomic_set_bit(data->aflags, XEC_AFLAG_WR_PH_BUF2_POS);
+	}
+
+	if ((data->read_phase_buf != NULL) && (data->read_phase_len != 0)) {
+		atomic_set_bit(data->aflags, XEC_AFLAG_RD_PH_BUF_POS);
+	}
+}
+
 static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 {
 	const struct xec_i2c_nl_config *devcfg = dev->config;
@@ -1063,15 +1104,11 @@ static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 	uint32_t ntx = 0, nrx = 0, ntx_buf = 0, dma_tx_len = 0;
 
 	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x10);
-#if 0
-	if (m->len > (devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ)) {
-		data->num_msgs_xfr = 0;
-		return -E2BIG;
-	}
 
-#endif
 	data->write_phase_buf = NULL;
 	data->write_phase_len = 0;
+	data->write_phase_buf2 = NULL;
+	data->write_phase_len2 = 0;
 	data->read_phase_buf = NULL;
 	data->read_phase_len = 0;
 	data->num_msgs_xfr = 1u;
@@ -1105,6 +1142,8 @@ static int xfr_cfg_one_msg(const struct device *dev, struct i2c_msg *m)
 		}
 	}
 
+	xfr_cfg_set_atomic_flags(dev);
+
 	data->wrcnt = (uint16_t)ntx;
 	data->rdcnt = (uint16_t)nrx;
 
@@ -1124,19 +1163,21 @@ static int xfr_cfg_wr_rd(const struct device *dev, struct i2c_msg *mwr, struct i
 	struct xec_i2c_nl_data *data = dev->data;
 	volatile uint8_t *xfrbuf = devcfg->xfrbuf;
 	uint32_t dma_flags = XEC_I2C_NL_DMA_CFG_HC | XEC_I2C_NL_DMA_CFG_M2D;
-	uint32_t ntx = 0, nrx = 0;
+	uint32_t ntx = 0, nrx = 0, tx_buf_max_len = 0, cplen = 0, rem = 0, dma_blk_len = 0;
+	uint8_t i2c_wr_addr = 0;
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x18);
-	if (mwr->len > (devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ)) {
-		data->num_msgs_xfr = 0;
-		return -E2BIG;
-	}
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x17);
 
 	data->num_msgs_xfr = 2u;
 	data->protocol = XEC_I2C_NL_PROTO_WR_RD;
+	data->write_phase_buf = NULL;
+	data->write_phase_len = 0;
+	data->write_phase_buf2 = NULL;
+	data->write_phase_len2 = 0;
 	data->read_phase_buf = mrd->buf;
 	data->read_phase_len = mrd->len;
 
+	dma_blk_len = 1u; /* 1-byte I2C address */
 	ntx = mwr->len + 2u; /* add START and RPT-START addresses */
 	nrx = mrd->len;
 	data->wrcnt = (uint16_t)ntx;
@@ -1144,15 +1185,41 @@ static int xfr_cfg_wr_rd(const struct device *dev, struct i2c_msg *mwr, struct i
 
 	data->hflags = BIT(0) | BIT(1) | BIT(2); /* START0 | STARTN | STOP */
 
-	memcpy((void *)&xfrbuf[1], mwr->buf, mwr->len);
-	xfrbuf[0] = (data->i2c_addr & 0x7Fu) << 1;
-	xfrbuf[mwr->len + 1u] = xfrbuf[0] | BIT(0);
+	i2c_wr_addr = (data->i2c_addr & 0x7Fu) << 1;
+	*xfrbuf++ = i2c_wr_addr;
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x42);
+	tx_buf_max_len = devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ;
+	cplen = mwr->len;
+
+	if (cplen > tx_buf_max_len) {
+		cplen = tx_buf_max_len;
+		rem = mwr->len - tx_buf_max_len;
+		data->write_phase_buf = mwr->buf + cplen;
+		data->write_phase_len = rem;
+	}
+
+	memcpy((void *)xfrbuf, mwr->buf, cplen);
+	xfrbuf += cplen;
+	dma_blk_len += cplen;
+
+	if (rem != 0) {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x18);
+		devcfg->xfrbuf[tx_buf_max_len] = i2c_wr_addr | BIT(0);
+		data->write_phase_buf2 = (uint8_t *)&devcfg->xfrbuf[tx_buf_max_len];
+		data->write_phase_len2 = 1u;
+	} else {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x19);
+		*xfrbuf++ = i2c_wr_addr | BIT(0);
+		dma_blk_len += 1u; /* RPT-START address at end of msg */
+	}
+
+	xfr_cfg_set_atomic_flags(dev);
+
 	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
-	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)xfrbuf, ntx, dma_flags);
+	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)devcfg->xfrbuf, dma_blk_len,
+				 dma_flags);
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x19);
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1A);
 
 	return 0;
 }
@@ -1163,34 +1230,60 @@ static int xfr_cfg_wr_wr(const struct device *dev, struct i2c_msg *mwr1, struct 
 	struct xec_i2c_nl_data *data = dev->data;
 	volatile uint8_t *xfrbuf = devcfg->xfrbuf;
 	uint32_t dma_flags = XEC_I2C_NL_DMA_CFG_HC | XEC_I2C_NL_DMA_CFG_M2D;
-	uint32_t ntx = 0;
+	uint32_t ntx = 0, buf_max_len = 0, cplen = 0, rem = 0, dma_blk_len = 0;
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1A);
-	if ((mwr1->len + mwr2->len) > (devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ)) {
-		data->num_msgs_xfr = 0;
-		return -E2BIG;
-	}
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1B);
 
-	data->num_msgs_xfr = 2u;
 	data->protocol = XEC_I2C_NL_PROTO_WR_WR;
+	data->write_phase_buf = NULL;
+	data->write_phase_len = 0;
 	data->read_phase_buf = NULL;
 	data->read_phase_len = 0;
 
+	dma_blk_len = 1u; /* 1-byte address */
+	*xfrbuf++ = (data->i2c_addr & 0x7Fu) << 1;
+	buf_max_len = devcfg->xfrbuf_sz - XEC_I2C_NL_XFRBUF_PAD_SZ;
+
+	cplen = mwr1->len;
+	if (cplen > buf_max_len) {
+		cplen = buf_max_len;
+		rem = mwr1->len - buf_max_len;
+	}
+
+	memcpy((void *)xfrbuf, mwr1->buf, cplen);
+	xfrbuf += cplen;
+	dma_blk_len += cplen;
+
+	if (rem != 0) {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1C);
+		data->write_phase_buf = mwr1->buf + cplen;
+		data->write_phase_len = rem;
+		data->write_phase_buf2 = mwr2->buf;
+		data->write_phase_len2 = mwr2->len;
+	} else {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1D);
+		rem = buf_max_len - cplen;
+		memcpy((void *)xfrbuf, mwr2->buf, rem);
+		xfrbuf += rem;
+		dma_blk_len += rem;
+		data->write_phase_buf = mwr2->buf + rem;
+		data->write_phase_len = mwr2->len - rem;
+	}
+
+	xfr_cfg_set_atomic_flags(dev);
+
+	data->num_msgs_xfr = 2u;
 	ntx = mwr1->len + mwr2->len + 1u; /* add START address */
 	data->wrcnt = (uint16_t)ntx;
 	data->rdcnt = 0;
 
 	data->hflags = BIT(0) | BIT(2); /* START0 | STOP */
 
-	memcpy((void *)&xfrbuf[1], mwr1->buf, mwr1->len);
-	memcpy((void *)&xfrbuf[1+ mwr1->len], mwr2->buf, mwr2->len);
-	xfrbuf[0] = (data->i2c_addr & 0x7Fu) << 1;
-
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x49);
 	xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
-	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)xfrbuf, ntx, dma_flags);
+	xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)devcfg->xfrbuf, dma_blk_len,
+				 dma_flags);
 
-	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1B);
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0x1E);
 
 	return 0;
 }
@@ -1516,16 +1609,22 @@ static void xec_i2c_nl_handler(const struct device *dev)
 		k_sem_give(&data->sync_sem);
 	} else if ((hcmd & 0x03u) == 0x01u) { /* turn-around for read phase? */
 		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x86);
-		xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
-		xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg, (void *)data->read_phase_buf,
-					 data->read_phase_len, dma_flags);
-		dma_config(devcfg->hc_dma_dev, devcfg->hc_dma_chan, &data->dma_cfg);
-		dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
-		sys_write32(hcmd | BIT(XEC_I2C_HCMD_PROC_POS), i2c_base + XEC_I2C_HCMD_OFS);
-		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+		if (atomic_test_and_clear_bit(data->aflags, XEC_AFLAG_RD_PH_BUF_POS) == true) {
+			xec_i2c_nl_dma_cfg_init(dev, &data->dma_cfg, dma_flags);
+			xec_i2c_nl_dma_cfg_block(dev, &data->dma_blk_cfg,
+						 (void *)data->read_phase_buf,
+						 data->read_phase_len, dma_flags);
+			dma_config(devcfg->hc_dma_dev, devcfg->hc_dma_chan, &data->dma_cfg);
+			dma_start(devcfg->hc_dma_dev, devcfg->hc_dma_chan);
+			sys_write32(hcmd | BIT(XEC_I2C_HCMD_PROC_POS), i2c_base + XEC_I2C_HCMD_OFS);
+			soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+		} else {
+			/* TODO should not happen! */
+			XEC_I2C_DEBUG_STATE_UPDATE(data, 0x87);
+		}
 	} else {
 		/* TODO can we get an interrupt with bits[1:0]=11b ? */
-		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x87);
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0x88);
 	}
 
 xec_i2c_nl_handler_exit:
@@ -1551,13 +1650,17 @@ static void xec_i2c_nl_isr(const struct device *dev)
 	/* disable I2C controller GIRQ causing GIRQ.Result = 0 -> NVIC input -> 0 */
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 0);
 
+	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0x70);
+
 #ifdef CONFIG_I2C_XEC_NL_USE_KWORKQUEUE
 	struct xec_i2c_nl_data *data = dev->data;
 
+	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0x71);
 	k_work_submit(&data->kwq);
 #else
 	xec_i2c_nl_handler(dev);
 #endif
+	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0x7F);
 }
 
 #ifdef CONFIG_PM_DEVICE
