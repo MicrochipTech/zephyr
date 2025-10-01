@@ -274,6 +274,7 @@ static bool xec_dma_chan_is_busy(mem_addr_t chan_base)
 static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t dest, size_t nbytes)
 {
 	uint32_t ctrl = 0, msa = 0, mea = 0, deva = 0;
+	uint32_t chien = BIT(XEC_DMA_CHAN_IESR_DONE_POS) | BIT(XEC_DMA_CHAN_IESR_BERR_POS);
 
 	sys_write32(0, chan_base + XEC_DMA_CHAN_ACTV_OFS);
 	ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
@@ -292,9 +293,16 @@ static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t d
 		deva = src;
 	}
 
+	if ((ctrl & BIT(XEC_DMA_CHAN_CR_DIS_HFC_POS)) == 0) {
+		ctrl |= BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS);
+	} else {
+		ctrl |= BIT(XEC_DMA_CHAN_CR_SFC_GO_POS);
+	}
+
 	sys_write32(msa, chan_base + XEC_DMA_CHAN_MSA_OFS);
 	sys_write32(mea, chan_base + XEC_DMA_CHAN_MEA_OFS);
 	sys_write32(deva, chan_base + XEC_DMA_CHAN_DEVA_OFS);
+	sys_write32(chien, chan_base + XEC_DMA_CHAN_IER_OFS);
 	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
 	sys_write32(1u, chan_base + XEC_DMA_CHAN_ACTV_OFS);
 }
@@ -587,7 +595,8 @@ static int dma_xec_start(const struct device *dev, uint32_t channel)
 	xec_dma_chan_configure(dev, chcfg, channel);
 
 	sys_write32(XEC_DMA_CHAN_IESR_MSK, chan_base + XEC_DMA_CHAN_SR_OFS);
-	sys_write32(BIT(XEC_DMA_CHAN_IESR_DONE_POS), chan_base + XEC_DMA_CHAN_IER_OFS);
+	sys_write32(BIT(XEC_DMA_CHAN_IESR_DONE_POS) | BIT(XEC_DMA_CHAN_IESR_BERR_POS),
+		    chan_base + XEC_DMA_CHAN_IER_OFS);
 
 	/* Block PM transition until DMA completes */
 	dma_xec_device_busy_set(dev, channel);
@@ -770,13 +779,13 @@ static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 
 	sys_write32(0, chb + XEC_DMA_CHAN_IER_OFS);
 	/* clear run bits, activate bit, and status */
-	sys_clear_bits(BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS) | BIT(XEC_DMA_CHAN_CR_SFC_GO_POS),
-		       chb + XEC_DMA_CHAN_CR_OFS);
+	sys_clear_bits(chb + XEC_DMA_CHAN_CR_OFS, (BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS) |
+						   BIT(XEC_DMA_CHAN_CR_SFC_GO_POS)));
 	sys_clear_bit(chb + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 	sys_write32(XEC_DMA_CHAN_IESR_MSK, chb + XEC_DMA_CHAN_SR_OFS);
 	soc_ecia_girq_status_clear(girq, girq_pos);
 
-	if (istatus & BIT(XEC_DMA_CHAN_IESR_BERR_POS)) {
+	if ((istatus & BIT(XEC_DMA_CHAN_IESR_BERR_POS)) != 0) {
 		dma_xec_device_busy_clear(dev, chan);
 		if ((chan_data->flags & BIT(DMA_XEC_CHAN_FLAGS_CB_ERR_DIS_POS)) == 0) {
 			do_callback(dev, chan, chan_data, -EIO);
@@ -785,7 +794,7 @@ static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 	}
 
 	chan_data->block_count--;
-	if (chan_data->block_count) {
+	if (chan_data->block_count != 0) {
 		if (((chan_data->flags & BIT(DMA_XEC_CHAN_FLAGS_CB_EOB_POS)) != 0) &&
 		    (chan_data->cb != NULL)) {
 			do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
