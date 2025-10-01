@@ -1765,7 +1765,6 @@ static void xec_i2c_kwork_thread(struct k_work *work)
 #ifdef CONFIG_I2C_TARGET
 	if ((data->i2c_sr & BIT(XEC_I2C_SR_STO_POS)) != 0) {
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_IEN_POS);
-		stop_active = 1;
 		state = I2C_XEC_ISR_STATE_TM_EV_STOP;
 		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xE0);
 	}
