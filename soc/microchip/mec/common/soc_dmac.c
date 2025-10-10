@@ -50,6 +50,17 @@ mem_addr_t soc_xec_dmac_chan_base(uint32_t chan)
 	return dmac_chan_base(chan);
 }
 
+bool soc_xec_dmac_is_enabled(void)
+{
+	mem_addr_t regaddr = XEC_DT_DMAC_BASE_ADDR + XEC_DMA_CHAN_ACTV_OFS;
+
+	if (sys_test_bit(regaddr, XEC_DMA_CHAN_ACTV_EN_POS) != 0) {
+		return true;
+	}
+
+	return false;
+}
+
 int soc_xec_dmac_chan_state_get(uint32_t chan, struct xec_dma_chan_state *ps)
 {
 	mem_addr_t chb = 0;

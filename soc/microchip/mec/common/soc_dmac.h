@@ -68,6 +68,9 @@ mem_addr_t soc_xec_dmac_chan_base(uint32_t chan);
 /* clear a channel */
 int soc_xec_dmac_chan_clear(uint32_t chan);
 
+/* Is the central DMA enabled */
+bool soc_xec_dmac_is_enabled(void);
+
 /* reset DMA controller and all channels and clear GIRQ enables/status
  * Optionally enable selected DMA channel GIRQs after clearing.
  */
