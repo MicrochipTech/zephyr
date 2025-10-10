@@ -669,7 +669,7 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	struct xec_dmac_channel *chan_data = NULL;
 	struct xec_dma_chan_cfg *chcfg = NULL;
 	mem_addr_t chan_base = 0;
-	uint32_t ctrl = 0, msa = 0, mea = 0, rembytes = 0;
+	uint32_t ctrl = 0, msa = 0, mea = 0; /* , rembytes = 0; */
 
 	if (!is_chan_valid(dev, chan) || (status == NULL)) {
 		LOG_ERR("unsupported channel");
@@ -685,16 +685,12 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	mea = sys_read32(chan_base + XEC_DMA_CHAN_MEA_OFS);
 	ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
 
+	/* TODO test with multi-block transfers */
+	status->pending_length = mea - msa;
 	if ((ctrl & BIT(XEC_DMA_CHAN_CR_BUSY_POS)) != 0) {
-		if (mea > msa) {
-			rembytes = mea - msa;
-		}
 		status->busy = true;
-		status->pending_length = chan_data->total_req_xfr_len - rembytes;
 	} else {
 		status->busy = false;
-		status->pending_length =
-			(chan_data->total_req_xfr_len - chan_data->total_curr_xfr_len);
 	}
 
 	if ((chcfg->flags & XEC_DMA_CFG_FLAG_SWFLC) != 0) {
@@ -705,7 +701,13 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 		status->dir = PERIPHERAL_TO_MEMORY;
 	}
 
-	status->total_copied = chan_data->total_curr_xfr_len;
+	/* Note: total_curr_xfr_len is updated by DMA ISR. If the last block is terminated
+	 * early by a peripheral(I2C, I3C, SPI) then DMA ISR will not fire. If the peripheral
+	 * driver/app calls dma_status we will return byte lengths transfered in this partial
+	 * block.
+	 */
+	status->total_copied = chan_data->total_curr_xfr_len +
+			       (chan_data->total_req_xfr_len - status->pending_length);
 
 	return 0;
 }
@@ -779,8 +781,8 @@ static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 
 	sys_write32(0, chb + XEC_DMA_CHAN_IER_OFS);
 	/* clear run bits, activate bit, and status */
-	sys_clear_bits(chb + XEC_DMA_CHAN_CR_OFS, (BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS) |
-						   BIT(XEC_DMA_CHAN_CR_SFC_GO_POS)));
+	sys_clear_bits(chb + XEC_DMA_CHAN_CR_OFS,
+		       (BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS) | BIT(XEC_DMA_CHAN_CR_SFC_GO_POS)));
 	sys_clear_bit(chb + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 	sys_write32(XEC_DMA_CHAN_IESR_MSK, chb + XEC_DMA_CHAN_SR_OFS);
 	soc_ecia_girq_status_clear(girq, girq_pos);
