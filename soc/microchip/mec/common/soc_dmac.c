@@ -77,7 +77,7 @@ int soc_xec_dmac_init(uint32_t chan_girq_en_mask)
 	mem_addr_t dmac_base = (mem_addr_t)(XEC_DT_DMAC_BASE_ADDR);
 	uint32_t n = 0, girq = 0, girq_pos = 0;
 
-	xec_pcr_sleep_en_clear(XEC_DT_DMAC_PCR_SCR);
+	soc_xec_pcr_sleep_en_clear(XEC_DT_DMAC_PCR_SCR);
 
 	sys_set_bit(dmac_base + XEC_DMA_MAIN_CR_OFS, XEC_DMA_MAIN_CR_SRST_POS);
 
