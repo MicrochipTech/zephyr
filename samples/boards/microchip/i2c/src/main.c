@@ -18,6 +18,8 @@
 
 LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
+#include "target_tests.h"
+
 #define PCA9555_CMD_PORT0_IN  0
 #define PCA9555_CMD_PORT1_IN  1u
 #define PCA9555_CMD_PORT0_OUT 2u
@@ -43,9 +45,6 @@ volatile uint32_t spin_val;
 
 uint8_t i2c_wr_buf[64];
 uint8_t i2c_rd_buf[64];
-
-#define I2C1_TARG_ADDR1 0x40u
-#define I2C1_TARG_ADDR2 0x41u
 
 #define TARGET_I2C_ADDR2_RX_BUF_SIZE 10
 #define TARGET_I2C_ADDR2_TX_BUF_SIZE 10
@@ -118,6 +117,14 @@ int main(void)
 #ifdef APP_HAS_I2C_NL
 	rc = i2c_nl_test1(i2c_nl_dev);
 	LOG_INF("I2C-NL test 1 returned (%d)", rc);
+#endif
+
+#if defined(CONFIG_I2C_TARGET) && defined(APP_HAS_I2C_NL)
+	rc = target_i2c_nl_prepare_tests(i2c0_dev);
+	LOG_INF("Target I2C-NL prepare returned (%d)", rc);
+
+	rc = target_i2c_nl_run_tests(i2c0_dev);
+	LOG_INF("Target I2C-NL run tests returned (%d)", rc);
 #endif
 
 	LOG_INF("Program End");
