@@ -856,6 +856,8 @@ static int xec_dmac_init(const struct device *dev)
 	data->ctx.dma_channels = devcfg->dma_channels;
 	data->ctx.atomic = data->channels_atomic;
 
+	soc_xec_pcr_sleep_en_clear(devcfg->enc_pcr_src);
+
 	sys_set_bit(dmac_base + XEC_DMA_MAIN_CR_OFS, XEC_DMA_MAIN_CR_SRST_POS);
 	sys_write32(0, dmac_base + XEC_DMA_MAIN_DPKT_OFS); /* delay */
 	sys_set_bit(dmac_base + XEC_DMA_MAIN_CR_OFS, XEC_DMA_MAIN_CR_EN_POS);
