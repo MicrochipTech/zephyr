@@ -372,10 +372,9 @@ static int xec_i2c_nl_hw_cfg(const struct device *dev, uint32_t bitrate, uint8_t
 
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 0);
 
-	xec_pcr_sleep_en_clear(devcfg->pcr);
-	xec_pcr_reset_en(devcfg->pcr);
-
 	xec_i2c_nl_dma_clear(dev);
+	soc_xec_pcr_sleep_en_clear(devcfg->pcr);
+	soc_xec_pcr_reset_en(devcfg->pcr);
 
 	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
 

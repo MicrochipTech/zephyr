@@ -470,8 +470,9 @@ static int i2c_xec_reset_config(const struct device *dev, uint8_t port)
 	data->read_discard = 0;
 	data->mdone = 0;
 
+	soc_xec_pcr_sleep_en_clear(devcfg->pcr);
 	/* reset I2C controller using PCR reset feature */
-	xec_pcr_reset_en(devcfg->pcr);
+	soc_xec_pcr_reset_en(devcfg->pcr);
 
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_GC_DIS_POS);
 
