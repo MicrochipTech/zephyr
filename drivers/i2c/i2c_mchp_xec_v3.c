@@ -284,6 +284,7 @@ static void xec_i2c_cr_write(const struct device *dev, uint8_t ctrl_val)
 	sys_write8(ctrl_val, devcfg->base + XEC_I2C_CR_OFS);
 }
 
+#ifdef CONFIG_I2C_TARGET
 static void xec_i2c_cr_write_mask(const struct device *dev, uint8_t clr_msk, uint8_t set_msk)
 {
 	const struct i2c_xec_config *devcfg = dev->config;
@@ -292,6 +293,7 @@ static void xec_i2c_cr_write_mask(const struct device *dev, uint8_t clr_msk, uin
 	data->i2c_cr_shadow = (data->i2c_cr_shadow & (uint8_t)~clr_msk) | set_msk;
 	sys_write8(data->i2c_cr_shadow, devcfg->base + XEC_I2C_CR_OFS);
 }
+#endif
 
 static int wait_bus_free(const struct device *dev, uint32_t nwait)
 {
