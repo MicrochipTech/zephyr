@@ -141,4 +141,9 @@
 
 	dmas = <&dmac 4 5>, <&dmac 5 4>;
 	dma-names = "host_mode", "target_mode";
+
+	/* Transfer buffer size defaults to 32 bytes plus internal padding.
+	 * Application can change the size: xfr-buffer-size = < size_in_bytes >;
+	 * Miminum size is 4 bytes. Maximum size is 0xfffc bytes.
+	 */
 };
