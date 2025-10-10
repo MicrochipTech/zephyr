@@ -25,5 +25,6 @@
 
 /* DEBUG */
 int i2c_mchp_xec_v3_debug_init(const struct device *dev);
+int i2c_mchp_xec_nl_debug_init(const struct device *dev);
 
 #endif /* ZEPHYR_INCLUDE_DRIVERS_I2C_MCHP_XEC_I2C_H_ */
