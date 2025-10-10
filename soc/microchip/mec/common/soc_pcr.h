@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #include <zephyr/arch/cpu.h>
+#include <zephyr/irq.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/arch/common/sys_bitops.h>
 
@@ -57,40 +58,36 @@ struct mchp_xec_pcr_clk_ctrl {
 };
 
 /* inline routines */
-#define XEC_PCR_BASE		(mem_addr_t)(DT_REG_ADDR_BY_IDX(DT_NODELABEL(pcr), 0))
-#define XEC_PCR_SLP_EN_BASE	(XEC_PCR_BASE + 0x30u)
-#define XEC_PCR_CLK_REQ_BASE	(XEC_PCR_BASE + 0x50u)
-#define XEC_PCR_RST_EN_BASE	(XEC_PCR_BASE + 0x70u)
+#define XEC_PCR_BASE			(mem_addr_t)(DT_REG_ADDR_BY_IDX(DT_NODELABEL(pcr), 0))
+#define XEC_PCR_SLP_EN_BASE		(XEC_PCR_BASE + 0x30u)
+#define XEC_PCR_CLK_REQ_BASE		(XEC_PCR_BASE + 0x50u)
+#define XEC_PCR_RST_EN_BASE		(XEC_PCR_BASE + 0x70u)
+#define XEC_PCR_RST_EN_LOCK_BASE	(XEC_PCR_BASE + 0x84u)
+#define XEC_PCR_RST_EN_LOCK_VAL		0xa6382d4du
+#define XEC_PCR_RST_EN_UNLOCK_VAL	0xa6382d4cu
 
-
-static ALWAYS_INLINE void xec_pcr_sleep_en_set(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_set(uint8_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
 
 	sys_set_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
 }
 
-static ALWAYS_INLINE void xec_pcr_sleep_en_clear(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_clear(uint8_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
 
-	sys_set_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
+	sys_clear_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
 }
 
-static ALWAYS_INLINE int xec_pcr_clk_req(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE int soc_xec_pcr_clk_req(uint8_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_CLK_REQ_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
 
 	return sys_test_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
 }
 
-/* Reset a peripheral block */
-static ALWAYS_INLINE void xec_pcr_reset_en(uint8_t enc_pcr_scr)
-{
-	mem_addr_t raddr = XEC_PCR_RST_EN_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
-
-	sys_set_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
-}
+void soc_xec_pcr_reset_en(uint16_t enc_pcr_scr);
 
 #ifdef __cplusplus
 }
