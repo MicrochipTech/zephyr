@@ -1,0 +1,153 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/ {
+	aliases {
+		i2c0 = &i2c_smb_0;
+		i2c-0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_1;
+		i2c-1 = &i2c_smb_1;
+		i2c-nl = &i2c_smb_2;
+	};
+};
+
+/* Central DMA controller
+ * We are using SoC DMA helpers due to the high overhead of Zephyr's
+ * generic DMA driver interface.
+ * We need the compatible to get custom DT properties such as pcr and girqs.
+ */
+&dmac {
+	compatible = "microchip,xec-dmac";
+	status = "okay";
+};
+
+/* I2C Port 0 */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 4 */
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+&i2c04_scl_gpio144 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* I2C Port 5 */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = "4x";
+};
+
+/* Zephyr will load NXP PCA9555 driver after i2c_smb_0 driver
+ * Zephyr does not have a driver for ltc2489 I2C delta-sigma ADC
+ */
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+
+	port-sel = < 0 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_003 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_004 0 >;
+
+	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-names = "default";
+
+	pca9555_evb: pca9555@26 {
+		/* compatible = "nxp,pca9555"; */
+		reg = <0x26>;
+		/* ngpios = <16>; */
+		/* gpio-controller; */
+		/* #gpio-cells = <2>; */
+	};
+
+	ltc2489_evb: ltc2489@34 {
+		reg = <0x34>;
+		#io-channels-cells = <1>;
+	};
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+
+	port-sel = < 4 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
+
+	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
+	pinctrl-names = "default";
+
+};
+
+/* I2C-NL and Central DMA controller race condition.
+ * We must ensure DMA channel interrupt priorities are higher
+ * than device drivers using DMA channels. The DMA driver interrupt
+ * handler must run and complete before the peripheral driver using
+ * DMA driver. Why? Peripheral driver may call DMA driver to reload
+ * a channel from its ISR. If the DMA driver interrupt handler then
+ * runs it will be out of sync with the reloaded channel!
+ * Chip DTSI sets all interrupt priorities of dmac to 2.
+ * We set any I2C controller using microchip,xec-i2c-nl driver to
+ * priority 3 to 7(lowest).
+ */
+&i2c_smb_2 {
+	compatible = "microchip,xec-i2c-nl-ndd";
+	status = "okay";
+
+	/* We must set I2C-NL interrupt for a lesser priority than DMA channels */
+	interrupts = <22 3>;
+
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	port-sel = < 5 >;
+
+	sda-gpios = < MCHP_GPIO_DECODE_141 0 >;
+	scl-gpios = < MCHP_GPIO_DECODE_142 0 >;
+
+	pinctrl-0 = < &i2c05_sda_gpio141 &i2c05_scl_gpio142 >;
+	pinctrl-names = "default";
+
+	dmas = <&dmac 4 5>, <&dmac 5 4>;
+	dma-names = "hm", "tm";
+
+	/* Transfer buffer size defaults to 32 bytes plus internal padding.
+	 * Application can change the size: xfr-buffer-size = < size_in_bytes >;
+	 * Miminum size is 4 bytes. Maximum size is 0xfffc bytes.
+	 */
+};

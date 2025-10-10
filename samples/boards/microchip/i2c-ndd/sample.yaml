@@ -1,0 +1,18 @@
+sample:
+  description: Microchip MEC EVB I2C sample
+  name: mec_app_i2c_ndd
+tests:
+  sample.board.i2c:
+    platform_allow:
+      - mec172xevb_assy6906
+      - mec172xmodular_assy6930
+      - mec_assy6941/mec1743_qlj
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: i2c
+    depends_on:
+      - gpio
+      - pinctrl
+      - i2c
+
