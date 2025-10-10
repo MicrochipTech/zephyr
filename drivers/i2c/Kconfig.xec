@@ -38,6 +38,15 @@ config I2C_XEC_NL
 	help
 	  Enable the Microchip I2C Network layer driver with DMA
 
+config I2C_XEC_NL_NDD
+	bool "Microchip XEC I2C network layer with local DMA"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_NDD_ENABLED
+	select PINCTRL
+	select I2C_PORT_MUX
+	help
+	  Enable the Microchip I2C Network layer with local DMA
+
 config I2C_XEC_PORT_MUX
 	bool "Allow I2C configuration to switch port and frequency"
 	help
@@ -54,7 +63,7 @@ config I2C_XEC_PORT_MUX
 	  application to switch the port and configure a new frequency
 	  in one API call.
 
-if I2C_XEC_NL
+if I2C_XEC_NL || I2C_XEC_NL_NDD
 
 config I2C_XEC_NL_USE_KWORKQUEUE
 	bool "Enable use of Zephyr kernel workqueue in ISR"
