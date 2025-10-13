@@ -155,6 +155,28 @@ int soc_xec_dmac_status_get(uint32_t chan, uint32_t *status)
 	return 0;
 }
 
+int soc_xec_dmac_status_clear_all(uint32_t chan)
+{
+	mem_addr_t chb = 0;
+	uint16_t chan_girq = 0, chan_girq_pos = 0;
+
+	if (chan >= (uint32_t)XEC_DT_DMAC_MAX_CHAN) {
+		return -EINVAL;
+	}
+
+	chan_girq = MCHP_XEC_ECIA_GIRQ(xec_dmac_intr_enc[chan]);
+	chan_girq_pos = MCHP_XEC_ECIA_GIRQ_POS(xec_dmac_intr_enc[chan]);
+	chb = dmac_chan_base(chan);
+
+	sys_write32(XEC_DMA_CHAN_IESR_MSK, chb + XEC_DMA_CHAN_SR_OFS);
+	chb = dmac_chan_base(chan);
+
+	sys_write32(UINT32_MAX, chb + XEC_DMA_CHAN_SR_OFS);
+	soc_ecia_girq_status_clear(chan_girq, chan_girq_pos);
+
+	return 0;
+}
+
 /* configure a channel
  * flags contain:
  *   direction = 0(dev2mem), 1(mem2dev)
@@ -165,7 +187,7 @@ int soc_xec_dmac_status_get(uint32_t chan, uint32_t *status)
  *   lock channel as highest priority in arbiter
  *   HW flow control device ID
  */
-int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t maddr, mem_addr_t daddr, uint32_t nbytes,
+int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t daddr, mem_addr_t maddr, uint32_t nbytes,
 			  uint32_t flags, struct xec_dma_chan_state *ps)
 {
 	uint32_t ctrl = 0, units = 0, hfc_dev_id = 0;
@@ -217,6 +239,16 @@ int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t maddr, mem_addr_t daddr, uin
 	sys_set_bit(chb + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 
 	return 0;
+}
+
+int soc_xec_dmac_chan_cfg2(uint32_t chan, struct soc_xec_dma_chan_cfg *cfg,
+			   struct xec_dma_chan_state *ps)
+{
+	if (cfg == NULL) {
+		return -EINVAL;
+	}
+
+	return soc_xec_dmac_chan_cfg(chan, cfg->daddr, cfg->maddr, cfg->nbytes, cfg->flags, ps);
 }
 
 int soc_xec_dmac_chan_start(uint32_t chan, uint32_t flags)
