@@ -31,6 +31,10 @@
 #define XEC_DMAC_CHAN_CFG_HDEVID_SET(h)	FIELD_PREP(XEC_DMAC_CHAN_CFG_HDEVID_MSK, (h))
 #define XEC_DMAC_CHAN_CFG_HDEVID_GET(c)	FIELD_GET(XEC_DMAC_CHAN_CFG_HDEVID_MSK, (c))
 
+#define XEC_DMAC_CHAN_CFG_INCRM		BIT(XEC_DMAC_CHAN_CFG_INCRM_POS)
+#define XEC_DMAC_CHAN_CFG_INCRD		BIT(XEC_DMAC_CHAN_CFG_INCRD_POS)
+#define XEC_DMAC_CHAN_CFG_LOCK		BIT(XEC_DMAC_CHAN_CFG_LOCK_POS)
+
 struct xec_dma_chan_state
 {
 	uint32_t msa_init;
@@ -53,10 +57,10 @@ struct soc_xec_dma_chan_cfg {
 };
 
 /* configure a channel */
-int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t maddr, mem_addr_t daddr, uint32_t nbytes,
+int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t daddr, mem_addr_t maddr, uint32_t nbytes,
 			  uint32_t flags, struct xec_dma_chan_state *ps);
 
-int soc_xec_dmac_chan_cfg2(uint32_t chan, struct soc_xec_dma_chan_cfg *chcfg,
+int soc_xec_dmac_chan_cfg2(uint32_t chan, struct soc_xec_dma_chan_cfg *cfg,
 			   struct xec_dma_chan_state *ps);
 
 #define XEC_DMAC_START_IEN		BIT(0)
@@ -67,6 +71,9 @@ mem_addr_t soc_xec_dmac_chan_base(uint32_t chan);
 
 /* clear a channel */
 int soc_xec_dmac_chan_clear(uint32_t chan);
+
+/* clear all channel status and corresponding GIRQ status */
+int soc_xec_dmac_status_clear_all(uint32_t chan);
 
 /* Is the central DMA enabled */
 bool soc_xec_dmac_is_enabled(void);
