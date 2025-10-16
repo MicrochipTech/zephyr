@@ -67,9 +67,26 @@ if I2C_XEC_NL || I2C_XEC_NL_NDD
 
 config I2C_XEC_NL_USE_KWORKQUEUE
 	bool "Enable use of Zephyr kernel workqueue in ISR"
-	default n
+	default y
 	help
 	  Enable create of kernel workqueue's for each instance
 	  to offload message processing from the ISR.
+
+config I2C_XEC_NL_TARGET_GENERAL_CALL
+	bool "Enable support target I2C general call address (0)"
+	default n
+	depends on I2C_TARGET
+	help
+	  Microchip XEC I2C controller has HW support in target mode
+	  of the I2C general call address (0).
+
+config I2C_XEC_NL_TARGET_SMBUS_HOST_DEV_ADDRESSES
+	bool "Enable support target SMBus Host and Device addresses"
+	default n
+	depends on I2C_TARGET
+	help
+	  Microchip XEC I2C controller has HW support for decoding
+	  SMBus Host address 0x08 and device address 0x61 when acting
+	  as a target.
 
 endif # I2C_XEC_NL
