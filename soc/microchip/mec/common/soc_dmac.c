@@ -114,6 +114,21 @@ int soc_xec_dmac_init(uint32_t chan_girq_en_mask)
 	return 0;
 }
 
+int soc_xec_dmac_chan_deactivate(uint32_t chan)
+{
+	mem_addr_t chb = 0;
+
+	if (chan >= (uint32_t)XEC_DT_DMAC_MAX_CHAN) {
+		return -EINVAL;
+	}
+
+	chb = dmac_chan_base(chan);
+
+	sys_write32(0, chb + XEC_DMA_CHAN_ACTV_OFS);
+
+	return 0;
+}
+
 /* Clear a channel. Force memory end address register <= memory start address register by
  * writing 0 before other registers. Writing 0 to activate gates clocks off for the channel.
  */
@@ -127,13 +142,14 @@ int soc_xec_dmac_chan_clear(uint32_t chan)
 
 	chb = dmac_chan_base(chan);
 
-	sys_write32(0, chb + XEC_DMA_CHAN_MEA_OFS);
+	/* DO NOT CHANGE THE SEQUENCE! */
 	sys_write32(0, chb + XEC_DMA_CHAN_ACTV_OFS);
+	sys_write32(0, chb + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(0, chb + XEC_DMA_CHAN_MEA_OFS);
 	sys_write32(0, chb + XEC_DMA_CHAN_MSA_OFS);
 	sys_write32(0, chb + XEC_DMA_CHAN_DEVA_OFS);
-	sys_write32(0, chb + XEC_DMA_CHAN_CR_OFS);
 	sys_write32(0, chb + XEC_DMA_CHAN_IER_OFS);
-	sys_write32(0xffu, chb + XEC_DMA_CHAN_SR_OFS);
+	sys_write32(0xff, chb + XEC_DMA_CHAN_SR_OFS);
 
 	return 0;
 }
@@ -232,10 +248,11 @@ int soc_xec_dmac_chan_cfg(uint32_t chan, mem_addr_t daddr, mem_addr_t maddr, uin
 		ps->deva_init = daddr;
 	}
 
+	/* DO NOT CHANGE THE SEQUENCE */
+	sys_write32(ctrl, chb + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(daddr, chb + XEC_DMA_CHAN_DEVA_OFS);
 	sys_write32(maddr, chb + XEC_DMA_CHAN_MSA_OFS);
 	sys_write32(maddr + nbytes, chb + XEC_DMA_CHAN_MEA_OFS);
-	sys_write32(daddr, chb + XEC_DMA_CHAN_DEVA_OFS);
-	sys_write32(ctrl, chb + XEC_DMA_CHAN_CR_OFS);
 	sys_set_bit(chb + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 
 	return 0;
