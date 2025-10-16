@@ -35,6 +35,10 @@
 #define XEC_DMAC_CHAN_CFG_INCRD		BIT(XEC_DMAC_CHAN_CFG_INCRD_POS)
 #define XEC_DMAC_CHAN_CFG_LOCK		BIT(XEC_DMAC_CHAN_CFG_LOCK_POS)
 
+#define XEC_DMAC_CHAN_UNIT_1B		XEC_DMAC_CHAN_CFG_UNITS_SET(XEC_DMAC_CHAN_CFG_UNITS_1)
+#define XEC_DMAC_CHAN_UNIT_2B		XEC_DMAC_CHAN_CFG_UNITS_SET(XEC_DMAC_CHAN_CFG_UNITS_2)
+#define XEC_DMAC_CHAN_UNIT_4B		XEC_DMAC_CHAN_CFG_UNITS_SET(XEC_DMAC_CHAN_CFG_UNITS_4)
+
 struct xec_dma_chan_state
 {
 	uint32_t msa_init;
@@ -68,6 +72,9 @@ int soc_xec_dmac_chan_cfg2(uint32_t chan, struct soc_xec_dma_chan_cfg *cfg,
 int soc_xec_dmac_chan_start(uint32_t chan, uint32_t flags);
 
 mem_addr_t soc_xec_dmac_chan_base(uint32_t chan);
+
+/* clear channel activate */
+int soc_xec_dmac_chan_deactivate(uint32_t chan);
 
 /* clear a channel */
 int soc_xec_dmac_chan_clear(uint32_t chan);
