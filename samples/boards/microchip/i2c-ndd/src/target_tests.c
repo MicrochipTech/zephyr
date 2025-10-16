@@ -270,7 +270,7 @@ int get_i2c_port(const struct device *i2c_dev, uint8_t *port)
 	return 0;
 }
 
-int target_i2c_nl_prepare_tests(const struct device *i2c_host_dev)
+int target_i2c_nl_prepare_tests(const struct device *i2c_host_dev, uint32_t flags)
 {
 	int rc = 0;
 	uint32_t host_i2c_cfg = 0, targ_i2c_cfg = 0, new_cfg = 0;
@@ -299,17 +299,19 @@ int target_i2c_nl_prepare_tests(const struct device *i2c_host_dev)
 		new_cfg |= I2C_SPEED_SET(host_speed);
 	}
 
+	if ((flags & BIT(0)) == 0) { /* app says ports are wired together? */
 #ifdef CONFIG_I2C_XEC_PORT_MUX
-	new_cfg |= I2C_XEC_PORT_SET((uint32_t)targ_port);
-	if (host_port != targ_port) {
-		reconfig = true;
-	}
+		new_cfg |= I2C_XEC_PORT_SET((uint32_t)targ_port);
+		if (host_port != targ_port) {
+			reconfig = true;
+		}
 #else
-	if (host_port != targ_port) {
-		LOG_ERR("Host and target I2C ports are different and no port mux support");
-		return -EIO;
-	}
+		if (host_port != targ_port) {
+			LOG_ERR("Host and target I2C ports are different and no port mux support");
+			return -EIO;
+		}
 #endif
+	}
 
 	if (reconfig == true) {
 		LOG_INF("Reconfiguration required!");
