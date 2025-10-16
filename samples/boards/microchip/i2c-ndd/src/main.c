@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "sys/errno.h"
-#include <errno.h>
+/* #include <errno.h> */
 #include <stdio.h>
 #include <string.h>
 #include <soc.h>
@@ -122,7 +121,7 @@ int main(void)
 #endif
 
 #if defined(CONFIG_I2C_TARGET) && defined(APP_HAS_I2C_NL)
-	rc = target_i2c_nl_prepare_tests(i2c0_dev);
+	rc = target_i2c_nl_prepare_tests(i2c0_dev, BIT(0)); /* ports wired together on the board */
 	LOG_INF("Target I2C-NL prepare returned (%d)", rc);
 
 	rc = target_i2c_nl_run_tests(i2c0_dev);
@@ -153,19 +152,17 @@ static int fill_buf(uint8_t *buf, uint32_t buflen, uint8_t val, uint8_t flags)
 }
 
 #ifdef APP_HAS_I2C_NL
-#define TEST_ORDER_WR_RD
- /* HW issue exists independent of transaction order. */
+/* HW issue exists independent of transaction order. */
 
 static int i2c_nl_test1(const struct device *i2c_dev)
 {
 	struct i2c_msg msgs[4] = {0};
 	int rc = 0;
-	uint16_t i2c_addr = 0;
+	uint16_t fram_ofs = 0, i2c_addr = 0;
 	uint8_t nmsgs = 0;
 
 	fill_buf(i2c0_tx_buf, 16u, 0x11u, 1u);
 
-#ifdef TEST_ORDER_WR_RD
 	LOG_INF("Test I2C-NL one write message");
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 1u;
@@ -189,31 +186,7 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
-#else
-	LOG_INF("Test I2C-NL one read message");
-	memset((void *)i2c0_rx_buf, 0xAA, 8);
 
-	i2c_addr = FRAM_I2C_ADDR;
-	nmsgs = 1u;
-
-	msgs[0].buf = i2c0_rx_buf;
-	msgs[0].len = 4u;
-	msgs[0].flags = I2C_MSG_READ | I2C_MSG_STOP;
-
-	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
-	LOG_INF("  API returned (%d)", rc);
-
-	LOG_INF("Test I2C-NL one write message");
-	i2c_addr = FRAM_I2C_ADDR;
-	nmsgs = 1u;
-
-	msgs[0].buf = i2c0_tx_buf;
-	msgs[0].len = 4u;
-	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
-
-	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
-	LOG_INF("  API returned (%d)", rc);
-#endif
 	LOG_INF("Test I2C-NL two write messages");
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 2u;
@@ -244,8 +217,12 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
 
-	LOG_INF("Test I2C-NL Write message > driver xfrbuf size");
-	fill_buf(i2c0_tx_buf, 66u, 0, 1);
+	fram_ofs = 0x3048u;
+	LOG_INF("Test I2C-NL Write message > driver xfrbuf size to FRAM offset 0x%0x", fram_ofs);
+	fill_buf(&i2c0_tx_buf[2], 64u, 0, 1);
+
+	i2c0_tx_buf[0] = (uint8_t)(fram_ofs >> 8); /* MSB of FRAM address */
+	i2c0_tx_buf[1] = (uint8_t)(fram_ofs & 0xffu); /* LSB of FRAM address */
 
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 1u;
@@ -258,14 +235,15 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 	LOG_INF("  API returned (%d)", rc);
 
 	/* Large Write-Write */
-	LOG_INF("Test I2C-NL Write-Write 64 bytes to FRAM address 0x2000");
+	fram_ofs = 0x4052u;
+	LOG_INF("Test I2C-NL Write-Write 64 bytes to FRAM offset 0x%0x", fram_ofs);
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 2u;
 
-	fill_buf(&i2c0_tx_buf[2], 64, 0, 1);
+	fill_buf(&i2c0_tx_buf[2], 64, 0x10, 1);
 
-	i2c0_tx_buf[0] = 0x20u; /* address MSB */
-	i2c0_tx_buf[1] = 0u; /* address LSB */
+	i2c0_tx_buf[0] = (uint8_t)(fram_ofs >> 8); /* address MSB */
+	i2c0_tx_buf[1] = (uint8_t)(fram_ofs & 0xffu);    /* address LSB */
 
 	msgs[0].buf = i2c0_tx_buf;
 	msgs[0].len = 2u;
@@ -278,16 +256,16 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
 	LOG_INF("  API returned (%d)", rc);
 
-
 	/* Large Write-Read */
-	LOG_INF("Test I2C-NL Write-Read 64 bytes from FRAM address 0x2000");
+	fram_ofs = 0x4052u;
+	LOG_INF("Test I2C-NL Write-Read 64 bytes from FRAM offset 0x%0x", fram_ofs);
 	i2c_addr = FRAM_I2C_ADDR;
 	nmsgs = 2u;
 
 	fill_buf(i2c0_rx_buf, 64, 0x55, 0);
 
-	i2c0_tx_buf[0] = 0x20u; /* address MSB */
-	i2c0_tx_buf[1] = 0u; /* address LSB */
+	i2c0_tx_buf[0] = (uint8_t)(fram_ofs >> 8); /* address MSB */
+	i2c0_tx_buf[1] = (uint8_t)(fram_ofs & 0xffu);    /* address LSB */
 
 	msgs[0].buf = i2c0_tx_buf;
 	msgs[0].len = 2u;
@@ -302,6 +280,22 @@ static int i2c_nl_test1(const struct device *i2c_dev)
 
 	rc = memcmp(&i2c0_tx_buf[2], i2c0_rx_buf, 64);
 	LOG_INF("Mem compare 64 byte TX data with RX data is (%d)", rc);
+
+	/* Read-Read */
+	LOG_INF("Test I2C-NL Read 4 - Read 8 from FRAM address 0x2000");
+
+	memset(i2c0_rx_buf, 0xAA, sizeof(i2c0_rx_buf));
+
+	msgs[0].buf = i2c0_rx_buf;
+	msgs[0].len = 4u;
+	msgs[0].flags = I2C_MSG_READ;
+
+	msgs[1].buf = &i2c0_rx_buf[4];
+	msgs[1].len = 8u;
+	msgs[1].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	rc = i2c_transfer(i2c_dev, msgs, nmsgs, i2c_addr);
+	LOG_INF("  API retured (%d)", rc);
 
 	return 0;
 }
