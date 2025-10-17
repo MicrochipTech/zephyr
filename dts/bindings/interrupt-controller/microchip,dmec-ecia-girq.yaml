@@ -21,3 +21,8 @@ properties:
       a. NVIC input number and priority from the interrupts property
       b. GIRQ number and bit position from the girqs property
       The number of entries in interrupts and girqs should be the same in a DT node.
+
+  girq-names:
+    type: string-array
+    description: |
+      Optional names given to each GIRQ entry. Names are specific to drivers.
