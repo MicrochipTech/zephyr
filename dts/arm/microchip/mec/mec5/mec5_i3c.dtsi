@@ -7,26 +7,28 @@
 /* Microchip MEC5 SoC's Improved I2C(I3C).
  * Include this file in the soc {} section in the relevant chip DTSI files.
  */
-i3c0: i3c@40010800 {
+i3c0: i3c@40010800 { /* Host controller */
 	compatible = "microchip,mec5-i3c";
 	#address-cells = <3>;
 	#size-cells = <0>;
 	reg = <0x40010800 0x800>;
 	interrupts = <181 2>;
-	girqs = < MCHP_XEC_ECIA_GIRQ_ENC(13, 8) >;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 8)>, <MCHP_XEC_ECIA_GIRQ_ENC(22, 17)>;
+	girq-names = "runtime", "wake_only";
 	input-clock-frequency = <192000000>;
 	i3c-scl-hz = <12500000>;
 	i2c-scl-hz = <400000>;
 	status = "disabled";
 };
 
-i3c1: i3c@40010000 {
+i3c1: i3c@40010000 { /* Secondary controller */
 	compatible = "microchip,mec5-i3c";
 	#address-cells = <3>;
 	#size-cells = <0>;
 	reg = <0x40010000 0x800>;
 	interrupts = <182 2>;
-	girqs = < MCHP_XEC_ECIA_GIRQ_ENC(13, 9) >;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(13, 9)>, <MCHP_XEC_ECIA_GIRQ_ENC(22, 16)>;
+	girq-names = "runtime", "wake_only";
 	input-clock-frequency = <192000000>;
 	i3c-scl-hz = <12500000>;
 	i2c-scl-hz = <400000>;
