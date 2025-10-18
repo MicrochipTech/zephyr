@@ -8,4 +8,7 @@
  */
 
 #include <zephyr/dt-bindings/pinctrl/mchp-xec-pinctrl.h>
-#include "mec5-common-pinctrl.dtsi"
+
+&pinctrl {
+	#include "mec17xx-common-pinctrl.dtsi"
+};
