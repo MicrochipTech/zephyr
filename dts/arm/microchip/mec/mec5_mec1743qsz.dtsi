@@ -7,6 +7,8 @@
 #include <arm/armv7-m.dtsi>
 
 #include "mec5.dtsi"
+#include "mec5/mec174xsz-espi-ng-pc-dev.dtsi"
+#include "mec5/mec174x-pinctrl.dtsi"
 
 / {
 	flash0: flash@b0000 {
