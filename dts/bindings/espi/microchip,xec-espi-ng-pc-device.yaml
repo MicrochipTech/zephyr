@@ -1,0 +1,75 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC eSPI next gen Host Logical Devices
+
+compatible: "microchip,xec-espi-ng-pc-device"
+
+include: [base.yaml]
+
+child-binding:
+  description: |
+    Child node containing eSPI Peripheral Channel device Host properties
+  properties:
+    ldn:
+      type: int
+      required: true
+      description: Host device logical device number.
+
+    host-io-config-index:
+      type: int
+      required: true
+      description: |
+        Hardware host configuration index of the I/O BAR.
+        The index is an 8-bit unsigned value. Refer to eSPI I/O
+        base address register tables in the data sheet. A value of 0
+        indicates logical device does not implement an I/O BAR.
+
+    host-mem-config-index:
+      type: int
+      required: true
+      description: |
+        Hardware host configuration index of the memory BAR.
+        The index is an 8-bit unsigned value. Refer to eSPI memory
+        base base address register table in the data sheet. A value of 0
+        indicates the logical device does not implement a memory BAR.
+
+    host-address:
+      type: int
+      required: true
+      description: |
+        Host address the logical device appears at. On x86 systems this
+        address may be I/O or memory space. Address values are interpreted
+        as: 0 = disabled, [1, 0xffff] I/O space, [0x10000, UINT32_MAX]
+        memory space.
+
+    sirq-config-indexes:
+      type: array
+      description: |
+        Array of chip specific configuration register index values for
+        Serial-IRQ slot value. These values are constant for the chip.
+        Refer to the eSPI Serial-IRQ assignement table in the data sheet.
+        This array should have two entries. If a peripheral does not implement
+        Serial-IRQs the value(s) should be 0.
+
+    sirqs:
+      type: array
+      description: |
+        Host Serial IRQ numbers assigned to the Serial-IRQ slots the device
+        implements. A value of 255 indicates the slot is disabled.
+
+        Example: KBC implements two Serial IRQ slots for keyboard and mouse
+                 host interrupts. We map them to Serial-IRQ slots 1 and 12.
+          sirqs = <1 12>;
+        Example: UART0 implements one Serial IRQ slot at hardware index 9.
+          sirqs = <3>;
+
+    sirq-names:
+      type: string-array
+      description: |
+        Names for the provided Serial IRQs. The number of names needs to match the
+        number of sirqs.
+
+    "#sirq-cells":
+      type: int
+      const: 1

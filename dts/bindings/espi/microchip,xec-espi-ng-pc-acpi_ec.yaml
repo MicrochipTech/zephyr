@@ -1,0 +1,25 @@
+
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI next gen Peripheral Channel ACPI embedded controller.
+
+compatible: "microchip,xec-espi-ng-pc-acpi_ec"
+
+include: ["microchip,mec5-espi-pc-common.yaml"]
+
+properties:
+  app-id:
+    type: int
+    required: true
+    description: |
+      An 8-bit application ID value passed via callbacks. The application
+      can identify the peripheral channel device making the callback.
+
+  four-byte-data-mode:
+    type: boolean
+    description: |
+      Enable support of four byte data mode. In four byte mode the
+      data register is four bytes and status is set when the host
+      write byte lane 3 of the data register.
