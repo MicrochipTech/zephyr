@@ -1,0 +1,83 @@
+
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC ESPI controller next gen driver
+
+compatible: "microchip,xec-espi-ng"
+
+include: ["espi-controller.yaml", "pinctrl-device.yaml", "microchip,dmec-ecia-girq.yaml"]
+
+properties:
+  reg:
+    description: controller memory mapped register spaces
+    required: true
+
+  reg-names:
+    required: true
+    description: array of register space names
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  espi-alert-od-capable:
+    type: boolean
+    description: |
+      Platform supports ESPI_ALERT# signal as opendrain in addition
+      to push-pull. If this property is present it allows the Host
+      eSPI Controller to select push-pull versus open-drain for
+      this signal.
+
+  espi-max-supp-freq-mhz:
+    type: string
+    default: "50"
+    description: |
+      Maximum supported frequency in MHz this eSPI target controller reports
+      to the eSPI Host Controller.
+    enum:
+      - "20"
+      - "25"
+      - "33"
+      - "50"
+      - "66"
+
+  espi-io-mode:
+    type: string
+    default: "IO124"
+    description: |
+      I/O mode(s) supported by this eSPI target controller exposed to
+      the eSPI Host Controller via capability registers. The target may
+      report single, single/dual, single/quad, or single/dual/quad.
+    enum:
+      - "IO1"
+      - "IO12"
+      - "IO14"
+      - "IO124"
+
+  config-io-addr:
+    type: int
+    required: true
+    description: |
+      Host I/O base address for the eSPI legacy I/O configuration port.
+
+  ec-sirq:
+    type: int
+    description: |
+      Serial IRQ slot number for eSPI driver generated software SIRQ.
+      Default is 255 (disabled).
+
+  host-memmap-addr-high:
+    type: int
+    required: true
+    description: |
+      Contains bits [47:32] of the Host address range where all memory mapped
+      host (logical) devices are mapped.
+
+  sram-bar-addr-high:
+    type: int
+    required: true
+    description: |
+      Contains Host address bits [47:32] where both SRAM BAR's are mapped.
