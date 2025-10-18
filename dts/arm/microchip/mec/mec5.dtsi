@@ -14,6 +14,10 @@
 #include <freq.h>
 #include <mem.h>
 
+#include "mec5/xec-espi-ng-vw-map.dtsi"
+#include "mec5/xec-espi-ng-vwires.dtsi"
+#include "mec5/xec-espi-ng-sram-bars.dtsi"
+
 / {
 	cpus {
 		#address-cells = <1>;
