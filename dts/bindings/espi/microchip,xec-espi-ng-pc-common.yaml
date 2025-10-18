@@ -1,0 +1,25 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI next gen Peripheral Channel device common properties
+
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
+
+on-bus: espi
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  interrupt-names:
+    required: true
+
+  hostinfos:
+    type: phandles
+    required: true
+    description:
+      Handles to one or more nodes from the mchp-xec-espi-ng-pc-host-dev table.
