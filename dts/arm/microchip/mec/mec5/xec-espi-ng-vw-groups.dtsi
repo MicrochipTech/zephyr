@@ -1,0 +1,272 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/espi/mchp_xec_espi_ng.h>
+
+/ {
+	mchp-xec-espi-ng-h2t-vw-groups {
+		compatible = "microchip,xec-espi-ng-vwg";
+
+		h2t_vwgrp0: h2t_vw_group0 {
+			host-index = <0x02>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW00>;
+			vw-mask = <0x7>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "slp_s3", "slp_s4", "slp_s5", "vw_max";
+		};
+
+		h2t_vwgrp1: h2t_vw_group1 {
+			host-index = <0x03>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW01>;
+			vw-mask = <0x7>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "sus_stat", "pltrst", "oob_rst_warn", "vw_max";
+		};
+
+		h2t_vwgrp2: h2t_vw_group2 {
+			host-index = <0x07>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW02>;
+			vw-mask = <0x1>;
+			reset-source = "pltrst";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "host_rst_warn", "vw_max", "vw_max", "vw_max";
+		};
+
+		h2t_vwgrp3: h2t_vw_group3 {
+			host-index = <0x41>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW03>;
+			vw-mask = <0xB>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_BE>;
+			source-names = "sus_warn", "sus_pwrdn_ack", "vw_max", "slp_a";
+		};
+
+		h2t_vwgrp4: h2t_vw_group4 {
+			host-index = <0x42>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW04>;
+			vw-mask = <0x3>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "slp_lan", "slp_wlan", "vw_max", "vw_max";
+		};
+
+		h2t_vwgrp5: h2t_vw_group5 {
+			host-index = <0x43>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW05>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+
+		h2t_vwgrp6: h2t_vw_group6 {
+			host-index = <0x44>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW06>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+
+		h2t_vwgrp7: h2t_vw_group7 {
+			host-index = <0x47>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW07>;
+			vw-mask = <0x1>;
+			reset-source = "pltrst";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "host_c10", "vw_max", "vw_max", "vw_max";
+		};
+
+		h2t_vwgrp8: h2t_vw_group8 {
+			host-index = <0x4A>;
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW08>;
+			vw-mask = <0x2>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "vw_max", "dnx_warn", "vw_max", "vw_max";
+		};
+
+		h2t_vwgrp9: h2t_vw_group9 {
+			host-index = <0>; /* disabled */
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW09>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+
+		h2t_vwgrp10: h2t_vw_group10 {
+			host-index = <0>; /* disabled */
+			direction = "downstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_CTVW10>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
+				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+	};
+
+	mchp-xec-espi-ng-t2h-vw-groups {
+		compatible = "microchip,xec-espi-ng-vwg";
+
+		t2h_vwgrp0: t2h_vw_group0 {
+			host-index = <0x04>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW00>;
+			vw-mask = <0xD>;
+			reset-source = "reset_espi";
+			reset-state = <0xC>;
+			source-names = "oob_rst_ack", "vw_max", "wake", "pme";
+		};
+
+		t2h_vwgrp1: t2h_vw_group1 {
+			host-index = <0x05>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW01>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_boot_done", "err_fatal", "err_non_fatal",
+					"target_boot_sts";
+		};
+
+		t2h_vwgrp2: t2h_vw_group2 {
+			host-index = <0x06>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW02>;
+			vw-mask = <0xf>;
+			reset-source = "pltrst";
+			reset-state = <0x7>;
+			source-names = "sci", "smi", "rst_cpu_init", "host_rst_ack";
+		};
+
+		t2h_vwgrp3: t2h_vw_group3 {
+			host-index = <0x40>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW03>;
+			vw-mask = <0x3>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "sus_ack", "dnx_ack", "vw_max", "vw_max";
+		};
+
+		t2h_vwgrp4: t2h_vw_group4 {
+			host-index = <0x45>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW04>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+
+		t2h_vwgrp5: t2h_vw_group5 {
+			host-index = <0x46>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW05>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			status = "disabled";
+		};
+
+		t2h_vwgrp6: t2h_vw_group6 {
+			host-index = <0x50>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW06>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_gpio_0", "target_gpio_1", "target_gpio_2",
+					"target_gpio_3";
+		};
+
+		t2h_vwgrp7: t2h_vw_group7 {
+			host-index = <0x51>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW07>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_gpio_4", "target_gpio_5", "target_gpio_6",
+					"target_gpio_7";
+		};
+
+		t2h_vwgrp8: t2h_vw_group8 {
+			host-index = <0x52>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW08>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_gpio_8", "target_gpio_9", "target_gpio_10",
+					"target_gpio_11";
+		};
+
+		t2h_vwgrp9: t2h_vw_group9 {
+			host-index = <0x53>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW09>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_gpio_12", "target_gpio_13", "target_gpio_14",
+					"target_gpio_15";
+			status = "disabled";
+		};
+
+		t2h_vwgrp10: t2h_vw_group10 {
+			host-index = <0x54>;
+			direction = "upstream";
+			vw-reg-idx = <MCHP_XEC_ESPI_TCVW10>;
+			vw-mask = <0xf>;
+			reset-source = "reset_espi";
+			reset-state = <0>;
+			source-names = "target_gpio_16", "target_gpio_17", "target_gpio_18",
+					"target_gpio_19";
+			status = "disabled";
+		};
+	};
+};
