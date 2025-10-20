@@ -19,6 +19,55 @@ config ESPI_XEC_V2
 	help
 	  Enable the Microchip XEC ESPI driver for MEC172x series.
 
+config ESPI_XEC_NG
+	bool "XEC Microchip eSPI next gen driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_NG_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip XEC next gen eSPI driver for MEC174x and onwards.
+
+if ESPI_XEC_NG
+config ESPI_OOB_CHANNEL
+	default y
+
+config ESPI_FLASH_CHANNEL
+	default y
+
+config ESPI_OOB_BUFFER_SIZE
+	int "eSPI OOB channel buffer size in bytes"
+	default 128
+	depends on ESPI_OOB_CHANNEL
+	help
+	  Use minimum RAM buffer size by default but allow applications to
+	  override the value.
+	  Maximum OOB payload is 73 bytes.
+
+config ESPI_FLASH_BUFFER_SIZE
+	int "eSPI Flash channel buffer size in bytes"
+	default 256
+	depends on ESPI_FLASH_CHANNEL
+	help
+	  Use maximum RAM buffer size defined by spec but allow applications
+	  to override if eSPI host doesn't support it.
+
+config ESPI_VWIRE_T2H_POLL_HOST_READ_US
+	int "Number of microseconds to wait for Host to read a vwire"
+	default 64
+	depends on ESPI_VWIRE_CHANNEL
+	help
+	  When the EC changes a Target-to-Host VWire, hardware will 
+	  set a read-only change bit associated with the VWire. HW
+	  will then set eSPI protocal status indicating the Host should
+	  read the VWires and issue eSPI alert (in-band or pin). When
+	  the Host issues GET_VW protocol command, HW will clear the
+	  read-only change bit. If this configuration setting is non-zero
+	  the driver send VWire API will poll change status bit until
+	  it is clear of this timeout expires. A value of 0 means the
+	  driver will not poll the change bit and return immediately.
+ 
+endif #ESPI_XEC_NG
+
 if ESPI_XEC || ESPI_XEC_V2
 
 config ESPI_OOB_CHANNEL
