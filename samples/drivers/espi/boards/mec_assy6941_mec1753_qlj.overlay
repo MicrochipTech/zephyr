@@ -1,0 +1,29 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	board_power: resources {
+		compatible = "microchip,mec_assy6941-board-power";
+		/* MCHP_GPIO_012 */
+		pwrg-gpios = <&gpio_000_036 10 GPIO_ACTIVE_HIGH>;
+		/* MCHP_GPIO_0054 */
+		rsm-gpios = <&gpio_040_076 12 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&espi0 {
+	compatible = "microchip,xec-espi-ng";
+	status = "okay";
+
+	/* required */
+	config-io-addr = <0x2E>;
+	host-memmap-addr-high = <0>;
+	sram-bar-addr-high = <0>;
+
+	pinctrl-0 = <&pin_espi_reset_n &pin_espi_cs_n &pin_espi_clk &pin_espi_alert_n
+		     &pin_espi_io0 &pin_espi_io1 &pin_espi_io2 &pin_espi_io3>;
+	pinctrl-names = "default";
+};
