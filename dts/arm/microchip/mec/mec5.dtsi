@@ -13,6 +13,12 @@
 #include <freq.h>
 #include <mem.h>
 
+#include "mec5/xec-espi-ng-vw-map.dtsi"
+#include "mec5/xec-espi-ng-vwires.dtsi"
+#include "mec5/xec-espi-ng-sram-bars.dtsi"
+
+#include "mec5/xec-espi-ng-vw-groups.dtsi"
+
 / {
 	cpus {
 		#address-cells = <1>;
@@ -656,12 +662,16 @@
 			reg-names = "io", "mem", "vw";
 			interrupts = <103 3>, <104 3>, <105 3>, <106 3>,
 				     <107 3>, <108 3>, <109 3>, <110 2>,
-				     <156 3>, <15 3>, <16 3>;
-			interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_up",
-					  "oob_dn", "fc", "erst", "vw_chan_en",
-					  "vwct_0_6", "vwct_7_10";
-			girqs = <19 0>, <19 1>, <19 2>, <19 3>, <19 4>, <19 5>,
-				<19 6>, <19 7>, <19 8>, <24 255>, <25 255>;
+				     <156 3>, <15 3>, <16 3>, <19 0>;
+			interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_tx", "oob_rx", "fc",
+					  "espi_reset", "vw_chen", "h2t_vw_bank0", "h2t_vw_bank1",
+					  "wake_only";
+			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(19, 0)>, <MCHP_XEC_ECIA_GIRQ_ENC(19, 1)>,
+				<MCHP_XEC_ECIA_GIRQ_ENC(19, 2)>, <MCHP_XEC_ECIA_GIRQ_ENC(19, 3)>,
+				<MCHP_XEC_ECIA_GIRQ_ENC(19, 4)>, <MCHP_XEC_ECIA_GIRQ_ENC(19, 5)>,
+				<MCHP_XEC_ECIA_GIRQ_ENC(19, 6)>, <MCHP_XEC_ECIA_GIRQ_ENC(19, 7)>,
+				<MCHP_XEC_ECIA_GIRQ_ENC(19, 8)>, <MCHP_XEC_ECIA_GIRQ_ENC(24, 255)>,
+				<MCHP_XEC_ECIA_GIRQ_ENC(25, 255)>, <MCHP_XEC_ECIA_GIRQ_ENC(22, 9)>;
 			status = "disabled";
 
 			/* Devices accessible to the Host via Logical Device mechanism.
@@ -672,7 +682,7 @@
 			mbox0: mbox@400f0000 {
 				reg = <0x400f0000 0x200>;
 				interrupts = <60 3>;
-				girqs = <15 20>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 20)>;
 				status = "disabled";
 			};
 
@@ -680,7 +690,8 @@
 				reg = <0x400f0400 0x400>, <0x400f2000 0x400>;
 				interrupts = <59 3>, <58 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 19>, <15 18>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 19)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 18)>;
 				status = "disabled";
 			};
 
@@ -688,7 +699,8 @@
 				reg = <0x400f0800 0x400>;
 				interrupts = <45 3>, <46 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 5>, <15 6>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 5)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 6)>;
 				status = "disabled";
 			};
 
@@ -696,7 +708,8 @@
 				reg = <0x400f0c00 0x400>;
 				interrupts = <47 3>, <48 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 7>, <15 8>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15 ,7)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 8)>;
 				status = "disabled";
 			};
 
@@ -704,7 +717,8 @@
 				reg = <0x400f1000 0x400>;
 				interrupts = <49 3>, <50 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 9>, <15 10>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 9)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 10)>;
 				status = "disabled";
 			};
 
@@ -712,7 +726,8 @@
 				reg = <0x400f1400 0x400>;
 				interrupts = <51 3>, <52 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 11>, <15 12>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 11)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 12)>;
 				status = "disabled";
 			};
 
@@ -720,7 +735,8 @@
 				reg = <0x400f1800 0x400>;
 				interrupts = <53 3>, <54 3>;
 				interrupt-names = "ibf", "obe";
-				girqs = <15 13>, <15 14>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 13)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 14)>;
 				status = "disabled";
 			};
 
@@ -728,35 +744,37 @@
 				reg = <0x400f1c00 0x400>;
 				interrupts = <55 3>, <56 3>, <57 3>;
 				interrupt-names = "ctl", "en", "sts";
-				girqs = <15 15>, <15 16>, <15 17>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 15)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 16)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(15, 17)>;
 				status = "disabled";
 			};
 
 			glue: glue_logic@400f3c00 {
 				reg = <0x400f3c00 0x200>;
 				interrupts = <172 1>;
-				girqs = <21 26>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(21, 26)>;
 				status = "disabled";
 			};
 
 			emi0: emi@400f4000 {
 				reg = <0x400f4000 0x400>;
 				interrupts = <42 3>;
-				girqs = <15 2>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 2)>;
 				status = "disabled";
 			};
 
 			emi1: emi@400f4400 {
 				reg = <0x400f4400 0x400>;
 				interrupts = <43 3>;
-				girqs = <15 3>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 3)>;
 				status = "disabled";
 			};
 
 			emi2: emi@400f4800 {
 				reg = <0x400f4800 0x400>;
 				interrupts = <44 3>;
-				girqs = <15 4>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 4)>;
 				status = "disabled";
 			};
 
@@ -767,7 +785,7 @@
 			p80bd0: p80bd@400f8000 {
 				reg = <0x400f8000 0x400>;
 				interrupts = <62 0>;
-				girqs = <15 22>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 22)>;
 				status = "disabled";
 			};
 
@@ -781,7 +799,8 @@
 				reg-names = "tafbr", "tafcomm";
 				interrupts = <166 3>, <167 3>;
 				interrupt-names = "done", "err";
-				girqs = <19 9>, <19 10>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(19, 9)>,
+					<MCHP_XEC_ECIA_GIRQ_ENC(19, 10)>;
 				status = "disabled";
 			};
 		};

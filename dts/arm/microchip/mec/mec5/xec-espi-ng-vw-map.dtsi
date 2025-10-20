@@ -1,0 +1,150 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/espi/mchp_xec_espi_ng.h>
+
+/ {
+	mchp-xec-espi-ng-h2t-vw-map {
+		compatible = "microchip,xec-espi-ng-vw-map";
+
+		h2t_vwg0: h2t_vw_group0 {
+			host-index = <0x02>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW00>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg1: h2t_vw_group1 {
+			host-index = <0x03>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW01>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg2: h2t_vw_group2 {
+			host-index = <0x07>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW02>;
+			reset-source = "pltrst";
+		};
+		h2t_vwg3: h2t_vw_group3 {
+			host-index = <0x41>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW03>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg4: h2t_vw_group4 {
+			host-index = <0x42>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW04>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg5: h2t_vw_group5 { /* TODO Generic */
+			host-index = <0x43>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW05>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg6: h2t_vw_group6 { /* TODO Generic */
+			host-index = <0x44>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW05>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg7: h2t_vw_group7 {
+			host-index = <0x47>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW07>;
+			reset-source = "pltrst";
+		};
+		h2t_vwg8: h2t_vw_group8 {
+			host-index = <0x4a>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW08>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg9: h2t_vw_group9 { /* TODO extra */
+			host-index = <0xff>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW09>;
+			reset-source = "reset_espi";
+		};
+		h2t_vwg10: h2t_vw_group10 { /* TODO extra */
+			host-index = <0xff>;
+			direction = "downstream";
+			vw-reg = <MCHP_XEC_ESPI_CTVW10>;
+			reset-source = "reset_espi";
+		};
+	};
+
+	mchp-xec-espi-ng-t2h-vw-map {
+		compatible = "microchip,xec-espi-ng-vw-map";
+
+		t2h_vwg0: t2h_vw_group0 {
+			host-index = <0x04>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW00>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg1: t2h_vw_group1 {
+			host-index = <0x05>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW01>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg2: t2h_vw_group2 {
+			host-index = <0x06>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW02>;
+			reset-source = "pltrst";
+		};
+		t2h_vwg3: t2h_vw_group3 {
+			host-index = <0x40>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW03>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg4: t2h_vw_group4 { /* Generic */
+			host-index = <0x45>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW04>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg5: t2h_vw_group5 { /* Generic */
+			host-index = <0x46>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW05>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg6: t2h_vw_group6 {
+			host-index = <0x50>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW06>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg7: t2h_vw_group7 {
+			host-index = <0x51>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW07>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg8: t2h_vw_group8 {
+			host-index = <0x52>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW08>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg9: t2h_vw_group9 {
+			host-index = <0xff>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW09>;
+			reset-source = "reset_espi";
+		};
+		t2h_vwg10: t2h_vw_group10 {
+			host-index = <0xff>;
+			direction = "upstream";
+			vw-reg = <MCHP_XEC_ESPI_TCVW10>;
+			reset-source = "reset_espi";
+		};
+	};
+};
