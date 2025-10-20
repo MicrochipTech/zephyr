@@ -1,0 +1,134 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC eSPI next gen Virtual Wire groups
+
+compatible: "microchip,xec-espi-ng-vwg"
+
+child-binding:
+  description: |
+    Child node containing the routing of an eSPI virtual wire to the SoC
+    VW registers and ECIA GIRQ registers.
+  properties:
+    host-index:
+      type: int
+      required: true
+      description: VWire group host index.
+
+    direction:
+      type: string
+      required: true
+      description: |
+        VWire group direction: downstream is Host to Target and
+        upstream is Target to Host.
+      enum:
+        - "downstream"
+        - "upstream"
+
+    vw-reg-idx:
+      type: int
+      required: true
+      description: |
+        A zero based index into the Microchip XEC VWire registers
+        which will be configured for this host index. Hardware power
+        on defaults implement the Host index mapping in Intel's eSPI
+        specification.
+
+    vw-mask:
+      type: int
+      required: true
+      description: |
+        Bits[3:0] are a bit mask of VWires implemented in this group.
+        The mask value should reflect the eSPI specification and HW
+        implementation.
+
+    reset-source:
+      type: string
+      required: true
+      description: |
+        All VWire group registers are reset on power on and chip reset.
+        This field allows one additional source of a VWire group. These
+        additional sources are: eSPI reset, platform reset, and VCC power
+        good.
+      enum:
+        - "reset_espi"
+        - "reset_sys"
+        - "reset_sio"
+        - "pltrst"
+
+    reset-state:
+      type: int
+      required: true
+      description: |
+        Integer where bits[3:0] contain the reset state of the four
+        VWires in this group.
+
+    irq-selects:
+      type: array
+      description: |
+        An array of 4 integers specifying the interrupt detection
+        mode for each of the four VWires in the group. For unimplemented
+        VWires use the NONE specifier. Note: XEC hardware
+        implements interrupt detection only for Host-to-Target VWires.
+
+    source-names:
+      type: string-array
+      description: |
+        Names from Zephyr eSPI driver enum espi_vwire_signal.
+        If present these names allow the appliation to use the eSPI
+        driver VWire send and receive APIs. The application can also
+        extend driver support to use some of the generic VWires the
+        XEC hardware supports.  NOTE 1: if the Zephyr enum names are
+        modified the driver will break! NOTE 2: all four names must
+        be present. Use "NONE" for reserved source bits in a group.
+      enum:
+        - "slp_s3"
+        - "slp_s4"
+        - "slp_s5"
+        - "oob_rst_warn"
+        - "pltrst"
+        - "sus_stat"
+        - "nmiout"
+        - "smiout"
+        - "host_rst_warn"
+        - "slp_a"
+        - "sus_pwrdn_ack"
+        - "sus_warn"
+        - "slp_wlan"
+        - "slp_lan"
+        - "host_c10"
+        - "dnx_warn"
+        - "pme"
+        - "wake"
+        - "oob_rst_ack"
+        - "target_boot_sts"
+        - "err_non_fatal"
+        - "err_fatal"
+        - "target_boot_done"
+        - "host_rst_ack"
+        - "rst_cpu_init"
+        - "smi"
+        - "sci"
+        - "dnx_ack"
+        - "sus_ack"
+        - "target_gpio_0"
+        - "target_gpio_1"
+        - "target_gpio_2"
+        - "target_gpio_3"
+        - "target_gpio_4"
+        - "target_gpio_5"
+        - "target_gpio_6"
+        - "target_gpio_7"
+        - "target_gpio_8"
+        - "target_gpio_9"
+        - "target_gpio_10"
+        - "target_gpio_11"
+        - "target_gpio_12"
+        - "target_gpio_13"
+        - "target_gpio_14"
+        - "target_gpio_15"
+        - "target_gpio_16"
+        - "target_gpio_17"
+        - "target_gpio_18"
+        - "target_gpio_19"
+        - "vw_max"

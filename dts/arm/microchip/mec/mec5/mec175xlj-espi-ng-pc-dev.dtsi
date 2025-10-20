@@ -1,0 +1,35 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/espi/mchp_xec_espi_ng.h>
+
+/ {
+	mchp-xec-espi-pc-host-dev {
+		compatible = "microchip,xec-espi-ng-pc-device";
+
+		#include "xec-espi-ng-pc-dev-common.dtsi"
+
+		espi_uart2: espi_uart2 {
+			ldn = <0xb>;
+			host-io-config-index = <0x88>;
+			host-mem-config-index = <0>;
+			host-address = <0x3e8>;
+			sirq-config-indexes = <0xbf>;
+			sirqs = <0xff>;
+			sirq-names = "uart_irq";
+			status = "disabled";
+		};
+		espi_uart3: espi_uart3 {
+			ldn = <0xc>;
+			host-io-config-index = <0x90>;
+			host-mem-config-index = <0>;
+			host-address = <0x2e8>;
+			sirq-config-indexes = <0xc1>;
+			sirqs = <0xff>;
+			sirq-names = "uart_irq";
+			status = "disabled";
+		};
+	};
+};
