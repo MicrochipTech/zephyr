@@ -28,14 +28,14 @@
 };
 
 /* I2C Port 0 */
-&i2c00_sda_gpio003 {
+&pin_i2c00_sda {
 	drive-open-drain;
 	output-enable;
 	output-high;
 	drive-strength = "4x";
 };
 
-&i2c00_scl_gpio004 {
+&pin_i2c00_scl {
 	drive-open-drain;
 	output-enable;
 	output-high;
@@ -43,14 +43,14 @@
 };
 
 /* I2C Port 4 */
-&i2c04_sda_gpio143 {
+&pin_i2c04_sda {
 	drive-open-drain;
 	output-enable;
 	output-high;
 	drive-strength = "4x";
 };
 
-&i2c04_scl_gpio144 {
+&pin_i2c04_scl {
 	drive-open-drain;
 	output-enable;
 	output-high;
@@ -58,13 +58,13 @@
 };
 
 /* I2C Port 5 */
-&i2c05_sda_gpio141 {
+&pin_i2c05_sda {
 	drive-open-drain;
 	output-enable;
 	output-high;
 	drive-strength = "4x";
 };
-&i2c05_scl_gpio142 {
+&pin_i2c05_scl {
 	drive-open-drain;
 	output-enable;
 	output-high;
@@ -84,7 +84,7 @@
 	sda-gpios = < MCHP_GPIO_DECODE_003 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_004 0 >;
 
-	pinctrl-0 = < &i2c00_sda_gpio003 &i2c00_scl_gpio004 >;
+	pinctrl-0 = < &pin_i2c00_sda &pin_i2c00_scl >;
 	pinctrl-names = "default";
 
 	pca9555_evb: pca9555@26 {
@@ -110,7 +110,7 @@
 	sda-gpios = < MCHP_GPIO_DECODE_143 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_144 0 >;
 
-	pinctrl-0 = < &i2c04_sda_gpio143 &i2c04_scl_gpio144 >;
+	pinctrl-0 = < &pin_i2c04_sda &pin_i2c04_scl >;
 	pinctrl-names = "default";
 
 };
@@ -140,7 +140,7 @@
 	sda-gpios = < MCHP_GPIO_DECODE_141 0 >;
 	scl-gpios = < MCHP_GPIO_DECODE_142 0 >;
 
-	pinctrl-0 = < &i2c05_sda_gpio141 &i2c05_scl_gpio142 >;
+	pinctrl-0 = < &pin_i2c05_sda &pin_i2c05_scl >;
 	pinctrl-names = "default";
 
 	dmas = <&dmac 4 5>, <&dmac 5 4>;
