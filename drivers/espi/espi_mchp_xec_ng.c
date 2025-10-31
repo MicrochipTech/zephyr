@@ -184,7 +184,46 @@ static int xec_espi_ng_pm_action(const struct device *dev, enum pm_device_action
 /* eSPI Reset from Host */
 static void xec_espi_ng_erst_irq(const struct device *dev)
 {
-	/* TODO */
+	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
+	struct xec_espi_ng_data *data = dev->data;
+	mem_addr_t iob = devcfg->base;
+	uint8_t erst = sys_read8(iob + XEC_ESPI_RESET_SR_OFS);
+	struct espi_event ev = {
+		.evt_type = ESPI_BUS_RESET,
+		.evt_details = 0,
+		.evt_data = 0, /* nESPI_RESET active low */
+	};
+
+	sys_write8(BIT(XEC_ESPI_RESET_SR_CHG_POS), iob + XEC_ESPI_RESET_SR_OFS);
+	soc_ecia_girq_status_clear(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_ERST_POS);
+
+	if ((erst & BIT(XEC_ESPI_RESET_SR_STATE_POS)) != 0) {
+		/* changed 0 -> 1 de-assertion */
+		ev.evt_data = 1;
+		/* enable channel enable change interrupts */
+		soc_ecia_girq_status_clear_bm(XEC_ESPI_GIRQ, (BIT(XEC_ESPI_GIRQ_VW_CHEN_POS) |
+		                                              BIT(XEC_ESPI_GIRQ_PC_POS) |
+		                                              BIT(XEC_ESPI_GIRQ_OOB_TX_POS) |
+		                                              BIT(XEC_ESPI_GIRQ_OOB_RX_POS) |
+		                                              BIT(XEC_ESPI_GIRQ_FC_POS)));
+#ifdef CONFIG_ESPI_VWIRE_CHANNEL
+		soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_VW_CHEN_POS, 1u);
+#endif
+#ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
+		soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_PC_POS, 1u);
+		sys_set_bit(iob + XEC_ESPI_PC_IER_OFS, XEC_ESPI_PC_IER_CHEN_CHG_POS);
+#endif
+#ifdef CONFIG_ESPI_OOB_CHANNEL
+		soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_OOB_TX_POS, 1u);
+		sys_set_bit(iob + XEC_ESPI_OOB_TX_IER_OFS, XEC_ESPI_OOB_TX_IER_CENC_POS);
+#endif
+#ifdef CONFIG_ESPI_FLASH_CHANNEL
+		soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_FC_POS, 1u);
+		sys_set_bit(iob + XEC_ESPI_FC_IER_OFS, XEC_ESPI_FC_IER_CHG_EN_POS);
+#endif
+	}
+
+	espi_send_callbacks(&data->cbs, dev, ev);
 }
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
@@ -216,7 +255,7 @@ static void xec_espi_ng_vw_chen_irq(const struct device *dev)
 }
 
 /* Controller-to-Target VWire group interrupts are always aggregated */
-static void xec_espi_ng_vwct_0_6_irq(const struct device *dev)
+static void xec_espi_ng_h2t_vw_bank0_irq(const struct device *dev)
 {
 	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
 	struct xec_espi_ng_data *data = dev->data;
@@ -227,7 +266,7 @@ static void xec_espi_ng_vwct_0_6_irq(const struct device *dev)
 	k_work_submit(&data->kwq_vwb0);
 }
 
-static void xec_espi_ng_vwct_7_10_irq(const struct device *dev)
+static void xec_espi_ng_h2t_vw_bank1_irq(const struct device *dev)
 {
 	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
 	struct xec_espi_ng_data *data = dev->data;
@@ -239,14 +278,14 @@ static void xec_espi_ng_vwct_7_10_irq(const struct device *dev)
 #endif
 
 #ifdef CONFIG_ESPI_OOB_CHANNEL
-static void xec_espi_ng_oob_dn_isr(const struct device *dev)
+static void xec_espi_ng_oob_rx_isr(const struct device *dev)
 {
-	xec_espi_ng_oob_dn_handler(dev);
+	xec_espi_ng_oob_rx_handler(dev);
 }
 
-static void xec_espi_ng_oob_up_isr(const struct device *dev)
+static void xec_espi_ng_oob_tx_isr(const struct device *dev)
 {
-	xec_espi_ng_oob_up_handler(dev);
+	xec_espi_ng_oob_tx_handler(dev);
 }
 #endif
 
@@ -352,43 +391,55 @@ static DEVICE_API(espi, xec_espi_ng_driver_api) = {
 
 #ifdef CONFIG_ESPI_VWIRE_CHANNEL
 #define XEC_ESPI_NG_VW_IRQ_CONNECT(i) \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, vw_chan_en, irq), \
-		    DT_INST_IRQ_BY_NAME(i, vw_chan_en, priority), \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, vw_chen, irq), \
+		    DT_INST_IRQ_BY_NAME(i, vw_chen, priority), \
 		    xec_espi_ng_vw_chen_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, vw_chan_en, irq)); \
+	irq_enable(DT_INST_IRQ_BY_NAME(i, vw_chen, irq)); \
 	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_VW_CHEN_POS, 1u); \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, vwct_0_6, irq), \
-		    DT_INST_IRQ_BY_NAME(i, vwct_0_6, priority), \
-		    xec_espi_ng_vwct_0_6_irq, \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, h2t_vw_bank0, irq), \
+		    DT_INST_IRQ_BY_NAME(i, h2t_vw_bank0, priority), \
+		    xec_espi_ng_h2t_vw_bank0_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, vwct_0_6, irq)); \
+	irq_enable(DT_INST_IRQ_BY_NAME(i, h2t_vw_bank0, irq)); \
 	soc_ecia_girq_ctrl_bm(XEC_ESPI_GIRQ_VW_BANK0, XEC_ESPI_GIRQ_VW_BANK0_MSK, 1u); \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, vwct_7_10, irq), \
-		    DT_INST_IRQ_BY_NAME(i, vwct_7_10, priority), \
-		    xec_espi_ng_vwct_7_10_irq, \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, h2t_vw_bank1, irq), \
+		    DT_INST_IRQ_BY_NAME(i, h2t_vw_bank1, priority), \
+		    xec_espi_ng_h2t_vw_bank1_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, vwct_7_10, irq)); \
+	irq_enable(DT_INST_IRQ_BY_NAME(i, h2t_vw_bank1, irq)); \
 	soc_ecia_girq_ctrl_bm(XEC_ESPI_GIRQ_VW_BANK1, XEC_ESPI_GIRQ_VW_BANK1_MSK, 1u)
 #else
 #define XEC_ESPI_NG_VW_IRQ_CONNECT(i)
 #endif
 
 #ifdef CONFIG_ESPI_OOB_CHANNEL
+#define XEC_ESPI_NB_OOB_BUF_DEFINE(i) \
+	static uint8_t oob_rx_buf##i[CONFIG_ESPI_OOB_BUFFER_SIZE] __aligned(8); \
+	static uint8_t oob_tx_buf##i[CONFIG_ESPI_OOB_BUFFER_SIZE] __aligned(8)
+
+#define XEC_ESPI_NG_OOB_DEV_CONFIG(i) \
+	.oob_rxb = &oob_rx_buf##i[0], \
+	.oob_txb = &oob_tx_buf##i[0], \
+	.oob_rxb_sz = CONFIG_ESPI_OOB_BUFFER_SIZE, \
+	.oob_txb_sz = CONFIG_ESPI_OOB_BUFFER_SIZE, \
+
 #define XEC_ESPI_NG_OOB_IRQ_CONNECT(i) \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, oob_dn, irq), \
-		    DT_INST_IRQ_BY_NAME(i, oob_dn, priority), \
-		    xec_espi_ng_oob_dn_isr, \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, oob_rx, irq), \
+		    DT_INST_IRQ_BY_NAME(i, oob_rx, priority), \
+		    xec_espi_ng_oob_rx_isr, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, oob_dn, irq)); \
-	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_OOB_DN_POS, 1u); \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, oob_up, irq), \
-		    DT_INST_IRQ_BY_NAME(i, oob_up, priority), \
-		    xec_espi_ng_oob_up_isr, \
+	irq_enable(DT_INST_IRQ_BY_NAME(i, oob_rx, irq)); \
+	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_OOB_RX_POS, 1u); \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, oob_tx, irq), \
+		    DT_INST_IRQ_BY_NAME(i, oob_tx, priority), \
+		    xec_espi_ng_oob_tx_isr, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, oob_up, irq)); \
-	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_OOB_UP_POS, 1u)
+	irq_enable(DT_INST_IRQ_BY_NAME(i, oob_tx, irq)); \
+	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_OOB_TX_POS, 1u)
 #else
+#define XEC_ESPI_NB_OOB_BUF_DEFINE(i)
+#define XEC_ESPI_NG_OOB_DEV_CONFIG(i)
 #define XEC_ESPI_NG_OOB_IRQ_CONNECT(i)
 #endif
 
@@ -404,17 +455,29 @@ static DEVICE_API(espi, xec_espi_ng_driver_api) = {
 #define XEC_ESPI_NG_FC_IRQ_CONNECT(i)
 #endif
 
+
 #define XEC_ESPI_NG_IRQ_CONNECT(i) \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, erst, irq), \
-		    DT_INST_IRQ_BY_NAME(i, erst, priority), \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, espi_reset, irq), \
+		    DT_INST_IRQ_BY_NAME(i, espi_reset, priority), \
 		    xec_espi_ng_erst_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, erst, irq)); \
-	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_ERST_POS, 1u)
+	irq_enable(DT_INST_IRQ_BY_NAME(i, espi_reset, irq)); \
+	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_ERST_POS, 1u);
+
+#define XEC_ESPI_NG_GIRQ_NUM_ELEM(i) DT_INST_PROP_LEN(i, girqs)
+
+#define XEC_ESPI_NG_GIRQ_ELEM(nid, prop, idx) DT_PROP_BY_IDX(nid, prop, idx)
+
+#define XEC_ESPI_NG_GIRQS_DEFINE(i) \
+	static const uint16_t xec_espi_ng_girqs##i[] = { \
+		DT_INST_FOREACH_PROP_ELEM_SEP(i, girqs, XEC_ESPI_NG_GIRQ_ELEM, (,)) \
+	}
 
 #define XEC_ESPI_NG_DEVICE(i) \
 	PINCTRL_DT_INST_DEFINE(i); \
+	XEC_ESPI_NG_GIRQS_DEFINE(i); \
 	PM_DEVICE_DT_INST_DEFINE(i, xec_espi_ng_pm_action); \
+	XEC_ESPI_NB_OOB_BUF_DEFINE(i); \
 	static struct xec_espi_ng_data xec_espi_ng_data##i; \
 	void xec_espi_ng_irq_connect##i(void) \
 	{ \
@@ -429,8 +492,11 @@ static DEVICE_API(espi, xec_espi_ng_driver_api) = {
 		.mbase = (mem_addr_t)DT_INST_REG_ADDR_BY_IDX(i, 1), \
 		.vwbase = (mem_addr_t)DT_INST_REG_ADDR_BY_IDX(i, 2), \
 		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i), \
-		.irqn_vwb0 = DT_INST_IRQ_BY_NAME(i, vwct_0_6, irq), \
-		.irqn_vwb1 = DT_INST_IRQ_BY_NAME(i, vwct_7_10, irq), \
+		.girqs = xec_espi_ng_girqs##i, \
+		.num_girqs = XEC_ESPI_NG_GIRQ_NUM_ELEM(i), \
+		.irqn_vwb0 = DT_INST_IRQ_BY_NAME(i, h2t_vw_bank0, irq), \
+		.irqn_vwb1 = DT_INST_IRQ_BY_NAME(i, h2t_vw_bank1, irq), \
+		XEC_ESPI_NG_OOB_DEV_CONFIG(i) \
 	}; \
 	DEVICE_DT_INST_DEFINE(i, &xec_espi_ng_driver_init, PM_DEVICE_DT_INST_GET(i), \
 			&xec_espi_ng_data##i, &xec_espi_ng_dcfg##i, \

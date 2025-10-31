@@ -18,6 +18,7 @@
 #include <zephyr/sys/util.h>
 
 /* local */
+#include "../espi_utils.h"
 #include "../espi_mchp_xec_ng.h"
 #include "mchp_xec_espi_regs.h"
 
@@ -81,7 +82,43 @@ int xec_espi_ng_pc_lpc_wr_api(const struct device *dev, enum lpc_peripheral_opco
  */
 void xec_espi_ng_pc_handler(const struct device *dev)
 {
-	/* TODO */
+	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
+	struct xec_espi_ng_data *data = dev->data;
+	mem_addr_t iob = devcfg->base;
+	uint32_t pc_status = sys_read32(iob + XEC_ESPI_PC_SR_OFS);
+	struct espi_event ev = {
+		.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
+		.evt_details = ESPI_CHANNEL_PERIPHERAL,
+		.evt_data = 0,
+	};
+
+	sys_write32(pc_status, iob + XEC_ESPI_PC_SR_OFS);
+	soc_ecia_girq_status_clear(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_PC_POS);
+
+	if ((pc_status & BIT(XEC_ESPI_PC_SR_CHEN_CHG_POS)) != 0) {
+		if ((pc_status & BIT(XEC_ESPI_PC_SR_CHEN_STATE_POS)) != 0) { /* 0 -> 1 enable */
+			ev.evt_data |= ESPI_PC_EVT_BUS_CHANNEL_READY;
+			soc_set_bit8(iob + XEC_ESPI_PC_RDY_OFS, XEC_ESPI_CHAN_RDY_POS);
+		}
+
+		espi_send_callbacks(&data->cbs, dev, ev);
+	}
+
+	if ((pc_status & BIT(XEC_ESPI_PC_SR_BMEN_CHG_POS)) != 0) {
+		if ((pc_status & BIT(XEC_ESPI_PC_SR_BMEN_STATE_POS)) != 0) {
+			ev.evt_data |= ESPI_PC_EVT_BUS_MASTER_ENABLE;
+		}
+	}
+
+	/* Our HW can signal an error on our internal AHB due to a misprogrammed BAR
+	 * or other configuration error.
+	 * TODO extend enum espi_pc_event adding bit[7] in a MCHP XEC specific header file.
+	 */
+	if ((pc_status & BIT(XEC_ESPI_PC_SR_ABERR_POS)) != 0) {
+		ev.evt_data |= BIT(7);
+	}
+
+	espi_send_callbacks(&data->cbs, dev, ev);
 }
 
 /* PC Bus Master 1 handler called from core driver ISR
