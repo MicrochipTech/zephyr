@@ -15,8 +15,8 @@
 #define XEC_ESPI_GIRQ_BM1_POS      1
 #define XEC_ESPI_GIRQ_BM2_POS      2
 #define XEC_ESPI_GIRQ_LTR_POS      3
-#define XEC_ESPI_GIRQ_OOB_UP_POS   4
-#define XEC_ESPI_GIRQ_OOB_DN_POS   5
+#define XEC_ESPI_GIRQ_OOB_TX_POS   4
+#define XEC_ESPI_GIRQ_OOB_RX_POS   5
 #define XEC_ESPI_GIRQ_FC_POS       6
 #define XEC_ESPI_GIRQ_ERST_POS     7
 #define XEC_ESPI_GIRQ_VW_CHEN_POS  8
@@ -306,11 +306,11 @@
 #define XEC_ESPI_PC_ERA_MSW_OFS       0x110u
 
 #define XEC_ESPI_PC_SR_OFS            0x114u
-#define XEC_ESPI_PC_ABERR_POS         16
-#define XEC_ESPI_PC_CHEN_STATE_POS    24 /* RO */
-#define XEC_ESPI_PC_CHEN_CHG_POS      25
-#define XEC_ESPI_PC_BMEN_STATE_POS    27 /* RO */
-#define XEC_ESPI_PC_BMEN_CHG_POS      28
+#define XEC_ESPI_PC_SR_ABERR_POS      16
+#define XEC_ESPI_PC_SR_CHEN_STATE_POS 24 /* RO */
+#define XEC_ESPI_PC_SR_CHEN_CHG_POS   25
+#define XEC_ESPI_PC_SR_BMEN_STATE_POS 27 /* RO */
+#define XEC_ESPI_PC_SR_BMEN_CHG_POS   28
 
 #define XEC_ESPI_PC_IER_OFS           0x118u
 #define XEC_ESPI_PC_IER_ABERR_POS     16
@@ -363,8 +363,8 @@
  */
 #define XEC_ESPI_OOB_ADDED_SIZE      9u
 
-#define XEC_ESPI_OOB_RX_BA_OFS       0x240u /* OOB RX EC buffer address, b[1:0]=00b(RO) */
-#define XEC_ESPI_OOB_TX_BA_OFS       0x248u /* OOB TX EC buffer address, b[1:0]=00b(RO) */
+#define XEC_ESPI_OOB_RX_BA_LSW_OFS   0x244u /* OOB RX EC SRAM buffer address, b[1:0]=00b(RO) */
+#define XEC_ESPI_OOB_TX_BA_LSW_OFS   0x24Cu /* OOB TX EC SRAM buffer address  b[1:0]=00b(RO) */
 
 #define XEC_ESPI_OOB_RXL_OFS         0x250u
 #define XEC_ESPI_OOB_RXL_MLEN_POS    0
