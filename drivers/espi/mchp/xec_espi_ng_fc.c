@@ -68,6 +68,8 @@ int xec_espi_ng_fc_rd_api(const struct device *dev, struct espi_flash_packet *pk
 		return -EBUSY;
 	}
 
+	/* TODO */
+
 	/* clear buffer before triggering read */
 	memset(fc_buf, 0x55, sizeof(fc_buf));
 
@@ -90,6 +92,8 @@ int xec_espi_ng_fc_wr_api(const struct device *dev, struct espi_flash_packet *pk
 		k_sem_give(&data->fc_lock);
 		return -EBUSY;
 	}
+
+	/* TODO */
 
 	/* after HW finishes clear driver buffer */
 	memset(fc_buf, 0x55, sizeof(fc_buf));
@@ -114,11 +118,16 @@ int xec_espi_ng_fc_er_api(const struct device *dev, struct espi_flash_packet *pk
 
 	k_sem_take(&data->fc_lock, K_FOREVER);
 
+	/* TODO */
+
 	k_sem_give(&data->fc_lock);
 
 	return 0;
 }
 
+/* TODO what if channel enable change (enable to disable) occurs during
+ * on on-going flash transfer?
+ */
 void xec_espi_ng_fc_handler(const struct device *dev)
 {
 	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
@@ -140,7 +149,7 @@ void xec_espi_ng_fc_handler(const struct device *dev)
 		if ((sr & BIT(XEC_ESPI_FC_SR_CHEN_STATE_POS)) != 0) { /* 0->1 enable */
 			/* set flash channel ready */
 			soc_set_bit8(iob + XEC_ESPI_FC_RDY_OFS, XEC_ESPI_CHAN_RDY_POS);
-			ev.evt_data = 1u;
+			ev.evt_data |= ESPI_PC_EVT_BUS_CHANNEL_READY;
 		}
 
 		espi_send_callbacks(&data->cbs, dev, ev);
@@ -149,7 +158,6 @@ void xec_espi_ng_fc_handler(const struct device *dev)
 	if ((sr & BIT(XEC_ESPI_FC_SR_DONE_POS)) != 0) {
 		/* TODO transfer done */
 		sys_clear_bit(iob + XEC_ESPI_FC_IER_OFS, XEC_ESPI_FC_IER_DONE_POS);
+		k_sem_give(&data->fc_sync);
 	}
-
-	k_sem_give(&data->fc_sync);
 }
