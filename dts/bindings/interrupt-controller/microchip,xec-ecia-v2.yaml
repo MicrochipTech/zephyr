@@ -1,0 +1,22 @@
+description: Microchip XEC series EC Interrupt Aggregator GIRQ
+
+compatible: "microchip,xec-ecia-v2"
+
+include: ["base.yaml", "interrupt-controller.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  direct-capable-bitmap:
+    type: int
+    description: |
+      GIRQ allows its source to be routed directly to the ARM NVIC.
+      If this properity is not present the GIRQ HW implementation
+      cannot connect its interrupt sources individually to the NVIC.
+      Instead all sources are wire-OR'd together producing one input
+      to the NVIC. The ISR must scan all GIRQ result bits (OR of source
+      and enable) and handle each active result bit.
