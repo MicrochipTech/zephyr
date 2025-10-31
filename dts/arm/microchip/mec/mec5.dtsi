@@ -42,126 +42,12 @@
 		};
 
 		ecia: ecia@4000e000 {
-			reg = <0x4000e000 0x400>;
+			compatible = "microchip,xec-ecia-v2";
 			#address-cells = <1>;
 			#size-cells = <1>;
+			reg = <0x4000e000 0x400>;
+			direct-capable-bitmap = <0x0bfe000>;
 			status = "disabled";
-
-			ranges = <0x0 0x4000e000 0x400>;
-
-			girq8: girq8@0 {
-				reg = <0x0 0x14>;
-				interrupts = <0 1>;
-				status = "disabled";
-			};
-
-			girq9: girq9@14 {
-				reg = <0x14 0x14>;
-				interrupts = <1 1>;
-				status = "disabled";
-			};
-
-			girq10: girq10@28 {
-				reg = <0x28 0x14>;
-				interrupts = <2 1>;
-				status = "disabled";
-			};
-
-			girq11: girq11@3c {
-				reg = <0x3c 0x14>;
-				interrupts = <3 1>;
-				status = "disabled";
-			};
-
-			girq12: girq12@50 {
-				reg = <0x50 0x14>;
-				interrupts = <4 1>;
-				status = "disabled";
-			};
-
-			girq13: girq13@64 {
-				reg = <0x64 0x14>;
-				interrupts = <5 1>;
-				status = "disabled";
-			};
-
-			girq14: girq14@78 {
-				reg = <0x78 0x14>;
-				interrupts = <6 1>;
-				status = "disabled";
-			};
-
-			girq15: girq15@8c {
-				reg = <0x8c 0x14>;
-				interrupts = <7 1>;
-				status = "disabled";
-			};
-
-			girq16: girq16@a0 {
-				reg = <0xa0 0x14>;
-				interrupts = <8 1>;
-				status = "disabled";
-			};
-
-			girq17: girq17@b4 {
-				reg = <0xb4 0x14>;
-				interrupts = <9 1>;
-				status = "disabled";
-			};
-
-			girq18: girq18@c8 {
-				reg = <0xc8 0x14>;
-				interrupts = <10 1>;
-				status = "disabled";
-			};
-
-			girq19: girq19@dc {
-				reg = <0xdc 0x14>;
-				interrupts = <11 1>;
-				status = "disabled";
-			};
-
-			girq20: girq20@f0 {
-				reg = <0xf0 0x14>;
-				interrupts = <12 1>;
-				status = "disabled";
-			};
-
-			girq21: girq21@104 {
-				reg = <0x104 0x14>;
-				interrupts = <13 1>;
-				status = "disabled";
-			};
-
-			girq22: girq22@118 {
-				reg = <0x118 0x14>;
-				interrupts = <255 0>;
-				status = "disabled";
-			};
-
-			girq23: girq23@12c {
-				reg = <0x12c 0x14>;
-				interrupts = <14 1>;
-				status = "disabled";
-			};
-
-			girq24: girq24@140 {
-				reg = <0x140 0x14>;
-				interrupts = <15 1>;
-				status = "disabled";
-			};
-
-			girq25: girq25@154 {
-				reg = <0x154 0x14>;
-				interrupts = <16 1>;
-				status = "disabled";
-			};
-
-			girq26: girq26@168 {
-				reg = <0x168 0x14>;
-				interrupts = <17 1>;
-				status = "disabled";
-			};
 		};
 
 		pinctrl: pin-controller@40081000 {
