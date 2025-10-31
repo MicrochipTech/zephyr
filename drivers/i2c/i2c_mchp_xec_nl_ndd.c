@@ -33,6 +33,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl_ndd);
 #define XEC_I2C_DEBUG_CLR_XFRBUF_ON_TRANSFER
 #define XEC_I2C_DEBUG_INTR
 #define XEC_I2C_DEBUG_KWORKQ
+#define XEC_I2C_DEBUT_TARGET_MODE
 
 #define XEC_DMAC_BASE (mem_addr_t)(DT_REG_ADDR(DT_NODELABEL(dmac)))
 
@@ -176,7 +177,6 @@ struct xec_i2c_nl_data {
 	void *userdata;
 #endif
 #ifdef CONFIG_I2C_TARGET
-	struct soc_xec_dma_chan_cfg tdcfg;
 	struct i2c_target_config *target_cfg_oa1;
 	struct i2c_target_config *target_cfg_oa2;
 #ifdef CONFIG_I2C_XEC_NL_TARGET_GENERAL_CALL
@@ -186,6 +186,7 @@ struct xec_i2c_nl_data {
 	struct i2c_target_config *target_cfg_smb_host;
 	struct i2c_target_config *target_cfg_smb_dev;
 #endif
+	struct i2c_target_config *curr_target_cfg;
 	uint8_t *buf_rd_req_ptr;
 	uint32_t buf_rd_req_len;
 	uint8_t target_bitmap;
@@ -1391,19 +1392,251 @@ static void hm_unknown(const struct device *dev)
 }
 
 #ifdef CONFIG_I2C_TARGET
-static void tm_dma_done(const struct device *dev)
+
+static int tm_get_target_config(const struct device *i2c_dev)
 {
-	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0xC0);
+	const struct xec_i2c_nl_config *devcfg = i2c_dev->config;
+	struct xec_i2c_nl_data *data = i2c_dev->data;
+	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t oa = 0;
+	uint16_t taddr = 0, oa1 = 0, oa2 = 0;
+	bool match = false;
+
+	taddr = sys_read8(i2c_base + XEC_I2C_IAS_OFS);
+
+	oa = sys_read32(i2c_base + XEC_I2C_OA_OFS);
+	oa1 = XEC_I2C_OA_1_GET(oa);
+	oa2 = XEC_I2C_OA_2_GET(oa);
+
+	if ((oa1 != 0) && (oa1 == taddr)) {
+		match = true;
+	} else if ((oa2 != 0) && (oa2 == taddr)) {
+		match = true;
+	}
+
+	if (match == false) { /* DEBUG */
+		__BKPT(1);
+	}
+
+	data->i2c_addr = taddr;
+	data->curr_target_cfg = find_target_config(i2c_dev);
+
+	if (data->curr_target_cfg == NULL) {
+		__BKPT(2); /* DEBUG */
+		/* return -EINVAL; */
+	}
+
+	return 0;
 }
 
+/* Configure I2C-NL to respond to external Host.
+ * For all I2C protocals external Host will generate START and transmit a target address.
+ * If this target HW matches the target address to one of its enabled targets then it
+ * will trigger DMA to move the target address byte to the driver buffer.
+ * This routine is used to arm I2C-NL and its DMA channel to receive data from the external
+ * Host and store it in a driver buffer.
+ * Configure DMA channel for dev2mem direction and driver (transfer buffer, size)
+ * Configure I2C-NL target mode to HW maximum read and write count sizes.
+ */
+static void tm_config_start(const struct device *dev)
+{
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	struct soc_xec_dma_chan_cfg *dcfg = &data->dcfgs[0];
+	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t dflags = XEC_DMA_CHAN_CFG_DEV2MEM | XEC_DMA_CHAN_CFG_TM;
+	uint32_t extlen = 0, tcmd = 0;
+
+	data->i2c_addr = UINT16_MAX;
+	data->curr_target_cfg = NULL;
+
+	soc_xec_dmac_chan_clear(devcfg->hm_dma_chan);
+
+	xec_dma_chan_cfg(dev, dcfg, (uint32_t)devcfg->xfrbuf, devcfg->xfrbuf_sz, dflags);
+
+	soc_xec_dmac_chan_cfg2(devcfg->tm_dma_chan, dcfg, NULL);
+	soc_xec_dmac_chan_start(devcfg->tm_dma_chan, 0);
+
+	extlen = XEC_I2C_ELEN_TRD_SET(XEC_I2C_NL_MAX_LEN >> 8);
+	extlen |= XEC_I2C_ELEN_TWR_SET(XEC_I2C_NL_MAX_LEN >> 8);
+
+	tcmd = XEC_I2C_TCMD_RCL_SET(XEC_I2C_NL_MAX_LEN);
+	tcmd |= XEC_I2C_TCMD_WCL_SET(XEC_I2C_NL_MAX_LEN);
+	tcmd |= (BIT(XEC_I2C_TCMD_RUN_POS) | BIT(XEC_I2C_TCMD_PROC_POS));
+
+	sys_write32(extlen, i2c_base + XEC_I2C_ELEN_OFS);
+	sys_write32(tcmd, i2c_base + XEC_I2C_TCMD_OFS);
+	sys_set_bits(i2c_base + XEC_I2C_CFG_OFS,
+		     (BIT(XEC_I2C_CFG_TD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS)));
+	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+}
+
+/* Handler for DMA channel used for I2C target mode.
+ * DMA events: DONE, internal AHB error, DMA terminated by I2C-NL.
+ * DMA direction dev2mem (external Host I2C write):
+ *   Compute data length: mem_start_addr_reg - original_mem_start_addr
+ *   Invoke buf_write_received callback passing our buffer and number of bytes received.
+ *   After the callback returns we re-arm the DMA channel for dev2mem.
+ *   NOTE: we can't change I2C-NL TCMD read count back to original value because
+ *   I2C-NL is performing read-ahead of up to 2 more bytes! The HW implementation decrements
+ *   the read count value each time it moves a byte from the I2C data register to the I2C
+ *   RX buffer register. We have no HW status indicating the read-ahead is complete.
+ *   If the external Host continues writing data eventually I2C-NL will decrement its HW read
+ *   count to 0 and start NAK'ing incoming bytes.
+ *
+ * DMA direction mem2dev (external Host I2C read)
+ *   If not an error or termination by I2C-NL then DMA has moved the whole buffer
+ *   to I2C-NL.  If I2C-NL TCMD write count != 0 and external Host has not NAK'd or
+ *   generated I2C STOP then we can invoke buf_read_requested callback again.
+ *   If app has more data we configure DMA for next data chunk. NOTE: it is safe for
+ *   this routine to modify I2C-NL TCMD write count since our HW is clock stretching.
+ *   NOTE 2: a NAK or STOP by the external Host will cause I2C-NL to generate an interrupt
+ *   not the DMA.
+ */
+static void tm_dma_done(const struct device *i2c_dev)
+{
+	const struct xec_i2c_nl_config *devcfg = i2c_dev->config;
+	struct xec_i2c_nl_data *data = i2c_dev->data;
+	struct soc_xec_dma_chan_cfg *dcfg = &data->dcfgs[0];
+	uint32_t dflags = XEC_DMA_CHAN_CFG_TM;
+	int rc = 0;
+	mem_addr_t dma_base = 0;
+	uint32_t dma_ctrl = 0, dma_msa = 0, nbytes = 0;
+
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC0);
+
+	dma_base = soc_xec_dmac_chan_base(devcfg->hm_dma_chan);
+	dma_ctrl = sys_read32(dma_base + XEC_DMA_CHAN_CR_OFS);
+
+	if (data->curr_target_cfg == NULL) {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC2);
+		tm_get_target_config(i2c_dev);
+	}
+
+	const struct i2c_target_callbacks *cbs = data->curr_target_cfg->callbacks;
+
+	if ((dcfg->flags & XEC_DMAC_CHAN_CFG_MEM2DEV) == 0) { /* I2C write to this target */
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC1);
+		dma_msa = sys_read32(dma_base + XEC_DMA_CHAN_MSA_OFS);
+
+		nbytes = dma_msa - dcfg->maddr;
+		if (nbytes > devcfg->xfrbuf_sz) {
+			nbytes = devcfg->xfrbuf_sz;
+		}
+
+		cbs->buf_write_received(data->curr_target_cfg, (uint8_t *)devcfg->xfrbuf, nbytes);
+
+		dflags |= XEC_DMA_CHAN_CFG_DEV2MEM;
+		xec_dma_chan_cfg(i2c_dev, dcfg, (uint32_t)devcfg->xfrbuf, devcfg->xfrbuf_sz,
+		                 dflags);
+
+		soc_xec_dmac_chan_cfg2(devcfg->tm_dma_chan, dcfg, NULL);
+		soc_xec_dmac_chan_start(devcfg->tm_dma_chan, XEC_DMAC_START_IEN);
+	} else {
+		/* I2C read from this target */
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC3);
+
+		data->buf_rd_req_ptr = NULL;
+		data->buf_rd_req_len = 0;
+
+		rc = cbs->buf_read_requested(data->curr_target_cfg, &data->buf_rd_req_ptr,
+		                             &data->buf_rd_req_len);
+		if (rc == 0) {
+			/* app has more data for external Host */
+			XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC4);
+			xec_dma_chan_cfg(i2c_dev, dcfg, (uint32_t)data->buf_rd_req_ptr,
+			                 data->buf_rd_req_len,
+			                 (XEC_DMA_CHAN_CFG_TM | XEC_DMA_CHAN_CFG_MEM2DEV));
+
+			soc_xec_dmac_chan_cfg2(devcfg->tm_dma_chan, dcfg, NULL);
+			soc_xec_dmac_chan_start(devcfg->tm_dma_chan, XEC_DMAC_START_IEN);
+		}
+	}
+
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xC5);
+}
+
+/* Target mode I2C-NL pauses the transfer when a direction change occurs:
+ * External Host I2C read: Direction change occurs when I2C-NL sees a matching
+ * target address with bit[0]=1 (read).
+ * External Host I2C combined write-read: Direction change occures when I2C-NL sees
+ * the target address with bit[0]=1 (read) after Rpt-START.
+ * I2C-NL pauses the transaction by:
+ *  asserting SCL to stretch the clock
+ *  clearing its TCMD.PROCEED bit
+ *  asserting TDONE status -> generate interrupt.
+ */
 static void tm_pause(const struct device *dev)
 {
-	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0xB8);
+	const struct xec_i2c_nl_config *devcfg = dev->config;
+	struct xec_i2c_nl_data *data = dev->data;
+	struct soc_xec_dma_chan_cfg *dcfg = &data->dcfgs[0];
+	mem_addr_t i2c_base = devcfg->i2c_base;
+	uint32_t extlen = 0, tcmd = 0;
+	int rc = 0;
+
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xB8);
+
+	if (data->curr_target_cfg == NULL) {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xB9);
+		tm_get_target_config(dev);
+	}
+
+	const struct i2c_target_callbacks *cbs = data->curr_target_cfg->callbacks;
+
+	/* invoke app buf_read_requested callback to get buffer pointer and size.
+	 * reconfigure TM DMA channel for mem2dev direction
+	 * unpause I2C-NL by setting TCMD.PROCEED = 1
+	 */
+	tcmd = sys_read32(i2c_base + XEC_I2C_TCMD_OFS);
+
+	data->buf_rd_req_ptr = NULL;
+	data->buf_rd_req_len = 0;
+
+	rc = cbs->buf_read_requested(data->curr_target_cfg, &data->buf_rd_req_ptr,
+	                             &data->buf_rd_req_len);
+	if (rc == 0) {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xBA);
+		xec_dma_chan_cfg(dev, dcfg, (uint32_t)data->buf_rd_req_ptr, data->buf_rd_req_len,
+		                 (XEC_DMA_CHAN_CFG_TM | XEC_DMA_CHAN_CFG_MEM2DEV));
+
+		soc_xec_dmac_chan_cfg2(devcfg->tm_dma_chan, dcfg, NULL);
+		soc_xec_dmac_chan_start(devcfg->tm_dma_chan, XEC_DMAC_START_IEN);
+	} else {
+		XEC_I2C_DEBUG_STATE_UPDATE(data, 0xBB);
+		/* TODO ignore transaction until external Host sends STOP
+		 * If we could force TCMD.wrCnt == 0 then I2C-NL will put
+		 * last byte value in TXB register on the wire until STOP.
+		 * It should be "safe" to modify TCMD.wrCnt since we are in pause state.
+		 * Alternative is to reconfigure DMA to pull byte from our driver
+		 * data structure without incrementing DMA memory address reg.
+		 */
+		soc_xec_dmac_chan_deactivate(devcfg->tm_dma_chan);
+
+		extlen = sys_read32(i2c_base + XEC_I2C_ELEN_OFS);
+		extlen &= (uint32_t)~XEC_I2C_ELEN_TWR_MSK;
+		sys_write32(extlen, i2c_base + XEC_I2C_ELEN_OFS);
+
+		tcmd &= (uint32_t)~XEC_I2C_TCMD_WCL_MSK;
+	}
+
+	tcmd |= BIT(XEC_I2C_TCMD_PROC_POS);
+	sys_write32(tcmd, i2c_base + XEC_I2C_TCMD_OFS);
+
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xBC);
 }
 
+/* Target mode I2C-NL indicates a transfer has ended by setting TDONE status.
+ * Transfer done due to STOP detected from external Host controller:
+ *   TCMD RUN and PROCEED bits are cleared.  TDONE set to 1
+ * Transfer done due to BERR, LAB, TNAKR:
+ *   TDONE set to 1. ??? Does HW clear RUN and PROCEED ???
+ */
 static void tm_all_done(const struct device *dev)
 {
-	XEC_I2C_DEBUG_STATE_UPDATE((struct xec_i2c_nl_data *)dev->data, 0xB0);
+	struct xec_i2c_nl_data *data = dev->data;
+
+	XEC_I2C_DEBUG_STATE_UPDATE(data, 0xB0);
 }
 
 static void tm_unknown(const struct device *dev)
@@ -1689,6 +1922,9 @@ static void xec_i2c_nl_tm_dma_isr(const struct device *i2c_dev)
 static int i2c_xec_nl_pm_action(const struct device *dev, enum pm_device_action action)
 {
 	const struct xec_i2c_nl_config *devcfg = dev->config;
+#ifdef CONFIG_I2C_TARGET
+	struct xec_i2c_nl_data *data = dev->data;
+#endif
 	mem_addr_t i2c_base = devcfg->i2c_base;
 
 	LOG_DBG("PM action: %d", (int)action);
@@ -1696,9 +1932,7 @@ static int i2c_xec_nl_pm_action(const struct device *dev, enum pm_device_action 
 	switch (action) {
 	case PM_DEVICE_ACTION_SUSPEND:
 #ifdef CONFIG_I2C_TARGET
-		struct xec_i2c_nl_data *data = dev->data;
-
-		if (data->target_bitmap; != 0) {
+		if (data->target_bitmap != 0) {
 			sys_clear_bit(i2c_base + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
 			sys_set_bit(i2c_base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
 			/* Enable GIRQ22 non-interrupt HW wake */
@@ -1789,12 +2023,8 @@ static int cfg_own_addr(const struct device *dev, struct i2c_target_config *cfg)
  */
 static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_target_config *cfg)
 {
-	const struct xec_i2c_nl_config *devcfg = dev->config;
 	struct xec_i2c_nl_data *data = dev->data;
-	struct soc_xec_dma_chan_cfg *dcfg = &data->tdcfg;
-	mem_addr_t i2c_base = devcfg->i2c_base;
 	uint32_t orig_target_bitmap = data->target_bitmap;
-	uint32_t extlen = 0, tcmd = 0;
 	int rc = 0;
 
 	rc = check_target_config(cfg);
@@ -1806,6 +2036,9 @@ static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_targe
 	if (rc != 0) {
 		return -EAGAIN;
 	}
+
+	data->i2c_addr = UINT16_MAX;
+	data->curr_target_cfg = NULL;
 
 	rc = -EADDRINUSE;
 	switch (cfg->address) {
@@ -1843,31 +2076,7 @@ static int xec_i2c_nl_target_register(const struct device *dev, struct i2c_targe
 	} /* end switch */
 
 	if ((rc == 0) && (orig_target_bitmap == 0)) {
-		soc_xec_dmac_chan_clear(devcfg->hm_dma_chan);
-
-		dcfg->daddr = (uint32_t)i2c_base + XEC_I2C_TRX_OFS;
-		dcfg->maddr = (uint32_t)devcfg->xfrbuf;
-		dcfg->nbytes = (uint32_t)devcfg->xfrbuf_sz;
-		dcfg->flags = (XEC_DMAC_CHAN_CFG_DEV2MEM | XEC_DMAC_CHAN_CFG_HFC |
-			       XEC_DMAC_CHAN_CFG_UNITS_SET(XEC_DMAC_CHAN_CFG_UNITS_1) |
-			       XEC_DMAC_CHAN_CFG_INCRM |
-			       XEC_DMAC_CHAN_CFG_HDEVID_SET(devcfg->tm_dma_trigsrc));
-
-		soc_xec_dmac_chan_cfg2(devcfg->tm_dma_chan, dcfg, NULL);
-		soc_xec_dmac_chan_start(devcfg->tm_dma_chan, 0);
-
-		extlen = XEC_I2C_ELEN_TRD_SET(dcfg->nbytes >> 8);
-		extlen |= XEC_I2C_ELEN_TWR_SET(XEC_I2C_NL_MAX_LEN >> 8);
-
-		tcmd = XEC_I2C_TCMD_RCL_SET(dcfg->nbytes);
-		tcmd |= XEC_I2C_TCMD_WCL_SET(XEC_I2C_NL_MAX_LEN);
-		tcmd |= (BIT(XEC_I2C_TCMD_RUN_POS) | BIT(XEC_I2C_TCMD_PROC_POS));
-
-		sys_write32(extlen, i2c_base + XEC_I2C_ELEN_OFS);
-		sys_write32(tcmd, i2c_base + XEC_I2C_TCMD_OFS);
-		sys_set_bits(i2c_base + XEC_I2C_CFG_OFS,
-			     (BIT(XEC_I2C_CFG_TD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS)));
-		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, 1u);
+		tm_config_start(dev);
 	}
 
 	k_mutex_unlock(&data->lock_mut);
