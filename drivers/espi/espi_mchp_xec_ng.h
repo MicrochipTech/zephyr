@@ -19,8 +19,16 @@ struct xec_espi_ng_drvcfg {
 	mem_addr_t vwbase;
 	const struct pinctrl_dev_config *pincfg;
 	void (*irq_connect)(void);
+	const uint16_t *girqs;
+	uint8_t num_girqs;
 	uint8_t irqn_vwb0;
 	uint8_t irqn_vwb1;
+#ifdef CONFIG_ESPI_OOB_CHANNEL
+	uint8_t *oob_rxb;
+	uint8_t *oob_txb;
+	uint16_t oob_rxb_sz;
+	uint16_t oob_txb_sz;
+#endif
 };
 
 struct xec_espi_ng_data {
@@ -31,17 +39,20 @@ struct xec_espi_ng_data {
 #endif
 	struct espi_callback vwcb;
 	sys_slist_t cbs;
-#ifdef CONFIG_ESPI_OOB_CHANNEL
-	struct k_sem oob_lock;
-	struct k_sem oob_rx_sync;
-	struct k_sem oob_tx_sync;
-	uint8_t *oob_rxb;
-	uint16_t oob_rx_len;
-#endif
 #ifdef CONFIG_ESPI_FLASH_CHANNEL
 	struct k_sem fc_lock;
 	struct k_sem fc_sync;
 	volatile uint32_t fc_status;
+#endif
+#ifdef CONFIG_ESPI_OOB_CHANNEL
+	struct k_sem oob_lock;
+	struct k_sem oob_rx_sync;
+	struct k_sem oob_tx_sync;
+	uint32_t oob_rx_status;
+	uint32_t oob_rx_len;
+	uint32_t oob_tx_status;
+	uint8_t oob_rxb[CONFIG_ESPI_OOB_BUFFER_SIZE];
+	uint8_t oob_txb[CONFIG_ESPI_OOB_BUFFER_SIZE];
 #endif
 };
 
@@ -75,8 +86,8 @@ int xec_espi_ng_vw_init1(const struct device *dev);
 int xec_espi_ng_oob_send_api(const struct device *dev, struct espi_oob_packet *pkt);
 int xec_espi_ng_oob_recv_api(const struct device *dev, struct espi_oob_packet *pkt);
 /* OOB channel interrupt handlers called from core driver */
-void xec_espi_ng_oob_dn_handler(const struct device *dev);
-void xec_espi_ng_oob_up_handler(const struct device *dev);
+void xec_espi_ng_oob_rx_handler(const struct device *dev);
+void xec_espi_ng_oob_tx_handler(const struct device *dev);
 #endif
 
 #ifdef CONFIG_ESPI_FLASH_CHANNEL
