@@ -16,3 +16,10 @@ config GPIO_XEC_V2
 	depends on DT_HAS_MICROCHIP_XEC_GPIO_V2_ENABLED
 	help
 	  Enable the Microchip XEC gpio V2 driver.
+
+config GPIO_MCHP_XEC_NG
+	bool "Microchip XEC next gen GPIO driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_GPIO_NG_ENABLED
+	help
+	  Enable the Micrcochip XEC next gen GPIO driver

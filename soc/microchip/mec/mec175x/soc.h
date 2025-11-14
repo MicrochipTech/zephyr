@@ -22,5 +22,7 @@
 #include <soc_pcr.h>
 #include <soc_pins.h>
 
+#include <reg/mec_gpio.h>
+
 #endif
 #endif
