@@ -10,6 +10,7 @@
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+#include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 
 / {
 	cpus {
@@ -195,8 +196,8 @@
 			interrupts = <40 0>;
 			clock-frequency = <1843200>;
 			current-speed = <38400>;
-			girqs = <15 0>;
-			pcrs = <2 1>;
+			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 0)>;
+			pcr_scr = <MCHP_XEC_SCR_ENCODE(2, 1)>;
 			ldn = <9>;
 			status = "disabled";
 		};
@@ -207,8 +208,8 @@
 			interrupts = <41 0>;
 			clock-frequency = <1843200>;
 			current-speed = <38400>;
-			girqs = <15 1>;
-			pcrs = <2 2>;
+			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 1)>;
+			pcr_scr = <MCHP_XEC_SCR_ENCODE(2, 2)>;
 			ldn = <10>;
 			status = "disabled";
 		};
@@ -219,8 +220,8 @@
 			interrupts = <44 0>;
 			clock-frequency = <1843200>;
 			current-speed = <38400>;
-			girqs = <15 4>;
-			pcrs = <2 28>;
+			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 4)>;
+			pcr_scr = <MCHP_XEC_SCR_ENCODE(2, 28)>;
 			ldn = <11>;
 			status = "disabled";
 		};
