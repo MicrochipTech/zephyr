@@ -13,6 +13,11 @@
 
 #include <device_mec5.h>
 
+#define MCHP_HAS_UART_LSR2
+
+/* common regiter definitions */
+#include <reg/mec_uart.h>
+
 /* common SoC API */
 #include <soc_dt.h>
 #include <soc_ecia.h>
