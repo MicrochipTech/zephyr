@@ -57,7 +57,7 @@
 };
 
 &uart1 {
-	compatible = "microchip,mec5-uart";
+	compatible = "microchip,xec-uart";
 	status = "okay";
 	clock-frequency = <1843200>;
 	current-speed = <115200>;
