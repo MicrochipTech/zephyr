@@ -9,15 +9,15 @@
 	};
 };
 
-/* Loopback requires wire connecting qspi_shd_io0_gpio223 to qspi_shd_io1_gpio224 */
+/* Loopback requires wire connecting pin_qspi_shd_io0 to pin_qspi_shd_io1 */
 
 &qspi0 {
 	status = "okay";
 	compatible = "microchip,mec5-qspi";
 	clock-frequency = <12000000>;
 
-	pinctrl-0 = <&qspi_shd_cs0_n_gpio055 &qspi_shd_clk_gpio056
-		     &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224>;
+	pinctrl-0 = <&pin_qspi_shd_cs0_n &pin_qspi_shd_clk
+		     &pin_qspi_shd_io0 &pin_qspi_shd_io1>;
 	pinctrl-names = "default";
 
 	slow@0 {
