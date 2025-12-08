@@ -7,7 +7,7 @@
 /dts-v1/;
 
 #include <microchip/mec/mec5_mec1653bnsz.dtsi>
-#include <microchip/mec5/mec1653b-nsz-b0-pinctrl.dtsi>
+#include <microchip/mec/mec5/mec1653b-b0-pinctrl.dtsi>
 
 / {
 	model = "Microchip MEC ASSY6941 MEC1753B-NSZ evaluation board";
@@ -61,6 +61,6 @@
 	status = "okay";
 	clock-frequency = <1843200>;
 	current-speed = <115200>;
-	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
+	pinctrl-0 = <&pin_uart1_tx &pin_uart1_rx>;
 	pinctrl-names = "default";
 };
