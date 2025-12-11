@@ -97,11 +97,10 @@ child-binding:
 
     slew-rate:
       type: string
-      default: "no-change"
+      default: "high-speed"
       enum:
-        - "no-change"
-        - "low-speed"
         - "high-speed"
+        - "low-speed"
       description: |
         Pin speed. The default value of slew-rate is the SoC power-on-reset
         value. Please refer to the data sheet as a small number of pins
@@ -110,9 +109,8 @@ child-binding:
 
     drive-strength:
       type: string
-      default: "no-change"
+      default: "1x"
       enum:
-        - "no-change"
         - "1x"
         - "2x"
         - "4x"

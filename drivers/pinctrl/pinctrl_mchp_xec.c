@@ -34,7 +34,7 @@ static void config_drive_slew(mm_reg_t gpio_cr1_addr, uint32_t conf)
 	uint32_t drvstr = (conf >> MCHP_XEC_DRV_STR_POS) & MCHP_XEC_DRV_STR_MSK0;
 	uint32_t msk = 0, val = 0;
 
-	if (slew != 0) { /* touch slew rate? */
+	if (slew != MCHP_XEC_SLEW_RATE_MSK0) { /* touch slew rate? */
 		msk |= MEC_GPIO_CR2_SLEW_MSK;
 		if (slew == MCHP_XEC_SLEW_RATE_SLOW0) {
 			val |= MEC_GPIO_CR2_SLEW_SET(MEC_GPIO_CR2_SLEW_SLOW);
@@ -43,12 +43,12 @@ static void config_drive_slew(mm_reg_t gpio_cr1_addr, uint32_t conf)
 		}
 	}
 
-	if (drvstr != 0) { /* touch drive strength? */
+	if (drvstr != MCHP_XEC_DRV_STR_MSK0) { /* touch drive strength? */
 		msk |= MEC_GPIO_CR2_DSTR_MSK;
 		val |= MEC_GPIO_CR2_DSTR_SET(drvstr - 1u);
 	}
 
-	if (!msk) {
+	if (msk == 0) {
 		return;
 	}
 
