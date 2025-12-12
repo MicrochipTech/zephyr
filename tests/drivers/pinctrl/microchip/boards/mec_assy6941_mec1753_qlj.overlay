@@ -26,11 +26,12 @@ ksi7_gpio032
 */
 
 &ksi1_gpio020 {
-	slew-rate = "low-speed";
+	drive-open-drain;
+	slew-rate = <MCHP_XEC_SLEW_RATE_SLOW>;
 };
 
 &ksi2_gpio021 {
-	drive-strength = "4x";
+	drive-strength = <MCHP_XEC_DRV_STR_4X>;
 };
 
 &ksi3_gpio026 {

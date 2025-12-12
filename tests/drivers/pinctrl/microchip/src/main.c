@@ -14,44 +14,66 @@ static const struct pinctrl_dev_config *pcfg = PINCTRL_DT_DEV_CONFIG_GET(TEST_DE
 
 #ifdef CONFIG_TEST_PINCTRL_MCHP_MEC
 
+static void pr_xec_pinctrl(const pinctrl_soc_pin_t *p)
+{
+	uint32_t d = *(const uint32_t *)p;
+
+	TC_PRINT("d = 0x%08x\n", d);
+	TC_PRINT(".pinmux    = 0x%0x\n", p->pinmux);
+	TC_PRINT(".no_pud    = %u\n", p->no_pud);
+	TC_PRINT(".pd        = %u\n", p->pd);
+	TC_PRINT(".pu        = %u\n", p->pu);
+	TC_PRINT(".obuf_pp   = %u\n", p->obuf_pp);
+	TC_PRINT(".obuf_od   = %u\n", p->obuf_od);
+	TC_PRINT(".out_dis   = %u\n", p->out_dis);
+	TC_PRINT(".out_en    = %u\n", p->out_en);
+	TC_PRINT(".out_hi    = %u\n", p->out_hi);
+	TC_PRINT(".out_lo    = %u\n", p->out_lo);
+	TC_PRINT(".slew_rate = %u\n", p->slew_rate);
+	TC_PRINT(".drive_str = %u\n", p->drive_str);
+	TC_PRINT(".finv      = %u\n", p->finv);
+	TC_PRINT(".lp        = %u\n", p->lp);
+}
+
 ZTEST(pinctrl_mchp_mec, test_slew_rate)
 {
-	const struct pinctrl_state *scfg;
-	uint32_t val = 0;
+	const struct pinctrl_state *scfg = &pcfg->states[0];
+	const pinctrl_soc_pin_t *p = &scfg->pins[1];
 
-	scfg = &pcfg->states[0];
+	TC_PRINT("pins[1]\n");
+	pr_xec_pinctrl(p);
 
-	val = (scfg->pins[1] >> MCHP_XEC_SLEW_RATE_POS) & MCHP_XEC_SLEW_RATE_MSK0;
-	zassert_equal(val, MCHP_XEC_SLEW_RATE_SLOW0);
+	zassert_equal(p->slew_rate, MCHP_XEC_SLEW_RATE_SLOW);
 }
 
 ZTEST(pinctrl_mchp_mec, test_drive_strength)
 {
-	const struct pinctrl_state *scfg;
-	uint32_t val = 0;
+	const struct pinctrl_state *scfg = &pcfg->states[0];
+	const pinctrl_soc_pin_t *p = &scfg->pins[2];
 
-	scfg = &pcfg->states[0];
+	TC_PRINT("pins[2]\n");
+	pr_xec_pinctrl(p);
 
-	val = (scfg->pins[2] >> MCHP_XEC_DRV_STR_POS) & MCHP_XEC_DRV_STR_MSK0;
-	zassert_equal(val, MCHP_XEC_DRV_STR0_4X);
+	zassert_equal(p->drive_str, MCHP_XEC_DRV_STR_4X);
 }
 
 ZTEST(pinctrl_mchp_mec, test_pullup)
 {
-	const struct pinctrl_state *scfg;
+	const struct pinctrl_state *scfg = &pcfg->states[0];
+	const pinctrl_soc_pin_t *p = &scfg->pins[3];
 
-	scfg = &pcfg->states[0];
+	TC_PRINT("pins[3]\n");
+	pr_xec_pinctrl(p);
 
-	zassert_equal(((scfg->pins[3] >> MCHP_XEC_PU_POS) & 1u), 1);
+	zassert_equal(p->pu, 1);
 }
 
 ZTEST(pinctrl_mchp_mec, test_pulldown)
 {
-	const struct pinctrl_state *scfg;
+	const struct pinctrl_state *scfg = &pcfg->states[0];
+	const pinctrl_soc_pin_t *p = &scfg->pins[4];
 
-	scfg = &pcfg->states[0];
-
-	zassert_equal(((scfg->pins[4] >> MCHP_XEC_PD_POS) & 1u), 1);
+	zassert_equal(p->pd, 1);
 }
 
 ZTEST(pinctrl_mchp_mec, test_apply_state)
