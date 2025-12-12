@@ -27,25 +27,23 @@
  * parent node. A zero value in the PINCTRL pinmux field means
  * do not touch.
  */
-static void config_drive_slew(mm_reg_t gpio_cr1_addr, uint32_t conf)
+static void config_drive_slew(mm_reg_t gpio_cr1_addr, const pinctrl_soc_pin_t *p)
 {
 	mm_reg_t gpio_cr2_addr = gpio_cr1_addr + MEC_GPIO_CR2_OFS;
-	uint32_t slew = (conf >> MCHP_XEC_SLEW_RATE_POS) & MCHP_XEC_SLEW_RATE_MSK0;
-	uint32_t drvstr = (conf >> MCHP_XEC_DRV_STR_POS) & MCHP_XEC_DRV_STR_MSK0;
 	uint32_t msk = 0, val = 0;
 
-	if (slew != MCHP_XEC_SLEW_RATE_MSK0) { /* touch slew rate? */
+	if (p->slew_rate != 0) { /* touch slew rate? */
 		msk |= MEC_GPIO_CR2_SLEW_MSK;
-		if (slew == MCHP_XEC_SLEW_RATE_SLOW0) {
+		if (p->slew_rate > 1u) {
 			val |= MEC_GPIO_CR2_SLEW_SET(MEC_GPIO_CR2_SLEW_SLOW);
 		} else {
 			val |= MEC_GPIO_CR2_SLEW_SET(MEC_GPIO_CR2_SLEW_FAST);
 		}
 	}
 
-	if (drvstr != MCHP_XEC_DRV_STR_MSK0) { /* touch drive strength? */
+	if (p->drive_str != 0) { /* touch drive strength? */
 		msk |= MEC_GPIO_CR2_DSTR_MSK;
-		val |= MEC_GPIO_CR2_DSTR_SET(drvstr - 1u);
+		val |= MEC_GPIO_CR2_DSTR_SET((uint32_t)p->drive_str - 1u);
 	}
 
 	if (msk == 0) {
@@ -64,20 +62,20 @@ static void config_drive_slew(mm_reg_t gpio_cr1_addr, uint32_t conf)
  * If pull up and/or down is set enable the respective pull or both for what
  * MCHP calls repeater(keeper) mode.
  */
-static uint32_t prog_pud(uint32_t pcr1, uint32_t conf)
+static uint32_t prog_pud(uint32_t pcr1, const pinctrl_soc_pin_t *p)
 {
-	if (conf & BIT(MCHP_XEC_NO_PUD_POS)) {
+	if (p->no_pud != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_PUD_MSK);
 		pcr1 |= MEC_GPIO_CR1_PUD_NONE;
 		return pcr1;
 	}
 
-	if (conf & (BIT(MCHP_XEC_PU_POS) | BIT(MCHP_XEC_PD_POS))) {
+	if ((p->pd != 0) || (p->pu != 0)) {
 		pcr1 &= ~(MEC_GPIO_CR1_PUD_MSK);
-		if (conf & BIT(MCHP_XEC_PU_POS)) {
+		if (p->pu != 0) {
 			pcr1 |= MEC_GPIO_CR1_PUD_PU;
 		}
-		if (conf & BIT(MCHP_XEC_PD_POS)) {
+		if (p->pd != 0) {
 			pcr1 |= MEC_GPIO_CR1_PUD_PD;
 		}
 	}
@@ -96,7 +94,7 @@ static uint32_t prog_pud(uint32_t pcr1, uint32_t conf)
  * Note 1: hardware allows input and output to be simultaneously enabled.
  * Note 2: hardware interrupt detection is only on the input path.
  */
-static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
+static int xec_config_pin(uint32_t portpin, const pinctrl_soc_pin_t *p, uint32_t altf)
 {
 	mm_reg_t gpio_cr1_addr = (mm_reg_t)DT_INST_REG_ADDR(0);
 	uint32_t port = MCHP_XEC_PINMUX_PORT(portpin);
@@ -110,51 +108,52 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 	/* MCHP XEC family Control 1 and 2 are 32-bit registers */
 	gpio_cr1_addr += (port * XEC_GPIO_PORT_REG_SPACE) + (pin * 4u);
 
-	config_drive_slew(gpio_cr1_addr, conf);
+	config_drive_slew(gpio_cr1_addr, p);
 
 	/* Clear alternate output disable and input pad disable */
-	pcr1 = sys_read32(gpio_cr1_addr) & (BIT(MEC_GPIO_CR1_OCR_POS) | BIT(MEC_GPIO_CR1_INPD_POS));
+	pcr1 = sys_read32(gpio_cr1_addr) &
+		~(BIT(MEC_GPIO_CR1_OCR_POS) | BIT(MEC_GPIO_CR1_INPD_POS));
 	sys_write32(pcr1, gpio_cr1_addr);
 	pcr1 = sys_read32(gpio_cr1_addr);
 
-	pcr1 = prog_pud(pcr1, conf);
+	pcr1 = prog_pud(pcr1, p);
 
 	/* Touch output enable. We always enable input */
-	if ((conf & BIT(MCHP_XEC_OUT_DIS_POS)) != 0) {
+	if (p->out_dis != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_DIR_MSK);
 		pcr1 |= MEC_GPIO_CR1_DIR_SET(MEC_GPIO_CR1_DIR_IN);
 	}
 
-	if ((conf & BIT(MCHP_XEC_OUT_EN_POS)) != 0) {
+	if (p->out_en != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_DIR_MSK);
 		pcr1 |= MEC_GPIO_CR1_DIR_SET(MEC_GPIO_CR1_DIR_OUT);
 	}
 
 	/* Touch output state? Bit can be set even if the direction is input only */
-	if ((conf & BIT(MCHP_XEC_OUT_LO_POS)) != 0) {
+	if (p->out_lo != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_ODAT_MSK);
 		pcr1 |= MEC_GPIO_CR1_ODAT_SET(MEC_GPIO_CR1_ODAT_LO);
 	}
 
-	if ((conf & BIT(MCHP_XEC_OUT_HI_POS)) != 0) {
+	if (p->out_hi != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_ODAT_MSK);
 		pcr1 |= MEC_GPIO_CR1_ODAT_SET(MEC_GPIO_CR1_ODAT_HI);
 	}
 
 	/* Touch output buffer type? */
-	if ((conf & BIT(MCHP_XEC_PUSH_PULL_POS)) != 0) {
+	if (p->obuf_pp != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_OBUF_MSK);
 		pcr1 |= MEC_GPIO_CR1_OBUF_SET(MEC_GPIO_CR1_OBUF_PP);
 	}
 
-	if ((conf & BIT(MCHP_XEC_OPEN_DRAIN_POS)) != 0) {
+	if (p->obuf_od != 0) {
 		pcr1 &= ~(MEC_GPIO_CR1_OBUF_MSK);
 		pcr1 |= MEC_GPIO_CR1_OBUF_SET(MEC_GPIO_CR1_OBUF_OD);
 	}
 
 	/* Always touch power gate */
 	pcr1 &= ~(MEC_GPIO_CR1_PG_MSK);
-	if ((conf & BIT(MCHP_XEC_PIN_LOW_POWER_POS)) != 0) {
+	if (p->lp != 0) {
 		pcr1 |= MEC_GPIO_CR1_PG_SET(MEC_GPIO_CR1_PG_UNPWRD);
 	} else {
 		pcr1 |= MEC_GPIO_CR1_PG_SET(MEC_GPIO_CR1_PG_VTR);
@@ -165,7 +164,7 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 	pcr1 |= MEC_GPIO_CR1_MUX_SET((uint32_t)altf);
 
 	/* Always touch invert of alternate function. Need another bit to avoid touching */
-	if ((conf & BIT(MCHP_XEC_FUNC_INV_POS)) != 0) {
+	if (p->finv != 0) {
 		pcr1 |= BIT(MEC_GPIO_CR1_FPOL_POS);
 	} else {
 		pcr1 &= ~BIT(MEC_GPIO_CR1_FPOL_POS);
@@ -181,22 +180,22 @@ static int xec_config_pin(uint32_t portpin, uint32_t conf, uint32_t altf)
 
 int pinctrl_configure_pins(const pinctrl_soc_pin_t *pins, uint8_t pin_cnt, uintptr_t reg)
 {
-	uint32_t portpin, pinmux, func;
-	int ret;
+	uint32_t portpin = 0, func = 0;
+	int ret = 0;
 
 	ARG_UNUSED(reg);
 
 	for (uint8_t i = 0U; i < pin_cnt; i++) {
-		pinmux = pins[i];
+		const pinctrl_soc_pin_t *p = &pins[i];
 
-		func = MCHP_XEC_PINMUX_FUNC(pinmux);
+		func = MCHP_XEC_PINMUX_FUNC(p->pinmux);
 		if (func >= MCHP_AFMAX) {
 			return -EINVAL;
 		}
 
-		portpin = MEC_XEC_PINMUX_PORT_PIN(pinmux);
+		portpin = MEC_XEC_PINMUX_PORT_PIN(p->pinmux);
 
-		ret = xec_config_pin(portpin, pinmux, func);
+		ret = xec_config_pin(portpin, p, func);
 		if (ret < 0) {
 			return ret;
 		}
