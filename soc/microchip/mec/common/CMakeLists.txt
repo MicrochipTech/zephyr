@@ -5,9 +5,9 @@ zephyr_library_sources(soc_ecia.c soc_pcr.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_MEC172X
   soc_i2c.c
 )
-zephyr_library_sources_ifdef(CONFIG_HAS_MEC5_HAL
-  soc_cmn_init.c
-)
+if (CONFIG_SOC_SERIES_MEC174X OR CONFIG_SOC_SERIES_MEC175X)
+  zephyr_library_sources(soc_cmn_init.c)
+endif()
 
 if(DEFINED CONFIG_MCHP_HEADER_VERBOSE_OUTPUT)
     set(MCHP_HEADER_VERBOSE_OPTION "-v")

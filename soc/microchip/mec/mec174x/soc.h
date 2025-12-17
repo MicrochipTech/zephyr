@@ -11,13 +11,12 @@
 
 #ifndef _ASMLANGUAGE
 
-#define MCHP_HAS_UART_LSR2
-
-#include <device_mec5.h>
+#include "mec174x.h"
 
 /* common peripheral register defines */
 #include <reg/mec_acpi_ec.h>
 #include <reg/mec_adc.h>
+#include <reg/mec_ecs.h>
 #include <reg/mec_global_cfg.h>
 #include <reg/mec_gpio.h>
 #include <reg/mec_kbc.h>
