@@ -222,43 +222,48 @@ choice
 	help
 	  Select Debug SoC interface support for MEC SoC family
 
-	config SOC_MEC_DEBUG_DISABLED
+	config SOC_XEC_DEBUG_DISABLED
 		bool "Disable debug support"
 		help
 		  Debug port is disabled, JTAG/SWD cannot be enabled. JTAG_RST#
 		  pin is ignored. All other JTAG pins can be used as GPIOs
 		  or other non-JTAG alternate functions.
 
-	config SOC_MEC_DEBUG_WITHOUT_TRACING
-		bool "Debug support via Serial wire debug"
+	config SOC_XEC_DEBUG_MODE_JTAG
+		bool "Debug enabled for JTAG mode"
 		help
-		  JTAG port in SWD mode.
+		  SoC debug port is in JTAG mode
 
-	config SOC_MEC_DEBUG_AND_TRACING
-		bool "Debug support via Serial wire debug with tracing enabled"
+	config SOC_XEC_DEBUG_MODE_SWD
+		bool "Debug enabled for two pin SWD"
 		help
-		  JTAG port is enabled in SWD mode.
+		  SoC debug port is in SWD 2-pin mode"
+
+	config SOC_XEC_DEBUG_MODE_SWD_SWV
+		bool "Debug enabled for SWD 2-pin + 1-pin Serial wire viewer"
+		help
+		  SoC debug port is in SWD + SWV"
 endchoice
 
 choice
-	prompt "MEC debug interface trace configuration"
-	default SOC_MEC_DEBUG_AND_SWV_TRACING
-	depends on SOC_MEC_DEBUG_AND_TRACING
+	prompt "MEC debug interface ETM configuration"
+	default SOC_XEC_DEBUG_ETM_DISABLED
+	depends on SOC_XEC_DEBUG_MODE_JTAG || SOC_XEC_DEBUG_MODE_SWD || SOC_XEC_DEBUG_MODE_SWD_SWV
 	help
 	  Select tracing mode for debug interface
 
-	config SOC_MEC_DEBUG_AND_ETM_TRACING
-		bool "Debug support via Serial wire debug"
+	config SOC_XEC_DEBUG_ETM_DISABLED
+		bool "Enable ARM ETM 4-pin interface"
 		help
-		  JTAG port in SWD mode and ETM as tracing method.
-		  ETM re-assigns 5 pins for clock and 4-bit data bus.
-		  Check data sheet for functions shared with ETM.
+		  Disable ARM ETM 5-pin trace interface
 
-	config SOC_MEC_DEBUG_AND_SWV_TRACING
-		bool "debug support via Serial Wire Debug and Viewer"
+	config SOC_XEC_DEBUG_ETM_ENABLED
+		bool "Enable ARM ETM 5-pin interface"
 		help
-		  JTAG port in SWD mode and SWV as tracing method.
-		  Check data sheet for functions shared with SWD and SWV pins.
+		  Enable ARM ETM 5-pin trace interface.
+		  ETM is clock plus 4 data output pins.
+		  Enabling this feature overrides the functionality
+		  of the 5 GPIO pins.
 endchoice
 
 # common processor clock divider configuration
