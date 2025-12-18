@@ -116,6 +116,12 @@ static int gpio_mec5_configure(const struct device *dev, gpio_pin_t pin, gpio_fl
 		return -EIO;
 	}
 
+	if (flags & GPIO_INPUT) {
+		props[idx].prop = MEC_GPIO_DIR_PROP_ID;
+		props[idx].val = MEC_GPIO_PROP_DIR_IN;
+		idx++;
+	}
+
 	if (flags & GPIO_OUTPUT) {
 		props[idx].prop = MEC_GPIO_DIR_PROP_ID;
 		props[idx].val = MEC_GPIO_PROP_DIR_OUT;
@@ -137,12 +143,6 @@ static int gpio_mec5_configure(const struct device *dev, gpio_pin_t pin, gpio_fl
 		} else {
 			mec_hal_gpio_pad_in(pin_num, &props[idx].val);
 		}
-		idx++;
-	}
-
-	if (flags & GPIO_INPUT) {
-		props[idx].prop = MEC_GPIO_DIR_PROP_ID;
-		props[idx].val = MEC_GPIO_PROP_DIR_IN;
 		idx++;
 	}
 
