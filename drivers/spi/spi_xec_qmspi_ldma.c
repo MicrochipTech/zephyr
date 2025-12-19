@@ -20,6 +20,7 @@
 LOG_MODULE_REGISTER(spi_xec_ldma, CONFIG_SPI_LOG_LEVEL);
 
 #include "spi_context.h"
+#include "spi_mchp_xec_regs.h"
 
 #define XEC_FREQ_HZ_MAX MHZ(96)
 #define XEC_FREQ_HZ_MIN (MHZ(96) / 0x10000U)
@@ -374,6 +375,7 @@ static int mec5_qspi_configure(const struct device *dev, const struct spi_config
 
 	return 0;
 }
+#else
 
 static int qspi_force_stop(const struct device *dev)
 {
@@ -516,6 +518,7 @@ static void qspi_ldma_init(const struct device *dev)
 
 	sys_clear_bits(qb + XEC_QSPI_MODE_OFS,
 		       (BIT(XEC_QSPI_MODE_LD_RX_EN_POS) | BIT(XEC_QSPI_MODE_LD_TX_EN_POS)));
+
 	sys_write32(0, qb + XEC_QSPI_LDMA_RX_EN_OFS);
 	sys_write32(0, qb + XEC_QSPI_LDMA_TX_EN_OFS);
 	sys_write32(BIT(XEC_QSPI_EXE_CLR_FIFOS_POS), qb + XEC_QSPI_EXE_OFS);
