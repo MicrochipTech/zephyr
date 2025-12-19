@@ -1,0 +1,44 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		spi0 = &qspi0;
+		spi-flash = &spi1_cs0_flash;
+		spi-flash-wp = &qspi_shd_io2_gpio227;
+	};
+};
+
+&qspi0 {
+	status = "okay";
+	compatible = "microchip,mec5-qspi";
+
+	pinctrl-0 = <&qspi_shd_cs0_n_gpio055
+		     &qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223
+		     &qspi_shd_io1_gpio224>;
+	pinctrl-names = "default";
+
+	spi1_cs0_flash: w25q128@0 {
+		compatible = "jedec,spi-nor";
+		/* 134217728 bits = 16 Mbytes */
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 40 18];
+		status = "okay";
+	};
+};
+
+&qspi_shd_cs0_n_gpio055 {
+	drive-open-drain;
+	output-high;
+};
+
+&qspi_shd_io2_gpio227 {
+	output-high;
+};

@@ -1,0 +1,76 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		spi0 = &qspi0;
+		spi-flash = &spi1_cs0_flash;
+		spi-flash-wp = &qspi_shd_io2_gpio227;
+	};
+};
+
+/* QSPI shared port
+ * GPIO002 = SHD_nCS1
+ * cs-gpios = <&gpioa 4 GPIO_ACTIVE_LOW>;
+ * cs-gpios is inherited from spi-controller.yaml
+ * It is phandle-array
+ * We should use define from include/zephyr/dt-bindings/gpio/mchp-xec-gpio.h
+ * cs-gpios = <MCHP_GPIO_DECODE_002 GPIO_ACTIVE_LOW>;
+ */
+
+/* ISSUE
+ * How can we mix HW chip selects and GPIO chip selects?
+ * Option 1:
+ *	if cs-gpios is not present, interprest child reg = <0> ... reg = <1> as
+ *		HW controlled chip selects [0:1]
+ *	else we can have N cs-gpios where reg = <0> ... reg = <N> specify the
+ *		index into array cs-gpios
+ * Option 2:
+ *	Complex. How can we decide an spi child device reg = <N> should be HW cs or GPIO?
+ *	We could interpret 0 and 1 as HW cs and any higher number as GPIO.
+ *
+ */
+&qspi0 {
+	status = "okay";
+	compatible = "microchip,mec5-qspi";
+
+	pinctrl-0 = <&qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223
+		     &qspi_shd_io1_gpio224>;
+	pinctrl-names = "default";
+	cs-gpios = <MCHP_GPIO_DECODE_002 GPIO_ACTIVE_LOW>;
+
+	spi1_cs0_flash: w25q128@0 {
+		compatible = "jedec,spi-nor";
+		/* 134217728 bits = 16 Mbytes */
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 40 18];
+		status = "okay";
+	};
+
+	spi1_cs1_flash: w25q128@1 {
+		compatible = "jedec,spi-nor";
+		/* 134217728 bits = 16 Mbytes */
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+		reg = <1>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 40 18];
+		status = "okay";
+	};
+};
+
+&qspi_shd_cs0_n_gpio055 {
+	drive-open-drain;
+	output-high;
+};
+
+&qspi_shd_io2_gpio227 {
+	output-high;
+};
