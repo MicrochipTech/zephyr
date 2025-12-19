@@ -11,7 +11,13 @@
 extern "C" {
 #endif
 
-/* slp_idx = [0, 4], bitpos = [0, 31] refer above */
+#include <zephyr/sys/sys_io.h>
+#include <zephyr/arch/common/sys_bitops.h>
+
+/* slp_idx = [0, 4], bitpos = [0, 31] */
+#define MCHP_XEC_ENC_PCR_SCR(slp_idx, bitpos)					\
+	(((slp_idx) & 0x7u) | (((bitpos) & 0x1fu) << 3))
+
 #define MCHP_XEC_PCR_SCR_ENCODE(slp_idx, bitpos, domain)			\
 	((((uint32_t)(domain) & 0xff) << 24) | (((bitpos) & 0x1f) << 3)		\
 	 | ((uint32_t)(slp_idx) & 0x7))
@@ -48,6 +54,38 @@ extern "C" {
 struct mchp_xec_pcr_clk_ctrl {
 	uint32_t pcr_info;
 };
+
+/* inline routines */
+#define XEC_PCR_BASE			DT_REG_ADDR_BY_IDX(DT_NODELABEL(pcr), 0)
+#define XEC_PCR_SLP_EN_BASE		(XEC_PCR_BASE + 0x30u)
+#define XEC_PCR_CLK_REQ_BASE		(XEC_PCR_BASE + 0x50u)
+#define XEC_PCR_RST_EN_BASE		(XEC_PCR_BASE + 0x70u)
+#define XEC_PCR_RST_EN_LOCK_BASE	(XEC_PCR_BASE + 0x84u)
+#define XEC_PCR_RST_EN_LOCK_VAL		0xa6382d4du
+#define XEC_PCR_RST_EN_UNLOCK_VAL	0xa6382d4cu
+
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_set(uint16_t enc_pcr_scr)
+{
+	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
+
+	sys_set_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
+}
+
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_clear(uint16_t enc_pcr_scr)
+{
+	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
+
+	sys_clear_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
+}
+
+static ALWAYS_INLINE int soc_xec_pcr_clk_req(uint16_t enc_pcr_scr)
+{
+	mem_addr_t raddr = XEC_PCR_CLK_REQ_BASE + (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * 4u);
+
+	return sys_test_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
+}
+
+void soc_xec_pcr_reset_en(uint16_t enc_pcr_scr);
 
 #ifdef __cplusplus
 }
