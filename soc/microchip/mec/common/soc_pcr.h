@@ -11,8 +11,6 @@
 extern "C" {
 #endif
 
-#include <zephyr/arch/cpu.h>
-#include <zephyr/irq.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/arch/common/sys_bitops.h>
 
@@ -71,21 +69,21 @@ struct mchp_xec_pcr_clk_ctrl {
 /* Calculate register offset from encoded zero based index and register size */
 #define XEC_PCR_SCR_REG_OFS(e)    (MCHP_XEC_PCR_SCR_GET_IDX(enc_pcr_scr) * XEC_PCR_SCR_REG_SIZE)
 
-static ALWAYS_INLINE void soc_xec_pcr_sleep_en_set(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_set(uint16_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + XEC_PCR_SCR_REG_OFS(enc_pcr_scr);
 
 	sys_set_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
 }
 
-static ALWAYS_INLINE void soc_xec_pcr_sleep_en_clear(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE void soc_xec_pcr_sleep_en_clear(uint16_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_SLP_EN_BASE + XEC_PCR_SCR_REG_OFS(enc_pcr_scr);
 
 	sys_clear_bit(raddr, MCHP_XEC_PCR_SCR_GET_BITPOS(enc_pcr_scr));
 }
 
-static ALWAYS_INLINE int soc_xec_pcr_clk_req(uint8_t enc_pcr_scr)
+static ALWAYS_INLINE int soc_xec_pcr_clk_req(uint16_t enc_pcr_scr)
 {
 	mem_addr_t raddr = XEC_PCR_CLK_REQ_BASE + XEC_PCR_SCR_REG_OFS(enc_pcr_scr);
 
