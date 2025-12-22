@@ -309,13 +309,13 @@ static int mec5_qspi_configure(const struct device *dev, const struct spi_config
 	}
 
 	/* chip select */
-	if (config->slave >= XEC_QSPI_MAX_CS) {
-		LOG_ERR("Invalid chip select [0,1]");
-		return -EINVAL;
-	}
-
 	if (config->cs.cs_is_gpio == true) {
-		LOG_ERR("GPIO as CS is not supported");
+		if (config->slave >= data->ctx.num_cs_gpios) {
+			LOG_ERR("Invalid GPIO chip select");
+			return -EINVAL;
+		}
+	} else if (config->slave >= XEC_QSPI_MAX_CS) {
+		LOG_ERR("Invalid HW chip select [0,1]");
 		return -EINVAL;
 	}
 
@@ -760,6 +760,7 @@ static DEVICE_API(spi, mec5_qspi_driver_api) = {
 	static struct mec5_qspi_data mec5_qspi_data_##i = {                                        \
 		SPI_CONTEXT_INIT_LOCK(mec5_qspi_data_##i, ctx),                                    \
 		SPI_CONTEXT_INIT_SYNC(mec5_qspi_data_##i, ctx),                                    \
+		SPI_CONTEXT_CS_GPIOS_INITIALIZE(DT_DRV_INST(i), ctx)                               \
 	};                                                                                         \
 	static const struct mec5_qspi_config mec5_qspi_config_##i = {                              \
 		.regbase = (mm_reg_t)DT_INST_REG_ADDR(i),                                          \
