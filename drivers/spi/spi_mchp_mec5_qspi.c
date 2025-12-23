@@ -49,6 +49,7 @@ struct mec5_qspi_config {
 /* Device run time data */
 struct mec5_qspi_data {
 	struct spi_context ctx; /* has pointer to struct spi_config */
+	struct spi_config spi_cfg;
 	const struct spi_buf *rxb;
 	const struct spi_buf *txb;
 	size_t rxcnt;
@@ -253,6 +254,7 @@ static void set_data_phase(const struct device *dev)
 	}
 
 	v = qspi_signal_mode[sgm];
+	v <<= XEC_QSPI_MODE_CPOL_HI_POS;
 	if (data->freq >= MHZ(48)) {
 		v ^= BIT(XEC_QSPI_MODE_CPHA_SDO_SE_POS);
 	}
@@ -309,15 +311,17 @@ static int mec5_qspi_configure(const struct device *dev, const struct spi_config
 	}
 
 	/* chip select */
-	if (config->cs.cs_is_gpio == true) {
-		if (config->slave >= data->ctx.num_cs_gpios) {
-			LOG_ERR("Invalid GPIO chip select");
-			return -EINVAL;
-		}
-	} else if (config->slave >= XEC_QSPI_MAX_CS) {
+#ifdef DT_SPI_CTX_HAS_NO_CS_GPIOS
+	if (config->slave >= XEC_QSPI_MAX_CS) {
 		LOG_ERR("Invalid HW chip select [0,1]");
 		return -EINVAL;
 	}
+#else
+	if ((config->cs.cs_is_gpio == true) && (config->slave >= data->ctx.num_cs_gpios)) {
+			LOG_ERR("Invalid GPIO chip select");
+			return -EINVAL;
+	}
+#endif
 
 	data->operation = config->operation;
 	data->cs = (uint8_t)(config->slave & 0xffu);
