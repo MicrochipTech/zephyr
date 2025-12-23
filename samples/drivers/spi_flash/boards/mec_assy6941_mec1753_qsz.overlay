@@ -21,6 +21,18 @@
  * cs-gpios = <MCHP_GPIO_DECODE_002 GPIO_ACTIVE_LOW>;
  */
 
+/* ISSUE
+ * How can we mix HW chip selects and GPIO chip selects?
+ * Option 1:
+ *	if cs-gpios is not present, interprest child reg = <0> ... reg = <1> as
+ *		HW controlled chip selects [0:1]
+ *	else we can have N cs-gpios where reg = <0> ... reg = <N> specify the
+ *		index into array cs-gpios
+ * Option 2:
+ *	Complex. How can we decide an spi child device reg = <N> should be HW cs or GPIO?
+ *	We could interpret 0 and 1 as HW cs and any higher number as GPIO.
+ *
+ */
 &qspi0 {
 	status = "okay";
 	compatible = "microchip,mec5-qspi";
@@ -37,6 +49,17 @@
 		size = <DT_SIZE_M(16)>;
 		page-size = <256>;
 		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 40 18];
+		status = "okay";
+	};
+
+	spi1_cs1_flash: w25q128@1 {
+		compatible = "jedec,spi-nor";
+		/* 134217728 bits = 16 Mbytes */
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+		reg = <1>;
 		spi-max-frequency = <DT_FREQ_M(24)>;
 		jedec-id = [ef 40 18];
 		status = "okay";
