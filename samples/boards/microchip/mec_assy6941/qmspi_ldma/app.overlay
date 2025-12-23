@@ -1,0 +1,87 @@
+/*
+ * Copyright (c) 2025 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/ {
+	zephyr,user {
+		shd-spi-other-gpios = <MCHP_GPIO_DECODE_227 GPIO_ACTIVE_HIGH>,
+				      <MCHP_GPIO_DECODE_016 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* The QSPI controller support 2 HW controlled chip selects.
+ * DT parameters are:
+ * 1. spi-cs-setup-delay-ns = delay after CS assertion to first clock (nanoseconds)
+ * 2. spi-cs-hold-delay-ns = delay after last clock edge to CS de-assertion (nanoseconds)
+ */
+/*
+&qspi0 {
+	compatible = "microchip,mec5-qspi";
+	status = "okay";
+
+	pinctrl-0 = <&qspi_shd_cs0_n_gpio055
+		     &qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223
+		     &qspi_shd_io1_gpio224>;
+	pinctrl-names = "default";
+
+	spi_ep0: spi_ep@0 {
+		reg = <0>;
+		spi-cs-setup-delay-ns = <80>;
+		spi-cs-hold-delay-ns = <80>;
+	};
+
+	spi_ep1: spi_ep@1 {
+		reg = <1>;
+		spi-cs-setup-delay-ns = <160>;
+		spi-cs-hold-delay-ns = <160>;
+	};
+
+	status = "okay";
+};
+*/
+
+/* Use GPIO chip selects
+ * delay in microseconds between:
+ * 1. chip select assertion and first clock
+ * 2. last clock edge and chip select de-assertion
+ * DT macro SPI_CONTEXT_CS_GPIOS_INITIALIZE in spi_context.h detects cs-gpios property
+ * exists  and fills in struct spi_context member cs (struct spi_cs_control) gpio which
+ * is a struct gpio_dt_spec. This macro does not fill in the delay member.
+ */
+&qspi0 {
+	compatible = "microchip,mec5-qspi";
+	status = "okay";
+
+	pinctrl-0 = <&qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223
+		     &qspi_shd_io1_gpio224>;
+	pinctrl-names = "default";
+
+	cs-gpios = <MCHP_GPIO_DECODE_055 GPIO_ACTIVE_LOW>,
+		   <MCHP_GPIO_DECODE_002 GPIO_ACTIVE_LOW>;
+
+	spi_ep0: spi_ep@0 {
+		compatible = "vnd,spi-device";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		spi-cs-setup-delay-ns = <1000>;
+		spi-cs-hold-delay-ns = <1000>;
+		status = "okay";
+	};
+
+	spi_ep1: spi_ep@1 {
+		compatible = "vnd,spi-device";
+		reg = <1>;
+		spi-max-frequency = <DT_FREQ_M(12)>;
+		spi-cs-setup-delay-ns = <2000>;
+		spi-cs-hold-delay-ns = <2000>;
+		status = "okay";
+	};
+
+	status = "okay";
+};
