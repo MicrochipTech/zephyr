@@ -1,0 +1,15 @@
+sample:
+  description: mec_assy6941 QMSPI-LDMA testing
+  name: mec_assy6941_qmspi_ldma test
+tests:
+  sample.board.mec_assy6941.qmspi_ldma:
+    harness: spi
+    platform_allow:
+      - mec_assy6941/mec1743_qlj
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: spi
+    depends_on:
+      - spi
+      - gpio
