@@ -114,6 +114,75 @@ struct test_buf {
 
 static struct test_buf tb1;
 
+static void pr_spi_dt_spec(const struct spi_dt_spec *dts)
+{
+	uint32_t temp = 0;
+
+	LOG_INF("struct spi_dt_spec pointer = %p", dts);
+
+	if (dts == NULL) {
+		LOG_ERR("struct spi_dt_spec pointer is NULL");
+	}
+
+	LOG_INF(".bus = %p", dts->bus);
+	LOG_INF(".config is struct spi_config");
+	LOG_INF("  .frequency = %u", dts->config.frequency);
+	LOG_INF("  .operation = 0x%0x", dts->config.operation);
+	if ((dts->config.operation & SPI_OP_MODE_SLAVE) == 0) {
+		LOG_INF("    Controller is Host");
+	} else {
+		LOG_INF("    Controller is Target");
+	}
+	if ((dts->config.operation & SPI_MODE_CPOL) == 0) {
+		LOG_INF("    Clock idle is Low");
+	} else {
+		LOG_INF("    Clock idle is High");
+	}
+	if ((dts->config.operation & SPI_MODE_CPHA) == 0) {
+		LOG_INF("    Data captured on clock idle to active edge");
+	} else {
+		LOG_INF("    Data captured on clock active to idle edge");
+	}
+	if ((dts->config.operation & SPI_MODE_LOOP) != 0) {
+		LOG_ERR("    SPI_MODE_LOOP flag is set. HW does not support this!");
+	}
+	if ((dts->config.operation & SPI_TRANSFER_LSB) == 0) {
+		LOG_INF("    Request bit order is MSB");
+	} else {
+		LOG_ERR("    Request bit order is LSB. HW does not support LSB!");
+	}
+
+	temp = SPI_WORD_SIZE_GET(dts->config.operation);
+	LOG_INF("    Word size = %u bits", temp);
+	if (temp != 8u) {
+		LOG_ERR("    Requested word size not allowed. HW supports byte (8-bit) only");
+	}
+
+	if ((dts->config.operation & SPI_HOLD_ON_CS) != 0) {
+		LOG_INF("    Request hold CS active at end of transfer");
+	}
+
+	if ((dts->config.operation & SPI_LOCK_ON) != 0) {
+		LOG_INF("    App requests driver lock SPI until app releases it");
+	}
+
+	if ((dts->config.operation & SPI_CS_ACTIVE_HIGH) != 0) {
+		LOG_INF("    Request CS active High. Not support by Controller HW. Must use GPIO for CS!");
+	}
+
+	LOG_INF("  .cs.cs_is_gpio = %u", dts->config.cs.cs_is_gpio);
+	if (dts->config.cs.cs_is_gpio == true) {
+		LOG_INF("    .gpio.port = %p", dts->config.cs.gpio.port);
+		LOG_INF("    .gpio.pin = %u", dts->config.cs.gpio.pin);
+		LOG_INF("    .gpio.dt_flags = %u", dts->config.cs.gpio.dt_flags);
+		LOG_INF("    .delay = %u", dts->config.cs.delay);
+	} else {
+		LOG_INF("    .setup_ns = %u", dts->config.cs.setup_ns);
+		LOG_INF("    .hold_ns  = %u", dts->config.cs.setup_ns);
+	}
+	LOG_INF("  word_delay = %u", dts->config.word_delay);
+}
+
 static bool is_data_buf_filled_with(uint8_t *data, size_t datasz, uint8_t val)
 {
 	if (!data || !datasz) {
@@ -369,6 +438,8 @@ int main(void)
 	memset(buf1, 0, sizeof(buf1));
 	memset((void *)&tb1, 0x55, sizeof(tb1));
 
+	LOG_INF("Size of struct spi_config is %u bytes", sizeof(struct spi_config));
+
 	if (device_is_ready(spi_ctrl_dev) == false) {
 		LOG_ERR("SPI Controller driver is not ready!\n");
 		return -1;
@@ -390,13 +461,19 @@ int main(void)
 	for (n = 0; n < ARRAY_SIZE(spi_ep_dt_specs); n++) {
 		const struct spi_dt_spec *pdts = &spi_ep_dt_specs[n];
 
+		pr_spi_dt_spec(pdts);
+
 		LOG_INF("Read JEDEC ID, STATUS1, and STATUS2 from SPI endpoint %u", n);
+
+		log_flush();
 
 		jedec_id = 0x55555555u;
 		err = read_jedec_id(pdts, &jedec_id);
 		if (err != 0) {
 			LOG_ERR("JEDEC ID read error (%d)", err);
 		}
+
+		log_flush();
 
 		spi_status1 = 0xffu;
 		err = spi_flash_read_status(pdts, SPI_FLASH_READ_STATUS1_OPCODE, &spi_status1);
@@ -435,6 +512,9 @@ int main(void)
 		LOG_INF("Exercising %u sectors", num_sectors);
 
 		LOG_INF("Erase sectors: Send SPI flash Write-Enable and Erase commands");
+
+		log_flush();
+
 		for (int i = 0; i < num_sectors; i++) {
 			err = spi_flash_fd_wr_cpd(pdts, SPI_FLASH_WRITE_ENABLE_OPCODE,
 						  NULL, 0, NULL, 0);
@@ -450,6 +530,8 @@ int main(void)
 
 			spi_addr.addr += SPI_FLASH_SECTOR_SIZE;
 		}
+
+		log_flush();
 
 		LOG_INF("Read and check erased sectors using Read 1-1-1-0");
 
@@ -474,6 +556,8 @@ int main(void)
 
 			spi_addr.addr += SPI_FLASH_SECTOR_SIZE;
 		}
+
+		log_flush();
 
 		LOG_INF("Fill buffers for %d sectors", num_sectors);
 		for (int i = 0; i < SPI_TEST_BUFFER_SIZE; i++) {
@@ -518,6 +602,8 @@ int main(void)
 			offset += SPI_FLASH_PAGE_SIZE;
 		}
 
+		log_flush();
+
 		LOG_INF("Read sectors and check data");
 
 		memset(&tb1.b[0], 0, sizeof(tb1));
@@ -557,6 +643,8 @@ int main(void)
 		} else {
 			LOG_ERR("FAIL: Data mismatch");
 		}
+
+		log_flush();
 	}
 
 	LOG_INF("Program End");
