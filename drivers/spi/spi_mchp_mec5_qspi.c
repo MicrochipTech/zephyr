@@ -27,6 +27,15 @@ LOG_MODULE_REGISTER(spi_xec_ldma, CONFIG_SPI_LOG_LEVEL);
 
 #define XEC_FORCE_STOP_LOOPS 100
 
+/* If defined the driver will check the contents of
+ * struct spi_config passed by the application against
+ * current configuration. This allows applications that
+ * re-use a non-const struct spi_config by casting it
+ * as a pointer to a const structure. Apps should not do
+ * this.
+ * #define XEC_CHK_SPI_CONFIG_CONTENT
+ */
+
 /* Device constant configuration parameters */
 struct mec5_qspi_config {
 	mm_reg_t regbase;
@@ -76,7 +85,7 @@ static int spi_feature_support(const struct spi_config *config)
 	}
 
 	if ((config->operation & SPI_CS_ACTIVE_HIGH) != 0) {
-		LOG_ERR("CS active high not supported");
+		LOG_ERR("CS active high not supported. Use invert property of CS pin");
 		return -ENOTSUP;
 	}
 
@@ -282,6 +291,17 @@ static void set_duplex(const struct device *dev, uint8_t duplex)
  * to de-assert. We must check for this corner case.
  * The driver data structure has member ctx which is type struct spi_context. The context has
  * a pointer to struct spi_config.
+ * TODO - check passed struct spi_config is the same as current
+ * 	static inline bool spi_context_configured checks pointer to struct spi_config is the same
+ * 	not the content. Check the content:
+ * 		.frequency
+ * 		.operation - multiple fields
+ * 		.slave - chip select
+ * 		.cs - this also selects chip select and has timings for GPIO or HW CS mode
+ * 		.word_delay - ignore
+ *
+ * TODO - handle SPI_LOCK_ON flag
+ *
  * struct spi_config
  *   frequency in Hz
  *   operation - contains flags for sampling clock edge and clock idle state
@@ -294,6 +314,7 @@ static void set_duplex(const struct device *dev, uint8_t duplex)
  *   slave - QSPI is controller only. We use this field for chip select (0/1).
  *   struct spi_cs_control cs - QSPI controls chip select. We don't use this field.
  */
+#if 0
 static int mec5_qspi_configure(const struct device *dev, const struct spi_config *config)
 {
 	const struct mec5_qspi_config *devcfg = dev->config;
@@ -349,6 +370,99 @@ static int mec5_qspi_configure(const struct device *dev, const struct spi_config
 
 	return 0;
 }
+#else
+
+static bool req_reconfig(const struct device *dev, const struct spi_config *config)
+{
+	const struct mec5_qspi_data *data = dev->data;
+	const struct spi_context *ctx = &data->ctx;
+	const struct spi_config *ctx_cfg = ctx->config;
+
+	if (ctx_cfg != config) {
+		return true;
+	}
+#ifdef XEC_CHK_SPI_CONFIG_CONTENT
+	if (ctx_cfg->frequency != config->frequency) {
+		return true;
+	}
+
+	if (ctx_cfg->operation != config->operation) {
+		return true;
+	}
+
+	if (ctx_cfg->slave != config->slave) {
+		return true;
+	}
+
+	if (memcmp((void *)&ctx_cfg->cs, (void *)&config->cs,
+	           sizeof(struct spi_cs_control)) != 0) {
+		return true;
+	}
+#endif
+	return false;
+}
+
+static int mec5_qspi_configure(const struct device *dev, const struct spi_config *config)
+{
+	const struct mec5_qspi_config *devcfg = dev->config;
+	struct mec5_qspi_data *data = dev->data;
+/*	struct spi_context *ctx = &data->ctx; */
+	mm_reg_t qb = devcfg->regbase;
+	int ret = 0;
+
+	if (config == NULL) {
+		return -EINVAL;
+	}
+
+	if (req_reconfig(dev, config) == false) {
+		return 0;
+	}
+
+	ret = spi_feature_support(config);
+	if (ret != 0) {
+		return ret;
+	}
+
+	/* chip select */
+#ifdef DT_SPI_CTX_HAS_NO_CS_GPIOS
+	if (config->slave >= XEC_QSPI_MAX_CS) {
+		LOG_ERR("Invalid HW chip select [0,1]");
+		return -EINVAL;
+	}
+#else
+	if ((config->cs.cs_is_gpio == true) && (config->slave >= data->ctx.num_cs_gpios)) {
+			LOG_ERR("Invalid GPIO chip select");
+			return -EINVAL;
+	}
+#endif
+
+	data->operation = config->operation;
+	data->cs = (uint8_t)(config->slave & 0xffu);
+	data->freq = config->frequency;
+
+	if ((data->operation & SPI_HOLD_ON_CS) == 0) {
+		qspi_soft_reset(dev);
+	}
+
+	set_freq(dev, data->freq);
+	set_taps(dev, data->cs);
+	set_cs(dev, data->cs);
+	set_cs_timing(dev, config);
+	set_data_phase(dev);
+	set_duplex(dev, XEC_QSPI_CR_IFM_FD);
+
+	data->ctx.config = config;
+
+	/* clear status */
+	sys_write32(UINT32_MAX, qb + XEC_QSPI_SR_OFS);
+	soc_ecia_girq_status_clear(devcfg->girq, devcfg->girq_pos);
+
+	/* enable */
+	sys_set_bit(qb + XEC_QSPI_MODE_OFS, XEC_QSPI_MODE_ACTV_POS);
+
+	return 0;
+}
+#endif /* 0 */
 
 static int qspi_force_stop(const struct device *dev)
 {
