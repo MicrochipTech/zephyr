@@ -6,6 +6,13 @@
 
 #include <zephyr/device.h>
 #include <zephyr/init.h>
+#include <zephyr/kernel.h>
+#include <soc.h>
+#include <soc_cmn_init.h>
+
+#if 0
+#include <zephyr/device.h>
+#include <zephyr/init.h>
 #include <soc.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/kernel.h>
@@ -58,4 +65,19 @@ void soc_early_init_hook(void)
 	if (!isave) {
 		__enable_irq();
 	}
+}
+#endif
+
+/* SoC preparation hook
+ * MEC15xx VTR2 and VTR3 can be 3.3 or 1.8V
+ * VTR2 pins don't need configuration if VTR2_STRAP is used.
+ * VTR3 pins must be set based on Kconfig
+ */
+void soc_prep_hook(void)
+{
+	mec5_soc_common_init();
+	
+#ifdef CONFIG_SOC_MEC1501_VTR3_1_8V
+	ECS_REGS->GPIO_BANK_PWR |= MCHP_ECS_VTR3_LVL_18;
+#endif
 }

@@ -15,7 +15,7 @@
 #include "regaccess.h"
 
 /* common peripheral register defines */
-
+#include <reg/mec_ecs.h>
 #include <reg/mec_gpio.h>
 #include <reg/mec_uart.h>
 
