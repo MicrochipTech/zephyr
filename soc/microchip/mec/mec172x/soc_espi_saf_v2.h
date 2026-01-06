@@ -387,6 +387,8 @@
 #define MCHP_SAF_VER_1			0
 #define MCHP_SAF_VER_2			1
 
+#define MCHP_ESPI_SAF_TAGMAP_MAX	3
+
 struct espi_saf_hw_cfg {
 	uint8_t  version;
 	uint8_t  flags;
