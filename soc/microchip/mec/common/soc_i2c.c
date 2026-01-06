@@ -79,10 +79,10 @@ int soc_i2c_port_lines_get(uint8_t port, uint32_t *lines)
 		return -EINVAL;
 	}
 
-	if (regs->CTRL[idx_scl] & BIT(MCHP_GPIO_CTRL_INPAD_VAL_POS)) {
+	if (regs->CTRL[idx_scl] & BIT(MEC_GPIO_CR1_INPV_POS)) {
 		pinval |= BIT(SOC_I2C_SCL_POS);
 	}
-	if (regs->CTRL[idx_sda] & BIT(MCHP_GPIO_CTRL_INPAD_VAL_POS)) {
+	if (regs->CTRL[idx_sda] & BIT(MEC_GPIO_CR1_INPV_POS)) {
 		pinval |= BIT(SOC_I2C_SDA_POS);
 	}
 
