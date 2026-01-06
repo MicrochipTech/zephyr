@@ -11,19 +11,8 @@
 
 #ifndef _ASMLANGUAGE
 
-#include "device_mec5.h"
-
-/* common peripheral register defines */
-#include <reg/mec_gpio.h>
-
-/* common SoC API */
-#include <soc_dt.h>
-#include <soc_ecia.h>
-#include <soc_espi_channels.h>
-#include <soc_gpio.h>
-#include <soc_mmcr.h>
-#include <soc_pcr.h>
-#include <soc_pins.h>
+#include <device_mec5.h>
+#include <soc_common.h>
 
 #endif
 #endif

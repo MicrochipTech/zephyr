@@ -1,0 +1,67 @@
+/*
+ * Copyright (c) 2021 Microchip Technology Inc. and its subsidiaries.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef _SOC_MICROCHIP_MEC_COMMON_REG_MEC_ECS_H
+#define _SOC_MICROCHIP_MEC_COMMON_REG_MEC_ECS_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <zephyr/sys/sys_io.h>
+
+/* ---- MEC EC Subsystem registers ---- */
+
+#define MCHP_XEC_ECS_AERR_CAP_OFS    0x04u
+#define MCHP_XEC_ECS_AERR_CR_OFS     0x14u
+#define MCHP_XEC_ECS_AERR_CR_CAP_DIS_POS 0
+
+#define MCHP_XEC_ECS_ICR_OFS         0x18u
+#define MCHP_XEC_ECS_ICR_DIREN_POS   0
+
+#define MCHP_XEC_ECS_ETM_CR_OFS      0x1cu
+#define MCHP_XEC_ECS_ETM_CR_EN_POS   0
+
+#define MCHP_XEC_ECS_DBG_CR_OFS      0x20u
+#define MCHP_XEC_ECS_DBG_CR_EN_POS   0
+#define MCHP_XEC_ECS_DBG_CR_CFG_POS  1
+#define MCHP_XEC_ECS_DBG_CR_CFG_MSK  GENMASK(2, 1)
+#define MCHP_XEC_ECS_DBG_CR_JTAG     0
+#define MCHP_XEC_ECS_DBG_CR_SWD_SWV  1
+#define MCHP_XEC_ECS_DBG_CR_SWD      2
+#define MCHP_XEC_ECS_DBG_CR_SET(m)   FIELD_PREP(MCHP_XEC_ECS_DBG_CR_CFG_MSK, (m))
+#define MCHP_XEC_ECS_DBG_CR_GET(r)   FIELD_GET(MCHP_XEC_ECS_DBG_CR_CFG_MSK, (r))
+#define MCHP_XEC_ECS_DBG_CR_PU_POS   3
+#define MCHP_XEC_ECS_DBG_CR_LOCK_POS 5
+
+#define MCHP_XEC_ECS_PECI_CR_OFS     0x40u
+#define MCHP_XEC_ECS_PECI_CR_DIS_POS 0
+
+#define MCHP_XEC_ECS_CMP_CR_OFS       0x94u
+#define MCHP_XEC_ECS_CMP_CR_EN0_POS   0
+#define MCHP_XEC_ECS_CMP_CR_LOCK0_POS 2
+#define MCHP_XEC_ECS_CMP_CR_EN1_POS   4
+
+#define MCHP_XEC_ECS_CMP_SLP_CR_OFS  0x98u
+#define MCHP_XEC_ECS_CMP_SLP_CR_EN0_POS 0
+#define MCHP_XEC_ECS_CMP_SLP_CR_EN1_POS 1
+
+#define MCHP_XEC_ECS_EMBRST_CR_OFS   0xb0u
+#define MCHP_XEC_ECS_EMBRST_CR_EN_POS 0
+
+#define MCHP_XEC_ECS_EMBRST_TM_OFS   0xb4u
+#define MCHP_XEC_ECS_EMBRST_TM_VAL_POS 0
+#define MCHP_XEC_ECS_EMBRST_TM_VAL_MSK GENMASK(2, 0)
+#define MCHP_XEC_ECS_EMBRST_TM_VAL_SET(tmout) FIELD_PREP(MCHP_XEC_ECS_EMBRST_TM_VAL_MSK, (tmout))
+#define MCHP_XEC_ECS_EMBRST_TM_VAL_GET(r) FIELD_GET(MCHP_XEC_ECS_EMBRST_TM_VAL_MSK, (r))
+
+#define MCHP_XEC_ECS_EMBRST_SR_OFS   0xb8u
+#define MCHP_XEC_ECS_EMBRST_SR_RST_POS 0
+
+#define MCHP_XEC_ECS_EMBRST_CNT_OFS  0xbcu /* read-only */
+#define MCHP_XEC_ECS_EMBRST_CNT_VAL_POS 0
+#define MCHP_XEC_ECS_EMBRST_CNT_VAL_MSK GENMASK(18, 0)
+#define MCHP_XEC_ECS_EMBRST_CNT_VAL_GET(r) FIELD_GET(MCHP_XEC_ECS_EMBRST_CNT_VAL_MSK, (r))
+
+#endif /* _SOC_MICROCHIP_MEC_COMMON_REG_MEC_ECS_H */
