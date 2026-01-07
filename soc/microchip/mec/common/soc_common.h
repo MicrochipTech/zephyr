@@ -20,6 +20,7 @@
 #include <reg/mec_peci.h>
 #include <reg/mec_ps2.h>
 #include <reg/mec_pwm.h>
+#include <reg/mec_qmspi.h>
 #include <reg/mec_tach.h>
 #include <reg/mec_tfdp.h>
 #include <reg/mec_timers.h>

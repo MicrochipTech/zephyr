@@ -1,0 +1,35 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MSPI_XEC_QMSPI_LDMA
+	bool "Microchip QMSPI-LDMA controller used as MSPI"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_MSPI_LDMA_ENABLED
+	select PINCTRL
+	imply MSPI_TIMING
+
+if MSPI_XEC_QMSPI_LDMA
+
+config MSPI_XEC_QMSPI_LDMA_MAX_FREQ
+	int "MCHP XEC MSPI max frequency"
+	default 960000000 if SOC_SERIES_MEC175X
+	default 960000000 if SOC_SERIES_MEC174X
+	default 960000000 if SOC_SERIES_MEC172X
+	default 960000000 if SOC_SERIES_MEC165XB
+	default 480000000 if SOC_SERIES_MEC15XX
+	default 480000000
+
+config MSPI_XEC_QMSPI_LDMA_MAX_SPI_DEVICES
+	int "MCHP XEC maximum number of SPI devices"
+	default 2
+	help
+	  Microchip MEC QSPI controller implements two
+	  hardware controlled chip selects. GPIO chip
+	  selects may also be used. This value specifies
+	  the number of devices connected to the controller.
+	  The driver must instantiate a MSPI device structure
+	  for each device connected to the controller. If GPIO
+	  pins are need for additional chip selects this value
+	  should be adjusted.
+
+endif # MSPI_XEC_QMSPI_LDMA

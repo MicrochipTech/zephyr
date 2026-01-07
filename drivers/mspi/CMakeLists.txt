@@ -13,4 +13,5 @@ zephyr_library_sources_ifdef(CONFIG_MSPI_EMUL mspi_emul.c)
 zephyr_library_sources_ifdef(CONFIG_MSPI_STM32_OSPI  mspi_stm32_ospi.c mspi_stm32_common.c)
 zephyr_library_sources_ifdef(CONFIG_MSPI_STM32_QSPI  mspi_stm32_qspi.c mspi_stm32_common.c)
 zephyr_library_sources_ifdef(CONFIG_MSPI_STM32_XSPI  mspi_stm32_xspi.c mspi_stm32_common.c)
+zephyr_library_sources_ifdef(CONFIG_MSPI_XEC_QMSPI_LDMA mspi_xec_qmspi_ldma.c)
 # zephyr-keep-sorted-stop
