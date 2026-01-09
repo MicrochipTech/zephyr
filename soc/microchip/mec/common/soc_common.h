@@ -5,6 +5,9 @@
 
 #ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H_
 #define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H_
+=======
+#ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
+#define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
 
 /* common peripheral register defines */
 #include <reg/mec_acpi_ec.h>
