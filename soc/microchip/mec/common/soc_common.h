@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
-#define __SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
+#ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
+#define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H
 
 #include <reg/mec_acpi_ec.h>
 #include <reg/mec_adc.h>
@@ -22,14 +22,19 @@
 #include <reg/mec_uart.h>
 #include <reg/mec_vci.h>
 #include <reg/mec_wdt.h>
+#include <reg/xec_dmac_regs.h>
 
 /* common SoC API */
+#include <pinctrl_soc.h>
+#include <soc_cmn_init.h>
+#include <soc_dmac.h>
 #include <soc_dt.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
 #include <soc_gpio.h>
+#include <soc_i2c.h>
 #include <soc_mmcr.h>
 #include <soc_pcr.h>
 #include <soc_pins.h>
 
-#endif /* __SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H */
+#endif /* _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H */
