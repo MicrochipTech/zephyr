@@ -17,8 +17,10 @@
 /* common peripheral register defines */
 #include <reg/mec_gpio.h>
 #include <reg/mec_uart.h>
+#include <reg/xec_dmac_regs.h>
 
 /* common SoC API */
+#include <soc_dmac.h>
 #include <soc_dt.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
