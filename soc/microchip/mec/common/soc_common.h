@@ -23,9 +23,12 @@
 #include <reg/mec_uart.h>
 #include <reg/mec_vci.h>
 #include <reg/mec_wdt.h>
+#include <reg/xec_dmac_regs.h>
 
 /* common SoC API */
 #include <pinctrl_soc.h>
+#include <soc_cmn_init.h>
+#include <soc_dmac.h>
 #include <soc_dt.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
