@@ -56,6 +56,7 @@
 
 	soc {
 		#include "mec172x_common.dtsi"
+		#include "mec5/mec5_dma_chan16.dtsi"
 
 		eeprom: eeprom@40002c00 {
 			compatible = "microchip,xec-eeprom";
