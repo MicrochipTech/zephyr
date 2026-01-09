@@ -1,9 +1,9 @@
 /*
- * Copyright (c) 2023 Microchip Technology Inc.
+ * Copyright 2025 Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-tst_dma: &dmac {
+tst_dma0: &dmac {
 	status = "okay";
 };
