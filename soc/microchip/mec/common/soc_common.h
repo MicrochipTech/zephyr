@@ -25,6 +25,7 @@
 #include <reg/mec_vci.h>
 #include <reg/mec_wdt.h>
 #include <reg/xec_dmac_regs.h>
+#include <reg/xec_i2c_regs.h>
 
 /* common SoC API */
 #include <pinctrl_soc.h>
