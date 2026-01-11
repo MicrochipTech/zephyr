@@ -29,6 +29,7 @@
 #include <reg/mec_vci.h>
 #include <reg/mec_wdt.h>
 #include <reg/xec_dmac_regs.h>
+#include <reg/xec_i2c_regs.h>
 
 #include <pinctrl_soc.h>
 #include <soc_cmn_init.h>
