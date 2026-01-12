@@ -666,7 +666,7 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	struct xec_dmac_channel *chan_data = NULL;
 	struct xec_dma_chan_cfg *chcfg = NULL;
 	mem_addr_t chan_base = 0;
-	uint32_t ctrl = 0, msa = 0, mea = 0; /* , rembytes = 0; */
+	uint32_t ctrl = 0, chan_status = 0, msa = 0, mea = 0;
 
 	if (!is_chan_valid(dev, chan) || (status == NULL)) {
 		LOG_ERR("unsupported channel");
@@ -681,6 +681,7 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	msa = sys_read32(chan_base + XEC_DMA_CHAN_MSA_OFS);
 	mea = sys_read32(chan_base + XEC_DMA_CHAN_MEA_OFS);
 	ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
+	chan_status = sys_read32(chan_base + XEC_DMA_CHAN_SR_OFS);
 
 	status->pending_length = mea - msa;
 	if ((ctrl & BIT(XEC_DMA_CHAN_CR_BUSY_POS)) != 0) {
@@ -704,6 +705,10 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	 */
 	status->total_copied = chan_data->total_curr_xfr_len +
 			       (chan_data->total_req_xfr_len - status->pending_length);
+
+	if ((chan_status & BIT(XEC_DMA_CHAN_IESR_BERR_POS)) != 0) {
+		return -EIO;
+	}
 
 	return 0;
 }
