@@ -20,7 +20,17 @@ config I2C_XEC_V2
 	help
 	  Enable the Microchip XEC I2C V2 driver.
 
-if I2C_XEC_V2
+config I2C_XEC_NL
+	bool "XEC Microchip I2C with network layer DMA driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select PINCTRL
+	select I2C_XEC_PORT_MUX
+	select DMA
+	help
+	  Enable the Microchip XEC I2C-NL driver.
+
+if I2C_XEC_V2 || I2C_XEC_NL
 
 config I2C_XEC_PORT_MUX
 	bool "Allow I2C configuration to switch port and frequency"
@@ -38,4 +48,4 @@ config I2C_XEC_PORT_MUX
 	  application to switch the port and configure a new frequency
 	  in one API call.
 
-endif # I2C_XEC_V2
+endif # I2C_XEC_V2 || I2C_XEC_NL
