@@ -895,9 +895,10 @@ espi0: espi@400f3400 {
 	reg-names = "io", "mem", "vw";
 	interrupts = <103 3>, <104 3>, <105 3>, <106 3>,
 		     <107 3>, <108 3>, <109 3>, <110 2>,
-		     <156 3>;
+		     <156 3>, <15 3>, <16 3>;
 	interrupt-names = "pc", "bm1", "bm2", "ltr", "oob_up",
-			  "oob_dn", "fc", "rst", "vw_chan_en";
+			  "oob_dn", "fc", "erst", "vw_chan_en",
+			  "ht_vw_bank0", "ht_vw_bank1";
 	girqs = <MCHP_XEC_ECIA(19, 0, 11, 103)
 		 MCHP_XEC_ECIA(19, 1, 11, 104)
 		 MCHP_XEC_ECIA(19, 2, 11, 105)
@@ -906,8 +907,10 @@ espi0: espi@400f3400 {
 		 MCHP_XEC_ECIA(19, 5, 11, 108)
 		 MCHP_XEC_ECIA(19, 6, 11, 109)
 		 MCHP_XEC_ECIA(19, 7, 11, 110)
-		 MCHP_XEC_ECIA(19, 8, 11, 156)>;
-	pcrs = <2 19>;
+		 MCHP_XEC_ECIA(19, 8, 11, 156)
+		 MCHP_XEC_ECIA_GIRQ_ENC(24, 31)
+		 MCHP_XEC_ECIA_GIRQ_ENC(25, 31)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 19)>;
 	status = "disabled";
 
 	espi_saf0: espi_saf@40008000 {
@@ -919,7 +922,7 @@ espi0: espi@400f3400 {
 		interrupt-names = "done", "err";
 		girqs = <MCHP_XEC_ECIA(19, 9, 11, 166)>,
 			<MCHP_XEC_ECIA(19, 10, 11, 167)>;
-		pcrs = <2 27>;
+		pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 27)>;
 		status = "disabled";
 	};
 

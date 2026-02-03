@@ -23,10 +23,11 @@ properties:
     description: |
       Array of encoded interrupt information
 
-  pcrs:
-    type: array
+  pcr-scr:
+    type: int
     required: true
-    description: eSPI PCR register index and bit position
+    description: |
+      Encoded PCR sleep, clock required, reset register index and bit position.
 
   pinctrl-0:
     required: true
