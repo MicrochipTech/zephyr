@@ -1,14 +1,15 @@
 /*
- * Copyright (c) 2021 Microchip Technology Inc. and its subsidiaries.
+ * Copyright (c) 2026 Microchip Technology Inc. and its subsidiaries.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _MEC172X_ESPI_IO_H
-#define _MEC172X_ESPI_IO_H
+#ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_IOM_V2_H
+#define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_IOM_V2_H
 
 #include <stdint.h>
 #include <stddef.h>
+#include <zephyr/sys/util.h>
 
 /* Offsets from base for various register groups */
 #define MCHP_ESPI_IO_PC_OFS		0x0100u
@@ -36,8 +37,7 @@
 #define MCHP_ESPI_GBL_CAP1_MAX_FREQ_50M		0x03u
 #define MCHP_ESPI_GBL_CAP1_MAX_FREQ_66M		0x04u
 #define MCHP_ESPI_GBL_CAP1_ALERT_POS		3u /* Read-Only */
-#define MCHP_ESPI_GBL_CAP1_ALERT_DED_PIN	\
-	BIT(MCHP_ESPI_GBL_CAP1_ALERT_POS)
+#define MCHP_ESPI_GBL_CAP1_ALERT_DED_PIN	BIT(MCHP_ESPI_GBL_CAP1_ALERT_POS)
 #define MCHP_ESPI_GBL_CAP1_ALERT_ON_IO1		0u
 #define MCHP_ESPI_GBL_CAP1_IO_MODE_POS		4u
 #define MCHP_ESPI_GBL_CAP1_IO_MODE_MASK0	0x03u
@@ -940,4 +940,4 @@ struct espi_iom_regs { /* @ 0x400F3400 */
 }
 #endif
 
-#endif /* #ifndef _MEC172X_ESPI_IO_H */
+#endif /* _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_IOM_V2_H */

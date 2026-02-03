@@ -250,9 +250,6 @@ typedef enum {
 #include "reg/mec172x_defs.h"
 #include "reg/mec172x_ecia.h"
 #include "reg/mec172x_ecs.h"
-#include "reg/mec172x_espi_iom.h"
-#include "reg/mec172x_espi_saf.h"
-#include "reg/mec172x_espi_vw.h"
 #include "reg/mec172x_gpio.h"
 #include "reg/mec172x_i2c_smb.h"
 #include "reg/mec172x_p80bd.h"
@@ -263,9 +260,6 @@ typedef enum {
 /* common peripheral register defines */
 #include <soc_common.h>
 #include <soc_i2c.h>
-
-/* MEC172x SAF V2 */
-#include "soc_espi_saf_v2.h"
 
 #endif
 #endif
