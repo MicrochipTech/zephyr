@@ -13,6 +13,9 @@
 /* common peripheral register defines */
 #include <reg/mec_acpi_ec.h>
 #include <reg/mec_adc.h>
+#include <reg/mec_espi_iom_v2.h>
+#include <reg/mec_espi_saf_v2.h>
+#include <reg/mec_espi_vw_v2.h>
 #include <reg/mec_global_cfg.h>
 #include <reg/mec_gpio.h>
 #include <reg/mec_kbc.h>
@@ -34,6 +37,7 @@
 #include <soc_dt.h>
 #include <soc_ecia.h>
 #include <soc_espi_channels.h>
+#include <soc_espi_saf_v2.h>
 #include <soc_gpio.h>
 #include <soc_misc.h>
 #include <soc_mmcr.h>
