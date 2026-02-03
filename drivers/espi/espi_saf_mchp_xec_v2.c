@@ -73,8 +73,7 @@ struct espi_saf_xec_config {
 	uint32_t sus_chk_delay;
 	uint16_t sus_rsm_interval;
 	uint16_t poll_interval;
-	uint8_t pcr_idx;
-	uint8_t pcr_pos;
+	uint16_t pcr_scr;
 	uint8_t irq_info_size;
 	uint8_t rsvd1;
 	const struct espi_xec_irq_info *irq_info_list;
@@ -1080,7 +1079,7 @@ static int espi_saf_xec_init(const struct device *dev)
 	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
 
 	/* ungate SAF clocks by disabling PCR sleep enable */
-	z_mchp_xec_pcr_periph_sleep(xcfg->pcr_idx, xcfg->pcr_pos, 0);
+	soc_xec_pcr_sleep_en_clear(xcfg->pcr_scr);
 
 	/* Configure the channels and its capabilities based on build config */
 	espi_iom->CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
@@ -1133,8 +1132,7 @@ static int espi_saf_xec_init(const struct device *dev)
 						    MCHP_SAF_FLASH_SUS_RSM_INTERVAL),	\
 		.poll_interval = DT_INST_PROP_OR(n, poll_interval,			\
 						 MCHP_SAF_FLASH_POLL_INTERVAL),		\
-		.pcr_idx = DT_INST_PROP_BY_IDX(n, pcrs, 0),				\
-		.pcr_pos = DT_INST_PROP_BY_IDX(n, pcrs, 1),				\
+		.pcr_scr = DT_INST_PROP(n, pcr_scr), \
 		.irq_config_func = espi_saf_xec_connect_irqs_##n,			\
 		.irq_info_size = ARRAY_SIZE(espi_saf_xec_irq_info_##n),			\
 		.irq_info_list = espi_saf_xec_irq_info_##n,				\

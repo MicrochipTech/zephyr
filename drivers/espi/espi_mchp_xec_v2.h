@@ -11,6 +11,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/pinctrl.h>
+#include <zephyr/kernel.h>
 
 /* #define ESPI_XEC_V2_DEBUG	1 */
 
@@ -37,8 +38,7 @@ struct espi_xec_irq_info {
 struct espi_xec_config {
 	uint32_t base_addr;
 	uint32_t vw_base_addr;
-	uint8_t pcr_idx;
-	uint8_t pcr_bitpos;
+	uint16_t pcr_scr;
 	uint8_t irq_info_size;
 	uint8_t rsvd[1];
 	const struct espi_xec_irq_info *irq_info_list;
@@ -102,6 +102,8 @@ enum xec_espi_girq_idx {
 	fc_girq_idx,
 	rst_girq_idx,
 	vw_ch_en_girq_idx,
+	ht_vw_bank0_idx,
+	ht_vw_bank1_idx,
 	max_girq_idx,
 };
 
