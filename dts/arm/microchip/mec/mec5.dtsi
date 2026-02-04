@@ -701,16 +701,18 @@
 				reg = <0x400f0000 0x200>;
 				interrupts = <60 3>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 20)>;
+				ldn = <0>;
 				status = "disabled";
 			};
 
 			kbc0: kbc@400f0400 {
 				compatible = "microchip,xec-espi-host-dev";
-				reg = <0x400f0400 0x400>, <0x400f2000 0x400>;
+				reg = <0x400f0400 0x400>;
 				interrupts = <59 3>, <58 3>;
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 19)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 18)>;
+				ldn = <1>;
 				status = "disabled";
 			};
 
@@ -721,6 +723,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 5)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 6)>;
+				ldn = <2>;
 				status = "disabled";
 			};
 
@@ -731,6 +734,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 7)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 8)>;
+				ldn = <3>;
 				status = "disabled";
 			};
 
@@ -741,6 +745,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 9)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 10)>;
+				ldn = <4>;
 				status = "disabled";
 			};
 
@@ -751,6 +756,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 11)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 12)>;
+				ldn = <5>;
 				status = "disabled";
 			};
 
@@ -761,6 +767,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 13)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 14)>;
+				ldn = <6>;
 				status = "disabled";
 			};
 
@@ -772,6 +779,14 @@
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 5)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 16)
 					 MCHP_XEC_ECIA_GIRQ_ENC(15, 17)>;
+				ldn = <7>;
+				status = "disabled";
+			};
+
+			port92: port92@400f2000 {
+				compatible = "microchip,xec-espi-host-dev";
+				reg = <0x400f2000 0x400>;
+				ldn = <8>;
 				status = "disabled";
 			};
 
@@ -780,30 +795,34 @@
 				reg = <0x400f3c00 0x200>;
 				interrupts = <172 1>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(21, 26)>;
+				ldn = <0xf>;
 				status = "disabled";
 			};
 
 			emi0: emi@400f4000 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f4000 0x400>;
-				interrupts = <MCHP_XEC_ECIA_GIRQ_ENC(42, 3)>;
-				girqs = <15 2>;
+				interrupts = <42 3>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 2)>;
+				ldn = <0x10>;
 				status = "disabled";
 			};
 
 			emi1: emi@400f4400 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f4400 0x400>;
-				interrupts = <MCHP_XEC_ECIA_GIRQ_ENC(43, 3)>;
-				girqs = <15 3>;
+				interrupts = <43 3>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 3)>;
+				ldn = <0x11>;
 				status = "disabled";
 			};
 
 			emi2: emi@400f4800 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f4800 0x400>;
-				interrupts = <MCHP_XEC_ECIA_GIRQ_ENC(44, 3)>;
-				girqs = <15 4>;
+				interrupts = <44 3>;
+				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 4)>;
+				ldn = <0x12>;
 				status = "disabled";
 			};
 
@@ -816,6 +835,7 @@
 				reg = <0x400f8000 0x400>;
 				interrupts = <62 0>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 22)>;
+				ldn = <0x20>;
 				status = "disabled";
 			};
 
@@ -823,7 +843,7 @@
 			p80bd0_alias: p80bd@400f8400 {
 				compatible = "microchip,xec-espi-host-dev";
 				reg = <0x400f8400 0x400>;
-				ldn = <33>;
+				ldn = <0x21>;
 				host-io = <0x90>;
 				/* map 0x90 to 0x80 */
 				host-io-addr-mask = <0x01>;

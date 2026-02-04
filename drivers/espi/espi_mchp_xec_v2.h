@@ -45,8 +45,10 @@ struct espi_xec_config {
 	const struct pinctrl_dev_config *pcfg;
 };
 
+#if 0
 #define ESPI_XEC_CONFIG(dev)						\
 	((struct espi_xec_config * const)(dev)->config)
+#endif
 
 struct espi_xec_data {
 	sys_slist_t callbacks;
@@ -58,8 +60,10 @@ struct espi_xec_data {
 #endif
 };
 
+#if 0
 #define ESPI_XEC_DATA(dev)						\
 	((struct espi_xec_data * const)(dev)->data)
+#endif
 
 struct xec_signal {
 	uint8_t host_idx;
