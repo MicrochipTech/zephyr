@@ -6,6 +6,10 @@
 #ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H_
 #define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H_
 
+#ifndef SHLU32
+#define SHLU32(val, pos) ((uint32_t)(val) << ((uint8_t)(pos) & 0x1fu))
+#endif
+
 /* common peripheral register defines */
 #include <reg/mec_acpi_ec.h>
 #include <reg/mec_adc.h>
@@ -16,6 +20,7 @@
 #include <reg/mec_gpio.h>
 #include <reg/mec_kbc.h>
 #include <reg/mec_keyscan.h>
+#include <reg/mec_pcr.h>
 #include <reg/mec_peci.h>
 #include <reg/mec_ps2.h>
 #include <reg/mec_pwm.h>
