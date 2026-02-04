@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <zephyr/sys/util.h>
 
 /* Offsets from base for various register groups */
 #define MCHP_ESPI_IO_PC_OFS		0x0100u
@@ -36,8 +37,7 @@
 #define MCHP_ESPI_GBL_CAP1_MAX_FREQ_50M		0x03u
 #define MCHP_ESPI_GBL_CAP1_MAX_FREQ_66M		0x04u
 #define MCHP_ESPI_GBL_CAP1_ALERT_POS		3u /* Read-Only */
-#define MCHP_ESPI_GBL_CAP1_ALERT_DED_PIN	\
-	BIT(MCHP_ESPI_GBL_CAP1_ALERT_POS)
+#define MCHP_ESPI_GBL_CAP1_ALERT_DED_PIN	BIT(MCHP_ESPI_GBL_CAP1_ALERT_POS)
 #define MCHP_ESPI_GBL_CAP1_ALERT_ON_IO1		0u
 #define MCHP_ESPI_GBL_CAP1_IO_MODE_POS		4u
 #define MCHP_ESPI_GBL_CAP1_IO_MODE_MASK0	0x03u
