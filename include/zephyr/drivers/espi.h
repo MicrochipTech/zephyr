@@ -219,6 +219,7 @@ enum espi_virtual_peripheral {
 	 */
 	ESPI_PERIPHERAL_EC_HOST_CMD,
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+	ESPI_PERIPHERAL_MAX,
 };
 
 /**
