@@ -23,6 +23,10 @@
 
 #include <soc.h>
 
+#ifndef SHLU32
+	#define SHLU32(v, n) ((uint32_t)(v) << (n))
+#endif
+
 LOG_MODULE_REGISTER(pwm_mchp_xec, CONFIG_PWM_LOG_LEVEL);
 
 /* Minimal on/off are 1 & 1 both are incremented, so 4.
@@ -52,8 +56,7 @@ LOG_MODULE_REGISTER(pwm_mchp_xec, CONFIG_PWM_LOG_LEVEL);
 
 struct pwm_xec_config {
 	struct pwm_regs * const regs;
-	uint8_t pcr_idx;
-	uint8_t pcr_pos;
+	uint8_t enc_pcr;
 	const struct pinctrl_dev_config *pcfg;
 };
 
@@ -433,14 +436,16 @@ static int pwm_xec_init(const struct device *dev)
 		return ret;
 	}
 
+	// enable pcr
+	soc_xec_pcr_sleep_en_clear(cfg->enc_pcr);
+
 	return 0;
 }
 
 #define XEC_PWM_CONFIG(inst)							\
 	static struct pwm_xec_config pwm_xec_config_##inst = {			\
 		.regs = (struct pwm_regs * const)DT_INST_REG_ADDR(inst),	\
-		.pcr_idx = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 0),		\
-		.pcr_pos = (uint8_t)DT_INST_PROP_BY_IDX(inst, pcrs, 1),		\
+		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                     \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),			\
 	};
 
