@@ -67,6 +67,26 @@
 #define MCHP_SAF_POLL_STS_END_DESCR		15u
 #define MCHP_SAF_NUM_GENERIC_DESCR		4u
 
+/* QMSPI Control and Descriptor register fields */
+#define MCHP_QMSPI_C_IFM_1X		0
+#define MCHP_QMSPI_C_IFM_2X		0x01u
+#define MCHP_QMSPI_C_IFM_4X		0x02u
+#define MCHP_QMSPI_C_TX_DIS		0
+#define MCHP_QMSPI_C_TX_DATA		0x04u
+#define MCHP_QMSPI_C_TX_ZEROS		0x08u
+#define MCHP_QMSPI_C_TX_ONES		0x0cu
+#define MCHP_QMSPI_C_RX_EN		BIT(6)
+#define MCHP_QMSPI_C_TX_DMA_DIS		0
+#define MCHP_QMSPI_C_RX_DIS		0
+#define MCHP_QMSPI_C_RX_DMA_DIS		0
+#define MCHP_QMSPI_C_RX_LDMA_CH0	(1u << 7)
+#define MCHP_QMSPI_C_NO_CLOSE		0
+#define MCHP_QMSPI_C_CLOSE		BIT(9)
+#define MCHP_QMSPI_C_DESCR_LAST		BIT(16)
+#define MCHP_QMSPI_C_XFR_UNITS_1	0x400u
+#define MCHP_QMSPI_C_NEXT_DESCR(nd)	((uint32_t)((nd) & 0xfu) << 12)
+#define MCHP_QMSPI_C_XFR_NUNITS(n)	(((uint32_t)(n) & 0x7fffu) << 17)
+
 /* QMSPI descriptors 12-15 for all SPI flash devices */
 
 /* QMSPI descriptors 12-13 are exit continuous mode */

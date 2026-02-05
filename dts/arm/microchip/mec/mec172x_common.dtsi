@@ -911,7 +911,7 @@ espi0: espi@400f3400 {
 	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 19)>;
 	status = "disabled";
 
-	espi_saf0: espi_saf@40008000 {
+	espi_taf0: espi_taf@40008000 {
 		compatible = "microchip,xec-espi-saf-v2";
 		reg = <0x40008000 0x400>, <0x40070000 0x400>,
 		      <0x40071000 0x400>;
