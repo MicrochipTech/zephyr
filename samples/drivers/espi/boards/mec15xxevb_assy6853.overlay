@@ -23,4 +23,13 @@
 	port-sel = <0>;
 	chip-select = <0>;
 	lines = <4>;
+
+	spi_flash0: spi_flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 40 18];
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+	};
 };

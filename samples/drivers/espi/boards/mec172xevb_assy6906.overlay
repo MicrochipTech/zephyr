@@ -18,7 +18,7 @@
 	};
 };
 
-&espi_saf0 {
+&espi_taf0 {
 	status = "okay";
 };
 

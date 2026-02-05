@@ -30,7 +30,7 @@
 
 &espi_taf0 {
 	compatible = "microchip,xec-espi-saf-v2";
-	status = "disabled";
+	status = "okay";
 };
 
 /* eSPI peripheral channel child devices */
@@ -96,5 +96,7 @@
 		jedec-id = [ef 40 18];
 		size = <DT_SIZE_M(16)>;
 		page-size = <256>;
+		use-fast-read;
+		quad-enable-requirements = "S2B1v4";
 	};
 };
