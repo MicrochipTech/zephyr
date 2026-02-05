@@ -254,7 +254,6 @@ typedef enum {
 #include "reg/mec172x_i2c_smb.h"
 #include "reg/mec172x_p80bd.h"
 #include "reg/mec172x_pcr.h"
-#include "reg/mec172x_qspi.h"
 #include "reg/mec172x_vbat.h"
 #include "reg/mec172x_emi.h"
 
