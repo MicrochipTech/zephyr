@@ -1,11 +1,11 @@
 /*
- * Copyright (c) 2021 Microchip Technology Inc. and its subsidiaries.
+ * Copyright (c) 2026 Microchip Technology Inc. and its subsidiaries.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _MEC172X_ESPI_VW_H
-#define _MEC172X_ESPI_VW_H
+#ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_VW_V2_H
+#define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_VW_V2_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -362,4 +362,4 @@ struct espi_smvw32_regs {
 }
 #endif
 
-#endif /* #ifndef _MEC172X_ESPI_VW_H */
+#endif /* _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_VW_V2_H */

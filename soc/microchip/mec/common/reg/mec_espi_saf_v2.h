@@ -1,11 +1,11 @@
 /*
- * Copyright (c) 2021 Microchip Technology Inc.
+ * Copyright (c) 2026 Microchip Technology Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _MEC172X_ESPI_SAF_H_
-#define _MEC172X_ESPI_SAF_H_
+#ifndef _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_SAF_V2_H
+#define _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_SAF_V2_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -637,4 +637,4 @@ struct mchp_espi_saf_comm { /* @ 0x40071000 */
 	uint32_t TEST7;
 };
 
-#endif /* _MEC172X_ESPI_SAF_H_ */
+#endif /* _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_REG_MEC_ESPI_SAF_V2_H */
