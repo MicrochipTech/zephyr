@@ -1539,7 +1539,7 @@ static void xec_register_vw_handlers(const struct device *dev)
 static int espi_xec_init(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
-	const struct espi_xec_config *cfg = dev->data;
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
 	mm_reg_t pcr_base = XEC_PCR_REG_BASE;
 	int ret = 0;
