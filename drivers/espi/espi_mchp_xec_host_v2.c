@@ -128,11 +128,12 @@ static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE] 
 BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(mbox0)),
 	     "XEC mbox0 DT node is disabled!");
 
-#define XEC_MBOX_H2EC_OFS 0x100u
-#define XEC_MBOX_EC2H_OFS 0x104u
-#define XEC_MBOX_SMI_SRC_OFS 0x108u
-#define XEC_MBOX_SMI_MSK_OFS 0x10cu
+#define XEC_MBOX_H2EC_OFS 0x100U
+#define XEC_MBOX_EC2H_OFS 0x104U
+#define XEC_MBOX_SMI_SRC_OFS 0x108U
+#define XEC_MBOX_SMI_MSK_OFS 0x10cU
 /* 32 mailbox data registers. 0 < n < 32 */
+#define XEC_MBOX_NUM_8BIT_DATA 32U
 #define XEC_MBOX_DATA_OFS(n) (0x110u + (uint32_t)(n))
 
 static struct xec_mbox_config {
@@ -153,6 +154,7 @@ static const struct xec_mbox0_config xec_mbox0_cfg = {
  * by writing a non-zero value to the EC-to-Host mailbox register.
  * EC may choose to enable EC-to-Host Serial-IRQ and/or EC-to-Host SMI delivered
  * by Serial-IRQ.
+ * TODO - implemented extended Host command to retrieve the 32 mailbox data registers.
  */
 static void mbox0_isr(const struct device *dev)
 {
@@ -164,7 +166,6 @@ static void mbox0_isr(const struct device *dev)
 		ESPI_PERIPHERAL_NODATA,
 	};
 
-	/* ISSUE: How does the app get all 8-bit mailbox register contents? */
 	evt.evt_data = sys_read8(mregbase + XEC_MBOX_H2EC_OFS);
 	espi_send_callbacks(&data->callbacks, dev, evt);
 
@@ -198,6 +199,31 @@ static int init_mbox0(const struct device *dev)
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
 
 	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+
+	return 0;
+}
+
+#define XEC_MBOX_GET_DATA 0
+#define XEC_MBOX_SET_DATA 1U
+
+static int mbox0_access_data(const struct device *dev, uint32_t *data, uint8_t mode)
+{
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	uint32_t n = 0;
+
+	if (data == NULL) {
+		return -EINVAL;
+	}
+
+	if (mode == XEC_MBOX_SET_DATA) {
+		for (n = 0; n < (XEC_MBOX_NUM_8BIT_DATA / 4U); n += 4U) {
+			sys_write32(data[n], mregbase + XEC_MBOX_DATA_OFS(n));
+		}
+	} else {
+		for (n = 0; n < (XEC_MBOX_NUM_8BIT_DATA / 4U); n += 4U) {
+			data[n] = sys_read32(mregbase + XEC_MBOX_DATA_OFS(n));
+		}
+	}
 
 	return 0;
 }
@@ -720,31 +746,63 @@ static int init_acpi_ec1(const struct device *dev)
 
 BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)), "XEC EMI0 DT node is disabled!");
 
+/* EC only access */
+#define XEC_EMI_H2EC_MBOX_OFS  0x100U
+#define XEC_EMI_EC2H_MBOX_OFS  0x101U
+#define XEC_EMI_MBASE0_OFS     0x104U
+#define XEC_EMI_RWLIM0_OFS     0x108U
+#define XEC_EMI_MBASE1_OFS     0x10CU
+#define XEC_EMI_RWLIM1_OFS     0x110U
+#define XEC_EMI_INTR_SET_OFS   0x114U /* r/ws */
+#define XEC_EMI_HCLR_EN_OFS    0x116U
+/* 8 32-bit registers. n is 0 through 7 */
+#define XEC_EMI_APP_ID_OFS(n)  0x120U
+
+#define XEC_EMI_MBASE_MSK           GENMASK(31, 2)
+#define XEC_EMI_RWLIM_RD_MSK        GENMASK(14, 2)
+#define XEC_EMI_RWLIM_WR_MSK        GENMASK(30, 18)
+#define XEC_EMI_RWLIM_RD_SET(rdlim) ((uint32_t)(rdlim) & XEC_EMI_RWLIM_RD_MSK)
+#define XEC_EMI_RWLIM_RD_GET(r)     ((uint32_t)(r) & XEC_EMI_RWLIM_RD_MSK)
+#define XEC_EMI_RWLIM_WR_SET(wrlim) (((uint32_t)(wrlim) << 16) & XEC_EMI_RWLIM_WR_MSK)
+#define XEC_EMI_RWLIM_WR_GET(r)     (((uint32_t)(r) & XEC_EMI_RWLIM_WR_MSK) >> 16)
+
 struct xec_emi_config {
 	uintptr_t regbase;
+	uint32_t ecia_info;
 };
 
 static const struct xec_emi_config xec_emi0_cfg = {
 	.regbase = DT_REG_ADDR(DT_NODELABEL(emi0)),
+	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(emi0), girqs, 0),
 };
 
 static int init_emi0(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct emi_regs *emi_hw = (struct emi_regs *)xec_emi0_cfg.regbase;
+	mm_reg_t emib = xec_emi0_cfg.regbase;
+	uint32_t temp = 0, val = 0;
+
+	sys_write8(0, emib + XEC_EMI_H2EC_MBOX_OFS); /* clear mailbox */
+
+	xec_ecia_info_girq_ctrl(xec_emi0_cfg.ecia_info, 0);
+	xec_ecia_info_girq_src_clear(xec_emi0_cfg.ecia_info);
+
+	sys_write32((uint32_t)ec_host_cmd_sram, emib + XEC_EMI_MBASE0_OFS);
+
+#ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
+	temp  = (uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
+	                   CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE);
+#else
+	temp = (uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE);
+#endif
+	val = XEC_EMI_RWLIM_RD_SET(temp);
+	val |= XEC_EMI_RWLIM_WR_SET((uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE));
+
+	sys_write32(val, emib + XEC_EMI_RWLIM0_OFS);
 
 	regs->IOHBAR[IOB_EMI0] = ((CONFIG_ESPI_PERIPHERAL_HOST_CMD_PARAM_PORT_NUM << 16) |
 	                          MCHP_ESPI_IO_BAR_HOST_VALID);
-
-	emi_hw->MEM_BA_0 = (uint32_t)ec_host_cmd_sram;
-#ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
-	emi_hw->MEM_RL_0 = (CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
-	                    CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE);
-#else
-	emi_hw->MEM_RL_0 = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
-#endif
-	emi_hw->MEM_WL_0 = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
 
 	return 0;
 }
@@ -771,6 +829,13 @@ static int ecust_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
 	case ECUSTOM_HOST_CMD_GET_PARAM_MEMORY_SIZE:
 		*data = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
 		break;
+#endif
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+	/* data must point to a buffer of at least 32 bytes in size */
+	case ECUSTOM_HOST_CMD_GET_MAILBOX_DATA:
+		return mbox0_access_data(dev, data, XEC_MBOX_GET_DATA);
+	case ECUSTOM_HOST_CMD_SET_MAILBOX_DATA:
+		return mbox0_access_data(dev, data, XEC_MBOX_SET_DATA);
 #endif
 	default:
 		return -EINVAL;
@@ -1142,8 +1207,7 @@ static const struct espi_lpc_req espi_lpc_req_tbl[] = {
 #ifdef CONFIG_ESPI_PERIPHERAL_HOST_IO
 	{ EACPI_START_OPCODE, EACPI_MAX_OPCODE, eacpi_rd_req, eacpi_wr_req },
 #endif
-#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && \
-	defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
 	{ EACPI_GET_SHARED_MEMORY, EACPI_GET_SHARED_MEMORY, eacpi_shm_rd_req, eacpi_shm_wr_req},
 #endif
 #ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
@@ -1229,7 +1293,7 @@ static void host_cust_opcode_enable_interrupts(void)
 
 	/* Enable host Port80 sub-device interrupt installation */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80)) {
-		xec_ecia_info_girq_ctrl(xec_p80db0_cfg.ecia_info, 1u);
+		xec_ecia_info_girq_ctrl(xec_p80bd0_cfg.ecia_info, 1u);
 	}
 }
 
@@ -1253,7 +1317,7 @@ static void host_cust_opcode_disable_interrupts(void)
 
 	/* Disable host Port80 sub-device interrupt installation */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80)) {
-		xec_ecia_info_girq_ctrl(xec_p80db0_cfg.ecia_info, 0);
+		xec_ecia_info_girq_ctrl(xec_p80bd0_cfg.ecia_info, 0);
 	}
 }
 #endif /* CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE */
