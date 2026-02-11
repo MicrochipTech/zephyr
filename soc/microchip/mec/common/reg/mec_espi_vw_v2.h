@@ -133,6 +133,8 @@
 #define ESPI_NUM_MSVW		11u
 #define ESPI_NUM_SMVW		11u
 
+#define ESPI_SMVW_OFS 0x200U
+
 /*
  * ESPI MSVW interrupts
  * GIRQ24 contains MSVW 0 - 6
