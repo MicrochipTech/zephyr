@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MSPI_MCHP_XEC
+	bool "Microchip XEC QMSPI controller MSPI driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_MSPI_CONTROLLER_ENABLED
+	select PINCTRL
+	imply MSPI_TIMING
+
+if MSPI_MCHP_XEC
+
+config MSPI_XEC_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE
+	bool "Handle FIFO in system workqueue"
+	depends on MULTITHREADING
+	help
+	  When the driver does not use DMA for transferring data to/from the
+	  QMSPI FIFOs, handling of those may take a significant amount of time.
+	  It may be destructive for some applications if that time is spent
+	  in the interrupt context. This option allows offloading the job to
+	  the system workqueue.
+
+endif # MSPI_MCHP_XEC
