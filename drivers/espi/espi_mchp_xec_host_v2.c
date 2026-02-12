@@ -7,68 +7,66 @@
 
 #define DT_DRV_COMPAT microchip_xec_espi_host_dev
 
-#include <zephyr/kernel.h>
 #include <soc.h>
-#include <errno.h>
-#include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/clock_control/mchp_xec_clock_control.h>
+#include <zephyr/drivers/espi.h>
+#include <zephyr/drivers/espi/mchp_xec_espi.h>
 #include <zephyr/drivers/interrupt_controller/intc_mchp_xec_ecia.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
-#include <zephyr/irq.h>
 #include "espi_utils.h"
 #include "espi_mchp_xec_v2.h"
 
-#define CONNECT_IRQ_MBOX0	NULL
-#define CONNECT_IRQ_KBC0	NULL
-#define CONNECT_IRQ_ACPI_EC0	NULL
-#define CONNECT_IRQ_ACPI_EC1	NULL
-#define CONNECT_IRQ_ACPI_EC2	NULL
-#define CONNECT_IRQ_ACPI_EC3	NULL
-#define CONNECT_IRQ_ACPI_EC4	NULL
-#define CONNECT_IRQ_ACPI_PM1	NULL
-#define CONNECT_IRQ_EMI0	NULL
-#define CONNECT_IRQ_EMI1	NULL
-#define CONNECT_IRQ_EMI2	NULL
-#define CONNECT_IRQ_RTC0	NULL
-#define CONNECT_IRQ_P80BD0	NULL
+#define CONNECT_IRQ_MBOX0    NULL
+#define CONNECT_IRQ_KBC0     NULL
+#define CONNECT_IRQ_ACPI_EC0 NULL
+#define CONNECT_IRQ_ACPI_EC1 NULL
+#define CONNECT_IRQ_ACPI_EC2 NULL
+#define CONNECT_IRQ_ACPI_EC3 NULL
+#define CONNECT_IRQ_ACPI_EC4 NULL
+#define CONNECT_IRQ_ACPI_PM1 NULL
+#define CONNECT_IRQ_EMI0     NULL
+#define CONNECT_IRQ_EMI1     NULL
+#define CONNECT_IRQ_EMI2     NULL
+#define CONNECT_IRQ_RTC0     NULL
+#define CONNECT_IRQ_P80BD0   NULL
 
-#define INIT_MBOX0		NULL
-#define INIT_KBC0		NULL
-#define INIT_ACPI_EC0		NULL
-#define INIT_ACPI_EC1		NULL
-#define INIT_ACPI_EC2		NULL
-#define INIT_ACPI_EC3		NULL
-#define INIT_ACPI_EC4		NULL
-#define INIT_ACPI_PM1		NULL
-#define INIT_EMI0		NULL
-#define INIT_EMI1		NULL
-#define INIT_EMI2		NULL
-#define INIT_RTC0		NULL
-#define INIT_P80BD0		NULL
-#define	INIT_UART0		NULL
-#define	INIT_UART1		NULL
+#define INIT_MBOX0    NULL
+#define INIT_KBC0     NULL
+#define INIT_ACPI_EC0 NULL
+#define INIT_ACPI_EC1 NULL
+#define INIT_ACPI_EC2 NULL
+#define INIT_ACPI_EC3 NULL
+#define INIT_ACPI_EC4 NULL
+#define INIT_ACPI_PM1 NULL
+#define INIT_EMI0     NULL
+#define INIT_EMI1     NULL
+#define INIT_EMI2     NULL
+#define INIT_RTC0     NULL
+#define INIT_P80BD0   NULL
+#define INIT_UART0    NULL
+#define INIT_UART1    NULL
 
 /* BARs as defined in LPC spec chapter 11 */
-#define ESPI_XEC_KBC_BAR_ADDRESS    0x00600000
-#define ESPI_XEC_UART0_BAR_ADDRESS  0x03F80000
-#define ESPI_XEC_MBOX_BAR_ADDRESS   0x03600000
-#define ESPI_XEC_PORT80_BAR_ADDRESS 0x00800000
-#define ESPI_XEC_PORT81_BAR_ADDRESS 0x00810000
-#define ESPI_XEC_ACPI_EC0_BAR_ADDRESS   0x00620000
+#define ESPI_XEC_KBC_BAR_ADDRESS      0x00600000
+#define ESPI_XEC_UART0_BAR_ADDRESS    0x03F80000
+#define ESPI_XEC_MBOX_BAR_ADDRESS     0x03600000
+#define ESPI_XEC_PORT80_BAR_ADDRESS   0x00800000
+#define ESPI_XEC_PORT81_BAR_ADDRESS   0x00810000
+#define ESPI_XEC_ACPI_EC0_BAR_ADDRESS 0x00620000
 
 /* Espi peripheral has 3 uart ports */
-#define ESPI_PERIPHERAL_UART_PORT0  0
-#define ESPI_PERIPHERAL_UART_PORT1  1
+#define ESPI_PERIPHERAL_UART_PORT0 0
+#define ESPI_PERIPHERAL_UART_PORT1 1
 
-#define UART_DEFAULT_IRQ_POS	    2u
-#define UART_DEFAULT_IRQ	    BIT(UART_DEFAULT_IRQ_POS)
+#define UART_DEFAULT_IRQ_POS 2u
+#define UART_DEFAULT_IRQ     BIT(UART_DEFAULT_IRQ_POS)
 
 /* PCR */
-#define XEC_PCR_REG_BASE						\
-	((struct pcr_regs *)(DT_REG_ADDR(DT_NODELABEL(pcr))))
+#define XEC_PCR_REG_BASE DT_REG_ADDR(DT_NODELABEL(pcr))
 
 #define MCHP_P80_MAX_BYTE_COUNT  4
 #define MCHP_P80_FIFO_READ_COUNT 8
@@ -84,10 +82,10 @@ struct xec_espi_host_sram_config {
 
 struct xec_espi_host_dev_config {
 	const struct device *parent;
-	uint32_t reg_base;		/* logical device registers */
-	uint32_t host_mem_base;		/* 32-bit host memory address */
-	uint16_t host_io_base;		/* 16-bit host I/O address */
-	uint8_t ldn;			/* Logical device number */
+	uint32_t reg_base;      /* logical device registers */
+	uint32_t host_mem_base; /* 32-bit host memory address */
+	uint16_t host_io_base;  /* 16-bit host I/O address */
+	uint8_t ldn;            /* Logical device number */
 	uint8_t num_ecia;
 	uint32_t *girqs;
 };
@@ -98,11 +96,27 @@ struct xec_acpi_ec_config {
 	uint32_t obe_ecia_info;
 };
 
+static void xec_ecia_info_girq_ctrl(uint32_t ecia_info, uint8_t en)
+{
+	uint8_t girq = MCHP_XEC_ECIA_GIRQ(ecia_info);
+	uint8_t girq_pos = MCHP_XEC_ECIA_GIRQ_POS(ecia_info);
+
+	soc_ecia_girq_ctrl(girq, girq_pos, en);
+}
+
+static void xec_ecia_info_girq_src_clear(uint32_t ecia_info)
+{
+	uint8_t girq = MCHP_XEC_ECIA_GIRQ(ecia_info);
+	uint8_t girq_pos = MCHP_XEC_ECIA_GIRQ_POS(ecia_info);
+
+	soc_ecia_girq_status_clear(girq, girq_pos);
+}
+
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
 static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
-			CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE] __aligned(8);
+				CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE] __aligned(8);
 #else
 static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE] __aligned(8);
 #endif
@@ -111,8 +125,15 @@ static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE] 
 
 #ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
 
-BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(mbox0)),
-	     "XEC mbox0 DT node is disabled!");
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(mbox0)), "XEC mbox0 DT node is disabled!");
+
+#define XEC_MBOX_H2EC_OFS      0x100U
+#define XEC_MBOX_EC2H_OFS      0x104U
+#define XEC_MBOX_SMI_SRC_OFS   0x108U
+#define XEC_MBOX_SMI_MSK_OFS   0x10cU
+/* 32 mailbox data registers. 0 < n < 32 */
+#define XEC_MBOX_NUM_8BIT_DATA 32U
+#define XEC_MBOX_DATA_OFS(n)   (0x110u + (uint32_t)(n))
 
 static struct xec_mbox_config {
 	uintptr_t regbase;
@@ -124,30 +145,43 @@ static const struct xec_mbox0_config xec_mbox0_cfg = {
 	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(mbox0), girqs, 0),
 };
 
-/* dev is a pointer to espi0 (parent) device */
+/* dev is a pointer to espi0 (parent) device
+ * Interrupt on Host writing a byte to Host-to-EC mailbox register.
+ * EC clears interrupt line by writing 0xFF to Host-to-EC mailbox register.
+ * This also clears Host-to-EC to 0. Host can poll Host-to-EC to know
+ * EC has processed command. EC may generate an interrupt to the Host
+ * by writing a non-zero value to the EC-to-Host mailbox register.
+ * EC may choose to enable EC-to-Host Serial-IRQ and/or EC-to-Host SMI delivered
+ * by Serial-IRQ.
+ * TODO - implemented extended Host command to retrieve the 32 mailbox data registers.
+ */
 static void mbox0_isr(const struct device *dev)
 {
-	uint8_t girq = MCHP_XEC_ECIA_GIRQ(xec_mbox0_cfg.ecia_info);
-	uint8_t bitpos = MCHP_XEC_ECIA_GIRQ_POS(xec_mbox0_cfg.ecia_info);
+	struct espi_xec_data *const data = dev->data;
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	struct espi_event evt = {
+		ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		MCHP_XEC_ESPI_PERIPHERAL_MAILBOX,
+		ESPI_PERIPHERAL_NODATA,
+	};
 
-	/* clear GIRQ source, inline version */
-	mchp_soc_ecia_girq_src_clr(girq, bitpos);
+	evt.evt_data = sys_read8(mregbase + XEC_MBOX_H2EC_OFS);
+	espi_send_callbacks(&data->callbacks, dev, evt);
+
+	sys_write8(0xffu, mregbase + XEC_MBOX_H2EC_OFS);
+	xec_ecia_info_girq_src_clear(xec_mbox0_cfg.ecia_info);
 }
 
 static int connect_irq_mbox0(const struct device *dev)
 {
-	/* clear GIRQ source */
-	mchp_xec_ecia_info_girq_src_clr(xec_mbox0_cfg.ecia_info);
+	xec_ecia_info_girq_src_clear(xec_mbox0_cfg.ecia_info);
 
-	IRQ_CONNECT(DT_IRQN(DT_NODELABLE(mbox0)),
-		    DT_IRQ(DT_NODELABLE(mbox0), priority),
-		    acpi_ec0_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
+	IRQ_CONNECT(DT_IRQN(DT_NODELABLE(mbox0)), DT_IRQ(DT_NODELABLE(mbox0), priority), mbox0_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
 	irq_enable(DT_IRQN(DT_NODELABLE(mbox0)));
 
 	/* enable GIRQ source */
-	mchp_xec_ecia_info_girq_src_en(xec_mbox0_cfg.ecia_info);
+	xec_ecia_info_girq_ctrl(xec_mbox0_cfg.ecia_info, 1u);
 
 	return 0;
 }
@@ -157,25 +191,49 @@ static int connect_irq_mbox0(const struct device *dev)
  */
 static int init_mbox0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *devcfg = dev->config;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
 
-	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS |
-				 MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+
 	return 0;
 }
 
-#undef	CONNECT_IRQ_MBOX0
-#define	CONNECT_IRQ_MBOX0	connect_irq_mbox0
-#undef	INIT_MBOX0
-#define	INIT_MBOX0		init_mbox0
+#define XEC_MBOX_GET_DATA 0
+#define XEC_MBOX_SET_DATA 1U
+
+static int mbox0_access_data(const struct device *dev, uint32_t *data, uint8_t mode)
+{
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	uint32_t n = 0;
+
+	if (data == NULL) {
+		return -EINVAL;
+	}
+
+	if (mode == XEC_MBOX_SET_DATA) {
+		for (n = 0; n < (XEC_MBOX_NUM_8BIT_DATA / 4U); n += 4U) {
+			sys_write32(data[n], mregbase + XEC_MBOX_DATA_OFS(n));
+		}
+	} else {
+		for (n = 0; n < (XEC_MBOX_NUM_8BIT_DATA / 4U); n += 4U) {
+			data[n] = sys_read32(mregbase + XEC_MBOX_DATA_OFS(n));
+		}
+	}
+
+	return 0;
+}
+
+#undef CONNECT_IRQ_MBOX0
+#define CONNECT_IRQ_MBOX0 connect_irq_mbox0
+#undef INIT_MBOX0
+#define INIT_MBOX0 init_mbox0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_8042_KBC
 
-BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(kbc0)),
-	     "XEC kbc0 DT node is disabled!");
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(kbc0)), "XEC kbc0 DT node is disabled!");
 
 struct xec_kbc0_config {
 	uintptr_t regbase;
@@ -191,9 +249,8 @@ static const struct xec_kbc0_config xec_kbc0_cfg = {
 
 static void kbc0_ibf_isr(const struct device *dev)
 {
+	struct espi_xec_data *const data = dev->data;
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_KBC_IBF_EVT_DATA
 	/* Chrome solution */
@@ -202,8 +259,7 @@ static void kbc0_ibf_isr(const struct device *dev)
 		ESPI_PERIPHERAL_8042_KBC,
 		ESPI_PERIPHERAL_NODATA,
 	};
-	struct espi_evt_data_kbc *kbc_evt =
-				(struct espi_evt_data_kbc *)&evt.evt_data;
+	struct espi_evt_data_kbc *kbc_evt = (struct espi_evt_data_kbc *)&evt.evt_data;
 	/*
 	 * Indicates if the host sent a command or data.
 	 * 0 = data
@@ -220,38 +276,33 @@ static void kbc0_ibf_isr(const struct device *dev)
 	 * and the lower byte speficies if the host sent
 	 * a command or data. 1 = Command.
 	 */
-	uint32_t isr_data = ((kbc_hw->EC_KBC_STS & MCHP_KBC_STS_CD) <<
-				E8042_ISR_CMD_DATA_POS);
+	uint32_t isr_data = ((kbc_hw->EC_KBC_STS & MCHP_KBC_STS_CD) << E8042_ISR_CMD_DATA_POS);
 	isr_data |= ((kbc_hw->EC_DATA & 0xFF) << E8042_ISR_DATA_POS);
 
-	struct espi_event evt = {
-		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		.evt_details = ESPI_PERIPHERAL_8042_KBC,
-		.evt_data = isr_data
-	};
+	struct espi_event evt = {.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
+				 .evt_details = ESPI_PERIPHERAL_8042_KBC,
+				 .evt_data = isr_data};
 #endif
-	espi_send_callbacks(&data->callbacks, dev, evt);
+	xec_ecia_info_girq_src_clear(xec_kbc0_cfg.ibf_ecia_info);
 
-	mchp_xec_ecia_info_girq_src_clr(xec_kbc0_cfg.ibf_ecia_info);
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
 static void kbc0_obe_isr(const struct device *dev)
 {
 #ifdef CONFIG_ESPI_PERIPHERAL_KBC_OBE_CBK
 	/* Chrome solution */
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
+	struct espi_xec_data *const data = dev->data;
 
 	struct espi_event evt = {
 		ESPI_BUS_PERIPHERAL_NOTIFICATION,
 		ESPI_PERIPHERAL_8042_KBC,
 		ESPI_PERIPHERAL_NODATA,
 	};
-	struct espi_evt_data_kbc *kbc_evt =
-				(struct espi_evt_data_kbc *)&evt.evt_data;
+	struct espi_evt_data_kbc *kbc_evt = (struct espi_evt_data_kbc *)&evt.evt_data;
 
 	/* Disable KBC OBE interrupt first */
-	mchp_xec_ecia_info_girq_src_dis(xec_kbc0_cfg.obe_ecia_info);
+	xec_ecia_info_girq_ctrl(xec_kbc0_cfg.obe_ecia_info, 0);
 
 	/*
 	 * Notify application that host already read out data. The application
@@ -264,16 +315,16 @@ static void kbc0_obe_isr(const struct device *dev)
 
 	espi_send_callbacks(&data->callbacks, dev, evt);
 #else
-	/* Windows solution */
-	/* disable and clear GIRQ interrupt and status */
-	mchp_xec_ecia_info_girq_src_dis(xec_kbc0_cfg.obe_ecia_info);
+	/* Windows solution
+	 * disable and clear GIRQ interrupt and status
+	 */
+	xec_ecia_info_girq_ctrl(xec_kbc0_cfg.obe_ecia_info, 0);
 #endif
-	mchp_xec_ecia_info_girq_src_clr(xec_kbc0_cfg.obe_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_kbc0_cfg.obe_ecia_info);
 }
 
 /* dev is a pointer to espi0 device */
-static int kbc0_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
-		       uint32_t *data)
+static int kbc0_rd_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
 
@@ -310,8 +361,7 @@ static int kbc0_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
 }
 
 /* dev is a pointer to espi0 device */
-static int kbc0_wr_req(const struct device *dev, enum lpc_peripheral_opcode op,
-		       uint32_t *data)
+static int kbc0_wr_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
 
@@ -333,28 +383,23 @@ static int kbc0_wr_req(const struct device *dev, enum lpc_peripheral_opcode op,
 			kbc_hw->EC_AUX_DATA = *data & 0xff;
 			break;
 		case E8042_RESUME_IRQ:
-			mchp_xec_ecia_info_girq_src_clr(
-				xec_kbc0_cfg.ibf_ecia_info);
-			mchp_xec_ecia_info_girq_src_en(
-				xec_kbc0_cfg.ibf_ecia_info);
+			xec_ecia_info_girq_src_clear(xec_kbc0_cfg.ibf_ecia_info);
+			xec_ecia_info_girq_ctrl(xec_kbc0_cfg.ibf_ecia_info, 1u);
 			break;
 		case E8042_PAUSE_IRQ:
-			mchp_xec_ecia_info_girq_src_dis(
-				xec_kbc0_cfg.ibf_ecia_info);
+			xec_ecia_info_girq_ctrl(xec_kbc0_cfg.ibf_ecia_info, 0);
 			break;
 		case E8042_CLEAR_OBF:
 			dummy = kbc_hw->HOST_AUX_DATA;
 			break;
 		case E8042_SET_FLAG:
 			/* FW shouldn't modify these flags directly */
-			*data &= ~(MCHP_KBC_STS_OBF | MCHP_KBC_STS_IBF |
-				   MCHP_KBC_STS_AUXOBF);
+			*data &= ~(MCHP_KBC_STS_OBF | MCHP_KBC_STS_IBF | MCHP_KBC_STS_AUXOBF);
 			kbc_hw->EC_KBC_STS |= *data;
 			break;
 		case E8042_CLEAR_FLAG:
 			/* FW shouldn't modify these flags directly */
-			*data |= (MCHP_KBC_STS_OBF | MCHP_KBC_STS_IBF |
-				  MCHP_KBC_STS_AUXOBF);
+			*data |= (MCHP_KBC_STS_OBF | MCHP_KBC_STS_IBF | MCHP_KBC_STS_AUXOBF);
 			kbc_hw->EC_KBC_STS &= ~(*data);
 			break;
 		default:
@@ -370,50 +415,46 @@ static int kbc0_wr_req(const struct device *dev, enum lpc_peripheral_opcode op,
 static int connect_irq_kbc0(const struct device *dev)
 {
 	/* clear GIRQ source */
-	mchp_xec_ecia_info_girq_src_clr(xec_kbc0_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_clr(xec_kbc0_cfg.obe_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_kbc0_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_kbc0_cfg.obe_ecia_info);
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_ibf, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_ibf, priority),
-		    kbc0_ibf_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_ibf, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), ibf, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), ibf, priority), kbc0_ibf_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), ibf, irq));
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_obe, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_obe, priority),
-		    kbc0_obe_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), kbc_obe, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), obe, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), obe, priority), kbc0_obe_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(kbc0), obe, irq));
 
-	/* enable GIRQ sources */
-	mchp_xec_ecia_info_girq_src_en(xec_kbc0_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_en(xec_kbc0_cfg.obe_ecia_info);
+	/* enable IBF GIRQ only. Application send command or turn on OBE
+	 * after it writes to EC-to-Host data register.
+	 */
+	xec_ecia_info_girq_ctrl(xec_kbc0_cfg.ibf_ecia_info, 1u);
 
 	return 0;
 }
 
 static int init_kbc0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *devcfg = dev->config;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
 
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_AUXH;
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_OBFEN;
 	/* This is the activate register, but the HAL has a funny name */
 	kbc_hw->KBC_PORT92_EN = MCHP_KBC_PORT92_EN;
-	regs->IOHBAR[IOB_KBC] = ESPI_XEC_KBC_BAR_ADDRESS |
-				MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_KBC] = ESPI_XEC_KBC_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
 
-#undef	CONNECT_IRQ_KBC0
-#define	CONNECT_IRQ_KBC0	connect_irq_kbc0
-#undef	INIT_KBC0
-#define	INIT_KBC0		init_kbc0
+#undef CONNECT_IRQ_KBC0
+#define CONNECT_IRQ_KBC0 connect_irq_kbc0
+#undef INIT_KBC0
+#define INIT_KBC0 init_kbc0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_8042_KBC */
 
@@ -427,17 +468,15 @@ static const struct xec_acpi_ec_config xec_acpi_ec0_cfg = {
 
 static void acpi_ec0_ibf_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		ESPI_PERIPHERAL_HOST_IO, ESPI_PERIPHERAL_NODATA
-	};
+	struct espi_xec_data *const data = dev->data;
+	struct espi_event evt = {ESPI_BUS_PERIPHERAL_NOTIFICATION, ESPI_PERIPHERAL_HOST_IO,
+				 ESPI_PERIPHERAL_NODATA};
+
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA
 	struct acpi_ec_regs *acpi_ec0_hw = (struct acpi_ec_regs *)xec_acpi_ec0_cfg.regbase;
 
 	/* Updates to fit Chrome shim layer design */
-	struct espi_evt_data_acpi *acpi_evt =
-				(struct espi_evt_data_acpi *)&evt.evt_data;
+	struct espi_evt_data_acpi *acpi_evt = (struct espi_evt_data_acpi *)&evt.evt_data;
 
 	/* Host put data on input buffer of ACPI EC0 channel */
 	if (acpi_ec0_hw->EC_STS & MCHP_ACPI_EC_STS_IBF) {
@@ -456,19 +495,31 @@ static void acpi_ec0_ibf_isr(const struct device *dev)
 	espi_send_callbacks(&data->callbacks, dev, evt);
 
 	/* clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec0_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec0_cfg.ibf_ecia_info);
 }
 
 static void acpi_ec0_obe_isr(const struct device *dev)
 {
+	struct espi_xec_data *const data = dev->data;
+	struct espi_event evt = {
+		ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		ESPI_PERIPHERAL_HOST_IO,
+		ESPI_PERIPHERAL_NODATA,
+	};
+	struct espi_evt_data_acpi *acpi_evt = (struct espi_evt_data_acpi *)&evt.evt_data;
+
+	/* ISSUE: 0=Host wrote data, 1=Host wrote cmd, 2=Host read EC-to-Host */
+	acpi_evt->type = 2u;
+	acpi_evt->data = 0;
+
 	/* disable and clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_dis(xec_acpi_ec0_cfg.obe_ecia_info);
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec0_cfg.obe_ecia_info);
+	xec_ecia_info_girq_ctrl(xec_acpi_ec0_cfg.obe_ecia_info, 0);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec0_cfg.obe_ecia_info);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
-static int eacpi_rd_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int eacpi_rd_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	struct acpi_ec_regs *acpi_ec0_hw = (struct acpi_ec_regs *)xec_acpi_ec0_cfg.regbase;
 
@@ -500,9 +551,7 @@ static int eacpi_rd_req(const struct device *dev,
 	return 0;
 }
 
-static int eacpi_wr_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int eacpi_wr_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	struct acpi_ec_regs *acpi_ec0_hw = (struct acpi_ec_regs *)xec_acpi_ec0_cfg.regbase;
 
@@ -524,49 +573,43 @@ static int eacpi_wr_req(const struct device *dev,
 
 static int connect_irq_acpi_ec0(const struct device *dev)
 {
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec0_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec0_cfg.obe_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec0_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec0_cfg.obe_ecia_info);
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_ibf, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_ibf, priority),
-		    acpi_ec0_ibf_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_ibf, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), ibf, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), ibf, priority), acpi_ec0_ibf_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), ibf, irq));
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_obe, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_obe, priority),
-		    acpi_ec0_obe_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), acpi_obe, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), obe, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), obe, priority), acpi_ec0_obe_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec0), obe, irq));
 
-	mchp_xec_ecia_info_girq_src_en(xec_acpi_ec0_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_en(xec_acpi_ec0_cfg.obe_ecia_info);
+	/* Only enable IBF. OBE will trigger immediately. App requests when this is enabled */
+	xec_ecia_info_girq_ctrl(xec_acpi_ec0_cfg.ibf_ecia_info, 1u);
 
 	return 0;
 }
 
 static int init_acpi_ec0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	const struct espi_xec_config *devcfg = dev->config;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
 
-	regs->IOHBAR[IOB_ACPI_EC0] = ESPI_XEC_ACPI_EC0_BAR_ADDRESS |
-				MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_ACPI_EC0] = ESPI_XEC_ACPI_EC0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
 
-#undef	CONNECT_IRQ_ACPI_EC0
-#define	CONNECT_IRQ_ACPI_EC0	connect_irq_acpi_ec0
-#undef	INIT_ACPI_EC0
-#define	INIT_ACPI_EC0		init_acpi_ec0
+#undef CONNECT_IRQ_ACPI_EC0
+#define CONNECT_IRQ_ACPI_EC0 connect_irq_acpi_ec0
+#undef INIT_ACPI_EC0
+#define INIT_ACPI_EC0 init_acpi_ec0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_HOST_IO */
 
-#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || \
-	defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT)
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT)
 
 static const struct xec_acpi_ec_config xec_acpi_ec1_cfg = {
 	.regbase = DT_REG_ADDR(DT_NODELABEL(acpi_ec1)),
@@ -576,17 +619,14 @@ static const struct xec_acpi_ec_config xec_acpi_ec1_cfg = {
 
 static void acpi_ec1_ibf_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-	struct espi_event evt = {
-		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
+	struct espi_xec_data *const data = dev->data;
+	struct espi_event evt = {.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
-		.evt_details = ESPI_PERIPHERAL_EC_HOST_CMD,
+				 .evt_details = ESPI_PERIPHERAL_EC_HOST_CMD,
 #else
-		.evt_details = ESPI_PERIPHERAL_HOST_IO_PVT,
+				 .evt_details = ESPI_PERIPHERAL_HOST_IO_PVT,
 #endif
-		.evt_data = ESPI_PERIPHERAL_NODATA
-	};
+				 .evt_data = ESPI_PERIPHERAL_NODATA};
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA
 	struct acpi_ec_regs *acpi_ec1_hw = (struct acpi_ec_regs *)xec_acpi_ec1_cfg.regbase;
 
@@ -599,122 +639,160 @@ static void acpi_ec1_ibf_isr(const struct device *dev)
 		/* Read out input data and clear IBF pending bit */
 		evt.evt_data = acpi_ec1_hw->OS2EC_DATA;
 	}
-#endif /* CONFIG_ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA */
 
+	/* clear GIRQ status */
+	xec_ecia_info_girq_src_clear(xec_acpi_ec1_cfg.ibf_ecia_info);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
+#else
 	espi_send_callbacks(&data->callbacks, dev, evt);
 
 	/* clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec1_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec1_cfg.ibf_ecia_info);
+#endif /* CONFIG_ESPI_PERIPHERAL_ACPI_EC_IBF_EVT_DATA */
 }
 
 static void acpi_ec1_obe_isr(const struct device *dev)
 {
+	struct espi_xec_data *const data = dev->data;
+	struct espi_event evt = {
+		ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		ESPI_PERIPHERAL_HOST_IO,
+		ESPI_PERIPHERAL_NODATA,
+	};
+	struct espi_evt_data_acpi *acpi_evt = (struct espi_evt_data_acpi *)&evt.evt_data;
+
+	/* ISSUE: 0=Host wrote data, 1=Host wrote cmd, 2=Host read EC-to-Host */
+	acpi_evt->type = 2u;
+	acpi_evt->data = 0;
+
 	/* disable and clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_dis(xec_acpi_ec1_cfg.obe_ecia_info);
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec1_cfg.obe_ecia_info);
+	xec_ecia_info_girq_ctrl(xec_acpi_ec1_cfg.obe_ecia_info, 0);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec1_cfg.obe_ecia_info);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
 static int connect_irq_acpi_ec1(const struct device *dev)
 {
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec1_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_clr(xec_acpi_ec1_cfg.obe_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec1_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec1_cfg.obe_ecia_info);
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_ibf, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_ibf, priority),
-		    acpi_ec1_ibf_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_ibf, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), ibf, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), ibf, priority), acpi_ec1_ibf_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), ibf, irq));
 
-	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_obe, irq),
-		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_obe, priority),
-		    acpi_ec1_obe_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
-	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), acpi_obe, irq));
+	IRQ_CONNECT(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), obe, irq),
+		    DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), obe, priority), acpi_ec1_obe_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(DT_NODELABEL(acpi_ec1), obe, irq));
 
-	mchp_xec_ecia_info_girq_src_en(xec_acpi_ec1_cfg.ibf_ecia_info);
-	mchp_xec_ecia_info_girq_src_en(xec_acpi_ec1_cfg.obe_ecia_info);
+	xec_ecia_info_girq_ctrl(xec_acpi_ec1_cfg.ibf_ecia_info, 0);
 
 	return 0;
 }
 
 static int init_acpi_ec1(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 	regs->IOHBAR[IOB_ACPI_EC1] =
-				(CONFIG_ESPI_PERIPHERAL_HOST_CMD_DATA_PORT_NUM << 16) |
-				MCHP_ESPI_IO_BAR_HOST_VALID;
+		(CONFIG_ESPI_PERIPHERAL_HOST_CMD_DATA_PORT_NUM << 16) | MCHP_ESPI_IO_BAR_HOST_VALID;
 #else
 	regs->IOHBAR[IOB_ACPI_EC1] =
-		CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM |
-		MCHP_ESPI_IO_BAR_HOST_VALID;
-	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS |
-				 MCHP_ESPI_IO_BAR_HOST_VALID;
+		(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM | MCHP_ESPI_IO_BAR_HOST_VALID);
+	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
 #endif
 
 	return 0;
 }
 
-#undef	CONNECT_IRQ_ACPI_EC1
-#define	CONNECT_IRQ_ACPI_EC1	connect_irq_acpi_ec1
-#undef	INIT_ACPI_EC1
-#define	INIT_ACPI_EC1		init_acpi_ec1
+#undef CONNECT_IRQ_ACPI_EC1
+#define CONNECT_IRQ_ACPI_EC1 connect_irq_acpi_ec1
+#undef INIT_ACPI_EC1
+#define INIT_ACPI_EC1 init_acpi_ec1
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD || CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 
-BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)),
-	     "XEC EMI0 DT node is disabled!");
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)), "XEC EMI0 DT node is disabled!");
+
+/* EC only access */
+#define XEC_EMI_H2EC_MBOX_OFS 0x100U
+#define XEC_EMI_EC2H_MBOX_OFS 0x101U
+#define XEC_EMI_MBASE0_OFS    0x104U
+#define XEC_EMI_RWLIM0_OFS    0x108U
+#define XEC_EMI_MBASE1_OFS    0x10CU
+#define XEC_EMI_RWLIM1_OFS    0x110U
+#define XEC_EMI_INTR_SET_OFS  0x114U /* r/ws */
+#define XEC_EMI_HCLR_EN_OFS   0x116U
+/* 8 32-bit registers. n is 0 through 7 */
+#define XEC_EMI_APP_ID_OFS(n) 0x120U
+
+#define XEC_EMI_MBASE_MSK           GENMASK(31, 2)
+#define XEC_EMI_RWLIM_RD_MSK        GENMASK(14, 2)
+#define XEC_EMI_RWLIM_WR_MSK        GENMASK(30, 18)
+#define XEC_EMI_RWLIM_RD_SET(rdlim) ((uint32_t)(rdlim) & XEC_EMI_RWLIM_RD_MSK)
+#define XEC_EMI_RWLIM_RD_GET(r)     ((uint32_t)(r) & XEC_EMI_RWLIM_RD_MSK)
+#define XEC_EMI_RWLIM_WR_SET(wrlim) (((uint32_t)(wrlim) << 16) & XEC_EMI_RWLIM_WR_MSK)
+#define XEC_EMI_RWLIM_WR_GET(r)     (((uint32_t)(r) & XEC_EMI_RWLIM_WR_MSK) >> 16)
 
 struct xec_emi_config {
 	uintptr_t regbase;
+	uint32_t ecia_info;
 };
 
 static const struct xec_emi_config xec_emi0_cfg = {
 	.regbase = DT_REG_ADDR(DT_NODELABEL(emi0)),
+	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(emi0), girqs, 0),
 };
 
 static int init_emi0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct emi_regs *emi_hw =
-		(struct emi_regs *)xec_emi0_cfg.regbase;
+	mm_reg_t emib = xec_emi0_cfg.regbase;
+	uint32_t temp = 0, val = 0;
 
-	regs->IOHBAR[IOB_EMI0] =
-				(CONFIG_ESPI_PERIPHERAL_HOST_CMD_PARAM_PORT_NUM << 16) |
-				MCHP_ESPI_IO_BAR_HOST_VALID;
+	sys_write8(0, emib + XEC_EMI_H2EC_MBOX_OFS); /* clear mailbox */
 
-	emi_hw->MEM_BA_0 = (uint32_t)ec_host_cmd_sram;
+	xec_ecia_info_girq_ctrl(xec_emi0_cfg.ecia_info, 0);
+	xec_ecia_info_girq_src_clear(xec_emi0_cfg.ecia_info);
+
+	sys_write32((uint32_t)ec_host_cmd_sram, emib + XEC_EMI_MBASE0_OFS);
+
 #ifdef CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION
-	emi_hw->MEM_RL_0 = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
-						CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE;
+	temp = (uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE +
+			  CONFIG_ESPI_XEC_PERIPHERAL_ACPI_SHD_MEM_SIZE);
 #else
-	emi_hw->MEM_RL_0 = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
+	temp = (uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE);
 #endif
-	emi_hw->MEM_WL_0 = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
+	val = XEC_EMI_RWLIM_RD_SET(temp);
+	val |= XEC_EMI_RWLIM_WR_SET((uint32_t)(CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE));
+
+	sys_write32(val, emib + XEC_EMI_RWLIM0_OFS);
+
+	regs->IOHBAR[IOB_EMI0] = ((CONFIG_ESPI_PERIPHERAL_HOST_CMD_PARAM_PORT_NUM << 16) |
+				  MCHP_ESPI_IO_BAR_HOST_VALID);
 
 	return 0;
 }
 
-#undef	INIT_EMI0
-#define	INIT_EMI0		init_emi0
+#undef INIT_EMI0
+#define INIT_EMI0 init_emi0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
 
-static void host_cus_opcode_enable_interrupts(void);
-static void host_cus_opcode_disable_interrupts(void);
+static void host_cust_opcode_enable_interrupts(void);
+static void host_cust_opcode_disable_interrupts(void);
 
-static int ecust_rd_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int ecust_rd_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	ARG_UNUSED(dev);
 
@@ -727,6 +805,13 @@ static int ecust_rd_req(const struct device *dev,
 		*data = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
 		break;
 #endif
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+	/* data must point to a buffer of at least 32 bytes in size */
+	case ECUSTOM_HOST_CMD_GET_MAILBOX_DATA:
+		return mbox0_access_data(dev, data, XEC_MBOX_GET_DATA);
+	case ECUSTOM_HOST_CMD_SET_MAILBOX_DATA:
+		return mbox0_access_data(dev, data, XEC_MBOX_SET_DATA);
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -734,9 +819,7 @@ static int ecust_rd_req(const struct device *dev,
 	return 0;
 }
 
-static int ecust_wr_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int ecust_wr_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	struct acpi_ec_regs *acpi_ec1_hw = (struct acpi_ec_regs *)xec_acpi_ec1_cfg.regbase;
 
@@ -745,9 +828,9 @@ static int ecust_wr_req(const struct device *dev,
 	switch (op) {
 	case ECUSTOM_HOST_SUBS_INTERRUPT_EN:
 		if (*data != 0) {
-			host_cus_opcode_enable_interrupts();
+			host_cust_opcode_enable_interrupts();
 		} else {
-			host_cus_opcode_disable_interrupts();
+			host_cust_opcode_disable_interrupts();
 		}
 		break;
 	case ECUSTOM_HOST_CMD_SEND_RESULT:
@@ -768,12 +851,9 @@ static int ecust_wr_req(const struct device *dev,
 
 #endif /* CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE */
 
-#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && \
-	defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
 
-static int eacpi_shm_rd_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int eacpi_shm_rd_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	ARG_UNUSED(dev);
 
@@ -788,9 +868,7 @@ static int eacpi_shm_rd_req(const struct device *dev,
 	return 0;
 }
 
-static int eacpi_shm_wr_req(const struct device *dev,
-			enum lpc_peripheral_opcode op,
-			uint32_t *data)
+static int eacpi_shm_wr_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data)
 {
 	ARG_UNUSED(dev);
 	ARG_UNUSED(op);
@@ -801,8 +879,40 @@ static int eacpi_shm_wr_req(const struct device *dev,
 
 #endif /* CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION */
 
-
 #ifdef CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80
+
+#define XEC_PBD_EC_DA_OFS           0x100u
+#define XEC_PBD_EC_DA_VAL_POS       0
+#define XEC_PBD_EC_DA_VAL_MSK       GENMASK(7, 0)
+#define XEC_PBD_EC_DA_VAL_GET(r)    FIELD_GET(XEC_PBD_EC_DA_LEN_MSK, (r))
+#define XEC_PBD_EC_DA_LANE_POS      8
+#define XEC_PBD_EC_DA_LANE_MSK      GENMASK(9, 8)
+#define XEC_PBD_EC_DA_LANE_0        0
+#define XEC_PBD_EC_DA_LANE_1        1u
+#define XEC_PBD_EC_DA_LANE_2        2u
+#define XEC_PBD_EC_DA_LANE_3        3u
+#define XEC_PBD_EC_DA_LANE_GET(r)   FIELD_GET(XEC_PBD_EC_DA_LANE_MSK, (r))
+#define XEC_PBD_EC_DA_LEN_POS       10
+#define XEC_PBD_EC_DA_LEN_MSK       GENMASK(11, 10)
+#define XEC_PBD_EC_DA_LEN_1_OR_CONT 0
+#define XEC_PBD_EC_DA_LEN_1_OF_2    1u
+#define XEC_PBD_EC_DA_LEN_1_OF_4    2u
+#define XEC_PBD_EC_DA_LEN_ORPHAN    3u
+#define XEC_PBD_EC_DA_LEN_GET(r)    FIELD_GET(XEC_PBD_EC_DA_LEN_MSK, (r))
+#define XEC_PBD_EC_DA_NE_POS        12
+#define XEC_PBD_EC_DA_OVERRUN_POS   13
+#define XEC_PBD_EC_DA_FTHR_POS      14
+
+#define XEC_PBD_CFG_OFS         0x104u
+#define XEC_PBD_SR_OFS          0x108u
+#define XEC_PBD_SR_NE_POS       0
+#define XEC_PBD_SR_OVERRUN_POS  1u
+#define XEC_PBD_SR_FTHR_POS     2u
+#define XEC_PBD_IER_OFS         0x109u
+#define XEC_PBD_IER_FTHR_POS    0
+#define XEC_PBD_SNAP_SHOT_OFS   0x10cu
+#define XEC_PBD_LD_CFG_OFS      0x330u
+#define XEC_PBD_LD_CFG_ACTV_POS 0
 
 struct xec_p80bd_config {
 	uintptr_t regbase;
@@ -820,36 +930,77 @@ static const struct xec_p80bd_config xec_p80bd0_cfg = {
  * We must decode the byte lane information and produce one or more
  * notification packets.
  */
-#ifndef CONFIG_ESPI_XEC_P80_MULTIBYTE
+#ifdef CONFIG_ESPI_XEC_P80_MULTIBYTE
 static void p80bd0_isr(const struct device *dev)
 {
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-	struct p80bd_regs *p80regs =
-		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
-	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION, 0,
-				  ESPI_PERIPHERAL_NODATA };
+	struct espi_xec_data *const data = dev->data;
+	mm_reg_t p80rb = xec_p80bd0_cfg.regbase;
+	struct espi_event evt = {ESPI_BUS_PERIPHERAL_NOTIFICATION, 0, ESPI_PERIPHERAL_NODATA};
 	int count = MCHP_P80_FIFO_READ_COUNT; /* limit ISR to 8 bytes */
-	uint32_t dattr = p80regs->EC_DA;
+	uint32_t dattr = 0;
+	uint8_t byte_count = 0, byte_val = 0, shift = 0;
+
+	dattr = sys_read32(p80rb + XEC_PBD_EC_DA_OFS);
 
 	/* b[7:0]=8-bit value written, b[15:8]=attributes */
-	while ((dattr & MCHP_P80BD_ECDA_NE) && (count--)) { /* Not empty? */
+	while ((dattr & BIT(XEC_PBD_EC_DA_NE_POS)) && (count--)) { /* Not empty? */
+		evt.evt_data = 0;
+
+		byte_val = XEC_PBD_EC_DA_VAL_GET(dattr);
+		byte_count = XEC_PBD_EC_DA_LEN_GET(dattr);
+
+		if (byte_count <= MCHP_P80_MAX_BYTE_COUNT) {
+			shift = 0;
+			while (byte_count) {
+				evt.evt_data |= ((uint32_t)byte_val << (shift * 8));
+				byte_count--;
+				shift++;
+				if (byte_count != 0) {
+					dattr = sys_read32(p80rb + XEC_PBD_EC_DA_OFS);
+				}
+			}
+
+			evt.evt_details = ESPI_PERIPHERAL_DEBUG_PORT80;
+			espi_send_callbacks(&data->callbacks, dev, evt);
+		}
+
+		dattr = sys_read32(p80rb + XEC_PBD_EC_DA_OFS);
+	}
+
+	/* clear GIRQ status */
+	xec_ecia_info_girq_src_clear(xec_p80bd0_cfg.ecia_info);
+}
+#else
+static void p80bd0_isr(const struct device *dev)
+{
+	struct espi_xec_data *const data = (struct espi_xec_data *)dev->data;
+	mm_reg_t p80rb = xec_p80bd0_cfg.regbase;
+	struct espi_event evt = {ESPI_BUS_PERIPHERAL_NOTIFICATION, 0, ESPI_PERIPHERAL_NODATA};
+	int count = MCHP_P80_FIFO_READ_COUNT; /* limit ISR to 8 bytes */
+	uint32_t dattr = sys_read32(p80rb + XEC_PBD_EC_DA_OFS);
+	uint8_t byte_lane = 0;
+
+	/* b[7:0]=8-bit value written, b[15:8]=attributes */
+	while ((dattr & BIT(XEC_PBD_EC_DA_NE_POS)) && (count--)) { /* Not empty? */
 		/* espi_event protocol No Data value is 0 so pick a bit and
 		 * set it. This depends on the application.
 		 */
-		evt.evt_data = (dattr & 0xffu) | BIT(16);
-		switch (dattr & MCHP_P80BD_ECDA_LANE_MSK) {
-		case MCHP_P80BD_ECDA_LANE_0:
-			evt.evt_details |= (ESPI_PERIPHERAL_INDEX_0 << 16) |
-					   ESPI_PERIPHERAL_DEBUG_PORT80;
+		evt.evt_data = XEC_PBD_EC_DA_VAL_GET(dattr) | BIT(16);
+
+		byte_lane = XEC_PBD_EC_DA_LANE_GET(dattr);
+
+		switch (byte_lane) {
+		case XEC_PBD_EC_DA_LANE_0:
+			evt.evt_details |=
+				((ESPI_PERIPHERAL_INDEX_0 << 16) | ESPI_PERIPHERAL_DEBUG_PORT80);
 			break;
-		case MCHP_P80BD_ECDA_LANE_1:
-			evt.evt_details |= (ESPI_PERIPHERAL_INDEX_1 << 16) |
-					   ESPI_PERIPHERAL_DEBUG_PORT80;
+		case XEC_PBD_EC_DA_LANE_1:
+			evt.evt_details |=
+				((ESPI_PERIPHERAL_INDEX_1 << 16) | ESPI_PERIPHERAL_DEBUG_PORT80);
 			break;
-		case MCHP_P80BD_ECDA_LANE_2:
+		case XEC_PBD_EC_DA_LANE_2:
 			break;
-		case MCHP_P80BD_ECDA_LANE_3:
+		case XEC_PBD_EC_DA_LANE_3:
 			break;
 		default:
 			break;
@@ -859,90 +1010,46 @@ static void p80bd0_isr(const struct device *dev)
 			espi_send_callbacks(&data->callbacks, dev, evt);
 			evt.evt_details = 0;
 		}
-		dattr = p80regs->EC_DA;
+
+		dattr = sys_read32(p80rb + XEC_PBD_EC_DA_OFS);
 	}
 
 	/* clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_clr(xec_p80bd0_cfg.ecia_info);
-}
-#else
-static void p80bd0_isr(const struct device *dev)
-{
-	struct espi_xec_data *const data =
-		(struct espi_xec_data *const)dev->data;
-	struct p80bd_regs *p80regs =
-		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
-	struct espi_event evt = { ESPI_BUS_PERIPHERAL_NOTIFICATION, 0,
-				  ESPI_PERIPHERAL_NODATA };
-	int count = MCHP_P80_FIFO_READ_COUNT; /* limit ISR to 8 bytes */
-	uint32_t dattr = p80regs->EC_DA;
-	uint8_t byte_count;
-	uint8_t shift;
-
-	/* b[7:0]=8-bit value written, b[15:8]=attributes */
-	while ((dattr & MCHP_P80BD_ECDA_NE) && (count--)) { /* Not empty? */
-		byte_count = 0;
-		evt.evt_data = 0;
-
-		byte_count = BIT((dattr & MCHP_P80BD_ECDA_LEN_MSK) >> MCHP_P80BD_ECDA_LEN_POS);
-		if (byte_count <= MCHP_P80_MAX_BYTE_COUNT) {
-			shift = 0;
-			while (byte_count) {
-				evt.evt_data |= (dattr & 0xffu) << (shift * 8);
-				byte_count--;
-				shift++;
-				if (byte_count) {
-					dattr = p80regs->EC_DA;
-				}
-			}
-
-			evt.evt_details = ESPI_PERIPHERAL_DEBUG_PORT80;
-			espi_send_callbacks(&data->callbacks, dev, evt);
-		}
-		dattr = p80regs->EC_DA;
-	}
-
-	/* clear GIRQ status */
-	mchp_xec_ecia_info_girq_src_clr(xec_p80bd0_cfg.ecia_info);
+	xec_ecia_info_girq_src_clear(xec_p80bd0_cfg.ecia_info);
 }
 #endif
 
 static int connect_irq_p80bd0(const struct device *dev)
 {
-	mchp_xec_ecia_info_girq_src_clr(xec_p80bd0_cfg.ecia_info);
+	xec_ecia_info_girq_src_clear(xec_p80bd0_cfg.ecia_info);
 
-	IRQ_CONNECT(DT_IRQN(DT_NODELABEL(p80bd0)),
-		    DT_IRQ(DT_NODELABEL(acpi_ec1), priority),
-		    p80bd0_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)),
-		    0);
+	IRQ_CONNECT(DT_IRQN(DT_NODELABEL(p80bd0)), DT_IRQ(DT_NODELABEL(acpi_ec1), priority),
+		    p80bd0_isr, DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
 	irq_enable(DT_IRQN(DT_NODELABEL(p80bd0)));
 
-	mchp_xec_ecia_info_girq_src_en(xec_p80bd0_cfg.ecia_info);
+	xec_ecia_info_girq_ctrl(xec_p80bd0_cfg.ecia_info, 1u);
 
 	return 0;
 }
 
 static int init_p80bd0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
-	struct p80bd_regs *p80bd_hw =
-		(struct p80bd_regs *)xec_p80bd0_cfg.regbase;
+	mm_reg_t p80rb = xec_p80bd0_cfg.regbase;
 
-	regs->IOHBAR[IOB_P80BD] = ESPI_XEC_PORT80_BAR_ADDRESS |
-				  MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_P80BD] = (ESPI_XEC_PORT80_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 
-	p80bd_hw->ACTV = 1;
-	p80bd_hw->STS_IEN = MCHP_P80BD_SI_THR_IEN;
+	soc_set_bit8(p80rb + XEC_PBD_LD_CFG_OFS, XEC_PBD_LD_CFG_ACTV_POS);
+	soc_set_bit8(p80rb + XEC_PBD_IER_OFS, XEC_PBD_IER_FTHR_POS);
 
 	return 0;
 }
 
-#undef	CONNECT_IRQ_P80BD0
-#define	CONNECT_IRQ_P80BD0	connect_irq_p80bd0
-#undef	INIT_P80BD0
-#define	INIT_P80BD0		init_p80bd0
+#undef CONNECT_IRQ_P80BD0
+#define CONNECT_IRQ_P80BD0 connect_irq_p80bd0
+#undef INIT_P80BD0
+#define INIT_P80BD0 init_p80bd0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80 */
 
@@ -954,68 +1061,45 @@ int init_uart0(const struct device *dev)
 	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
 
-	regs->IOHBAR[IOB_UART0] = ESPI_XEC_UART0_BAR_ADDRESS |
-				  MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_UART0] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 
 	return 0;
 }
 
-#undef	INIT_UART0
-#define	INIT_UART0		init_uart0
+#undef INIT_UART0
+#define INIT_UART0 init_uart0
 
 #elif CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING == 1
 int init_uart1(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
 
-	regs->IOHBAR[IOB_UART1] = ESPI_XEC_UART0_BAR_ADDRESS |
-				  MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_UART1] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 
 	return 0;
 }
 
-#undef	INIT_UART1
-#define	INIT_UART1		init_uart1
+#undef INIT_UART1
+#define INIT_UART1 init_uart1
 #endif /* CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING */
 #endif /* CONFIG_ESPI_PERIPHERAL_UART */
 
 typedef int (*host_dev_irq_connect)(const struct device *dev);
 
 static const host_dev_irq_connect hdic_tbl[] = {
-	CONNECT_IRQ_MBOX0,
-	CONNECT_IRQ_KBC0,
-	CONNECT_IRQ_ACPI_EC0,
-	CONNECT_IRQ_ACPI_EC1,
-	CONNECT_IRQ_ACPI_EC2,
-	CONNECT_IRQ_ACPI_EC3,
-	CONNECT_IRQ_ACPI_EC4,
-	CONNECT_IRQ_ACPI_PM1,
-	CONNECT_IRQ_EMI0,
-	CONNECT_IRQ_EMI1,
-	CONNECT_IRQ_EMI2,
-	CONNECT_IRQ_RTC0,
+	CONNECT_IRQ_MBOX0,    CONNECT_IRQ_KBC0,     CONNECT_IRQ_ACPI_EC0, CONNECT_IRQ_ACPI_EC1,
+	CONNECT_IRQ_ACPI_EC2, CONNECT_IRQ_ACPI_EC3, CONNECT_IRQ_ACPI_EC4, CONNECT_IRQ_ACPI_PM1,
+	CONNECT_IRQ_EMI0,     CONNECT_IRQ_EMI1,     CONNECT_IRQ_EMI2,     CONNECT_IRQ_RTC0,
 	CONNECT_IRQ_P80BD0,
 };
 
 typedef int (*host_dev_init)(const struct device *dev);
 
 static const host_dev_init hd_init_tbl[] = {
-	INIT_MBOX0,
-	INIT_KBC0,
-	INIT_ACPI_EC0,
-	INIT_ACPI_EC1,
-	INIT_ACPI_EC2,
-	INIT_ACPI_EC3,
-	INIT_ACPI_EC4,
-	INIT_ACPI_PM1,
-	INIT_EMI0,
-	INIT_EMI1,
-	INIT_EMI2,
-	INIT_RTC0,
-	INIT_P80BD0,
-	INIT_UART0,
-	INIT_UART1,
+	INIT_MBOX0,    INIT_KBC0,     INIT_ACPI_EC0, INIT_ACPI_EC1, INIT_ACPI_EC2,
+	INIT_ACPI_EC3, INIT_ACPI_EC4, INIT_ACPI_PM1, INIT_EMI0,     INIT_EMI1,
+	INIT_EMI2,     INIT_RTC0,     INIT_P80BD0,   INIT_UART0,    INIT_UART1,
 };
 
 int xec_host_dev_connect_irqs(const struct device *dev)
@@ -1056,9 +1140,7 @@ int xec_host_dev_init(const struct device *dev)
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
 
-typedef int (*xec_lpc_req)(const struct device *,
-			   enum lpc_peripheral_opcode,
-			   uint32_t *);
+typedef int (*xec_lpc_req)(const struct device *, enum lpc_peripheral_opcode, uint32_t *);
 
 struct espi_lpc_req {
 	uint16_t opcode_start;
@@ -1069,23 +1151,21 @@ struct espi_lpc_req {
 
 static const struct espi_lpc_req espi_lpc_req_tbl[] = {
 #ifdef CONFIG_ESPI_PERIPHERAL_8042_KBC
-	{ E8042_START_OPCODE, E8042_MAX_OPCODE, kbc0_rd_req, kbc0_wr_req },
+	{E8042_START_OPCODE, E8042_MAX_OPCODE, kbc0_rd_req, kbc0_wr_req},
 #endif
 #ifdef CONFIG_ESPI_PERIPHERAL_HOST_IO
-	{ EACPI_START_OPCODE, EACPI_MAX_OPCODE, eacpi_rd_req, eacpi_wr_req },
+	{EACPI_START_OPCODE, EACPI_MAX_OPCODE, eacpi_rd_req, eacpi_wr_req},
 #endif
-#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && \
-	defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
-	{ EACPI_GET_SHARED_MEMORY, EACPI_GET_SHARED_MEMORY, eacpi_shm_rd_req, eacpi_shm_wr_req},
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) && defined(CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION)
+	{EACPI_GET_SHARED_MEMORY, EACPI_GET_SHARED_MEMORY, eacpi_shm_rd_req, eacpi_shm_wr_req},
 #endif
 #ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
-	{ ECUSTOM_START_OPCODE, ECUSTOM_MAX_OPCODE, ecust_rd_req, ecust_wr_req},
+	{ECUSTOM_START_OPCODE, ECUSTOM_MAX_OPCODE, ecust_rd_req, ecust_wr_req},
 #endif
 };
 
-static int espi_xec_lpc_req(const struct device *dev,
-			    enum lpc_peripheral_opcode op,
-			    uint32_t  *data, uint8_t write)
+static int espi_xec_lpc_req(const struct device *dev, enum lpc_peripheral_opcode op, uint32_t *data,
+			    uint8_t write)
 {
 	ARG_UNUSED(dev);
 
@@ -1105,23 +1185,20 @@ static int espi_xec_lpc_req(const struct device *dev,
 }
 
 /* dev = pointer to espi0 device */
-int espi_xec_read_lpc_request(const struct device *dev,
-			      enum lpc_peripheral_opcode op,
-			      uint32_t  *data)
+int espi_xec_read_lpc_request(const struct device *dev, enum lpc_peripheral_opcode op,
+			      uint32_t *data)
 {
 	return espi_xec_lpc_req(dev, op, data, 0);
 }
 
-int espi_xec_write_lpc_request(const struct device *dev,
-			       enum lpc_peripheral_opcode op,
-			       uint32_t  *data)
+int espi_xec_write_lpc_request(const struct device *dev, enum lpc_peripheral_opcode op,
+			       uint32_t *data)
 {
 	return espi_xec_lpc_req(dev, op, data, 1);
 }
 #else
-int espi_xec_write_lpc_request(const struct device *dev,
-				      enum lpc_peripheral_opcode op,
-				      uint32_t *data)
+int espi_xec_write_lpc_request(const struct device *dev, enum lpc_peripheral_opcode op,
+			       uint32_t *data)
 {
 	ARG_UNUSED(dev);
 	ARG_UNUSED(op);
@@ -1130,9 +1207,8 @@ int espi_xec_write_lpc_request(const struct device *dev,
 	return -ENOTSUP;
 }
 
-int espi_xec_read_lpc_request(const struct device *dev,
-				     enum lpc_peripheral_opcode op,
-				     uint32_t  *data)
+int espi_xec_read_lpc_request(const struct device *dev, enum lpc_peripheral_opcode op,
+			      uint32_t *data)
 {
 	ARG_UNUSED(dev);
 	ARG_UNUSED(op);
@@ -1143,12 +1219,11 @@ int espi_xec_read_lpc_request(const struct device *dev,
 #endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
 #if defined(CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE)
-static void host_cus_opcode_enable_interrupts(void)
+static void host_cust_opcode_enable_interrupts(void)
 {
 	/* Enable host KBC sub-device interrupt */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_8042_KBC)) {
-		mchp_xec_ecia_info_girq_src_en(xec_kbc0_cfg.ibf_ecia_info);
-		mchp_xec_ecia_info_girq_src_en(xec_kbc0_cfg.obe_ecia_info);
+		xec_ecia_info_girq_ctrl(xec_kbc0_cfg.ibf_ecia_info, 1u);
 	}
 
 	/* Enable host ACPI EC0 (Host IO) and
@@ -1156,38 +1231,37 @@ static void host_cus_opcode_enable_interrupts(void)
 	 */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_HOST_IO) ||
 	    IS_ENABLED(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD)) {
-		mchp_xec_ecia_info_girq_src_en(xec_acpi_ec0_cfg.ibf_ecia_info);
-		mchp_xec_ecia_info_girq_src_en(xec_acpi_ec0_cfg.obe_ecia_info);
-		mchp_xec_ecia_info_girq_src_en(xec_acpi_ec1_cfg.ibf_ecia_info);
+		xec_ecia_info_girq_ctrl(xec_acpi_ec0_cfg.ibf_ecia_info, 1u);
+		xec_ecia_info_girq_ctrl(xec_acpi_ec1_cfg.ibf_ecia_info, 1u);
 	}
 
 	/* Enable host Port80 sub-device interrupt installation */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80)) {
-		mchp_xec_ecia_info_girq_src_en(xec_p80bd0_cfg.ecia_info);
+		xec_ecia_info_girq_ctrl(xec_p80bd0_cfg.ecia_info, 1u);
 	}
 }
 
-static void host_cus_opcode_disable_interrupts(void)
+static void host_cust_opcode_disable_interrupts(void)
 {
 	/* Disable host KBC sub-device interrupt */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_8042_KBC)) {
-		mchp_xec_ecia_info_girq_src_dis(xec_kbc0_cfg.ibf_ecia_info);
-		mchp_xec_ecia_info_girq_src_dis(xec_kbc0_cfg.obe_ecia_info);
+		xec_ecia_info_girq_ctrl(xec_kbc0_cfg.ibf_ecia_info, 0);
+		xec_ecia_info_girq_ctrl(xec_kbc0_cfg.obe_ecia_info, 0);
 	}
 
 	/* Disable host ACPI EC0 (Host IO) and
 	 * ACPI EC1 (Host CMD) sub-device interrupt
 	 */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_HOST_IO) ||
-		IS_ENABLED(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD)) {
-		mchp_xec_ecia_info_girq_src_dis(xec_acpi_ec0_cfg.ibf_ecia_info);
-		mchp_xec_ecia_info_girq_src_dis(xec_acpi_ec0_cfg.obe_ecia_info);
-		mchp_xec_ecia_info_girq_src_dis(xec_acpi_ec1_cfg.ibf_ecia_info);
+	    IS_ENABLED(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD)) {
+		xec_ecia_info_girq_ctrl(xec_acpi_ec0_cfg.ibf_ecia_info, 0);
+		xec_ecia_info_girq_ctrl(xec_acpi_ec0_cfg.obe_ecia_info, 0);
+		xec_ecia_info_girq_ctrl(xec_acpi_ec1_cfg.ibf_ecia_info, 0);
 	}
 
 	/* Disable host Port80 sub-device interrupt installation */
 	if (IS_ENABLED(CONFIG_ESPI_PERIPHERAL_DEBUG_PORT_80)) {
-		mchp_xec_ecia_info_girq_src_dis(xec_p80bd0_cfg.ecia_info);
+		xec_ecia_info_girq_ctrl(xec_p80bd0_cfg.ecia_info, 0);
 	}
 }
 #endif /* CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE */
