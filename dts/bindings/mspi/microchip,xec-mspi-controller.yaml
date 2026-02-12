@@ -1,0 +1,59 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC MSPI driver using QMSPI controller
+
+compatible: "microchip,xec-mspi-controller"
+
+include: [mspi-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  girqs:
+    type: array
+    required: true
+    description: |
+      Array of encoded GIRQ number and bit position for each interrupt
+      the peripheral implements.
+
+  pcr:
+    type: int
+    required: true
+    description: |
+      Encoded index and bit position in PCR sleep enable, clock required,
+      and reset enable registers.
+
+  dcsda:
+    type: int
+    description: |
+      Delay in units of 10 ns from nCS de-assertion to nCS asserion.
+      If property is not presetn use hardware default of 6 (60 ns)
+
+  ctrl-taps:
+    type: array
+    description: |
+      An array of integers representing the control tap point for
+      each of the two chip selects. Each value is in [0, 255].
+      The hardware default is 0. The property is only needed to
+      tune the signals to an external flash at 96 MHz.
+
+  tx-fifo-depth:
+    type: int
+    default: 8
+    description: Controller TX FIFO size in bytes.
+
+  rx-fifo-depth:
+    type: int
+    default: 8
+    description: Controller RX FIFO size in bytes.
