@@ -35,7 +35,9 @@
 #define XEC_QSPI_MODE_CK_DIV_GET(r)   FIELD_GET(XEC_QSPI_MODE_CK_DIV_MSK, (r))
 
 /* CPOL, CPHA_SDI, and CPHA_SDO bit mask */
-#define XEC_QSPI_MODE_CP_MSK 0x700u
+#define XEC_QSPI_MODE_CP_MSK    GENMASK(10, 8)
+#define XEC_QSPI_MODE_CP_GET(r) FIELD_GET(XEC_QSPI_MODE_CP_MSK, (r))
+#define XEC_QSPI_MODE_CP_SET(m) FIELD_PREP(XEC_QSPI_MODE_CP_MSK, (m))
 
 /* Control register */
 #define XEC_QSPI_CR_OFS            4u
