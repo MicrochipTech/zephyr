@@ -34,6 +34,13 @@ properties:
       Encoded index and bit position in PCR sleep enable, clock required,
       and reset enable registers.
 
+  cpp-mode:
+    type: int
+    description: |
+      The controller transmit and receive clock phase modes.
+      The values are the standard SPI signalling modes 0 through 3.
+      If the property is not present the driver defaults to mode 0.
+
   dcsda:
     type: int
     description: |

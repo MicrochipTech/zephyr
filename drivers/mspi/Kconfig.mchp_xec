@@ -10,7 +10,7 @@ config MSPI_MCHP_XEC
 
 if MSPI_MCHP_XEC
 
-config MSPI_XEC_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE
+config MSPI_MCHP_XEC_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE
 	bool "Handle FIFO in system workqueue"
 	depends on MULTITHREADING
 	help
@@ -19,5 +19,23 @@ config MSPI_XEC_HANDLE_FIFOS_IN_SYSTEM_WORKQUEUE
 	  It may be destructive for some applications if that time is spent
 	  in the interrupt context. This option allows offloading the job to
 	  the system workqueue.
+
+config MSPI_MCHP_XEC_USE_DMA_DRIVER
+	bool "Use QMSPI Local-DMA instead of the DMA driver"
+	default y
+	depends on MSPI_DMA
+	select DMA
+	help
+	  The Microchip QMSPI controllers can use either DMA built into
+	  the controller (local-DMA) or the central DMA unit via the Zephyr
+	  DMA driver. QMSPI local-DMA has six channels partitioned into three
+	  for transmit and three for receive. QMSPI with central DMA is limited
+	  to using two channels at a time. Local-DMA has the advantage of three
+	  channels for each direction allowing the driver to offload more
+	  of the transfer to hardware. Central DMA advantage is the driver handles
+	  DMA configuration and operation. One disadvantage of the DMA driver is
+	  the overhead. Each DMA direction requires a DMA driver configuration
+	  structure and each block of data requires a DMA driver block configuration
+	  struture.
 
 endif # MSPI_MCHP_XEC
