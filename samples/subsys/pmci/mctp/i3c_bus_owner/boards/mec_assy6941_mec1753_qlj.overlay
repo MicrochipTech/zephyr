@@ -1,0 +1,41 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/* I3C SDA J22.3
+ * I3C SCL J22.1
+ * J22.5 = VTR2
+ * J22.2,6 = GND
+ *
+ * demux jumpers
+ * JP14 16-17 ON
+ *
+ * board pull-ups, if required
+ * SDA: JP76 21-22 ON connects 7.5K pull-up to VTR2
+ * SCL: JP76 23-24 ON connects 7.5K pull-up to VTR2
+ */
+&i3c0 {
+	status = "okay";
+
+	i3c-scl-hz = <DT_FREQ_M(4)>;
+
+	pinctrl-0 = <&i3c01_host_sda_gpio012 &i3c01_host_scl_gpio013>;
+	pinctrl-names = "default";
+
+	mctp_endpoint0: mctp_endpoint0@20a00000011 {
+		compatible = "zephyr,mctp-i3c-endpoint";
+		reg = <0x0000 0x020a 0x00000011>;
+		status = "okay";
+	};
+};
+
+/ {
+	mctp_i3c: mctp_i3c {
+		compatible = "zephyr,mctp-i3c-controller";
+		endpoints = <&mctp_endpoint0>;
+		endpoint-ids = <11>;
+	};
+};
