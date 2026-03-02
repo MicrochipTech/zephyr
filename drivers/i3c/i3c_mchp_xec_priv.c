@@ -79,61 +79,6 @@ static void xec_i3c_resp_queue_threshold_set(mm_reg_t regbase, uint8_t threshold
 	}
 }
 
-uint8_t xec_i3c_resp_buf_level_get(mm_reg_t regbase)
-{
-	uint32_t qlvl = sys_read32(regbase + XEC_I3C_QL_SR_OFS);
-
-	return (uint8_t)XEC_I3C_QL_SR_RBL_GET(qlvl);
-}
-
-uint8_t xec_i3c_ibi_status_count_get(mm_reg_t regbase)
-{
-	uint32_t qlvl = sys_read32(regbase + XEC_I3C_QL_SR_OFS);
-
-	return (uint8_t)XEC_I3C_QL_SR_IBC_GET(qlvl);
-}
-
-uint32_t xec_i3c_ibi_queue_status_get(mm_reg_t regbase)
-{
-	return sys_read32(regbase + XEC_I3C_IBI_QUE_SR_OFS);
-}
-
-uint8_t xec_i3c_response_sts_get(mm_reg_t regbase, uint16_t *len, uint8_t *tid)
-{
-	uint32_t response = sys_read32(regbase + XEC_I3C_RESP_OFS);
-
-	if (len != NULL) {
-		*len = (uint16_t)(response & 0xffffu);
-	}
-
-	if (tid != NULL) {
-		*tid = (uint8_t)((response & RESPONSE_TID_BITMASK) >> RESPONSE_TID_BITPOS);
-	}
-
-	return (uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >> RESPONSE_ERR_STS_BITPOS);
-}
-
-uint8_t xec_i3c_tgt_response_sts_get(mm_reg_t regbase, uint16_t *len, uint8_t *tid,
-				     bool *rx_response)
-{
-	uint32_t response = sys_read32(regbase + XEC_I3C_RESP_OFS);
-
-	if (len != NULL) {
-		*len = (uint16_t)(response & 0xFFFFu);
-	}
-
-	if (tid != NULL) {
-		*tid = (uint8_t)((response & RESPONSE_TID_TGT_BITMASK) >> RESPONSE_TID_BITPOS);
-	}
-
-	if ((rx_response != NULL) &&
-	    (((response & RESPONSE_RX_RESP_BITMASK) >> RESPONSE_RX_RESP_BITPOS) != 0)) {
-		*rx_response = true;
-	}
-
-	return (uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >> RESPONSE_ERR_STS_BITPOS);
-}
-
 static void xec_i3c_cmd_queue_threshold_set(mm_reg_t regbase, uint32_t val)
 {
 	uint32_t mask = XEC_I3C_QT_CR_CEBT_MSK;
@@ -861,15 +806,6 @@ void xec_i3c_sec_host_stuck_sda_scl_config(mm_reg_t srb, uint32_t en, uint32_t s
 	soc_mmcr_mask_set(srb + XEC_I3C_SC_TMO_CR_OFS, val, msk);
 }
 
-void xec_i3c_soft_reset(mm_reg_t hrb)
-{
-	sys_set_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS);
-
-	/* wait for hardware to clear the bit */
-	while (sys_test_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS) != 0) {
-	}
-}
-
 /* Get device pointer from Host or Secondary Host controller */
 void xec_i3c_dev_addr_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint16_t *depth)
 {
@@ -886,32 +822,6 @@ void xec_i3c_dev_char_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint
 
 	*start_addr = XEC_I3C_DCT_PTR_STA_GET(val);
 	*depth = XEC_I3C_DCT_PTR_DEPTH_GET(val);
-}
-
-/* Get role from HW capabilities register in Host or Secondary Host */
-uint32_t xec_i3c_dev_role_config_get(mm_reg_t regbase)
-{
-	uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
-
-	return XEC_I3C_HW_CAP_ROLE_GET(hwcap);
-}
-
-/* Get Device operation mode from Host or Secondary Host controller */
-uint8_t xec_i3c_dev_operation_mode_get(mm_reg_t regbase)
-{
-	uint32_t dev_ext_cr = sys_read32(regbase + XEC_I3C_DEV_EXT_CR_OFS);
-
-	return XEC_I3C_DEV_EXT_CR_OPM_GET(dev_ext_cr);
-}
-
-/* Get current operation mode of Host or Secondary Host controller */
-bool xec_i3c_is_current_host(mm_reg_t regbase)
-{
-	if (sys_test_bit(regbase + XEC_I3C_PRES_ST_OFS, XEC_I3C_PRES_ST_CH_POS) != 0) {
-		return true;
-	}
-
-	return false;
 }
 
 /* Get TX FIFO depth from Host or Secondary Host controller
@@ -958,132 +868,42 @@ uint32_t xec_i3c_ibi_fifo_depth_get(mm_reg_t regbase)
 }
 
 /**
- * @brief Read the DCT
+ * @brief Write one Device Address Table (DAT) entry in external RAM.
  *
- * @param regs Pointer to controller registers
- * @param DAT_start Start location of DCT
- * @param DAT_idx Position in the Device Characteristics table
- * @param info DCT information read
- */
-/* TODO there is no explaination of what memory this routine is accessing
- * The original code is dangerous becasue DCT_start is being added to
- * the base addrss of the controller. How do we know the caller is passing
- * a valid value that doesn't cause this code to produce a bad address and
- * cause a HW fault?
- * This code will fail Zephyr code review due to no explaination of shift
- * values, bit positions, etc.
- * Where is the documentation. Is it proprietary?
- */
-void xec_i3c_DCT_read(mm_reg_t rb, uint16_t DCT_start, uint8_t DCT_idx,
-		      struct mec_i3c_DCT_info *info)
-{
-	uint32_t *entry_addr = NULL;
-	uint64_t prov_id = 0;
-
-	entry_addr =
-		(uint32_t *)((uint32_t)rb + ((uint32_t)DCT_start + ((uint32_t)DCT_idx * 4u * 4u)));
-
-	prov_id = *entry_addr;
-
-	entry_addr++;
-	info->pid = (prov_id << 16) | (*entry_addr & 0xFFFF);
-
-	entry_addr++;
-	info->dcr = *entry_addr & 0xFF;
-	info->bcr = (*entry_addr >> 8) & 0xFF;
-
-	entry_addr++;
-	info->dynamic_addr = *entry_addr & 0x7F;
-}
-
-/**
- * @brief Read the Secondary DCT
+ * The Device Address Table (DAT) is used only in Controller mode to store addressing
+ * information for each target device on the I3C bus. Command descriptors (e.g. Address
+ * Assignment and Transfer commands) reference DAT entries through a device index
+ * (DEV_INDEX) to obtain the target addressing/protocol attributes (I3C dynamic/static
+ * address, legacy I2C select, IBI capability bits, etc.).
  *
- * @param regs Pointer to controller registers
- * @param DAT_start Start location of DCT
- * @param DAT_idx Position in the Device Characteristics table
- * @param info SDCT information read
- */
-/* TODO there is no explaination of what memory this routine is accessing
- * The original code is dangerous becasue DCT_start is being added to
- * the base addrss of the controller. How do we know the caller is passing
- * a valid value that doesn't cause this code to produce a bad address and
- * cause a HW fault?
- * This code will fail Zephyr code review due to no explaination of shift
- * values, bit positions, etc.
- * Where is the documentation. Is it proprietary?
- */
-void xec_i3c_SDCT_read(mm_reg_t rb, uint16_t DCT_start, uint8_t idx, struct mec_i3c_SDCT_info *info)
-{
-	uint32_t *entry_addr = NULL;
-	uint32_t sdct_val = 0;
-
-	entry_addr = (uint32_t *)((uint32_t)rb + ((uint32_t)DCT_start + ((uint32_t)idx * 4u)));
-
-	sdct_val = *entry_addr;
-
-	info->dynamic_addr = sdct_val & 0xFFu;
-	info->dcr = (sdct_val >> 8) & 0xFFu;
-	info->bcr = (sdct_val >> 16) & 0xFFu;
-	info->static_addr = (uint8_t)((sdct_val >> 24) & 0xFFu);
-}
-
-/**
- * @brief Writes the DAT entry
+ * Per the specification, DAT registers are implemented in the controller’s external RAM
+ * and their offsets vary by configuration. Software must obtain the DAT start address and
+ * depth from the DEVICE_ADDR_TABLE_POINTER register and then program one 32-bit DAT word
+ * per device at:
  *
- * @param regs Pointer to controller registers
- * @param DAT_start Start location of DAT
- * @param DAT_idx Position in the Device Address table
- * @param val 32-bit value to program
- */
-/* TODO there is no explaination of what memory this routine is accessing
- * The original code is dangerous becasue DAT_start is being added to
- * the base addrss of the controller. How do we know the caller is passing
- * a valid value that doesn't cause this code to produce a bad address and
- * cause a HW fault?
- * This code will fail Zephyr code review due to no explaination of shift
- * values, bit positions, etc.
- * Where is the documentation. Is it proprietary?
+ *   entry_addr = regbase + DAT_start + (DAT_idx * 4)
+ *
+ * where DAT_start is the start offset/address of the DAT external RAM window and DAT_idx
+ * is the device index used by command descriptors.
+ *
+ * This helper performs the raw 32-bit write. The caller is responsible for:
+ * - ensuring DAT_start/DAT_idx are valid for the current configuration (within DAT depth)
+ * - formatting @p val according to the selected DAT structure
+ *   (I3C w/ static addr, I3C w/ dynamic addr, or legacy I2C)
+ *
+ * @param regbase   I3C controller register base address.
+ * @param DAT_start Start offset/address of the DAT in external RAM (from DAT pointer register).
+ * @param DAT_idx   Device index within the DAT.
+ * @param val       Encoded 32-bit DAT entry value to program.
  */
 void xec_i3c_DAT_write(mm_reg_t regbase, uint16_t DAT_start, uint8_t DAT_idx, uint32_t val)
 {
-	uint32_t *entry_addr =
-		(uint32_t *)((uint32_t)regbase + ((uint32_t)DAT_start + ((uint32_t)DAT_idx * 4u)));
+	uint32_t *entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DAT_start +
+					    ((uintptr_t)DAT_idx * sizeof(uint32_t)));
 
 	*entry_addr = val;
 }
 
-/* TODO
- * !!! NO !!!!
- * DO NOT PASS A POINTER THAT COULD BE ALIGNED ON 8-bit or 16-bit boudary
- * and then cast is as a pointer to a 32-bit object !!!!
- */
-#if 0
-void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len)
-{
-	uint32_t *dword_ptr = NULL;
-	uint32_t last_dword = 0;
-	uint16_t i, remaining_bytes;
-
-	/* Build Zephyr with CONFIG_ASSERT=y and CONFIG_ASSERT_LEVEL set appropriately */
-	__ASSERT(IS_ALIGNED(buffer, 4), "xec_i3c_fifo_write buffer is not >= 4 byte aligned");
-
-	if (len >= 4) {
-		dword_ptr = (uint32_t *)buffer;
-
-		for (i = 0; i < len / 4; i++) {
-			sys_write32(dword_ptr[i], regbase + XEC_I3C_TX_DATA_OFS);
-		}
-	}
-
-	remaining_bytes = len % 4;
-
-	if (remaining_bytes) {
-		memcpy(&last_dword, buffer + (len & ~0x3), remaining_bytes);
-		sys_write32(last_dword, regbase + XEC_I3C_TX_DATA_OFS);
-	}
-}
-#else
 /* Handle pointer of any alignment and length of any size */
 void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len)
 {
@@ -1146,39 +966,8 @@ void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len)
 		sys_write32(data32, regbase + XEC_I3C_TX_DATA_OFS);
 	}
 }
-#endif
 
-/**
- * @brief Read from FIFO
- *
- * @param regs Pointer to controller registers
- * @param buffer  buffer to copy data
- * @param len Length of data to read
- */
-#if 0
-/* TODO Does not handle misaligned buffer */
-void xec_i3c_fifo_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len)
-{
-	uint32_t *dword_ptr;
-	uint32_t last_dword = 0;
-	uint16_t i =0, remaining_bytes = 0;
-
-	if (len >= 4) {
-		dword_ptr = (uint32_t *)buffer;
-
-		for (i = 0; i < len / 4; i++) {
-			dword_ptr[i] = regs->RX_DATA;
-		}
-	}
-
-	remaining_bytes = len % 4;
-
-	if (remaining_bytes) {
-		last_dword = regs->RX_DATA;
-		memcpy(buffer + (len & ~0x3), &last_dword, remaining_bytes);
-	}
-}
-#else
+/* Handle pointer of any alignment and length of any size */
 void xec_i3c_fifo_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len)
 {
 	uint32_t data32 = 0, n = 0, num_rem = 0;
@@ -1231,29 +1020,33 @@ void xec_i3c_fifo_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len)
 		memcpy(remptr, (const void *)&data32, num_rem);
 	}
 }
-#endif
 
 /**
- * @brief Reads the DAT entry
+ * @brief Read one Device Address Table (DAT) entry from external RAM.
  *
- * @param regs Pointer to controller registers
- * @param DAT_start Start location of DAT
- * @param DAT_idx Position in the Device Address table
- * @return val 32-bit DAT value
- */
-/* TODO there is no explaination of what memory this routine is accessing
- * The original code is dangerous becasue DAT_start is being added to
- * the base addrss of the controller. How do we know the caller is passing
- * a valid value that doesn't cause this code to produce a bad address and
- * cause a HW fault?
- * This code will fail Zephyr code review due to no explaination of shift
- * values, bit positions, etc.
- * Where is the documentation. Is it proprietary?
+ * The Device Address Table (DAT) is stored in the controller’s external RAM (Controller mode)
+ * and contains one 32-bit entry per device indexed by DEV_INDEX. DAT base (start offset/address)
+ * and depth are provided by the DEVICE_ADDR_TABLE_POINTER register.
+ *
+ * This helper reads the raw 32-bit DAT word from:
+ *
+ *   entry_addr = regbase + DAT_start + (DAT_idx * 4)
+ *
+ * The caller is responsible for:
+ * - ensuring DAT_start/DAT_idx are valid for the current configuration (within DAT depth)
+ * - decoding the returned value according to the DAT structure in use
+ *   (I3C w/ static addr, I3C w/ dynamic addr, or legacy I2C)
+ *
+ * @param regbase   I3C controller register base address.
+ * @param DAT_start Start offset/address of the DAT in external RAM (from DAT pointer register).
+ * @param DAT_idx   Device index within the DAT.
+ *
+ * @return Raw 32-bit DAT entry value.
  */
 uint32_t xec_i3c_DAT_read(mm_reg_t regbase, uint16_t DAT_start, uint8_t DAT_idx)
 {
-	uint32_t *entry_addr =
-		(uint32_t *)((uint32_t)regbase + ((uint32_t)DAT_start + ((uint32_t)DAT_idx * 4u)));
+	uint32_t *entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DAT_start +
+					    ((uintptr_t)DAT_idx * sizeof(uint32_t)));
 
 	return *entry_addr;
 }
@@ -1274,20 +1067,6 @@ void xec_i3c_tgt_pid_set(mm_reg_t srb, uint16_t tgt_mipi_mfg_id, bool is_random_
 		      XEC_I3C_SC_PROV_ID_INST_SET((uint32_t)tgt_inst_id) |
 		      XEC_I3C_SC_PROV_ID_PART_SET((uint32_t)tgt_part_id);
 	}
-}
-
-void xec_i3c_xfers_reset(mm_reg_t hrb)
-{
-	uint32_t rstval = (BIT(XEC_I3C_RST_CR_CMDQ_POS) | BIT(XEC_I3C_RST_CR_RESPQ_POS) |
-			   BIT(XEC_I3C_RST_CR_TX_FIFO_POS) | BIT(XEC_I3C_RST_CR_RX_FIFO_POS));
-	uint32_t rv = 0;
-
-	sys_write32(rstval, hrb + XEC_I3C_RST_CR_OFS);
-
-	/* wait for HW to clear all the reset bits we set */
-	do {
-		rv = sys_read32(hrb + XEC_I3C_RST_CR_OFS) & rstval;
-	} while (rv != 0);
 }
 
 void xec_i3c_tgt_raise_ibi_SIR(mm_reg_t srb, uint8_t *sir_data, uint8_t sir_datalen, uint8_t mdb)
@@ -1311,24 +1090,6 @@ void xec_i3c_tgt_raise_ibi_SIR(mm_reg_t srb, uint8_t *sir_data, uint8_t sir_data
 	}
 
 	sys_set_bit(srb + XEC_I3C_SC_TIREQ_OFS, XEC_I3C_SC_TIREQ_TIR_POS);
-}
-
-/* Databook mentions SIR RESP DATA LENGTH as bits 8 t0 23, but we are using only
- * 8 bits because IBI Datalen is not supposed to be more than 4
- */
-bool xec_i3c_tgt_ibi_resp_get(mm_reg_t srb, uint8_t *sir_rem_datalen)
-{
-	uint32_t resp = sys_read32(srb + XEC_I3C_SC_TIBI_RESP_OFS);
-
-	if (sir_rem_datalen != NULL) {
-		*sir_rem_datalen = XEC_I3C_SC_TIBI_RESP_LEN_GET(resp);
-	}
-
-	if (XEC_I3C_SC_TIBI_RESP_STS_GET(resp) == XEC_I3C_SC_TIBI_RESP_STS_ACK) {
-		return true;
-	}
-
-	return false;
 }
 
 /*------------------------ High level helpers ---------------------------------*/
@@ -1587,20 +1348,6 @@ void XEC_I3C_Thresholds_Init(const struct device *dev)
 }
 
 /**
- * @brief Set Response Buffer Threshold to trigger interrupt
- *
- * @param regs Pointer to controller registers
- * @param threshold Threshold value
- */
-void XEC_I3C_Thresholds_Response_buf_set(const struct device *dev, uint8_t threshold)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-
-	xec_i3c_resp_queue_threshold_set(regbase, threshold);
-}
-
-/**
  * @brief
  *
  * @param regs Pointer to controller registers
@@ -1649,103 +1396,13 @@ void XEC_I3C_Sec_Host_Config(const struct device *sec_dev)
 void XEC_I3C_Soft_Reset(const struct device *host_dev)
 {
 	const struct xec_i3c_config *drvcfg = host_dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
+	mm_reg_t hrb = drvcfg->regbase;
 
-	xec_i3c_soft_reset(regbase);
-}
+	sys_set_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS);
 
-/**
- * @brief Retrieve Device Address Table Information
- *
- * @param regs Pointer to controller registers
- * @param start_addr Start Address of DAT
- * @param depth Depth of DAT
- */
-void XEC_I3C_DAT_info_get(const struct device *dev, uint16_t *start_addr, uint16_t *depth)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-
-	xec_i3c_dev_addr_table_ptr_get(regbase, start_addr, depth);
-}
-
-/**
- * @brief Retrieve Device Characteristic Table Information
- *
- * @param regs Pointer to controller registers
- * @param start_addr Start Address of DCT
- * @param depth Depth of DCT
- */
-void XEC_I3C_DCT_info_get(const struct device *dev, uint16_t *start_addr, uint16_t *depth)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-
-	xec_i3c_dev_char_table_ptr_get(regbase, start_addr, depth);
-}
-
-/* TODO the original implementation of the function did not look correct.
- * We read HW capabilites register and extract the role field.
- * There are three values:
- * 1 = Host Controller
- * 3 = Secondary Host Controller
- * 4 = Target only
- *
- * We return true if the value is 1 (Host Controller)
- *
- * NOTE: Both Host Controller HW and Secondary Host HW implement this
- * register and Role field.
- */
-bool XEC_I3C_Is_Current_Role_Primary(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	uint32_t role = xec_i3c_dev_role_config_get(drvcfg->regbase);
-
-	if (role == XEC_I3C_HW_CAP_ROLE_HC) {
-		return true;
+	/* wait for hardware to clear the bit */
+	while (sys_test_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS) != 0) {
 	}
-
-	return false;
-}
-
-/**
- * @brief Check if the core is operating in controller
- * or target mode
- * (applicable only to secondary controller)
- *
- * @param regs Pointer to controller registers
- */
-bool XEC_I3C_Is_Current_Role_Master(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	uint32_t opmode = xec_i3c_dev_operation_mode_get(drvcfg->regbase);
-	uint32_t role = xec_i3c_dev_role_config_get(drvcfg->regbase);
-
-	if (((role == XEC_I3C_HW_CAP_ROLE_SC) && (opmode != XEC_I3C_DEV_EXT_CR_OPM_HC)) ||
-	    (role == XEC_I3C_HW_CAP_ROLE_TGT)) {
-		return false;
-	}
-
-	return true;
-}
-
-/**
- * @brief Check if the core is the current bus master
- * or not (applicable only to secondary controller)
- *
- * @param regs Pointer to controller registers
- */
-bool XEC_I3C_Is_Current_Role_BusMaster(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	uint32_t role = xec_i3c_dev_role_config_get(drvcfg->regbase);
-
-	if ((role == XEC_I3C_HW_CAP_ROLE_SC) &&
-	    (xec_i3c_is_current_host(drvcfg->regbase) != true)) {
-		return false;
-	}
-
-	return true;
 }
 
 /**
@@ -1830,20 +1487,48 @@ void XEC_I3C_Enable(const struct device *dev, uint8_t address, uint8_t config)
 }
 
 /**
- * @brief Reads the DCT entry
+ * @brief Read one Device Characteristics Table (DCT) entry (ENTDAA format).
  *
- * @param regs Pointer to controller registers
- * @param DCT_start Start address of DCT
- * @param DCT_idx Index for the DAT entry
- * @param address 7-bit dynamic address
+ * The Device Characteristics Table (DCT) is stored in the controller's external RAM
+ * and is populated by the controller during ENTDAA (Active Controller mode).
+ * Each device consumes 4 x 32-bit words (16 bytes) in the DCT.
+ *
+ * The DCT base address (start offset in the controller external RAM window) is
+ * provided by the DEVICE_CHAR_TABLE_POINTER register; the caller supplies that
+ * start offset via @p DCT_start along with the device index @p DCT_idx.
+ *
+ * Layout parsed here matches the ENTDAA-captured structure:
+ * - PID (48-bit, assembled from word0 and low 16 bits of word1)
+ * - DCR (8-bit) and BCR (8-bit) from word2
+ * - Dynamic address (7-bit) from word3
+ *
+ * @param dev       I3C controller device.
+ * @param DCT_start Start offset/address of the DCT in external RAM (from DCT pointer register).
+ * @param DCT_idx   Device index within the DCT.
+ * @param info      Output decoded DCT information.
  */
 void XEC_I3C_DCT_read(const struct device *dev, uint16_t DCT_start, uint16_t DCT_idx,
 		      struct mec_i3c_DCT_info *info)
 {
 	const struct xec_i3c_config *drvcfg = dev->config;
 	mm_reg_t regbase = drvcfg->regbase;
+	uint32_t *entry_addr;
+	uint64_t prov_id;
 
-	xec_i3c_DCT_read(regbase, DCT_start, (uint8_t)DCT_idx, info);
+	/* Each DCT entry is 4 x 32-bit words (16 bytes) */
+	entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DCT_start +
+				  ((uintptr_t)DCT_idx * 4u * sizeof(uint32_t)));
+
+	/* Word0 + low 16 bits of word1 form the 48-bit PID per existing format */
+	prov_id = (uint64_t)entry_addr[0];
+	info->pid = (prov_id << 16) | ((uint64_t)entry_addr[1] & 0xFFFFu);
+
+	/* Word2: DCR in bits[7:0], BCR in bits[15:8] */
+	info->dcr = (uint8_t)(entry_addr[2] & 0xFFu);
+	info->bcr = (uint8_t)((entry_addr[2] >> 8) & 0xFFu);
+
+	/* Word3: Dynamic address in bits[6:0] */
+	info->dynamic_addr = (uint8_t)(entry_addr[3] & 0x7Fu);
 }
 
 /**
@@ -1876,62 +1561,48 @@ void XEC_I3C_TGT_DEFTGTS_DAT_write(const struct device *dev, uint16_t DCT_start,
 }
 
 /**
- * @brief Reads the Secondary DCT entry
+ * @brief Read one Secondary Device Characteristics Table (SDCT) entry (DEFSLVS format).
  *
-   _i3c_SDCT_read(regs, DCT_start, DCT_idx, info);
-}* @param regs Pointer to controller registers
- * @param DCT_start Start address of DCT
- * @param DCT_idx Index for the DAT entry
- * @param address 7-bit dynamic address
+ * In Secondary Controller mode, the controller captures device characteristics received
+ * during the DEFSLVS CCC into the Secondary Device Characteristics Table (SDCT), also
+ * referred to in the spec as SEC_DEV_CHAR_TABLEx. These SDCT registers are implemented
+ * in the controller’s external RAM window and share the same external RAM region/offsets
+ * as the DEV_CHAR_TABLEx_LOCy registers (used in Active Controller mode).
+ *
+ * Each SDCT entry is a single 32-bit word with the following byte layout (SEC_DEV_CHAR_TABLE1):
+ *   [31:24] STATIC_ADDR  - static address (if applicable; 0 if not present)
+ *   [23:16] BCR_TYPE     - Bus Characteristics Register (BCR)
+ *   [15:8]  DCR_TYPE     - Device Characteristics Register (DCR)
+ *   [7:0]   DYNAMIC_ADDR - dynamic address assigned to the device
+ *
+ * The SDCT base address (start offset in external RAM) is provided by the device
+ * characteristic table pointer register; the caller supplies that start offset via
+ * @p DCT_start, and selects an entry via @p idx. Each entry is 4 bytes, so the entry
+ * address is computed as: regbase + DCT_start + idx * 4.
+ *
+ * @param dev       I3C controller device (secondary controller instance).
+ * @param DCT_start Start offset/address of the (S)DCT in external RAM.
+ * @param idx       Device index within the SDCT.
+ * @param info      Output decoded SDCT information.
  */
 void XEC_I3C_SDCT_read(const struct device *dev, uint16_t DCT_start, uint16_t idx,
 		       struct mec_i3c_SDCT_info *info)
 {
 	const struct xec_i3c_config *drvcfg = dev->config;
 	mm_reg_t regbase = drvcfg->regbase;
+	uint32_t sdct_val;
+	uint32_t *entry_addr;
 
-	xec_i3c_SDCT_read(regbase, DCT_start, (uint8_t)idx, info);
-}
+	/* One SDCT entry is one 32-bit word (4 bytes) per device */
+	entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DCT_start +
+				  ((uintptr_t)idx * sizeof(uint32_t)));
 
-/**
- * @brief Writes the DAT entry with a dynamic address
- *
- * @param regs Pointer to controller registers
- * @param DAT_loc Start address of DAT
- * @param DAT_idx Index for the DAT entry
- * @param address 7-bit dynamic address
- */
-void XEC_I3C_DAT_DynamicAddr_write(const struct device *dev, uint16_t DAT_start, uint16_t DAT_idx,
-				   uint8_t address)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-	uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(address);
+	sdct_val = *entry_addr;
 
-	xec_i3c_DAT_write(regbase, DAT_start, (uint8_t)DAT_idx, val);
-}
-
-/**
- * @brief Writes the DAT entry with a dynamic address for DAA
- *
- * @param regs Pointer to controller registers
- * @param DAT_loc Start address of DAT
- * @param DAT_idx Index for the DAT entry
- * @param address 7-bit dynamic address
- */
-void XEC_I3C_DAT_DynamicAddrAssign_write(const struct device *dev, uint16_t DAT_start,
-					 uint16_t DAT_idx, uint8_t address)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-	uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(address);
-
-	/* Set the odd parity for the dynamic address */
-	if (!__builtin_parity(address)) {
-		val |= DEV_ADDR_TABLE1_LOC1_PARITY;
-	}
-
-	xec_i3c_DAT_write(regbase, DAT_start, (uint8_t)DAT_idx, val);
+	info->dynamic_addr = (uint8_t)(sdct_val & 0xFFu);
+	info->dcr = (uint8_t)((sdct_val >> 8) & 0xFFu);
+	info->bcr = (uint8_t)((sdct_val >> 16) & 0xFFu);
+	info->static_addr = (uint8_t)((sdct_val >> 24) & 0xFFu);
 }
 
 /**
@@ -2221,37 +1892,6 @@ void XEC_I3C_TGT_PID_set(const struct device *dev, uint64_t pid, bool pid_random
 }
 
 /**
- * @brief Check if the dynamic address is valid (in target mode)
- *
- * @param regs Pointer to controller registers
- */
-bool XEC_I3C_TGT_is_dyn_addr_valid(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t rb = drvcfg->regbase;
-
-	if (sys_test_bit(rb + XEC_I3C_DEV_ADDR_OFS, XEC_I2C_DEV_ADDR_DYAV_POS) != 0) {
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * @brief Get the dynamic address assinged (in target mode)
- *
- * @param regs Pointer to controller registers
- */
-uint8_t XEC_I3C_TGT_dyn_addr_get(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-	uint32_t da = sys_read32(regbase + XEC_I3C_DEV_ADDR_OFS);
-
-	return (uint8_t)XEC_I3C_DEV_ADDR_DYA_GET(da);
-}
-
-/**
  * @brief Set the MWL value for target
  *
  * @param regs Pointer to controller registers
@@ -2420,20 +2060,22 @@ void XEC_I3C_Xfer_Error_Resume(const struct device *dev)
 void XEC_I3C_Xfer_Reset(const struct device *dev)
 {
 	const struct xec_i3c_config *drvcfg = dev->config;
+	mm_reg_t hrb = drvcfg->regbase;
+	uint32_t rstval = (BIT(XEC_I3C_RST_CR_CMDQ_POS) | BIT(XEC_I3C_RST_CR_RESPQ_POS) |
+			   BIT(XEC_I3C_RST_CR_TX_FIFO_POS) | BIT(XEC_I3C_RST_CR_RX_FIFO_POS));
+	uint32_t rv = 0;
 
 	/* Reset the TX/RX Fifos & Cmd/Res Queues */
-	xec_i3c_xfers_reset(drvcfg->regbase);
+	sys_write32(rstval, hrb + XEC_I3C_RST_CR_OFS);
+
+	/* wait for HW to clear all the reset bits we set */
+	do {
+		rv = sys_read32(hrb + XEC_I3C_RST_CR_OFS) & rstval;
+	} while (rv != 0);
 }
 
 /* Interrupt functions */
 /*--------------------------------------------------------*/
-
-void XEC_I3C_GIRQ_Status_Clr(const struct device *dev)
-{
-	const struct xec_i3c_config *drvcfg = dev->config;
-
-	soc_ecia_girq_status_clear(drvcfg->hwctx.girq, drvcfg->hwctx.girq_pos);
-}
 
 /* Enable/disable I23 controller interrupt signal from propagating to NVIC */
 void XEC_I3C_GIRQ_CTRL(const struct device *dev, int flags)
@@ -2472,3 +2114,5 @@ int XEC_I3C_GIRQ_Result(const struct device *dev)
 
 	return (int)result;
 }
+
+/* End of file */

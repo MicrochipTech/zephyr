@@ -1229,15 +1229,7 @@ struct xec_i3c_data {
 
 /* MEC I3C helpers */
 
-uint8_t xec_i3c_ibi_status_count_get(mm_reg_t regbase);
-uint32_t xec_i3c_ibi_queue_status_get(mm_reg_t regbase);
-uint8_t xec_i3c_response_sts_get(mm_reg_t regbase, uint16_t *len, uint8_t *tid);
 void xec_i3c_ibi_data_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len);
-
-uint8_t xec_i3c_tgt_response_sts_get(mm_reg_t regbase, uint16_t *len, uint8_t *tid,
-				     bool *rx_response);
-
-bool xec_i3c_tgt_ibi_resp_get(mm_reg_t srb, uint8_t *sir_rem_datalen);
 
 void xec_i3c_tgt_max_speed_update(mm_reg_t srb, uint8_t max_rd_speed, uint8_t max_wr_speed);
 
@@ -1274,16 +1266,13 @@ void xec_i3c_sec_host_dma_rx_burst_length_set(mm_reg_t srb, uint32_t val);
 void xec_i3c_sec_host_stuck_sda_scl_config(mm_reg_t srb, uint32_t en, uint32_t sda_tout_val,
 					   uint32_t scl_tout_val);
 
+void xec_i3c_soft_reset(mm_reg_t hrb);
+
 /* Get device pointer from Host or Secondary Host controller */
 void xec_i3c_dev_addr_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint16_t *depth);
 
-/* Get role from HW capabilities register in Host or Secondary Host */
-uint32_t xec_i3c_dev_role_config_get(mm_reg_t regbase);
-
-/* Get operational mode from Host or Secondary Host */
-uint8_t xec_i3c_dev_operation_mode_get(mm_reg_t regbase);
-
-bool xec_i3c_is_current_host(mm_reg_t regbase);
+/* Get device characteristics pointer from Host or Secondary Host controller */
+void xec_i3c_dev_char_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint16_t *depth);
 
 /* return FIFO size in bytes */
 uint32_t xec_i3c_tx_fifo_depth_get(mm_reg_t regbase);
@@ -1291,10 +1280,6 @@ uint32_t xec_i3c_rx_fifo_depth_get(mm_reg_t regbase);
 uint32_t xec_i3c_cmd_fifo_depth_get(mm_reg_t regbase);
 uint32_t xec_i3c_resp_fifo_depth_get(mm_reg_t regbase);
 uint32_t xec_i3c_ibi_fifo_depth_get(mm_reg_t regbase);
-
-uint8_t xec_i3c_resp_buf_level_get(mm_reg_t regbase);
-uint8_t xec_i3c_ibi_status_count_get(mm_reg_t regbase);
-uint32_t xec_i3c_ibi_queue_status_get(mm_reg_t regbase);
 
 void xec_i3c_fifo_read(mm_reg_t regbase, uint8_t *buffer, uint16_t len);
 void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len);
@@ -1327,8 +1312,6 @@ void XEC_I3C_Controller_Interrupts_Init(const struct device *dev);
 
 void XEC_I3C_Thresholds_Init(const struct device *dev);
 
-void XEC_I3C_Thresholds_Response_buf_set(const struct device *dev, uint8_t threshold);
-
 void XEC_I3C_queue_depths_get(const struct device *dev, struct queue_depths *fd);
 
 void XEC_I3C_Host_Config(const struct device *dev);
@@ -1348,24 +1331,10 @@ void XEC_I3C_Xfer_Error_Resume(const struct device *dev);
 
 void XEC_I3C_Xfer_Reset(const struct device *dev);
 
-void XEC_I3C_DAT_info_get(const struct device *dev, uint16_t *start_addr, uint16_t *depth);
-
 void XEC_I3C_DCT_info_get(const struct device *dev, uint16_t *start_addr, uint16_t *depth);
 
 void XEC_I3C_DCT_read(const struct device *dev, uint16_t DCT_start, uint16_t DCT_idx,
 		      struct mec_i3c_DCT_info *info);
-
-bool XEC_I3C_Is_Current_Role_Primary(const struct device *dev);
-
-bool XEC_I3C_Is_Current_Role_Master(const struct device *dev);
-
-bool XEC_I3C_Is_Current_Role_BusMaster(const struct device *dev);
-
-void XEC_I3C_DAT_DynamicAddrAssign_write(const struct device *dev, uint16_t DAT_start,
-					 uint16_t DAT_idx, uint8_t address);
-
-void XEC_I3C_DAT_DynamicAddr_write(const struct device *dev, uint16_t DAT_start, uint16_t DAT_idx,
-				   uint8_t address);
 
 void XEC_I3C_DO_Xfer_Prep(const struct device *dev, struct mec_i3c_dw_cmd *cmd, uint8_t *tid_xfer);
 
@@ -1378,10 +1347,6 @@ void XEC_I3C_IBI_SIR_Disable(const struct device *dev, struct mec_i3c_IBI_SIR *i
 			     bool disable_ibi_interrupt);
 
 void XEC_I3C_TGT_PID_set(const struct device *dev, uint64_t pid, bool pid_random);
-
-bool XEC_I3C_TGT_is_dyn_addr_valid(const struct device *dev);
-
-uint8_t XEC_I3C_TGT_dyn_addr_get(const struct device *dev);
 
 void xec_i3c_tgt_MRL_get(mm_reg_t srb, uint16_t *max_rd_len);
 void xec_i3c_tgt_MWL_get(mm_reg_t srb, uint16_t *max_rd_len);
@@ -1423,8 +1388,6 @@ void XEC_I3C_TGT_DEFTGTS_DAT_write(const struct device *dev, uint16_t DCT_start,
 				   uint8_t targets_count);
 
 void XEC_I3C_TGT_RoleSwitch_Resume(const struct device *dev);
-
-void XEC_I3C_GIRQ_Status_Clr(const struct device *dev);
 
 void XEC_I3C_GIRQ_CTRL(const struct device *dev, int flags);
 
