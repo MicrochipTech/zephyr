@@ -45,4 +45,5 @@ zephyr_library_sources_ifdef(CONFIG_I3C_NPCX i3c_npcx.c)
 zephyr_library_sources_ifdef(CONFIG_I3C_RENESAS_RA i3c_renesas_ra.c)
 zephyr_library_sources_ifdef(CONFIG_I3C_STM32 i3c_stm32.c)
 zephyr_library_sources_ifdef(CONFIG_I3C_TEST i3c_test.c)
+zephyr_library_sources_ifdef(CONFIG_I3C_MCHP i3c_mchp.c)
 # zephyr-keep-sorted-stop

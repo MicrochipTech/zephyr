@@ -225,6 +225,7 @@ rsource "Kconfig.nxp"
 rsource "Kconfig.renesas"
 rsource "Kconfig.stm32"
 rsource "Kconfig.test"
+rsource "Kconfig.mchp"
 # zephyr-keep-sorted-stop
 
 endif # I3C
