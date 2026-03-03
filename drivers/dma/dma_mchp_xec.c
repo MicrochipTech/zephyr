@@ -271,6 +271,7 @@ static bool xec_dma_chan_is_busy(mem_addr_t chan_base)
 	return false;
 }
 
+/* NOTE: only call from non-interrupt context. Refer to xec_dma_chan_reload_ns */
 static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t dest, size_t nbytes)
 {
 	uint32_t ctrl = 0, msa = 0, mea = 0, deva = 0;
@@ -302,6 +303,65 @@ static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t d
 	sys_write32(chien, chan_base + XEC_DMA_CHAN_IER_OFS);
 	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
 	sys_write32(1u, chan_base + XEC_DMA_CHAN_ACTV_OFS);
+}
+
+static void xec_dma_chan_configure(const struct device *dev, struct xec_dma_chan_cfg *cfg,
+				   uint32_t chan)
+{
+	mem_addr_t chan_base = 0;
+	uint32_t ctrl = 0u; /* dir = Dev2Mem, IncrMem=0, IncrDev=0 */
+	uint32_t usz = 1u;
+
+	if ((cfg->unitsz == 4u) || (cfg->unitsz == 2u)) {
+		usz = cfg->unitsz;
+	}
+
+	chan_base = xec_dma_chan_base(dev, chan);
+
+	/* ensure channel is inactive and internal FSM is cleared */
+	sys_write32(0, chan_base + XEC_DMA_CHAN_CR_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_IER_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_MEA_OFS);
+	sys_write32(0, chan_base + XEC_DMA_CHAN_MSA_OFS);
+	sys_write32(0xffu, chan_base + XEC_DMA_CHAN_SR_OFS);
+
+	ctrl = XEC_DMA_CHAN_CR_XU_SET(usz);
+	if (cfg->dir == XEC_DMA_CFG_DIR_MEM_TO_DEV) {
+		ctrl |= BIT(XEC_DMA_CHAN_CR_M2D_POS);
+
+		sys_write32(cfg->src_addr, chan_base + XEC_DMA_CHAN_MSA_OFS);
+		sys_write32(cfg->src_addr + cfg->nbytes, chan_base + XEC_DMA_CHAN_MEA_OFS);
+		sys_write32(cfg->dst_addr, chan_base + XEC_DMA_CHAN_DEVA_OFS);
+
+		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_SRC_ADDR) != 0) {
+			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_MEM_POS);
+		}
+
+		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_DST_ADDR) != 0) {
+			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_DEV_POS);
+		}
+	} else { /* device(source address) to memory(destination address) */
+		sys_write32(cfg->dst_addr, chan_base + XEC_DMA_CHAN_MSA_OFS);
+		sys_write32(cfg->dst_addr + cfg->nbytes, chan_base + XEC_DMA_CHAN_MEA_OFS);
+		sys_write32(cfg->src_addr, chan_base + XEC_DMA_CHAN_DEVA_OFS);
+
+		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_SRC_ADDR) != 0) {
+			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_DEV_POS);
+		}
+
+		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_DST_ADDR) != 0) {
+			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_MEM_POS);
+		}
+	}
+
+	if ((cfg->flags & XEC_DMA_CFG_FLAG_SWFLC) != 0) {
+		ctrl |= BIT(XEC_DMA_CHAN_CR_DIS_HFC_POS);
+	}
+
+	ctrl |= XEC_DMA_CHAN_CR_HFC_DEV_SET((uint32_t)cfg->hwfc_dev);
+
+	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
+	sys_set_bit(chan_base + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 }
 
 /*
@@ -369,7 +429,8 @@ static void xec_dma_chan_reload(mem_addr_t chan_base, uintptr_t src, uintptr_t d
  *	chan mem_addr_end = chan mem_addr + block_size
  *	chan dev_addr = source_address
  */
-static int xec_dmac_configure(const struct device *dev, uint32_t channel, struct dma_config *config)
+static int xec_dmac_configure_api(const struct device *dev, uint32_t channel,
+                                  struct dma_config *config)
 {
 	struct xec_dmac_data *const data = dev->data;
 	struct xec_dmac_channel *chdata = NULL;
@@ -408,13 +469,16 @@ static int xec_dmac_configure(const struct device *dev, uint32_t channel, struct
 	chcfg->flags = 0;
 	chcfg->nbytes = block->block_size;
 	chcfg->hwfc_dev = config->dma_slot & XEC_DMA_CHAN_CR_HFC_DEV_MSK0;
-	chcfg->dir = XEC_DMA_CFG_DIR_MEM_TO_DEV;
 
-	if (config->channel_direction == PERIPHERAL_TO_MEMORY) {
+	if (config->channel_direction == MEMORY_TO_PERIPHERAL) {
+		chcfg->dir = XEC_DMA_CFG_DIR_MEM_TO_DEV;
+	} else if (config->channel_direction == PERIPHERAL_TO_MEMORY) {
 		chcfg->dir = XEC_DMA_CFG_DIR_DEV_TO_MEM;
 	} else if (config->channel_direction == MEMORY_TO_MEMORY) {
 		/* mem-to-mem requires software flow control */
 		chcfg->flags |= XEC_DMA_CFG_FLAG_SWFLC;
+	} else {
+		return -EINVAL;
 	}
 
 	chcfg->src_addr = block->source_address;
@@ -443,6 +507,9 @@ static int xec_dmac_configure(const struct device *dev, uint32_t channel, struct
 	if (config->error_callback_dis) { /* disable callback on errors ? */
 		chdata->flags |= BIT(DMA_XEC_CHAN_FLAGS_CB_ERR_DIS_POS);
 	}
+
+	/* configure channel for first block */
+	xec_dma_chan_configure(dev, chcfg, channel);
 
 	return 0;
 }
@@ -477,9 +544,10 @@ static void xec_dmac_reload_int(const struct device *dev, uint32_t channel, uint
  * size = size of DMA transfer. Assume this is in bytes.
  * We assume the caller will pass src, dst, and size that matches
  * the unit size from the previous configure call.
+ * NOTE: this can be called from a register callback which is in DMA ISR context!
  */
-static int xec_dmac_reload(const struct device *dev, uint32_t channel, uint32_t src, uint32_t dst,
-			   size_t size)
+static int xec_dmac_reload_api(const struct device *dev, uint32_t channel, uint32_t src,
+                               uint32_t dst, size_t size)
 {
 	mem_addr_t chan_base = 0;
 
@@ -498,65 +566,6 @@ static int xec_dmac_reload(const struct device *dev, uint32_t channel, uint32_t 
 	return 0;
 }
 
-static void xec_dma_chan_configure(const struct device *dev, struct xec_dma_chan_cfg *cfg,
-				   uint32_t chan)
-{
-	mem_addr_t chan_base = 0;
-	uint32_t ctrl = 0u; /* dir = Dev2Mem, IncrMem=0, IncrDev=0 */
-	uint32_t usz = 1u;
-
-	if ((cfg->unitsz == 4u) || (cfg->unitsz == 2u)) {
-		usz = cfg->unitsz;
-	}
-
-	chan_base = xec_dma_chan_base(dev, chan);
-
-	/* ensure channel is inactive and internal FSM is cleared */
-	sys_write32(0, chan_base + XEC_DMA_CHAN_CR_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_IER_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_MEA_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_MSA_OFS);
-	sys_write32(0xffu, chan_base + XEC_DMA_CHAN_SR_OFS);
-
-	ctrl = XEC_DMA_CHAN_CR_XU_SET(usz);
-	if (cfg->dir == XEC_DMA_CFG_DIR_MEM_TO_DEV) {
-		ctrl |= BIT(XEC_DMA_CHAN_CR_M2D_POS);
-
-		sys_write32(cfg->src_addr, chan_base + XEC_DMA_CHAN_MSA_OFS);
-		sys_write32(cfg->src_addr + cfg->nbytes, chan_base + XEC_DMA_CHAN_MEA_OFS);
-		sys_write32(cfg->dst_addr, chan_base + XEC_DMA_CHAN_DEVA_OFS);
-
-		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_SRC_ADDR) != 0) {
-			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_MEM_POS);
-		}
-
-		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_DST_ADDR) != 0) {
-			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_DEV_POS);
-		}
-	} else { /* device(source address) to memory(destination address) */
-		sys_write32(cfg->dst_addr, chan_base + XEC_DMA_CHAN_MSA_OFS);
-		sys_write32(cfg->dst_addr + cfg->nbytes, chan_base + XEC_DMA_CHAN_MEA_OFS);
-		sys_write32(cfg->src_addr, chan_base + XEC_DMA_CHAN_DEVA_OFS);
-
-		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_SRC_ADDR) != 0) {
-			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_DEV_POS);
-		}
-
-		if ((cfg->flags & XEC_DMA_CFG_FLAG_INCR_DST_ADDR) != 0) {
-			ctrl |= BIT(XEC_DMA_CHAN_CR_INC_MEM_POS);
-		}
-	}
-
-	if ((cfg->flags & XEC_DMA_CFG_FLAG_SWFLC) != 0) {
-		ctrl |= BIT(XEC_DMA_CHAN_CR_DIS_HFC_POS);
-	}
-
-	ctrl |= XEC_DMA_CHAN_CR_HFC_DEV_SET((uint32_t)cfg->hwfc_dev);
-
-	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
-	sys_set_bit(chan_base + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
-}
-
 static void xec_dma_chan_go(mem_addr_t chan_base)
 {
 	uint32_t ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
@@ -572,31 +581,31 @@ static void xec_dma_chan_go(mem_addr_t chan_base)
 	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
 }
 
-static int dma_xec_start(const struct device *dev, uint32_t channel)
+/* Start a previously configured channel.
+ * NOTE: this can be called in DMA ISR context via a registered callback!
+ */
+static int xec_dmac_start_api(const struct device *dev, uint32_t channel)
 {
-	struct xec_dmac_data *const data = dev->data;
-	struct xec_dma_chan_cfg *chcfg = NULL;
-	struct xec_dmac_channel *chdata = NULL;
-	mem_addr_t chan_base = 0;
+	const struct xec_dmac_config *const devcfg = dev->config;
+	mm_reg_t chan_base = 0;
+	uint8_t girq = 0, girq_pos = 0;
 
 	if (is_chan_valid(dev, channel) == false) {
 		return -EINVAL;
 	}
 
+	/* Block PM transition until DMA completes */
+	dma_xec_device_busy_set(dev, channel);
+
 	chan_base = xec_dma_chan_base(dev, channel);
-	chdata = &data->channels[channel];
-	chcfg = &chdata->chan_cfg;
+	girq = MCHP_XEC_ECIA_GIRQ(devcfg->chan_girqs[channel]);
+	girq_pos = MCHP_XEC_ECIA_GIRQ_POS(devcfg->chan_girqs[channel]);
 
 	sys_write32(0, chan_base + XEC_DMA_CHAN_IER_OFS);
-
-	xec_dma_chan_configure(dev, chcfg, channel);
-
 	sys_write32(XEC_DMA_CHAN_IESR_MSK, chan_base + XEC_DMA_CHAN_SR_OFS);
 	sys_write32(BIT(XEC_DMA_CHAN_IESR_DONE_POS) | BIT(XEC_DMA_CHAN_IESR_BERR_POS),
 		    chan_base + XEC_DMA_CHAN_IER_OFS);
-
-	/* Block PM transition until DMA completes */
-	dma_xec_device_busy_set(dev, channel);
+	soc_ecia_girq_status_clear(girq, girq_pos);
 
 	xec_dma_chan_go(chan_base); /* start HW */
 
@@ -627,7 +636,7 @@ static int xec_dma_chan_stop(mem_addr_t chan_base)
 	return ret;
 }
 
-static int dma_xec_stop(const struct device *dev, uint32_t channel)
+static int xec_dmac_stop_api(const struct device *dev, uint32_t channel)
 {
 	mem_addr_t chan_base = 0;
 	int ret = 0;
@@ -660,7 +669,8 @@ static int dma_xec_stop(const struct device *dev, uint32_t channel)
  * read_position		- read position in a circular dma buffer
  *
  */
-static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dma_status *status)
+static int xec_dmac_get_status_api(const struct device *dev, uint32_t chan,
+                                   struct dma_status *status)
 {
 	struct xec_dmac_data *const data = dev->data;
 	struct xec_dmac_channel *chan_data = NULL;
@@ -708,7 +718,7 @@ static int dma_xec_get_status(const struct device *dev, uint32_t chan, struct dm
 	return 0;
 }
 
-static int dma_xec_get_attribute(const struct device *dev, uint32_t type, uint32_t *value)
+static int xec_dmac_get_attribute_api(const struct device *dev, uint32_t type, uint32_t *value)
 {
 	if ((type == DMA_ATTR_MAX_BLOCK_COUNT) && (value != NULL)) {
 		*value = 1;
@@ -724,7 +734,7 @@ static int dma_xec_get_attribute(const struct device *dev, uint32_t type, uint32
  * the requested channel number. If requested channel number matches
  * the chan parameter passed return true else return false.
  */
-static bool dma_xec_chan_filter(const struct device *dev, int chan, void *filter_param)
+static bool xec_dmac_chan_filter_api(const struct device *dev, int chan, void *filter_param)
 {
 	const struct xec_dmac_config *const devcfg = dev->config;
 	int requested_chan = 0;
@@ -753,36 +763,6 @@ static void do_callback(const struct device *dev, uint32_t chan, struct xec_dmac
 	}
 }
 
-static void xec_dma_chan_reload_ns(mem_addr_t chan_base, struct xec_dma_chan_cfg *chcfg)
-{
-	uint32_t ctrl = 0, msa = 0, mea = 0, deva = 0;
-
-	sys_write32(0, chan_base + XEC_DMA_CHAN_ACTV_OFS);
-	ctrl = sys_read32(chan_base + XEC_DMA_CHAN_CR_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_CR_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_MEA_OFS);
-	sys_write32(0, chan_base + XEC_DMA_CHAN_MSA_OFS);
-	sys_write32(0xff, chan_base + XEC_DMA_CHAN_SR_OFS);
-
-	if ((ctrl & BIT(XEC_DMA_CHAN_CR_M2D_POS)) != 0) {
-		msa = chcfg->src_addr;
-		mea = msa;
-		deva = chcfg->dst_addr;
-	} else { /* device to memory */
-		msa = chcfg->dst_addr;
-		mea = msa;
-		deva = chcfg->src_addr;
-	}
-
-	mea += chcfg->nbytes;
-
-	sys_write32(msa, chan_base + XEC_DMA_CHAN_MSA_OFS);
-	sys_write32(mea, chan_base + XEC_DMA_CHAN_MEA_OFS);
-	sys_write32(deva, chan_base + XEC_DMA_CHAN_DEVA_OFS);
-	sys_write32(ctrl, chan_base + XEC_DMA_CHAN_CR_OFS);
-	sys_write32(1u, chan_base + XEC_DMA_CHAN_ACTV_OFS);
-}
-
 static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 {
 	mem_addr_t chb = 0;
@@ -790,8 +770,7 @@ static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 	const struct xec_dmac_config *const devcfg = dev->config;
 	struct xec_dmac_data *const data = dev->data;
 	struct xec_dmac_channel *chan_data = &data->channels[chan];
-	struct dma_block_config *block = chan_data->curr;
-	struct xec_dma_chan_cfg *chcfg = &chan_data->chan_cfg;
+	int cb_status = DMA_STATUS_COMPLETE;
 	uint8_t girq = MCHP_XEC_ECIA_GIRQ(devcfg->chan_girqs[chan]);
 	uint8_t girq_pos = MCHP_XEC_ECIA_GIRQ_POS(devcfg->chan_girqs[chan]);
 
@@ -814,42 +793,13 @@ static void xec_dmac_irq_handler(const struct device *dev, uint8_t chan)
 	sys_write32(XEC_DMA_CHAN_IESR_MSK, chb + XEC_DMA_CHAN_SR_OFS);
 	soc_ecia_girq_status_clear(girq, girq_pos);
 
+	dma_xec_device_busy_clear(dev, chan);
+
 	if ((istatus & BIT(XEC_DMA_CHAN_IESR_BERR_POS)) != 0) {
-		dma_xec_device_busy_clear(dev, chan);
-		if ((chan_data->flags & BIT(DMA_XEC_CHAN_FLAGS_CB_ERR_DIS_POS)) == 0) {
-			do_callback(dev, chan, chan_data, -EIO);
-		}
-		return;
+		cb_status = -EIO;
 	}
 
-	chan_data->block_count--;
-	if (chan_data->block_count != 0) {
-		if (((chan_data->flags & BIT(DMA_XEC_CHAN_FLAGS_CB_EOB_POS)) != 0) &&
-		    (chan_data->cb != NULL)) {
-			do_callback(dev, chan, chan_data, DMA_STATUS_BLOCK);
-		}
-
-		block = block->next_block;
-		if (block != NULL) {
-			chan_data->curr = block;
-			chcfg->src_addr = block->source_address;
-			chcfg->dst_addr = block->dest_address;
-			chcfg->nbytes = block->block_size;
-			chan_data->total_req_xfr_len = block->block_size;
-
-			/* reload */
-			xec_dma_chan_reload_ns(chb, chcfg);
-
-			sys_write32(
-				(BIT(XEC_DMA_CHAN_IESR_DONE_POS) | BIT(XEC_DMA_CHAN_IESR_BERR_POS)),
-				chb + XEC_DMA_CHAN_IER_OFS);
-
-			xec_dma_chan_go(chb);
-		}
-	} else {
-		dma_xec_device_busy_clear(dev, chan);
-		do_callback(dev, chan, chan_data, DMA_STATUS_COMPLETE);
-	}
+	do_callback(dev, chan, chan_data, cb_status);
 }
 
 #if defined(CONFIG_PM_DEVICE)
@@ -910,13 +860,13 @@ static int xec_dmac_init(const struct device *dev)
 
 /* API - HW does not stupport suspend/resume */
 static DEVICE_API(dma, xec_dmac_api) = {
-	.config = xec_dmac_configure,
-	.reload = xec_dmac_reload,
-	.start = dma_xec_start,
-	.stop = dma_xec_stop,
-	.get_status = dma_xec_get_status,
-	.chan_filter = dma_xec_chan_filter,
-	.get_attribute = dma_xec_get_attribute,
+	.config = xec_dmac_configure_api,
+	.reload = xec_dmac_reload_api,
+	.start = xec_dmac_start_api,
+	.stop = xec_dmac_stop_api,
+	.get_status = xec_dmac_get_status_api,
+	.chan_filter = xec_dmac_chan_filter_api,
+	.get_attribute = xec_dmac_get_attribute_api,
 };
 
 /* clang-format off */
