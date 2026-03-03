@@ -1,0 +1,59 @@
+# Microchip XEC I2C configuration options
+
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config I2C_XEC
+	bool "XEC Microchip I2C driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C driver.
+
+config I2C_XEC_V2
+	bool "XEC Microchip I2C driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V2_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_XEC_NL
+	bool "XEC Microchip I2C driver using hardware network layer"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C with network layer and DMA driver.
+
+if I2C_XEC_NL
+
+config I2C_XEC_NL_PORT_SWITCHING
+	bool "Enable driver support for HW port switch APIs"
+	default n
+	depends on I2C_XEC_NL
+	help
+	  Microchip XEC I2C controller has a hardware MUX with up to 16 I2C
+	  signal pairs to be selected one pair at a time. Enabling to build
+	  additional APIs to set and get the port. Note: changing the port MUX
+	  requires a controller reset to resync the controller to the state of
+	  SCL/SDA on the new port.
+
+config I2C_XEC_NL_TRACE_DEBUG
+	bool "Enable capture of byte state values into a driver buffer"
+	default n
+	depends on I2C_XEC_NL
+	help
+	  If enabled the driver will save a trace byte value indicating
+	  the code flow sequence.
+
+config I2C_XEC_NL_TRACE_DEBUG_BUF_SIZE
+	int "Buffer size in bytes of debug trace capture"
+	default 256
+	depends on I2C_XEC_NL_TRACE_DEBUG
+	help
+	  Size in bytes of the buffer to store trace bytes.
+	  Once the buffer fills capture stops.
+
+endif #I2C_XEC_NL
