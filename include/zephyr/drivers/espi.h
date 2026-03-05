@@ -377,6 +377,12 @@ enum lpc_peripheral_opcode {
 	 * @kconfig_dep{CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE}
 	 */
 	ECUSTOM_HOST_CMD_SEND_RESULT,
+
+	/**
+	 * Must be in this enum type or compiler complains
+	 */
+	ECUSTOM_HOST_CMD_GET_MAILBOX_DATA,
+	ECUSTOM_HOST_CMD_SET_MAILBOX_DATA,
 #endif /* CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE */
 };
 
