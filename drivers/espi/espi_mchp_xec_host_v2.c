@@ -65,6 +65,9 @@
 #define UART_DEFAULT_IRQ_POS 2u
 #define UART_DEFAULT_IRQ     BIT(UART_DEFAULT_IRQ_POS)
 
+/* eSPI */
+#define XEC_ESPI0_NODE DT_NODELABEL(espi0)
+
 /* PCR */
 #define XEC_PCR_REG_BASE DT_REG_ADDR(DT_NODELABEL(pcr))
 
@@ -125,7 +128,9 @@ static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE] 
 
 #ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
 
-BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(mbox0)), "XEC mbox0 DT node is disabled!");
+#define XEC_MBOX0_NODE DT_NODELABEL(mbox0)
+
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(XEC_MBOX0_NODE), "XEC mbox0 DT node is disabled!");
 
 #define XEC_MBOX_H2EC_OFS      0x100U
 #define XEC_MBOX_EC2H_OFS      0x104U
@@ -135,14 +140,14 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(mbox0)), "XEC mbox0 DT node is
 #define XEC_MBOX_NUM_8BIT_DATA 32U
 #define XEC_MBOX_DATA_OFS(n)   (0x110u + (uint32_t)(n))
 
-static struct xec_mbox_config {
+struct xec_mbox_config {
 	uintptr_t regbase;
 	uint32_t ecia_info;
 };
 
-static const struct xec_mbox0_config xec_mbox0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(mbox0)),
-	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(mbox0), girqs, 0),
+static const struct xec_mbox_config xec_mbox0_cfg = {
+	.regbase = (uintptr_t)DT_REG_ADDR(XEC_MBOX0_NODE),
+	.ecia_info = (uint32_t)DT_PROP_BY_IDX(XEC_MBOX0_NODE, girqs, 0),
 };
 
 /* dev is a pointer to espi0 (parent) device
@@ -176,9 +181,9 @@ static int connect_irq_mbox0(const struct device *dev)
 {
 	xec_ecia_info_girq_src_clear(xec_mbox0_cfg.ecia_info);
 
-	IRQ_CONNECT(DT_IRQN(DT_NODELABLE(mbox0)), DT_IRQ(DT_NODELABLE(mbox0), priority), mbox0_isr,
-		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
-	irq_enable(DT_IRQN(DT_NODELABLE(mbox0)));
+	IRQ_CONNECT(DT_IRQN(XEC_MBOX0_NODE), DT_IRQ(XEC_MBOX0_NODE, priority), mbox0_isr,
+		    DEVICE_DT_GET(XEC_ESPI0_NODE), 0);
+	irq_enable(DT_IRQN(XEC_MBOX0_NODE));
 
 	/* enable GIRQ source */
 	xec_ecia_info_girq_ctrl(xec_mbox0_cfg.ecia_info, 1u);
@@ -223,6 +228,146 @@ static int mbox0_access_data(const struct device *dev, uint32_t *data, uint8_t m
 
 	return 0;
 }
+
+int mchp_xec_espi_pc_mailbox_get(const struct device *dev, uint8_t mbox_idx, uint8_t num_mboxes,
+				 uint8_t *dest)
+{
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	uint8_t nb = 0;
+
+	if ((dev == NULL) || (dest == NULL) || (mbox_idx >= MCHP_XEC_MAX_MAILBOX_INDEX)) {
+		return -EINVAL;
+	}
+
+	mregbase += XEC_MBOX_DATA_OFS(0);
+
+	for (uint8_t idx = mbox_idx; idx < MCHP_XEC_MAX_MAILBOX_INDEX; idx++) {
+		if (idx >= num_mboxes) {
+			break;
+		}
+
+		dest[nb++] = sys_read8(mregbase + idx);
+	}
+
+	return 0;
+}
+
+int mchp_xec_espi_pc_mailbox_set(const struct device *dev, uint8_t mbox_idx, uint8_t num_mboxes,
+				 const uint8_t *src)
+{
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	uint8_t nb = 0;
+
+	if ((dev == NULL) || (src == NULL) || (mbox_idx >= MCHP_XEC_MAX_MAILBOX_INDEX)) {
+		return -EINVAL;
+	}
+
+	mregbase += XEC_MBOX_DATA_OFS(0);
+
+	for (uint8_t idx = mbox_idx; idx < MCHP_XEC_MAX_MAILBOX_INDEX; idx++) {
+		if (idx >= num_mboxes) {
+			break;
+		}
+
+		sys_write8(src[nb], mregbase + idx);
+	}
+
+	return 0;
+}
+
+int mchp_xec_espi_pc_mailbox_get_all(const struct device *dev, uint32_t *dest)
+{
+	if (dev == NULL) {
+		return -EINVAL;
+	}
+
+	return mbox0_access_data(dev, dest, XEC_MBOX_GET_DATA);
+}
+
+int mchp_xec_espi_pc_mailbox_set_all(const struct device *dev, const uint32_t *src)
+{
+	if (dev == NULL) {
+		return -EINVAL;
+	}
+
+	return mbox0_access_data(dev, (uint32_t *)src, XEC_MBOX_SET_DATA);
+}
+
+int mchp_xec_espi_pc_mailbox_cmd(const struct device *dev, enum mchp_xec_espi_pc_mbox_cmd_id cmd_id,
+				 uint8_t cmd)
+{
+	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
+	uint32_t ofs = 0;
+
+	if ((dev == NULL) || (cmd_id >= MCHP_XEC_ESPI_PC_MBOX_CMD_ID_MAX)) {
+		return -EINVAL;
+	}
+
+	switch (cmd_id) {
+	case MCHP_XEC_ESPI_PC_MBOX_CMD_ID_HOST_TO_EC:
+		ofs = XEC_MBOX_H2EC_OFS;
+		break;
+	case MCHP_XEC_ESPI_PC_MBOX_CMD_ID_EC_TO_HOST:
+		ofs = XEC_MBOX_EC2H_OFS;
+		break;
+	case MCHP_XEC_ESPI_PC_MBOX_CMD_ID_SMI_SRC:
+		ofs = XEC_MBOX_SMI_SRC_OFS;
+		break;
+	case MCHP_XEC_ESPI_PC_MBOX_CMD_ID_SMI_MASK:
+		ofs = XEC_MBOX_SMI_MSK_OFS;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	sys_write8(cmd, mregbase + ofs);
+
+	return 0;
+}
+
+/** @brief Write command to specified mailbox box command register
+ *
+ * @param dev Pointer to the device structure for the driver instance
+ * @param id enum mchp_xec_espi_pc_mbox_isrc specifying the interrupt (internal EC or serial IRQ)
+ * @param enable a zero value is disable else enable
+ *
+ * @retval 0 success
+ * @retval -EINVAL if dev is NULL or id is invalid
+ */
+int mchp_xec_espi_pc_mailbox_ictrl(const struct device *dev, enum mchp_xec_espi_pc_mbox_isrc id,
+				   uint8_t enable)
+{
+	if (dev == NULL) {
+		return -EINVAL;
+	}
+
+	switch (id) {
+	case MCHP_XEC_ESPI_PC_MBOX_ISRC_EC:
+		xec_ecia_info_girq_ctrl(xec_mbox0_cfg.ecia_info, enable);
+		break;
+	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ:
+		/* TODO where to we get slot number from? DT? */
+		if (enable != 0) {
+			/* TODO write slot number to SIRQ slot reg */
+		} else {
+			/* TODO write 0xff to Mbox SIRQ slot reg */
+		}
+		break;
+	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ_SMI:
+		/* TODO where to we get slot number from? DT? */
+		if (enable != 0) {
+			/* TODO write slot number to SIRQ slot reg */
+		} else {
+			/* TODO write 0xff to Mbox SIRQ slot reg */
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 
 #undef CONNECT_IRQ_MBOX0
 #define CONNECT_IRQ_MBOX0 connect_irq_mbox0
