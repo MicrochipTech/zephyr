@@ -163,7 +163,7 @@ static inline uintptr_t xec_smvw_addr(const struct device *dev, uint8_t vw_index
 static int espi_xec_configure(const struct device *dev, struct espi_cfg *cfg)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *iom_regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *iom_regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint8_t iomode = 0;
 	uint8_t cap0 = iom_regs->CAP0;
 	uint8_t cap1 = iom_regs->CAP1;
@@ -255,7 +255,7 @@ static int espi_xec_configure(const struct device *dev, struct espi_cfg *cfg)
 static bool espi_xec_channel_ready(const struct device *dev, enum espi_channel ch)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *iom_regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *iom_regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	bool sts = false;
 
 	switch (ch) {
@@ -364,7 +364,7 @@ static int espi_xec_send_oob(const struct device *dev, struct espi_oob_packet *p
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint8_t err_mask = (MCHP_ESPI_OOB_TX_STS_IBERR | MCHP_ESPI_OOB_TX_STS_OVRUN |
 			    MCHP_ESPI_OOB_TX_STS_BADREQ);
 	int ret = 0;
@@ -410,7 +410,7 @@ static int espi_xec_send_oob(const struct device *dev, struct espi_oob_packet *p
 static int espi_xec_receive_oob(const struct device *dev, struct espi_oob_packet *pckt)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint8_t err_mask = MCHP_ESPI_OOB_RX_STS_IBERR | MCHP_ESPI_OOB_RX_STS_OVRUN;
 
 	if (regs->OOBRXSTS & err_mask) {
@@ -453,7 +453,7 @@ static int espi_xec_flash_read(const struct device *dev, struct espi_flash_packe
 {
 	struct espi_xec_data *data = (struct espi_xec_data *)dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint32_t err_mask = (MCHP_ESPI_FC_STS_IBERR | MCHP_ESPI_FC_STS_FAIL |
 			     MCHP_ESPI_FC_STS_OVFL | MCHP_ESPI_FC_STS_BADREQ);
 	int ret = 0;
@@ -500,7 +500,7 @@ static int espi_xec_flash_write(const struct device *dev, struct espi_flash_pack
 {
 	struct espi_xec_data *data = (struct espi_xec_data *)dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint32_t err_mask = MCHP_ESPI_FC_STS_IBERR | MCHP_ESPI_FC_STS_OVRUN |
 			    MCHP_ESPI_FC_STS_FAIL | MCHP_ESPI_FC_STS_BADREQ;
 	int ret = 0;
@@ -552,7 +552,7 @@ static int espi_xec_flash_erase(const struct device *dev, struct espi_flash_pack
 {
 	struct espi_xec_data *data = (struct espi_xec_data *)dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	uint32_t err_mask = (MCHP_ESPI_FC_STS_IBERR | MCHP_ESPI_FC_STS_OVRUN |
 			     MCHP_ESPI_FC_STS_FAIL | MCHP_ESPI_FC_STS_BADREQ);
 	uint32_t status = 0;
@@ -623,7 +623,7 @@ static void send_slave_bootdone(const struct device *dev)
 static void espi_init_oob(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 
 	/* Enable OOB Tx/Rx interrupts */
 	soc_ecia_girq_ctrl(cfg->irq_info_list[oob_up_girq_idx].gid,
@@ -652,7 +652,7 @@ static void espi_init_oob(const struct device *dev)
 static void espi_init_flash(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 
 	LOG_DBG("%s", __func__);
 
@@ -714,7 +714,7 @@ static void espi_rst_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct espi_event evt = {ESPI_BUS_RESET, 0, 0};
 	uint8_t rst_sts = 0;
 
@@ -759,7 +759,7 @@ static void config_sub_devices(const struct device *dev)
 static void configure_sirq(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_UART
 	switch (CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING) {
@@ -775,12 +775,18 @@ static void configure_sirq(const struct device *dev)
 	regs->SIRQ[SIRQ_KBC_KIRQ] = 1;
 	regs->SIRQ[SIRQ_KBC_MIRQ] = 12;
 #endif
+#ifdef CONFIG_ESPI_PERIPHERAL_MAILBOX
+	regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SIRQ] =
+				CONFIG_ESPI_PERIPHERAL_MAILBOX_SIRQ_SLOT;
+	regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SMI] =
+				CONFIG_ESPI_PERIPHERAL_MAILBOX_SMI_SIRQ_SLOT;
+#endif
 }
 
 static void setup_espi_io_config(const struct device *dev, uint16_t host_address)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 
 	regs->IOHBAR[IOB_IOC] = (host_address << 16) | MCHP_ESPI_IO_BAR_HOST_VALID;
 
@@ -818,7 +824,7 @@ static void espi_pc_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct espi_event evt = {.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
 				 .evt_details = ESPI_CHANNEL_PERIPHERAL,
 				 .evt_data = 0};
@@ -855,7 +861,7 @@ static void espi_vw_chan_en_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct espi_event evt = {.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
 				 .evt_details = ESPI_CHANNEL_VWIRE,
 				 .evt_data = 0};
@@ -882,7 +888,7 @@ static void espi_oob_down_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 #ifdef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
 	struct espi_event evt = {
 		.evt_type = ESPI_BUS_EVENT_OOB_RECEIVED, .evt_details = 0, .evt_data = 0};
@@ -909,7 +915,7 @@ static void espi_oob_up_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct espi_event evt = {.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
 				 .evt_details = ESPI_CHANNEL_OOB,
 				 .evt_data = 0};
@@ -944,7 +950,7 @@ static void espi_flash_isr(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct espi_event evt = {
 		.evt_type = ESPI_BUS_EVENT_CHANNEL_READY,
 		.evt_details = ESPI_CHANNEL_FLASH,
@@ -1279,7 +1285,8 @@ static const struct espi_xec_irq_info espi_xec_irq_info_0[] = {
 PINCTRL_DT_INST_DEFINE(0);
 
 static const struct espi_xec_config espi_xec_config = {
-	.base_addr = DT_INST_REG_ADDR(0),
+	.ioc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, io),
+	.mc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, mem),
 	.vw_base_addr = DT_INST_REG_ADDR_BY_NAME(0, vw),
 	.pcr_scr = DT_INST_PROP(0, pcr_scr),
 	.irq_info_size = ARRAY_SIZE(espi_xec_irq_info_0),
@@ -1508,7 +1515,7 @@ static int espi_xec_init(const struct device *dev)
 {
 	struct espi_xec_data *const data = dev->data;
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 	mm_reg_t pcr_base = XEC_PCR_REG_BASE;
 	int ret = 0;
 

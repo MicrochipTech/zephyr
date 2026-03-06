@@ -126,7 +126,7 @@ static uint8_t ec_host_cmd_sram[CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE] 
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
 
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+#ifdef CONFIG_ESPI_PERIPHERAL_MAILBOX
 
 #define XEC_MBOX0_NODE DT_NODELABEL(mbox0)
 
@@ -158,7 +158,10 @@ static const struct xec_mbox_config xec_mbox0_cfg = {
  * by writing a non-zero value to the EC-to-Host mailbox register.
  * EC may choose to enable EC-to-Host Serial-IRQ and/or EC-to-Host SMI delivered
  * by Serial-IRQ.
- * TODO - implemented extended Host command to retrieve the 32 mailbox data registers.
+ * We do not write 0xFF to the Host-to-EC register to clear the interrupt status because
+ * the Host may interpret claring of Host-to-EC as the EC has completed the requested
+ * operation. Instead, we disable the mailbox interrupt. The application can re-enable the
+ * interrupt after writing a value to Host-to-EC via our side-band API.
  */
 static void mbox0_isr(const struct device *dev)
 {
@@ -166,15 +169,16 @@ static void mbox0_isr(const struct device *dev)
 	mm_reg_t mregbase = xec_mbox0_cfg.regbase;
 	struct espi_event evt = {
 		ESPI_BUS_PERIPHERAL_NOTIFICATION,
-		MCHP_XEC_ESPI_PERIPHERAL_MAILBOX,
+		ESPI_PERIPHERAL_MAILBOX,
 		ESPI_PERIPHERAL_NODATA,
 	};
 
 	evt.evt_data = sys_read8(mregbase + XEC_MBOX_H2EC_OFS);
-	espi_send_callbacks(&data->callbacks, dev, evt);
 
-	sys_write8(0xffu, mregbase + XEC_MBOX_H2EC_OFS);
+	xec_ecia_info_girq_ctrl(xec_mbox0_cfg.ecia_info, 0);
 	xec_ecia_info_girq_src_clear(xec_mbox0_cfg.ecia_info);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
 static int connect_irq_mbox0(const struct device *dev)
@@ -197,7 +201,7 @@ static int connect_irq_mbox0(const struct device *dev)
 static int init_mbox0(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 
 	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
 
@@ -337,6 +341,11 @@ int mchp_xec_espi_pc_mailbox_cmd(const struct device *dev, enum mchp_xec_espi_pc
 int mchp_xec_espi_pc_mailbox_ictrl(const struct device *dev, enum mchp_xec_espi_pc_mbox_isrc id,
 				   uint8_t enable)
 {
+	const struct espi_xec_config *espi_drv_cfg = dev->config;
+	struct xec_espi_ioc_cfg_regs *regs =
+		(struct xec_espi_ioc_cfg_regs *)(espi_drv_cfg->ioc_base_addr +
+						 MCHP_ESPI_IO_CFG_OFS);
+
 	if (dev == NULL) {
 		return -EINVAL;
 	}
@@ -346,19 +355,19 @@ int mchp_xec_espi_pc_mailbox_ictrl(const struct device *dev, enum mchp_xec_espi_
 		xec_ecia_info_girq_ctrl(xec_mbox0_cfg.ecia_info, enable);
 		break;
 	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ:
-		/* TODO where to we get slot number from? DT? */
 		if (enable != 0) {
-			/* TODO write slot number to SIRQ slot reg */
+			regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SIRQ] =
+				CONFIG_ESPI_PERIPHERAL_MAILBOX_SIRQ_SLOT;
 		} else {
-			/* TODO write 0xff to Mbox SIRQ slot reg */
+			regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SIRQ] = MCHP_ESPI_IO_SIRQ_DIS;
 		}
 		break;
 	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ_SMI:
-		/* TODO where to we get slot number from? DT? */
 		if (enable != 0) {
-			/* TODO write slot number to SIRQ slot reg */
+			regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SMI] =
+				CONFIG_ESPI_PERIPHERAL_MAILBOX_SMI_SIRQ_SLOT;
 		} else {
-			/* TODO write 0xff to Mbox SIRQ slot reg */
+			regs->SIRQ[MCHP_ESPI_SIRQ_MBOX_SMI] = MCHP_ESPI_IO_SIRQ_DIS;
 		}
 		break;
 	default:
@@ -584,7 +593,7 @@ static int connect_irq_kbc0(const struct device *dev)
 static int init_kbc0(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
 
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_AUXH;
@@ -740,7 +749,7 @@ static int connect_irq_acpi_ec0(const struct device *dev)
 static int init_acpi_ec0(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 
 	regs->IOHBAR[IOB_ACPI_EC0] = ESPI_XEC_ACPI_EC0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
 
@@ -841,7 +850,7 @@ static int connect_irq_acpi_ec1(const struct device *dev)
 static int init_acpi_ec1(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 	regs->IOHBAR[IOB_ACPI_EC1] =
@@ -899,7 +908,7 @@ static const struct xec_emi_config xec_emi0_cfg = {
 static int init_emi0(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 	mm_reg_t emib = xec_emi0_cfg.regbase;
 	uint32_t temp = 0, val = 0;
 
@@ -950,7 +959,7 @@ static int ecust_rd_req(const struct device *dev, enum lpc_peripheral_opcode op,
 		*data = CONFIG_ESPI_XEC_PERIPHERAL_HOST_CMD_PARAM_SIZE;
 		break;
 #endif
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+#ifdef CONFIG_ESPI_PERIPHERAL_MAILBOX
 	/* data must point to a buffer of at least 32 bytes in size */
 	case ECUSTOM_HOST_CMD_GET_MAILBOX_DATA:
 		return mbox0_access_data(dev, data, XEC_MBOX_GET_DATA);
@@ -1180,7 +1189,7 @@ static int connect_irq_p80bd0(const struct device *dev)
 static int init_p80bd0(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 	mm_reg_t p80rb = xec_p80bd0_cfg.regbase;
 
 	regs->IOHBAR[IOB_P80BD] = (ESPI_XEC_PORT80_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
@@ -1204,7 +1213,7 @@ static int init_p80bd0(const struct device *dev)
 int init_uart0(const struct device *dev)
 {
 	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 
 	regs->IOHBAR[IOB_UART0] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 
@@ -1218,7 +1227,7 @@ int init_uart0(const struct device *dev)
 int init_uart1(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
-	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->base_addr;
+	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
 
 	regs->IOHBAR[IOB_UART1] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 

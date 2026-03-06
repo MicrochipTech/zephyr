@@ -36,7 +36,8 @@ struct espi_xec_irq_info {
 };
 
 struct espi_xec_config {
-	uint32_t base_addr;
+	uint32_t ioc_base_addr;
+	uint32_t mc_base_addr;
 	uint32_t vw_base_addr;
 	uint16_t pcr_scr;
 	uint8_t irq_info_size;
