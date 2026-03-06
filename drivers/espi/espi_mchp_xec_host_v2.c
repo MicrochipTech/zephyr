@@ -50,13 +50,14 @@
 #define INIT_UART0    NULL
 #define INIT_UART1    NULL
 
-/* BARs as defined in LPC spec chapter 11 */
-#define ESPI_XEC_KBC_BAR_ADDRESS      0x00600000
-#define ESPI_XEC_UART0_BAR_ADDRESS    0x03F80000
-#define ESPI_XEC_MBOX_BAR_ADDRESS     0x03600000
-#define ESPI_XEC_PORT80_BAR_ADDRESS   0x00800000
-#define ESPI_XEC_PORT81_BAR_ADDRESS   0x00810000
-#define ESPI_XEC_ACPI_EC0_BAR_ADDRESS 0x00620000
+/* Host I/O space addresses for default set of peripherals mapped by eSPI */
+#define ESPI_XEC_KBC_HOST_ADDR      0x60U
+#define ESPI_XEC_FKBC_HOST_ADDR     0x92U
+#define ESPI_XEC_UART_HOST_ADDR     0x3F0U
+#define ESPI_XEC_MBOX_HOST_ADDR     (CONFIG_ESPI_PERIPHERAL_MAILBOX_PORT_NUM)
+#define ESPI_XEC_PORT80_HOST_ADDR   0x80U
+#define ESPI_XEC_PORT81_HOST_ADDR   0x81U
+#define ESPI_XEC_ACPI_EC0_HOST_ADDR 0x62U
 
 /* Espi peripheral has 3 uart ports */
 #define ESPI_PERIPHERAL_UART_PORT0 0
@@ -95,6 +96,7 @@ struct xec_espi_host_dev_config {
 
 struct xec_acpi_ec_config {
 	uintptr_t regbase;
+	uint32_t host_io_addr;
 	uint32_t ibf_ecia_info;
 	uint32_t obe_ecia_info;
 };
@@ -143,11 +145,15 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(XEC_MBOX0_NODE), "XEC mbox0 DT node is disa
 struct xec_mbox_config {
 	uintptr_t regbase;
 	uint32_t ecia_info;
+	uint32_t host_io_addr;
+	uint32_t host_mem_addr;
 };
 
 static const struct xec_mbox_config xec_mbox0_cfg = {
 	.regbase = (uintptr_t)DT_REG_ADDR(XEC_MBOX0_NODE),
 	.ecia_info = (uint32_t)DT_PROP_BY_IDX(XEC_MBOX0_NODE, girqs, 0),
+	.host_io_addr = (uint32_t)DT_PROP_OR(XEC_MBOX0_NODE, host_io, ESPI_XEC_MBOX_HOST_ADDR),
+	.host_mem_addr = (uint32_t)DT_PROP_OR(XEC_MBOX0_NODE, host_mem, 0),
 };
 
 /* dev is a pointer to espi0 (parent) device
@@ -202,8 +208,9 @@ static int init_mbox0(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
+	uint32_t iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(xec_mbox0_cfg.host_io_addr);
 
-	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_MBOX] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
@@ -391,12 +398,14 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(kbc0)), "XEC kbc0 DT node is d
 
 struct xec_kbc0_config {
 	uintptr_t regbase;
+	uintptr_t regbase_p92;
 	uint32_t ibf_ecia_info;
 	uint32_t obe_ecia_info;
 };
 
 static const struct xec_kbc0_config xec_kbc0_cfg = {
 	.regbase = DT_REG_ADDR(DT_NODELABEL(kbc0)),
+	.regbase_p92 = DT_REG_ADDR(DT_NODELABEL(port92)),
 	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(kbc0), girqs, 1),
 	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(kbc0), girqs, 0),
 };
@@ -595,12 +604,22 @@ static int init_kbc0(const struct device *dev)
 	const struct espi_xec_config *devcfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
 	struct kbc_regs *kbc_hw = (struct kbc_regs *)xec_kbc0_cfg.regbase;
+#ifdef CONFIG_ESPI_PERIPHERAL_8042_FAST_KBC_PORT92
+	struct port92_regs *p92_hw = (struct port92_regs *)xec_kbc0_cfg.regbase_p92;
+#endif
+	uint32_t iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(ESPI_XEC_KBC_HOST_ADDR);
 
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_AUXH;
 	kbc_hw->KBC_CTRL |= MCHP_KBC_CTRL_OBFEN;
 	/* This is the activate register, but the HAL has a funny name */
-	kbc_hw->KBC_PORT92_EN = MCHP_KBC_PORT92_EN;
-	regs->IOHBAR[IOB_KBC] = ESPI_XEC_KBC_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+	kbc_hw->ACTV = MCHP_KBC_ACTV_EN;
+	regs->IOHBAR[IOB_KBC] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
+
+#ifdef CONFIG_ESPI_PERIPHERAL_8042_FAST_KBC_PORT92
+	iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(ESPI_XEC_FKBC_HOST_ADDR);
+	p29_hw->ACTV = MCHP_PORT92_ACTV_ENABLE;
+	regs->IOHBAR[IOB_PORT92] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
+#endif
 
 	return 0;
 }
@@ -614,10 +633,13 @@ static int init_kbc0(const struct device *dev)
 
 #ifdef CONFIG_ESPI_PERIPHERAL_HOST_IO
 
+#define XEC_AEC0_NODE DT_NODELABEL(acpi_ec0)
+
 static const struct xec_acpi_ec_config xec_acpi_ec0_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(acpi_ec0)),
-	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec0), girqs, 0),
-	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec0), girqs, 1),
+	.regbase = DT_REG_ADDR(XEC_AEC0_NODE),
+	.host_io_addr = DT_PROP_OR(XEC_AEC0_NODE, host_io, ESPI_XEC_ACPI_EC0_HOST_ADDR),
+	.ibf_ecia_info = DT_PROP_BY_IDX(XEC_AEC0_NODE, girqs, 0),
+	.obe_ecia_info = DT_PROP_BY_IDX(XEC_AEC0_NODE, girqs, 1),
 };
 
 static void acpi_ec0_ibf_isr(const struct device *dev)
@@ -750,8 +772,9 @@ static int init_acpi_ec0(const struct device *dev)
 {
 	const struct espi_xec_config *devcfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)devcfg->ioc_base_addr;
+	uint32_t iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(xec_acpi_ec0_cfg.host_io_addr);
 
-	regs->IOHBAR[IOB_ACPI_EC0] = ESPI_XEC_ACPI_EC0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+	regs->IOHBAR[IOB_ACPI_EC0] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
@@ -765,10 +788,12 @@ static int init_acpi_ec0(const struct device *dev)
 
 #if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT)
 
+#define XEC_AEC1_NODE DT_NODELABEL(acpi_ec1)
+
 static const struct xec_acpi_ec_config xec_acpi_ec1_cfg = {
-	.regbase = DT_REG_ADDR(DT_NODELABEL(acpi_ec1)),
-	.ibf_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec1), girqs, 0),
-	.obe_ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(acpi_ec1), girqs, 1),
+	.regbase = DT_REG_ADDR(XEC_AEC1_NODE),
+	.ibf_ecia_info = DT_PROP_BY_IDX(XEC_AEC1_NODE, girqs, 0),
+	.obe_ecia_info = DT_PROP_BY_IDX(XEC_AEC1_NODE, girqs, 1),
 };
 
 static void acpi_ec1_ibf_isr(const struct device *dev)
@@ -851,15 +876,15 @@ static int init_acpi_ec1(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
+	uint32_t iobar_val = 0;
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
-	regs->IOHBAR[IOB_ACPI_EC1] =
-		(CONFIG_ESPI_PERIPHERAL_HOST_CMD_DATA_PORT_NUM << 16) | MCHP_ESPI_IO_BAR_HOST_VALID;
+	iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(CONFIG_ESPI_PERIPHERAL_HOST_CMD_DATA_PORT_NUM);
 #else
-	regs->IOHBAR[IOB_ACPI_EC1] =
-		(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM | MCHP_ESPI_IO_BAR_HOST_VALID);
-	regs->IOHBAR[IOB_MBOX] = ESPI_XEC_MBOX_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID;
+	iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM);
 #endif
+
+	regs->IOHBAR[IOB_ACPI_EC1] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
@@ -1209,13 +1234,22 @@ static int init_p80bd0(const struct device *dev)
 
 #ifdef CONFIG_ESPI_PERIPHERAL_UART
 
+#define XEC_UART0_NODE DT_NODELABEL(uart0)
+
+struct xec_uart0_config {
+	uintptr_t regbase = (uintptr_t)DT_REG_ADDR(XEC_UART0_NODE),
+	uint32_t host_io_addr =
+		(uint32_t)DT_PROP_OR(XEC_MBOX0_NODE, host_io, ESPI_XEC_UART0_BAR_ADDRESS),
+};
+
 #if CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING == 0
 int init_uart0(const struct device *dev)
 {
-	struct espi_xec_config *const cfg = ESPI_XEC_CONFIG(dev);
+	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
+	uint32_t iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(xec_uart0_config->host_io_addr);
 
-	regs->IOHBAR[IOB_UART0] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
+	regs->IOHBAR[IOB_UART0] = iobar_val | MCHP_ESPI_IO_BAR_HOST_VALID;
 
 	return 0;
 }
@@ -1224,10 +1258,20 @@ int init_uart0(const struct device *dev)
 #define INIT_UART0 init_uart0
 
 #elif CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING == 1
+
+#define XEC_UART1_NODE DT_NODELABEL(uart1)
+
+struct xec_uart0_config {
+	uintptr_t regbase = (uintptr_t)DT_REG_ADDR(XEC_UART0_NODE),
+	uint32_t host_io_addr =
+		(uint32_t)DT_PROP_OR(XEC_MBOX0_NODE, host_io, ESPI_XEC_UART0_BAR_ADDRESS),
+};
+
 int init_uart1(const struct device *dev)
 {
 	const struct espi_xec_config *cfg = dev->config;
 	struct espi_iom_regs *regs = (struct espi_iom_regs *)cfg->ioc_base_addr;
+	uint32_t iobar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(xec_uart0_config->host_io_addr);
 
 	regs->IOHBAR[IOB_UART1] = (ESPI_XEC_UART0_BAR_ADDRESS | MCHP_ESPI_IO_BAR_HOST_VALID);
 

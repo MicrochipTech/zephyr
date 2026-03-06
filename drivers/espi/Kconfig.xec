@@ -159,6 +159,11 @@ config ESPI_PERIPHERAL_XEC_EMI2
 	  Enable EMI 2 interface accessible via Host I/O over the
 	  ESPI Peripheral Channel.
 
+config ESPI_PERIPHERAL_8042_FAST_KBC_PORT92
+	bool "Enable Fast 8042 keyboard alternate GATE A20 support at Host I/O 92h"
+	help
+	  Enable keyboard fast, alternate GATE A20 control using I/O port 92h
+
 config ESPI_PERIPHERAL_MAILBOX_SIRQ_SLOT
 	int "Mailbox peripheral Serial-IRQ slot number"
 	default 255
