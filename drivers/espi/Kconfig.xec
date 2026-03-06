@@ -56,7 +56,7 @@ config ESPI_VWIRE_T2H_POLL_HOST_READ_US
 	default 64
 	depends on ESPI_VWIRE_CHANNEL
 	help
-	  When the EC changes a Target-to-Host VWire, hardware will 
+	  When the EC changes a Target-to-Host VWire, hardware will
 	  set a read-only change bit associated with the VWire. HW
 	  will then set eSPI protocal status indicating the Host should
 	  read the VWires and issue eSPI alert (in-band or pin). When
@@ -65,7 +65,7 @@ config ESPI_VWIRE_T2H_POLL_HOST_READ_US
 	  the driver send VWire API will poll change status bit until
 	  it is clear of this timeout expires. A value of 0 means the
 	  driver will not poll the change bit and return immediately.
- 
+
 endif #ESPI_XEC_NG
 
 if ESPI_XEC || ESPI_XEC_V2
@@ -209,6 +209,24 @@ config ESPI_PERIPHERAL_XEC_EMI2
 	help
 	  Enable EMI 2 interface accessible via Host I/O over the
 	  ESPI Peripheral Channel.
+
+config ESPI_PERIPHERAL_BC1_SUPPORT
+	bool "Support Bus Controller 1"
+	help
+	  Enable the first eSPI target to host bus controller channel.
+	  BC allows the eSPI target to read/write Host memory.
+
+config ESPI_PERIPHERAL_BC2_SUPPORT
+	bool "Support Bus Controller 2"
+	help
+	  Enable a second eSPI target to host bus controller channel.
+	  BC allows the eSPI target to read/write Host memory.
+
+config ESPI_PERIPHERAL_LTR_SUPPORT
+	bool "Support sending LTR messages to Host"
+	help
+	  Enable support for sending eSPI latency tolerance report (LTR)
+	  messages to the eSPI Host controller.
 
 endif #ESPI_PERIPHERAL_CHANNEL
 

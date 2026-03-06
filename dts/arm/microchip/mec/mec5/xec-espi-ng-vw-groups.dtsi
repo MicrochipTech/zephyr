@@ -7,7 +7,7 @@
 
 / {
 	mchp-xec-espi-ng-h2t-vw-groups {
-		compatible = "microchip,xec-espi-ng-vwg";
+		compatible = "microchip,xec-espi-ng-vwg2";
 
 		h2t_vwgrp0: h2t_vw_group0 {
 			host-index = <0x02>;
@@ -126,9 +126,9 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
-				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
-			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE>;
+			source-names = "generic0", "generic1", "generic2", "generic3";
 			status = "disabled";
 		};
 
@@ -139,15 +139,15 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			irq-selects = <XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE
-				       XEC_ESPI_VW_ISEL_NONE XEC_ESPI_VW_ISEL_NONE>;
-			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			irq-selects = <XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE
+				       XEC_ESPI_VW_ISEL_BE XEC_ESPI_VW_ISEL_BE>;
+			source-names = "generic4", "generic5", "generic6", "generic7";
 			status = "disabled";
 		};
 	};
 
 	mchp-xec-espi-ng-t2h-vw-groups {
-		compatible = "microchip,xec-espi-ng-vwg";
+		compatible = "microchip,xec-espi-ng-vwg2";
 
 		t2h_vwgrp0: t2h_vw_group0 {
 			host-index = <0x04>;
@@ -197,7 +197,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			source-names = "vw_max", "target_generic1",
+					"target_generic2", "target_generic3";
 			status = "disabled";
 		};
 
@@ -208,7 +209,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "vw_max", "vw_max", "vw_max", "vw_max";
+			source-names = "target_generic4", "target_generic5",
+					"target_generic6", "target_generic7";
 			status = "disabled";
 		};
 
@@ -219,8 +221,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "target_gpio_0", "target_gpio_1", "target_gpio_2",
-					"target_gpio_3";
+			source-names = "target_gpio_0", "target_gpio_1",
+					"target_gpio_2", "target_gpio_3";
 		};
 
 		t2h_vwgrp7: t2h_vw_group7 {
@@ -230,8 +232,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "target_gpio_4", "target_gpio_5", "target_gpio_6",
-					"target_gpio_7";
+			source-names = "target_gpio_4", "target_gpio_5",
+					"target_gpio_6", "target_gpio_7";
 		};
 
 		t2h_vwgrp8: t2h_vw_group8 {
@@ -241,8 +243,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "target_gpio_8", "target_gpio_9", "target_gpio_10",
-					"target_gpio_11";
+			source-names = "target_gpio_8", "target_gpio_9",
+					"target_gpio_10", "target_gpio_11";
 		};
 
 		t2h_vwgrp9: t2h_vw_group9 {
@@ -252,8 +254,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "target_gpio_12", "target_gpio_13", "target_gpio_14",
-					"target_gpio_15";
+			source-names = "target_gpio_12", "target_gpio_13",
+					"target_gpio_14", "target_gpio_15";
 			status = "disabled";
 		};
 
@@ -264,8 +266,8 @@
 			vw-mask = <0xf>;
 			reset-source = "reset_espi";
 			reset-state = <0>;
-			source-names = "target_gpio_16", "target_gpio_17", "target_gpio_18",
-					"target_gpio_19";
+			source-names = "target_gpio_16", "target_gpio_17",
+					"target_gpio_18", "target_gpio_19";
 			status = "disabled";
 		};
 	};

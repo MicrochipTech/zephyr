@@ -6,7 +6,7 @@
 #include <zephyr/dt-bindings/espi/mchp_xec_espi_ng.h>
 
 / {
-	mchp-xec-espi-pc-host-dev {
+	mchp-xec-espi-ng-pc-host-dev {
 		compatible = "microchip,xec-espi-ng-pc-device";
 
 		#include "xec-espi-ng-pc-dev-common.dtsi"

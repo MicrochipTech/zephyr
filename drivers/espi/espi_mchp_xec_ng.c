@@ -75,24 +75,26 @@ static uint32_t get_channels_supported(enum espi_channel chan_caps)
 
 static uint32_t io_mode_encoded(enum espi_io_mode iom)
 {
-	uint32_t iom_enc = 0;
+	uint32_t iom_enc = 0, val = 0;
 
 	switch ((uint32_t)iom) {
 	case ESPI_IO_MODE_SINGLE_LINE:
-		iom_enc = XEC_ESPI_CAP1_IOM_S;
+		val = XEC_ESPI_CAP1_IOM_S;
 		break;
 	case (ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_DUAL_LINES):
-		iom_enc = XEC_ESPI_CAP1_IOM_SD;
+		val = XEC_ESPI_CAP1_IOM_SD;
 		break;
 	case (ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_QUAD_LINES):
-		iom_enc = XEC_ESPI_CAP1_IOM_SQ;
+		val = XEC_ESPI_CAP1_IOM_SQ;
 		break;
 	case (ESPI_IO_MODE_SINGLE_LINE | ESPI_IO_MODE_DUAL_LINES | ESPI_IO_MODE_QUAD_LINES):
-		iom_enc = XEC_ESPI_CAP1_IOM_SDQ;
+		val = XEC_ESPI_CAP1_IOM_SDQ;
 		break;
 	default:
-		iom_enc = XEC_ESPI_CAP1_IOM_S;
+		val = XEC_ESPI_CAP1_IOM_S;
 	}
+
+	iom_enc = XEC_ESPI_CAP1_IOM_SET(val);
 
 	return iom_enc;
 }
@@ -232,21 +234,27 @@ static void xec_espi_ng_pc_irq(const struct device *dev)
 	xec_espi_ng_pc_handler(dev);
 }
 
+#ifdef CONFIG_ESPI_PERIPHERAL_BC1_SUPPORT
 static void xec_espi_ng_bm1_irq(const struct device *dev)
 {
 	xec_espi_ng_bm1_handler(dev);
 }
+#endif
 
+#ifdef CONFIG_ESPI_PERIPHERAL_BC2_SUPPORT
 static void xec_espi_ng_bm2_irq(const struct device *dev)
 {
 	xec_espi_ng_bm2_handler(dev);
 }
+#endif
 
+#ifdef CONFIG_ESPI_PERIPHERAL_LTR_SUPPORT
 static void xec_espi_ng_ltr_irq(const struct device *dev)
 {
 	xec_espi_ng_ltr_handler(dev);
 }
 #endif
+#endif /* CONFIG_ESPI_PERIPHERAL_CHANNEL */
 
 #ifdef CONFIG_ESPI_VWIRE_CHANNEL
 static void xec_espi_ng_vw_chen_irq(const struct device *dev)
@@ -359,32 +367,50 @@ static DEVICE_API(espi, xec_espi_ng_driver_api) = {
 	.manage_callback = xec_espi_ng_mcb_api,
 };
 
+
 #ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
-#define XEC_ESPI_NG_PC_IRQ_CONNECT(i) \
-	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, pc, irq), \
-		    DT_INST_IRQ_BY_NAME(i, pc, priority), \
-		    xec_espi_ng_pc_irq, \
-		    DEVICE_DT_INST_GET(i), 0); \
-	irq_enable(DT_INST_IRQ_BY_NAME(i, pc, irq)); \
-	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_PC_POS, 1u); \
+#ifdef CONFIG_ESPI_PERIPHERAL_BC1_SUPPORT
+#define XEC_CONN_ESPI_PC_BC1(i) \
 	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, bm1, irq), \
 		    DT_INST_IRQ_BY_NAME(i, bm1, priority), \
 		    xec_espi_ng_bm1_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
 	irq_enable(DT_INST_IRQ_BY_NAME(i, bm1, irq)); \
 	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_BM1_POS, 1u); \
+#else
+#define XEC_CONN_ESPI_PC_BC1(i)
+#endif
+#ifdef CONFIG_ESPI_PERIPHERAL_BC2_SUPPORT
+#define XEC_CONN_ESPI_PC_BC2(i) \
 	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, bm2, irq), \
 		    DT_INST_IRQ_BY_NAME(i, bm2, priority), \
 		    xec_espi_ng_bm2_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
 	irq_enable(DT_INST_IRQ_BY_NAME(i, bm2, irq)); \
 	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_BM2_POS, 1u); \
+#else
+#define XEC_CONN_ESPI_PC_BC2(i)
+#endif
+#ifdef CONFIG_ESPI_PERIPHERAL_LTR_SUPPORT
+#define XEC_CONN_ESPI_PC_LTR(i) \
 	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, ltr, irq), \
 		    DT_INST_IRQ_BY_NAME(i, ltr, priority), \
 		    xec_espi_ng_ltr_irq, \
 		    DEVICE_DT_INST_GET(i), 0); \
 	irq_enable(DT_INST_IRQ_BY_NAME(i, ltr, irq)); \
 	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_LTR_POS, 1u);
+#else
+#define XEC_CONN_ESPI_PC_LTR(i)
+#endif
+
+/* TODO how to handle other PC interrupts: BM1, BM2, and LTR */
+#define XEC_ESPI_NG_PC_IRQ_CONNECT(i) \
+	IRQ_CONNECT(DT_INST_IRQ_BY_NAME(i, pc, irq), \
+		    DT_INST_IRQ_BY_NAME(i, pc, priority), \
+		    xec_espi_ng_pc_irq, \
+		    DEVICE_DT_INST_GET(i), 0); \
+	irq_enable(DT_INST_IRQ_BY_NAME(i, pc, irq)); \
+	soc_ecia_girq_ctrl(XEC_ESPI_GIRQ, XEC_ESPI_GIRQ_PC_POS, 1u);
 #else
 #define XEC_ESPI_NG_PC_IRQ_CONNECT(i)
 #endif

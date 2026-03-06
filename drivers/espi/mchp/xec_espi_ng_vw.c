@@ -24,14 +24,11 @@
 
 LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
+
 #define XEC_ESPI_NG_H2T_VW_NODE DT_PATH(mchp_xec_espi_ng_h2t_vwires)
 #define XEC_ESPI_NG_T2H_VW_NODE DT_PATH(mchp_xec_espi_ng_t2h_vwires)
 #define XEC_ESPI_NG_H2T_VW_MAP_NODE DT_PATH(mchp_xec_espi_ng_h2t_vw_map)
 #define XEC_ESPI_NG_T2H_VW_MAP_NODE DT_PATH(mchp_xec_espi_ng_t2h_vw_map)
-
-/* from xec-espi-ng-vw-groups.dtsi */
-#define XEC_ESPI_NG_H2T_VWG_NODE DT_PATH(mchp_xec_espi_ng_h2t_vw_groups)
-#define XEC_ESPI_NG_T2H_VWG_NODE DT_PATH(mchp_xec_espi_ng_t2h_vw_groups)
 
 struct xec_espi_ng_vw {
 	uint8_t host_idx;
@@ -67,81 +64,6 @@ static const struct xec_espi_ng_vw xec_espi_ng_vw_tbl[] = {
 	DT_FOREACH_CHILD(XEC_ESPI_NG_T2H_VW_NODE, XEC_ESPI_NG_VW)
 };
 
-#if 1
-struct xec_espi_ng_vw_grp {
-	uint8_t host_idx;
-	uint8_t dir;
-	uint8_t vw_reg_idx;
-	uint8_t vw_mask;
-	uint8_t reset_src;
-	uint8_t reset_state;
-	uint8_t rsvd[2];
-	uint8_t irq_selects[4];
-	uint8_t src_enum_vals[4];
-};
-
-#define XEC_ESPI_NG_VWG_SN_FULL(nid, idx) \
-	DT_CAT(ESPI_VWIRE_SIGNAL_, DT_PROP_BY_IDX(nid, source_names, idx))
-
-/* #define XEC_ESPI_NG_VWG_SIGNAL(nid, idx) DT_STRING_UPPER_TOKEN(nid, source_names) */
-
-#define XEC_ESPI_NG_H2T_VWGRP(nid) \
-	{ \
-		.host_idx = DT_PROP(nid, host_index), \
-		.dir = DT_ENUM_IDX(nid, direction), \
-		.vw_reg_idx = DT_PROP(nid, vw_reg_idx), \
-		.vw_mask = DT_PROP(nid, vw_mask), \
-		.reset_src = DT_ENUM_IDX(nid, reset_source), \
-		.reset_state = DT_PROP(nid, reset_state), \
-		.irq_selects = { \
-			DT_PROP_BY_IDX(nid, irq_selects, 0), \
-			DT_PROP_BY_IDX(nid, irq_selects, 1), \
-			DT_PROP_BY_IDX(nid, irq_selects, 2), \
-			DT_PROP_BY_IDX(nid, irq_selects, 3), \
-		}, \
-		.src_enum_vals = { \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 0), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 1), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 2), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 3), \
-		}, \
-	},
-
-#define XEC_ESPI_NG_T2H_VWGRP(nid) \
-	{ \
-		.host_idx = DT_PROP(nid, host_index), \
-		.dir = DT_ENUM_IDX(nid, direction), \
-		.vw_reg_idx = DT_PROP(nid, vw_reg_idx), \
-		.vw_mask = DT_PROP(nid, vw_mask), \
-		.reset_src = DT_ENUM_IDX(nid, reset_source), \
-		.reset_state = DT_PROP(nid, reset_state), \
-		.src_enum_vals = { \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 0), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 1), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 2), \
-			DT_ENUM_IDX_BY_IDX(nid, source_names, 3), \
-		}, \
-	},
-
-static const struct xec_espi_ng_vw_grp xec_espi_ng_vwgrp_tbl[] __aligned(8) = {
-	DT_FOREACH_CHILD_STATUS_OKAY(XEC_ESPI_NG_H2T_VWG_NODE, XEC_ESPI_NG_H2T_VWGRP)
-	DT_FOREACH_CHILD_STATUS_OKAY(XEC_ESPI_NG_H2T_VWG_NODE, XEC_ESPI_NG_T2H_VWGRP)
-};
-
-const struct xec_espi_ng_vw_grp *xec_espi_ng_find_vw_group(uint8_t host_idx)
-{
-	for (size_t i = 0; i < ARRAY_SIZE(xec_espi_ng_vwgrp_tbl); i++) {
-		const struct xec_espi_ng_vw_grp *p = &xec_espi_ng_vwgrp_tbl[i];
-
-		if (p->host_idx == host_idx) {
-			return p;
-		}
-	}
-
-	return NULL;
-}
-#endif
-
 static const struct xec_espi_ng_vw *find_vw(uint32_t vw_enum_val)
 {
 	if (vw_enum_val >= ARRAY_SIZE(xec_espi_ng_vw_tbl)) {
@@ -153,11 +75,6 @@ static const struct xec_espi_ng_vw *find_vw(uint32_t vw_enum_val)
 
 /* Configure IRQ detection of Host-to-Target VWires
  * H2T VWire IRQ_SELECT field is reset on chip reset not eSPI platform reset.
- * Host-to-Target VWires:
- *  host index
- *  reset sources
- *  reset states - manually load into sources?
- *  TODO
  */
 int xec_espi_ng_vw_init1(const struct device *dev)
 {
@@ -172,7 +89,7 @@ int xec_espi_ng_vw_init1(const struct device *dev)
 			continue;
 		}
 
-		ofs = XEC_ESPI_VW_HT_GRPW(p->vw_reg_num, 1);
+		ofs = XEC_ESPI_VW_H2T_GRPW(p->vw_reg_num, 1);
 
 		v = sys_read32(vb + ofs);
 		v &= (uint32_t)~XEC_ESPI_VW_H2T_W1_ISEL_MSK(p->src_pos);
@@ -197,14 +114,14 @@ int xec_espi_ng_vw_init2(const struct device *dev)
 		const struct xec_espi_ng_vw *p = &xec_espi_ng_vw_tbl[i];
 
 		if (p->dir == 0) {
-			ofs = XEC_ESPI_VW_HT_GRPW(p->vw_reg_num, 0);
+			ofs = XEC_ESPI_VW_H2T_GRPW(p->vw_reg_num, 0);
 
 			v = sys_read32(vb + ofs);
 			v &= (uint32_t)~XEC_ESPI_VW_H2T_W1_ISEL_MSK(p->src_pos);
 			v |= XEC_ESPI_VW_H2T_W1_ISEL_SET(p->src_pos, (uint32_t)p->irq_sel);
 			sys_write32(v, vb + ofs);
 		} else {
-			ofs = XEC_ESPI_VW_TH_GRPW(p->vw_reg_num, 0);
+			ofs = XEC_ESPI_VW_T2H_GRPW(p->vw_reg_num, 0);
 		}
 	}
 
@@ -218,19 +135,13 @@ int xec_espi_ng_vw_send_api(const struct device *dev, enum espi_vwire_signal vw,
 	const struct xec_espi_ng_vw *p = find_vw(vw);
 	uint32_t ofs = 0;
 	uint8_t pos = 0;
-#if 1
-	const struct xec_espi_ng_vw_grp *pg = xec_espi_ng_find_vw_group(0x41);
 
-	if (pg == NULL) {
-		return -ENODEV;
-	}
-#endif
 	/* unknown VWire OR VWire is Host-to-Target */
 	if ((p == NULL) || (p->dir == 0)) {
 		return -EINVAL;
 	}
 
-	ofs = XEC_ESPI_VW_TH_GRPW(p->vw_reg_num, 1);
+	ofs = XEC_ESPI_VW_T2H_GRPW(p->vw_reg_num, 1);
 	pos = XEC_ESPI_VW_STATE_POS(p->src_pos);
 
 	sys_set_bit(vb + ofs, pos);
@@ -238,7 +149,7 @@ int xec_espi_ng_vw_send_api(const struct device *dev, enum espi_vwire_signal vw,
 #ifdef CONFIG_ESPI_VWIRE_T2H_POLL_HOST_READ_US
 	uint32_t poll_time_us = CONFIG_ESPI_VWIRE_T2H_POLL_HOST_READ_US;
 
-	ofs = XEC_ESPI_VW_TH_GRPW(p->vw_reg_num, 1);
+	ofs = XEC_ESPI_VW_T2H_GRPW(p->vw_reg_num, 1);
 	pos = XEC_ESPI_VW_T2H_W0_CHG_POS(p->src_pos);
 
 	while (sys_test_bit(vb + ofs, pos) != 0) {
@@ -266,7 +177,7 @@ int xec_espi_ng_vw_recv_api(const struct device *dev, enum espi_vwire_signal vw,
 		return -EINVAL;
 	}
 
-	ofs = XEC_ESPI_VW_HT_GRPW(p->vw_reg_num, 2);
+	ofs = XEC_ESPI_VW_H2T_GRPW(p->vw_reg_num, 2);
 	pos = XEC_ESPI_VW_STATE_POS(p->src_pos);
 
 	if (sys_test_bit(vb + ofs, pos) != 0) {
@@ -292,12 +203,12 @@ static void set_boot_done_vwires(const struct device *dev)
 		return;
 	}
 
-	ofs = XEC_ESPI_VW_TH_GRPW(vwbs->vw_reg_num, 1);
+	ofs = XEC_ESPI_VW_T2H_GRPW(vwbs->vw_reg_num, 1);
 	pos = XEC_ESPI_VW_STATE_POS(vwbs->src_pos);
 
 	sys_set_bit(vb + ofs, pos);
 
-	ofs = XEC_ESPI_VW_TH_GRPW(vwbd->vw_reg_num, 1);
+	ofs = XEC_ESPI_VW_T2H_GRPW(vwbd->vw_reg_num, 1);
 	pos = XEC_ESPI_VW_STATE_POS(vwbd->src_pos);
 
 	sys_set_bit(vb + ofs, pos);
@@ -389,7 +300,7 @@ void xec_espi_ng_vw_bank0_kworker(struct k_work *work)
 				ev.evt_details = signal;
 				ev.evt_data = 0;
 
-				ofs = XEC_ESPI_VW_HT_GRPW(p->vw_reg_num, 2);
+				ofs = XEC_ESPI_VW_H2T_GRPW(p->vw_reg_num, 2);
 				vw_pos = XEC_ESPI_VW_STATE_POS(p->src_pos);
 
 				if (sys_test_bit(vb + ofs, vw_pos) != 0) {
@@ -430,7 +341,7 @@ void xec_espi_ng_vw_bank1_kworker(struct k_work *work)
 				ev.evt_details = signal;
 				ev.evt_data = 0;
 
-				ofs = XEC_ESPI_VW_HT_GRPW(p->vw_reg_num, 2);
+				ofs = XEC_ESPI_VW_H2T_GRPW(p->vw_reg_num, 2);
 				vw_pos = XEC_ESPI_VW_STATE_POS(p->src_pos);
 
 				if (sys_test_bit(vb + ofs, vw_pos) != 0) {
