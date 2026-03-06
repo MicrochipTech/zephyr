@@ -25,21 +25,24 @@
 
 LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 
-#if 0
-struct espi_flash_packet {
-	/** Pointer to the data buffer. */
-	uint8_t *buf;
-	/** Flash address to access. */
-	uint32_t flash_addr;
-	/**
-	 * Length of the data in bytes for read/write, or the size of the
-	 * sector/block for an erase operation.
-	 */
-	uint16_t len;
-};
-#endif
+#define XEC_ESPI_FC_ERASE_CMD_LEN 1u
+#define XEC_ESPI_FC_OP_EC_TAG 0
+#define XEC_ESPI_FC_OP_TIMEOUT_MS 1000u
 
-static uint8_t fc_buf[CONFIG_ESPI_FLASH_BUFFER_SIZE] __aligned(8);
+/* NOTE: nESPI_RESET or Host clearing flash channel enable will cause
+ * our hardware to clear flash channel ready bit.
+ */
+static bool fc_is_ready(const struct device *dev)
+{
+	const struct xec_espi_ng_drvcfg *devcfg = dev->config;
+	mm_reg_t iom_base = devcfg->base;
+
+	if (soc_test_bit8(iom_base + XEC_ESPI_FC_RDY_OFS, XEC_ESPI_CHAN_RDY_POS) != 0) {
+		return true;
+	}
+
+	return false;
+}
 
 static bool fc_is_busy(const struct device *dev)
 {
@@ -52,81 +55,112 @@ static bool fc_is_busy(const struct device *dev)
 	return 0;
 }
 
-/* blocking flash read */
-int xec_espi_ng_fc_rd_api(const struct device *dev, struct espi_flash_packet *pkt)
+int static xec_espi_ng_fc_op(const struct device *dev, struct espi_flash_packet *pkt, uint8_t op)
 {
-	struct xec_espi_ng_data *data = dev->data;
+	struct xec_espi_ng_data *const data = dev->data;
+	const struct xec_espi_ng_drvcfg *drvcfg = dev->config;
+	mm_reg_t iob = drvcfg->base;
+	uint32_t fc_cr = 0, xfr_len = 0;
+	int rc = 0;
 
-	if (pkt == NULL) {
+	if (fc_is_ready(dev) == false) {
+		return -ECONNRESET;
+	}
+
+	if (fc_is_busy(dev) == true) {
+		return -EBUSY;
+	}
+
+	if (IS_PTR_ALIGNED(pkt->buf, uint32_t) == false) {
+		LOG_ERR("eSPI FC op: packet buffer not 4-byte aligned");
 		return -EINVAL;
 	}
 
 	k_sem_take(&data->fc_lock, K_FOREVER);
+	k_sem_reset(&data->fc_sync);
 
-	if (fc_is_busy(dev) == true) {
-		k_sem_give(&data->fc_lock);
-		return -EBUSY;
+	data->fc_status = 0;
+
+	xfr_len = pkt->len;
+	if ((op == XEC_ESPI_FC_CR_FUNC_ERASE_SM) || (op == XEC_ESPI_FC_CR_FUNC_ERASE_LG)) {
+		xfr_len = XEC_ESPI_FC_ERASE_CMD_LEN;
 	}
 
-	/* TODO */
+	fc_cr = XEC_ESPI_FC_CR_FUNC_SET((uint32_t)op);
+	fc_cr |= XEC_ESPI_FC_CR_TAG_SET(XEC_ESPI_FC_OP_EC_TAG);
 
-	/* clear buffer before triggering read */
-	memset(fc_buf, 0x55, sizeof(fc_buf));
+	sys_write32(XEC_ESPI_FC_SR_ERR_ALL_MSK, iob + XEC_ESPI_FC_SR_OFS);
 
+	sys_write32((uint32_t)pkt->flash_addr, iob + XEC_ESPI_FC_FA_OFS);
+	sys_write32((uint32_t)pkt->buf, iob + XEC_ESPI_FC_BA_OFS);
+	sys_write32(xfr_len, iob + XEC_ESPI_FC_LEN_OFS);
+
+	sys_write32(fc_cr, iob + XEC_ESPI_FC_CR_OFS);
+	sys_set_bit(iob + XEC_ESPI_FC_IER_OFS, XEC_ESPI_FC_IER_DONE_POS);
+	sys_set_bit(iob + XEC_ESPI_FC_CR_OFS, XEC_ESPI_FC_CR_START_POS);
+
+	rc = k_sem_take(&data->fc_sync, K_MSEC(XEC_ESPI_FC_OP_TIMEOUT_MS));
+	if (rc != -EAGAIN) {
+		sys_clear_bit(iob + XEC_ESPI_FC_IER_OFS, XEC_ESPI_FC_IER_DONE_POS);
+		sys_set_bit(iob + XEC_ESPI_FC_CR_OFS, XEC_ESPI_FC_CR_ABORT_POS);
+		LOG_ERR("eSPI FC op=%u timed out", op);
+		rc = -ETIMEDOUT;
+		goto fc_op_exit;
+	}
+
+	if ((data->fc_status & XEC_ESPI_FC_SR_ERR_ALL_MSK) != 0) {
+		LOG_ERR("eSPI FC op: err sts = 0x%0x", data->fc_status);
+		rc = -EIO;
+	}
+
+fc_op_exit:
 	k_sem_give(&data->fc_lock);
 
-	return 0;
+	return rc;
+}
+
+/* blocking flash read */
+int xec_espi_ng_fc_rd_api(const struct device *dev, struct espi_flash_packet *pkt)
+{
+	if (pkt == NULL) {
+		return -EINVAL;
+	}
+
+	return xec_espi_ng_fc_op(dev, pkt, XEC_ESPI_FC_CR_FUNC_READ);
 }
 
 int xec_espi_ng_fc_wr_api(const struct device *dev, struct espi_flash_packet *pkt)
 {
-	struct xec_espi_ng_data *data = dev->data;
-
 	if (pkt == NULL) {
 		return -EINVAL;
 	}
 
-	k_sem_take(&data->fc_lock, K_FOREVER);
-
-	if (fc_is_busy(dev) == true) {
-		k_sem_give(&data->fc_lock);
-		return -EBUSY;
-	}
-
-	/* TODO */
-
-	/* after HW finishes clear driver buffer */
-	memset(fc_buf, 0x55, sizeof(fc_buf));
-
-	k_sem_give(&data->fc_lock);
-
-	return 0;
+	return xec_espi_ng_fc_op(dev, pkt, XEC_ESPI_FC_CR_FUNC_WRITE);
 }
 
 int xec_espi_ng_fc_er_api(const struct device *dev, struct espi_flash_packet *pkt)
 {
-	struct xec_espi_ng_data *data = dev->data;
+	uint8_t op = 0;
 
 	if (pkt == NULL) {
 		return -EINVAL;
 	}
 
-	if (fc_is_busy(dev) == true) {
-		k_sem_give(&data->fc_lock);
-		return -EBUSY;
+	op = XEC_ESPI_FC_CR_FUNC_ERASE_SM;
+	if (pkt->len != 0) {
+		op = XEC_ESPI_FC_CR_FUNC_ERASE_LG;
 	}
 
-	k_sem_take(&data->fc_lock, K_FOREVER);
-
-	/* TODO */
-
-	k_sem_give(&data->fc_lock);
-
-	return 0;
+	return xec_espi_ng_fc_op(dev, pkt, op);
 }
 
-/* TODO what if channel enable change (enable to disable) occurs during
- * on on-going flash transfer?
+/* eSPI flash channel interrupt handler
+ * Events:
+ *   Host setting or clearing flash channel enable.
+ *   Flash channel operation DONE.
+ * NOTE: if the Host disables the channel any on-going
+ * flash operation will cause our FC hardware to set
+ * the disabled by controller status.
  */
 void xec_espi_ng_fc_handler(const struct device *dev)
 {
@@ -140,9 +174,9 @@ void xec_espi_ng_fc_handler(const struct device *dev)
 	};
 	uint32_t sr = sys_read32(iob + XEC_ESPI_FC_SR_OFS);
 
-	data->fc_status = sr;
-
 	sys_write32(sr, iob + XEC_ESPI_FC_SR_OFS);
+
+	data->fc_status = sr;
 
 	/* Did flash channel enable change? */
 	if ((sr & BIT(XEC_ESPI_FC_SR_CHEN_CHG_POS)) != 0) {
@@ -156,7 +190,6 @@ void xec_espi_ng_fc_handler(const struct device *dev)
 	}
 
 	if ((sr & BIT(XEC_ESPI_FC_SR_DONE_POS)) != 0) {
-		/* TODO transfer done */
 		sys_clear_bit(iob + XEC_ESPI_FC_IER_OFS, XEC_ESPI_FC_IER_DONE_POS);
 		k_sem_give(&data->fc_sync);
 	}

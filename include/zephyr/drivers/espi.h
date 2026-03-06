@@ -219,6 +219,11 @@ enum espi_virtual_peripheral {
 	 */
 	ESPI_PERIPHERAL_EC_HOST_CMD,
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+	/** EC read/write to Host memory using eSPI PC Bus controllers 1 or 2 */
+	ESPI_PERIPHERAL_BUS_CTRL1,
+	ESPI_PERIPHERAL_BUS_CTRL2,
+	/** eSPI target LTR message send to Host */
+	ESPI_PERIPHERAL_LTR,
 };
 
 /**
@@ -268,6 +273,15 @@ enum espi_vwire_signal {
 	ESPI_VWIRE_SIGNAL_HOST_C10,      /**< Host C10 state signal */
 	ESPI_VWIRE_SIGNAL_DNX_WARN,      /**< DNX (Debug and eXception) warning signal */
 
+	ESPI_VWIRE_SIGNAL_GENERIC0,      /**< Host to Target generic signals */
+	ESPI_VWIRE_SIGNAL_GENERIC1,
+	ESPI_VWIRE_SIGNAL_GENERIC2,
+	ESPI_VWIRE_SIGNAL_GENERIC3,
+	ESPI_VWIRE_SIGNAL_GENERIC4,
+	ESPI_VWIRE_SIGNAL_GENERIC5,
+	ESPI_VWIRE_SIGNAL_GENERIC6,
+	ESPI_VWIRE_SIGNAL_GENERIC7,
+
 	/* Virtual wires that can only be sent from target to controller */
 	ESPI_VWIRE_SIGNAL_PME,              /**< Power Management Event signal */
 	ESPI_VWIRE_SIGNAL_WAKE,             /**< Wake signal */
@@ -299,6 +313,23 @@ enum espi_vwire_signal {
 	ESPI_VWIRE_SIGNAL_TARGET_GPIO_9,  /**< Target GPIO 9 signal */
 	ESPI_VWIRE_SIGNAL_TARGET_GPIO_10, /**< Target GPIO 10 signal */
 	ESPI_VWIRE_SIGNAL_TARGET_GPIO_11, /**< Target GPIO 11 signal */
+
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_12,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_13,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_14,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_15,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_16,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_17,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_18,
+	ESPI_VWIRE_SIGNAL_TARGET_GPIO_19,
+
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC1,    /**< Target to Host generic signals */
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC2,
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC3,
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC4,
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC5,
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC6,
+	ESPI_VWIRE_SIGNAL_TARGET_GENERIC7,
 
 	/** Number of Virtual Wire signals */
 	ESPI_VWIRE_SIGNAL_COUNT
@@ -415,6 +446,10 @@ struct espi_evt_data_acpi {
 	/** Reserved field for future use */
 	uint32_t reserved: 16;
 };
+
+#define ESPI_EVT_ACPI_HOST_DATA_WRITE 0
+#define ESPI_EVT_ACPI_HOST_CMD_WRITE  1u
+#define ESPI_EVT_ACPI_HOST_DATA_READ  2u
 
 /**
  * @brief Event data format for Private Channel (PVT) events.
