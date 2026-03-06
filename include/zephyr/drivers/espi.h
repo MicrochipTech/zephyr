@@ -219,6 +219,10 @@ enum espi_virtual_peripheral {
 	 */
 	ESPI_PERIPHERAL_EC_HOST_CMD,
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+#if defined(CONFIG_ESPI_PERIPHERAL_MAILBOX)
+	/** Host to EC mailbox peripheral */
+	ESPI_PERIPHERAL_MAILBOX,
+#endif
 	ESPI_PERIPHERAL_MAX,
 };
 

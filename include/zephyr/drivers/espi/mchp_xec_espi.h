@@ -18,13 +18,7 @@
 
 #include <zephyr/drivers/espi.h>
 
-/** @brief Extend espi_virtual_peripheral enum */
-enum mchp_xec_espi_virtual_peripheral {
-	MCHP_XEC_ESPI_PERIPHERAL_MAILBOX = ESPI_PERIPHERAL_MAX,
-	MCHP_XEC_ESPI_PERIPHERAL_MAX,
-};
-
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+#ifdef CONFIG_ESPI_PERIPHERAL_MAILBOX
 
 #define MCHP_XEC_MAX_MAILBOX_INDEX 32
 
