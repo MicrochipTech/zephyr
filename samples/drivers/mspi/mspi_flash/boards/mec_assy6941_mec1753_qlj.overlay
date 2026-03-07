@@ -10,11 +10,6 @@
 	};
 };
 
-&dmac {
-	compatible = "microchip,xec-dmac";
-	status = "okay";
-};
-
 &qspi0 {
 	compatible = "microchip,xec-mspi-controller";
 	clock-frequency = <DT_FREQ_M(8)>;
@@ -25,9 +20,6 @@
 		     &qspi_shd_io1_gpio224 &qspi_shd_io2_gpio227
 		     &qspi_shd_io3_gpio016>;
 	pinctrl-names = "default";
-
-	dmas = <&dmac 10 10>, <&dmac 11 11>; /* ctrl chan hw-id */
-	dma-names = "tx", "rx";
 
 	status = "okay";
 
