@@ -30,10 +30,10 @@
 #define MCHP_SAF_FLASH_CONSEC_READ_TIMEOUT 2u
 #define MCHP_SAF_FLASH_SUS_CHK_DELAY       0u
 
-/* Default SAF Map of eSPI TAG numbers to master numbers */
-#define MCHP_SAF_TAG_MAP0_DFLT 0x23221100u
-#define MCHP_SAF_TAG_MAP1_DFLT 0x77677767u
-#define MCHP_SAF_TAG_MAP2_DFLT 0x00000005u
+/* Default TAF Map of eSPI TAG numbers to external Controller numbers */
+#define MCHP_TAF_TAG_MAP0_DFLT 0x23221100u
+#define MCHP_TAF_TAG_MAP1_DFLT 0x77677767u
+#define MCHP_TAF_TAG_MAP2_DFLT 0x00000005u
 
 /*
  * Default QMSPI clock divider and chip select timing.
@@ -355,6 +355,8 @@
  */
 #define MCHP_SAF_HW_CFG_TAGMAP_USE BIT(31)
 
+#define MCHP_ESPI_TAF_TAGMAP_MAX 3U
+
 #define MCHP_SAF_VER_1 0
 #define MCHP_SAF_VER_2 1
 
@@ -367,7 +369,7 @@ struct espi_saf_hw_cfg {
 	uint16_t flash_pd_timeout;
 	uint16_t flash_pd_min_interval;
 	uint32_t generic_descr[MCHP_SAF_NUM_GENERIC_DESCR];
-	uint32_t tag_map[MCHP_ESPI_SAF_TAGMAP_MAX];
+	uint32_t tag_map[MCHP_ESPI_TAF_TAGMAP_MAX];
 };
 
 /*

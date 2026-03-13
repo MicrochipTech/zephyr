@@ -67,8 +67,14 @@
 #define MCHP_SAF_ECP_CMD_ERASE        0x02u
 #define MCHP_SAF_ECP_CMD_RPMC_OP1_CS0 0x03u
 #define MCHP_SAF_ECP_CMD_RPMC_OP2_CS0 0x04u
-#define MCHP_SAF_ECP_CMD_RPMC_OP1_CS1 0x83u
-#define MCHP_SAF_ECP_CMD_RPMC_OP2_CS1 0x84u
+#define MCHP_SAF_ECP_CMD_RPMC_OP1_CS1 0x23u
+#define MCHP_SAF_ECP_CMD_RPMC_OP2_CS1 0x24u
+/* Default TAF hardware recognizes both 0x23/0x24 and 0x83/0x84
+ * as valid opcodes for RPMC OP1/OP2 for chip select 1.
+ * If strict mode is enabled only 0x23/0x24 will be recognized
+ */
+#define MCHP_SAF_ECP_CMD_RPMC_OP1_CS1_DEP 0x83u
+#define MCHP_SAF_ECP_CMD_RPMC_OP2_CS1_DEP 0x84u
 
 /* SAF EC Portal Flash Address register */
 #define MCHP_SAF_ECP_FLAR_OFS  0x1cu
