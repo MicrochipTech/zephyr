@@ -9,15 +9,16 @@
 
 #include <zephyr/kernel.h>
 #include <soc.h>
-#include <errno.h>
-#include <zephyr/drivers/clock_control/mchp_xec_clock_control.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/espi_saf.h>
 #include <zephyr/drivers/interrupt_controller/intc_mchp_xec_ecia.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
+#include <zephyr/sys/sys_io.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 
-#include "espi_mchp_xec_v2.h"
+#include "mec_espi_taf_regs.h"
 #include "espi_utils.h"
 LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 
@@ -38,6 +39,9 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 /* After 8 wait intervals yield */
 #define SAF_YIELD_THRESHOLD 64
 
+/* Delay after TAF activation in microseconds */
+#define TAF_ACTIVATION_DELAY_US 1000U
+
 /* Get QMSPI 0 encoded GIRQ information */
 #define XEC_QMSPI_ENC_GIRQ						\
 	DT_PROP_BY_IDX(DT_INST(0, microchip_xec_qmspi_ldma), girqs, 0)
@@ -52,72 +56,108 @@ LOG_MODULE_REGISTER(espi_saf, CONFIG_ESPI_LOG_LEVEL);
 #define XEC_SAF_DONE_GIRQ_POS MCHP_XEC_ECIA_GIRQ_POS(XEC_SAF_ERR_ENC_GIRQ)
 
 /*
- * SAF configuration from Device Tree
- * SAF controller register block base address
+ * TAF configuration from Device Tree
+ * TAF controller register block base address
  * QMSPI controller register block base address
- * SAF communications register block base address
+ * TAF communications register block base address
  * Flash STATUS1 poll timeout in 32KHz periods
  * Flash consecutive read timeout in units of 20 ns
  * Delay before first Poll-1 command after suspend in 20 ns units
  * Hold off suspend for this interval if erase or program in 32KHz periods.
  * Add delay between Poll STATUS1 commands in 20 ns units.
  */
-struct espi_saf_xec_config {
-	struct mchp_espi_saf * const saf_base;
-	struct qmspi_regs * const qmspi_base;
-	struct mchp_espi_saf_comm * const saf_comm_base;
-	struct espi_iom_regs * const iom_base;
+struct espi_taf_xec_config {
+	mm_reg_t taf_base;
+	mm_reg_t taf_comm_base;
+	mm_reg_t espi_ioc_base;
+	mm_reg_t qspi_base;
+	volatile uint32_t *ecp_mem;
 	void (*irq_config_func)(void);
 	uint32_t poll_timeout;
 	uint32_t consec_rd_timeout;
 	uint32_t sus_chk_delay;
 	uint16_t sus_rsm_interval;
 	uint16_t poll_interval;
-	uint8_t pcr_idx;
-	uint8_t pcr_pos;
-	uint8_t irq_info_size;
-	uint8_t rsvd1;
-	const struct espi_xec_irq_info *irq_info_list;
+	uint8_t girq;
+	uint8_t girq_pos;
+	uint8_t girq_bmon;
+	uint8_t girq_bmon_pos;
+	uint8_t enc_pcr;
 };
 
-struct espi_saf_xec_data {
-	struct k_sem ecp_lock;
+struct espi_taf_xec_data {
+	struct k_mutex ecp_lock;
+	struct k_sem sync;
+	uint32_t ecp_cmd;
+	uint32_t ecp_hwstatus;
 	uint32_t hwstatus;
 	sys_slist_t callbacks;
 };
 
-/* EC portal local flash r/w buffer */
-static uint32_t slave_mem[MAX_SAF_ECP_BUFFER_SIZE];
-
 /*
  * @brief eSPI SAF configuration
  */
-
-static inline void mchp_saf_cs_descr_wr(struct mchp_espi_saf *regs, uint8_t cs,
-					uint32_t val)
+#if 0 /* Not used? */
+static inline void mchp_saf_cs_descr_wr(mm_reg_t taf_base, uint8_t cs, uint32_t val)
 {
+	uint32_t ofs = XEC_TAFS_CFG_CS0_OPCODE_A_OFS;
+
+	if (cs == 1U) {
+		ofs = XEC_TAF_CFG_CS1_OPCODE_A_OFS;
+	} else {
+		return;
+	}
+
+
+#define XEC_TAFS_CFG_CS0_OPCODE_A_OFS 0x04CU
+#define XEC_TAFS_CFG_CS1_OPCODE_A_OFS 0x05CU
+
+#define XEC_TAFS_CFG_OPCODE_A_OP_POLL1_MSK GENMASK(31, 24)
+#define XEC_TAFS_CFG_OPCODE_A_OP_RSM_MSK   GENMASK(23, 16)
+#define XEC_TAFS_CFG_OPCODE_A_OP_SUS_MSK   GENMASK(15, 8)
+#define XEC_TAFS_CFG_OPCODE_A_OP_WE_MSK    GENMASK(7, 0)
+
+
 	regs->SAF_CS_OP[cs].OP_DESCR = val;
 }
+#endif
 
-static inline void mchp_saf_poll2_mask_wr(struct mchp_espi_saf *regs, uint8_t cs,
-					  uint16_t val)
+/* Program bit mask used to mask out status bits returned by flash read status operation */
+static inline void mchp_taf_poll2_mask_wr(mm_reg_t taf_base, uint8_t cs, uint16_t val)
 {
+	uint32_t rval = 0, msk = 0;
+
 	LOG_DBG("%s cs: %d mask %x", __func__, cs, val);
+
 	if (cs == 0) {
-		regs->SAF_CS0_CFG_P2M = val;
+		msk = XEC_TAFS_CFG_CS_POLL2_MASK_CS0_MSK;
+	} else if (cs == 1U) {
+		msk = XEC_TAFS_CFG_CS_POLL2_MASK_CS1_MSK;
 	} else {
-		regs->SAF_CS1_CFG_P2M = val;
+		return;
 	}
+
+	rval = xec_tafs_field_prep(msk, (uint32_t)val);
+	soc_mmcr_mask_set(taf_base + 0, rval, msk);
 }
 
-static inline void mchp_saf_cm_prefix_wr(struct mchp_espi_saf *regs, uint8_t cs,
-					 uint16_t val)
+/* Program the continous mode entry opcode and optional prefix byte for the flash connect to
+ * chip select cs.
+ */
+static inline void mchp_taf_cm_prefix_wr(mm_reg_t taf_base, uint8_t cs, uint16_t val)
 {
+	uint32_t rval = 0, msk = 0;
+
 	if (cs == 0) {
-		regs->SAF_CS0_CM_PRF = val;
+		msk = XEC_TAFS_CONT_PREFIX_CS0_OP_MSK | XEC_TAFS_CONT_PREFIX_CS0_DAT_MSK;
+	} else if (cs == 1U) {
+		msk = XEC_TAFS_CONT_PREFIX_CS1_OP_MSK | XEC_TAFS_CONT_PREFIX_CS1_DAT_MSK;
 	} else {
-		regs->SAF_CS1_CM_PRF = val;
+		return;
 	}
+
+	rval = xec_tafs_field_prep(msk, (uint32_t)val);
+	soc_mmcr_mask_set(taf_base + XEC_TAFS_CONT_PREFIX_CFG_OFS, rval, msk);
 }
 
 /*
@@ -148,30 +188,32 @@ static inline void mchp_saf_cm_prefix_wr(struct mchp_espi_saf *regs, uint8_t cs,
  * WR = 0xFF
  * RD = 0xFF
  */
-static void saf_protection_regions_init(struct mchp_espi_saf *regs)
+static void taf_protection_regions_init(mm_reg_t tafb)
 {
+	uint32_t lim0 = 0;
 	LOG_DBG("%s", __func__);
 
-	for (size_t n = 0; n < MCHP_ESPI_SAF_PR_MAX; n++) {
-		if (n == 0) {
-			regs->SAF_PROT_RG[0].START = 0U;
-			regs->SAF_PROT_RG[0].LIMIT =
-				regs->SAF_FL_CFG_SIZE_LIM >> 12;
-			regs->SAF_PROT_RG[0].WEBM = MCHP_SAF_MSTR_ALL;
-			regs->SAF_PROT_RG[0].RDBM = MCHP_SAF_MSTR_ALL;
-		} else {
-			regs->SAF_PROT_RG[n].START =
-				MCHP_SAF_PROT_RG_START_DFLT;
-			regs->SAF_PROT_RG[n].LIMIT =
-				MCHP_SAF_PROT_RG_LIMIT_DFLT;
-			regs->SAF_PROT_RG[n].WEBM = 0U;
-			regs->SAF_PROT_RG[n].RDBM = 0U;
-		}
+	/* Get the flash size limit register value and convert to 4KB units since
+	 * the protection registers work on 4KB boundaries
+	 */
+	lim0 = sys_read32(tafb + XEC_TAFS_CFG_SIZE_LIM_OFS);
+	lim0 >>= 12;
 
-		LOG_DBG("PROT[%d] START %x", n, regs->SAF_PROT_RG[n].START);
-		LOG_DBG("PROT[%d] LIMIT %x", n, regs->SAF_PROT_RG[n].LIMIT);
-		LOG_DBG("PROT[%d] WEBM %x", n, regs->SAF_PROT_RG[n].WEBM);
-		LOG_DBG("PROT[%d] RDBM %x", n, regs->SAF_PROT_RG[n].RDBM);
+	sys_write32(0, tafb + XEC_TAFS_PROT_RG_START_OFS(0));
+	sys_write32(lim0, tafb + XEC_TAFS_PROT_RG_LIMIT_OFS(0));
+	sys_write32(XEC_TAF_CID_ALL_MSK, tafb + XEC_TAFS_PROT_RG_WR_OFS(0));
+	sys_write32(XEC_TAF_CID_ALL_MSK, tafb + XEC_TAFS_PROT_RG_RD_OFS(0));
+
+	for (size_t n = 1U; n < XEC_TAFS_PROT_RG_MAX_REGIONS; n++) {
+		sys_write32(XEC_TAF_PROT_RG_START_DFLT, tafb + XEC_TAFS_PROT_RG_START_OFS(n));
+		sys_write32(XEC_TAF_PROT_RG_LIMIT_DFLT, tafb + XEC_TAFS_PROT_RG_LIMIT_OFS(n));
+		sys_write32(0, tafb + XEC_TAFS_PROT_RG_WR_OFS(n));
+		sys_write32(0, tafb + XEC_TAFS_PROT_RG_RD_OFS(n));
+
+		LOG_DBG("PROT[%u] STA  0x%x", n, sys_read32(tafb + XEC_TAFS_PROT_RG_START_OFS(n)));
+		LOG_DBG("PROT[%u] LIM  0x%x", n, sys_read32(tafb + XEC_TAFS_PROT_RG_LIMIT_OFS(n)));
+		LOG_DBG("PROT[%u] WBM  0x%x", n, sys_read32(tafb + XEC_TAFS_PROT_RG_WR_OFS(n)));
+		LOG_DBG("PROT[%u] RBM  0x%x", n, sys_read32(tafb + XEC_TAFS_PROT_RG_RD_OFS(n)));
 	}
 }
 
@@ -325,11 +367,12 @@ static void saf_flash_timing_init(struct mchp_espi_saf * const regs,
 
 /*
  * Disable DnX bypass feature.
+ * Allow access to all regions of the flash array during DnX.
  */
-static void saf_dnx_bypass_init(struct mchp_espi_saf * const regs)
+static void taf_dnx_bypass_init(mm_reg_t taf_base)
 {
-	regs->SAF_DNX_PROT_BYP = 0;
-	regs->SAF_DNX_PROT_BYP = 0xffffffff;
+	sys_write32(0, taf_base + XEC_TAFS_DNX_PROT_BYP_OFS);
+	sys_write32(UINT32_MAX, taf_base + XEC_TAFS_DNX_PROT_BYP_OFS);
 }
 
 /*
@@ -341,11 +384,11 @@ static void saf_dnx_bypass_init(struct mchp_espi_saf * const regs)
  */
 static int saf_init_erase_block_size(const struct device *dev, const struct espi_saf_cfg *cfg)
 {
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
+	const struct espi_saf_xec_config *xcfg = dev->config;
+	mm_reg_t iocb = xcfg->espi_ioc_base;
 	struct espi_saf_flash_cfg *fcfg = cfg->flash_cfgs;
 	uint32_t opb = fcfg->opb;
-	uint8_t erase_bitmap = MCHP_ESPI_SERASE_SZ_4K;
+	uint8_t erase_bitmap = BIT(XEC_ESPI_IOC_TAF_ERBSZ_4KB_POS);
 
 	LOG_DBG("%s\n", __func__);
 
@@ -360,14 +403,14 @@ static int saf_init_erase_block_size(const struct device *dev, const struct espi
 	}
 
 	if (opb & MCHP_SAF_CS_OPB_ER1_MASK) {
-		erase_bitmap |= MCHP_ESPI_SERASE_SZ_32K;
+		erase_bitmap |= BIT(XEC_ESPI_IOC_TAF_ERBSZ_32KB_POS);
 	}
 
 	if (opb & MCHP_SAF_CS_OPB_ER2_MASK) {
-		erase_bitmap |= MCHP_ESPI_SERASE_SZ_64K;
+		erase_bitmap |= BIT(XEC_ESPI_IOC_TAF_ERBSZ_64KB_POS);
 	}
 
-	espi_iom->SAFEBS = erase_bitmap;
+	sys_write8(erase_bitmap, iocb + XEC_ESPI_IOC_TAF_ERBSZ_OFS);
 
 	return 0;
 }
@@ -536,34 +579,37 @@ static int saf_flash_cfg(const struct device *dev,
 		qregs->DESCR[did++] = d;
 	}
 
-	mchp_saf_poll2_mask_wr(regs, cs, fcfg->poll2_mask);
-	mchp_saf_cm_prefix_wr(regs, cs, fcfg->cont_prefix);
+	mchp_taf_poll2_mask_wr(regs, cs, fcfg->poll2_mask);
+	mchp_taf_cm_prefix_wr(regs, cs, fcfg->cont_prefix);
 	saf_flash_misc_cfg(regs, cs, fcfg);
 	saf_flash_pd_cfg(regs, cs, fcfg);
 
 	return saf_flash_freq_cfg(regs, cs, fcfg);
 }
 
-static const uint32_t tag_map_dflt[MCHP_ESPI_SAF_TAGMAP_MAX] = {
-	MCHP_SAF_TAG_MAP0_DFLT, MCHP_SAF_TAG_MAP1_DFLT, MCHP_SAF_TAG_MAP2_DFLT
+static const uint32_t tag_map_dflt[MCHP_ESPI_TAF_TAGMAP_MAX] = {
+	MCHP_TAF_TAG_MAP0_DFLT, MCHP_TAF_TAG_MAP1_DFLT, MCHP_TAF_TAG_MAP2_DFLT
 };
 
-static void saf_tagmap_init(struct mchp_espi_saf * const regs,
-			    const struct espi_saf_cfg *cfg)
+static void taf_tagmap_init(mm_reg_t taf_base, const struct espi_saf_cfg *cfg)
 {
 	const struct espi_saf_hw_cfg *hwcfg = &cfg->hwcfg;
+	uint32_t tagm_ofs = XEC_TAFS_TAG_MAP0_OFS;
+	uint32_t tagm_val = 0;
 
-	for (int i = 0; i < MCHP_ESPI_SAF_TAGMAP_MAX; i++) {
-		if (hwcfg->tag_map[i] & MCHP_SAF_HW_CFG_TAGMAP_USE) {
-			regs->SAF_TAG_MAP[i] = hwcfg->tag_map[i];
-		} else {
-			regs->SAF_TAG_MAP[i] = tag_map_dflt[i];
+	for (size_t n = 0; n < MCHP_ESPI_SAF_TAGMAP_MAX; n++) {
+		tagm_val = tag_map_dflt[n];
+
+		if (hwcfg->tag_map[n] & MCHP_SAF_HW_CFG_TAGMAP_USE) {
+			tagm_val = hwcfg->tag_map[n];
 		}
-	}
 
-	LOG_DBG("SAF TAG0 %x", regs->SAF_TAG_MAP[0]);
-	LOG_DBG("SAF TAG1 %x", regs->SAF_TAG_MAP[1]);
-	LOG_DBG("SAF TAG2 %x", regs->SAF_TAG_MAP[2]);
+		sys_write32(tagm_val, taf_base + tagm_ofs);
+
+		LOG_DBG("TAF TAGM[%u]=0x%x", n, sys_read32(taf_base + tagm_ofs););
+
+		tagm_ofs += 4U;
+	}
 }
 
 #define SAF_QSPI_LDMA_CTRL						\
@@ -675,11 +721,11 @@ static int espi_saf_xec_configuration(const struct device *dev,
 	LOG_DBG("SAF_FL_CFG_THRH = %x SAF_FL_CFG_SIZE_LIM = %x",
 		regs->SAF_FL_CFG_THRH, regs->SAF_FL_CFG_SIZE_LIM);
 
-	saf_tagmap_init(regs, cfg);
+	taf_tagmap_init(regs, cfg);
 
-	saf_protection_regions_init(regs);
+	taf_protection_regions_init(regs);
 
-	saf_dnx_bypass_init(regs);
+	taf_dnx_bypass_init(regs);
 
 	saf_flash_timing_init(regs, xcfg);
 
@@ -778,48 +824,44 @@ static bool espi_saf_xec_channel_ready(const struct device *dev)
 	return false;
 }
 
-/*
- * MCHP SAF hardware supports a range of flash block erase
- * sizes from 1KB to 128KB. The eSPI Host specification requires
- * 4KB must be supported. The MCHP SAF QMSPI HW interface only
- * supported three erase sizes. Most SPI flash devices chosen for
- * SAF support 4KB, 32KB, and 64KB.
- * Get flash erase sizes driver has configured from eSPI capabilities
- * registers. We assume driver flash tables have opcodes to match
- * capabilities configuration.
- * Check requested erase size is supported.
+/* Current TAF hardware erase operations use the ECP command register length
+ * field to encode the erase size.
+ * 4KB  = 0
+ * 32KB = 1
+ * 64KB = 2
+ * All other encoding are invalid. The attached flash must support one of these
+ * erase sizes.
+ * The eSPI target has a register with a bit map of support erase sizes.
+ * We updated that register when the application passed us the flash parameters
+ * during driver configuration.
  */
-struct erase_size_encoding {
-	uint8_t hwbitpos;
-	uint8_t encoding;
-};
-
-static const struct erase_size_encoding ersz_enc[] = {
-	{ MCHP_ESPI_SERASE_SZ_4K_BITPOS, 0 },
-	{ MCHP_ESPI_SERASE_SZ_32K_BITPOS, 1 },
-	{ MCHP_ESPI_SERASE_SZ_64K_BITPOS, 2 }
-};
-
-#define SAF_ERASE_ENCODING_MAX_ENTRY                                           \
-	(sizeof(ersz_enc) / sizeof(struct erase_size_encoding))
-
-static uint32_t get_erase_size_encoding(const struct device *dev, uint32_t erase_size)
+static int get_erase_size_encoding(const struct device *dev, uint32_t erase_size,
+                                   uint32_t *encoding)
 {
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
-	uint8_t supsz = espi_iom->SAFEBS;
+	const struct espi_saf_xec_config *xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
+	mm_reg_t iocb = xcfg->espi_ioc_base;
+	uint8_t ebsz = sys_read8(iocb + XEC_ESPI_IOC_TAF_ERBSZ_OFS);
 
 	LOG_DBG("%s\n", __func__);
-	for (int i = 0; i < SAF_ERASE_ENCODING_MAX_ENTRY; i++) {
-		uint32_t sz = MCHP_ESPI_SERASE_SZ(ersz_enc[i].hwbitpos);
 
-		if ((sz == erase_size) &&
-		    (supsz & (1 << ersz_enc[i].hwbitpos))) {
-			return ersz_enc[i].encoding;
-		}
+	if (encoding == NULL) {
+		return -EINVAL;
 	}
 
-	return 0xffffffffU;
+	if (((ebsz & BIT(XEC_ESPI_IOC_TAF_ERBSZ_4KB_POS)) != 0) && (erase_size == KB(4))) {
+		*encoding = XEC_TAFS_ECP_CMD_LEN_ERASE_4KB;
+	} else if (((ebsz & BIT(XEC_ESPI_IOC_TAF_ERBSZ_32KB_POS)) != 0) &&
+	           (erase_size == KB(32))) {
+		*encoding = XEC_TAFS_ECP_CMD_LEN_ERASE_32KB;
+	} else if (((ebsz & BIT(XEC_ESPI_IOC_TAF_ERBSZ_64KB_POS)) != 0) &&
+	           (erase_size == KB(64))) {
+		*encoding = XEC_TAFS_ECP_CMD_LEN_ERASE_64KB;
+	} else {
+		return -EBADR;
+	}
+
+	return 0;
 }
 
 static int check_ecp_access_size(uint32_t reqlen)
@@ -832,297 +874,391 @@ static int check_ecp_access_size(uint32_t reqlen)
 	return 0;
 }
 
+static int ecp_rw(const struct device *dev, struct espi_saf_packet *pkt, uint8_t cmd)
+{
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
+	uint32_t ecp_cmd = XEC_TAFS_ECP_CTYPE_READ;
+
+	rc = check_ecp_access_size(pkt->len);
+	if (rc != 0) {
+		LOG_ERR("TAF EC Portal request size out of bounds");
+		return rc;
+	}
+
+	if (cmd == MCHP_SAF_ECP_CMD_WRITE) {
+		emp_cmd = XEC_TAFS_ECP_CTYPE_WRITE;
+		memcpy((void *)xcfg->ecp_mem, pkt->buf, pkt->len);
+	}
+
+	sys_write32(pckt->flash_addr, tb + XEC_TAFS_ECP_FLASH_ADDR_OFS);
+	sys_write32((uint32_t)xcfg->ecp_mem, tb + XEC_TAFS_EC_MBUF_ADDR_OFS);
+
+	ecp_cmd = xec_tafs_field_prep(XEC_TAFS_ECP_CMD_CTYPE_MSK, ecp_cmd);
+	ecp_cmd |= xec_tafs_field_prep(XEC_TAFS_ECP_CMD_PUT_MSK, XEC_TAFS_ECP_CMD_PUT_FLASH_NP);
+	ecp_cmd |= xec_tafs_field_prep(XEC_TAFS_ECP_CMD_LEN_MSK, pkt->len);
+
+	data->ecp_cmd = ecp_cmd;
+
+	return 0;
+}
+
+static int ecp_erase(const struct device *dev, struct espi_saf_packet *pkt)
+{
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
+	uint32_t encoding = 0;
+	int rc = get_erase_size_encoding(dev, pkt->len, &encoding);
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	sys_write32(pckt->flash_addr, tb + XEC_TAFS_ECP_FLASH_ADDR_OFS);
+	sys_write32((uint32_t)xcfg->ecp_mem, tb + XEC_TAFS_ECP_MBUF_ADDR_OFS);
+
+	cmd = xec_tafs_field_prep(XEC_TAFS_ECP_CMD_CTYPE_MSK, XEC_TAFS_ECP_CTYPE_ERASE);
+	cmd |= xec_tafs_field_prep(XEC_TAFS_ECP_CMD_PUT_MSK, XEC_TAFS_ECP_CMD_PUT_FLASH_NP);
+	cmd |= xec_tafs_field_prep(XEC_TAFS_ECP_CMD_LEN_MSK, pkt->len);
+
+	data->ecp_cmd = cmd;
+
+	return 0;
+}
+
+#ifdef CONFIG_ESPI_TAF_XEC_V2_RPMC_SUPPORT
+static int ecp_rpmc(const struct device *dev, struct espi_saf_packet *pkt, uint8_t cmd)
+{
+	struct espi_taf_xec_data *const xdat = dev->data;
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
+	uint32_t ecp_cmd = XEC_TAFS_ECP_CTYPE_READ;
+	int rc = 0;
+
+	rc = check_ecp_access_size(pckt->len);
+	if (rc != 0) {
+		LOG_ERR("SAF EC Portal RPMC size out of bounds");
+		goto ecp_acc_exit;
+	}
+
+
+	if (!(regs->SAF_CFG_CS0_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
+		LOG_ERR("TAF CS0 RPMC opcode not configured");
+		rc = -EIO;
+		goto ecp_acc_exit;
+	}
+
+	if (!(regs->SAF_CFG_CS1_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
+		LOG_ERR("TAF CS1 RPMC opcode not configured");
+		rc = -EIO;
+		goto ecp_acc_exit;
+	}
+
+	n = pckt->len;
+
+	return 0;
+}
+#endif
+
 /*
- * EC access to SAF atttached flash array
- * Allowed commands:
- * MCHP_SAF_ECP_CMD_READ(0x0), MCHP_SAF_ECP_CMD_WRITE(0x01),
- * MCHP_SAF_ECP_CMD_ERASE(0x02), MCHP_SAF_ECP_CMD_RPMC_OP1_CS0(0x03),
- * MCHP_SAF_ECP_CMD_RPMC_OP2_CS0(0x04), MCHP_SAF_ECP_CMD_RPMC_OP1_CS1(0x83),
- * MCHP_SAF_ECP_CMD_RPMC_OP2_CS1(0x84)
+ * Application can send a flash read, erase, write operation to the attached flash array.
+ * NOTE: If the Host eSPI controller has an on-going flash access the EC Portal hardware
+ * will stall waiting for the Host access to finish.
+ * If RPMC support is enabled at build time then RPMC OP1 and OP2 flash command are supported.
  */
-static int saf_ecp_access(const struct device *dev,
-			  struct espi_saf_packet *pckt, uint8_t cmd)
+static int taf_v2_ecp_access(const struct device *dev, struct espi_saf_packet *pckt, uint8_t cmd)
 {
 	uint32_t scmd, err_mask, n;
 	int rc, counter;
-	struct espi_saf_xec_data *xdat = dev->data;
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct mchp_espi_saf * const regs = xcfg->saf_base;
-	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[0];
-
-	counter = 0;
-	err_mask = MCHP_SAF_ECP_STS_ERR_MASK;
+	struct espi_taf_xec_data *const xdat = dev->data;
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
+	uint32_t err_mask = XEC_TAFS_BR_ECP_SR_ERR_MSK;
+	uint32_t status = 0;
+	int rc = 0, counter = 0;
 
 	LOG_DBG("%s", __func__);
 
-	if (!(regs->SAF_FL_CFG_MISC & MCHP_SAF_FL_CFG_MISC_SAF_EN)) {
-		LOG_ERR("SAF is disabled");
+	if (pckt == NULL) {
+		return -EINVAL;
+	}
+
+	if (sys_test_bit(tb + XEC_TAFS_BR_CFG_MISC_OFS,
+	                 XEC_TAFS_BR_CFG_MISC_TAF_MODE_EN_POS) == 0) {
+		LOG_ERR("TAF is disabled");
 		return -EIO;
 	}
 
-	n = regs->SAF_ECP_BUSY;
-	if (n & (MCHP_SAF_ECP_EC0_BUSY | MCHP_SAF_ECP_EC1_BUSY)) {
-		LOG_ERR("SAF EC Portal is busy: 0x%08x", n);
+	if (sys_test_bit(tb + XEC_TAFS_BR_ECP_BUSY_OFS, XEC_TAFS_BR_ECP_BUSY_EC0_POS) != 0) {
+		LOG_ERR("TAF EC Portal is busy");
 		return -EBUSY;
 	}
 
-	switch (cmd) {
-	case MCHP_SAF_ECP_CMD_READ:
-	case MCHP_SAF_ECP_CMD_WRITE:
-		rc = check_ecp_access_size(pckt->len);
-		if (rc) {
-			LOG_ERR("SAF EC Portal size out of bounds");
-			return rc;
-		}
+	k_mutex_lock(&data->ecp_lock, K_FOREVER);
 
-		if (cmd == MCHP_SAF_ECP_CMD_WRITE) {
-			memcpy(slave_mem, pckt->buf, pckt->len);
-		}
-
-		n = pckt->len;
-		break;
-	case MCHP_SAF_ECP_CMD_ERASE:
-		n = get_erase_size_encoding(dev, pckt->len);
-		if (n == UINT32_MAX) {
-			LOG_ERR("SAF EC Portal unsupported erase size");
-			return -EAGAIN;
-		}
-		break;
-	case MCHP_SAF_ECP_CMD_RPMC_OP1_CS0:
-	case MCHP_SAF_ECP_CMD_RPMC_OP2_CS0:
-		rc = check_ecp_access_size(pckt->len);
-		if (rc) {
-			LOG_ERR("SAF EC Portal RPMC size out of bounds");
-			return rc;
-		}
-		if (!(regs->SAF_CFG_CS0_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
-			LOG_ERR("SAF CS0 RPMC opcode not configured");
-			return -EIO;
-		}
-		n = pckt->len;
-		break;
-	case MCHP_SAF_ECP_CMD_RPMC_OP1_CS1:
-	case MCHP_SAF_ECP_CMD_RPMC_OP2_CS1:
-		rc = check_ecp_access_size(pckt->len);
-		if (rc) {
-			LOG_ERR("SAF EC Portal RPMC size out of bounds");
-			return rc;
-		}
-		if (!(regs->SAF_CFG_CS1_OPD & SAF_CFG_CS_OPC_RPMC_OP2_MSK)) {
-			LOG_ERR("SAF CS1 RPMC opcode not configured");
-			return -EIO;
-		}
-		n = pckt->len;
-		break;
-	default:
-		LOG_ERR("SAF EC Portal bad cmd");
-		return -EAGAIN;
+	if ((cmd == XEC_TAFS_ECP_CTYPE_READ) || (cmd == XEC_TAFS_ECP_CTYPE_WRITE)) {
+		rc = ecp_rw(dev, pckt, cmd);
+	} else if (cmd == MCHP_SAF_ECP_CMD_ERASE) {
+		rc = ecp_erase(dev, pckt);
+	}
+#ifdef CONFIG_ESPI_TAF_XEC_V2_RPMC_SUPPORT
+	else if ((cmd == XEC_TAFS_ECP_CTYPE_RPMC_OP1_CS0) ||
+		 (cmd == XEC_TAFS_ECP_CTYPE_RPMC_OP2_CS0) ||
+		 (cmd == XEC_TAFS_ECP_CTYPE_RPMC_OP1_CS1) ||
+		 (cmd == XEC_TAFS_ECP_CTYPE_RPMC_OP2_CS1)) {
+		rc = ecp_rpmc(dev, pckt, cmd);
+	}
+#endif /* CONFIG_ESPI_TAF_XEC_V2_RPMC_SUPPORT */
+	else {
+		rc = -ENOTSUP;
 	}
 
-	LOG_DBG("%s params val done", __func__);
+	if (rc != 0) {
+		LOG_ERR("TAF EC Port bad cmd");
+		goto ecp_acc_exit;
+	}
 
-	regs->SAF_ECP_INTEN = 0;
-	regs->SAF_ECP_STATUS = MCHP_SAF_ECP_STS_MASK;
-	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
+	LOG_DBG("%s ECP FlashAddr=0x%x", __func__, sys_read32(tb + XEC_TAFS_ECP_FLASH_ADDR_OFS));
+	LOG_DBG("%s ECP MemAddr=0x%x", __func__, sys_read32(tb + XEC_TAFS_EC_MBUF_ADDR_OFS));
+	LOG_DBG("%s ECP_CMD=0x%x", __func__, data->ecp_cmd);
 
-	regs->SAF_ECP_INTEN = BIT(MCHP_SAF_ECP_INTEN_DONE_POS);
+	sys_write32(0, tb + XEC_TAFS_ECP_IER_OFS);
+	sys_write32(XEC_TAFS_ECP_SR_MSK, tb + XEC_TAFS_ECP_SR_OFS);
+	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
 
-	regs->SAF_ECP_FLAR = pckt->flash_addr;
-	regs->SAF_ECP_BFAR = (uint32_t)&slave_mem[0];
+	/* NOTE: errors cause Done to be set along with error status bits */
+	sys_set_bit(tb + XEC_TAFS_ECP_IER_OFS, XEC_TAFS_BR_ECP_IER_DONE_EN_POS);
 
-	scmd = MCHP_SAF_ECP_CMD_PUT_FLASH_NP |
-		((uint32_t)cmd << MCHP_SAF_ECP_CMD_CTYPE_POS) |
-		((n << MCHP_SAF_ECP_CMD_LEN_POS) & MCHP_SAF_ECP_CMD_LEN_MASK);
+	sys_write32(data->ecp_cmd, tb + XEC_TAFS_ECP_CMD_OFS);
 
-	LOG_DBG("%s ECP_FLAR=0x%x", __func__, regs->SAF_ECP_FLAR);
-	LOG_DBG("%s ECP_BFAR=0x%x", __func__, regs->SAF_ECP_BFAR);
-	LOG_DBG("%s ECP_CMD=0x%x", __func__, scmd);
+	data->ecp_hwstatus = 0;
+	sys_set_bit(tb + XEC_TAFS_ECP_START_OFS, XEC_TAFS_ECP_START_EN_POS);
 
-	regs->SAF_ECP_CMD = scmd;
-	regs->SAF_ECP_START = MCHP_SAF_ECP_START;
-
-	rc = k_sem_take(&xdat->ecp_lock, K_MSEC(MAX_SAF_FLASH_TIMEOUT_MS));
+	rc = k_sem_take(&xdat->sync, K_MSEC(MAX_SAF_FLASH_TIMEOUT_MS));
 	if (rc == -EAGAIN) {
 		LOG_ERR("%s timeout", __func__);
-		return -ETIMEDOUT;
+		rc = -ETIMEDOUT;
+		goto ecp_acc_exit;
 	}
 
 	LOG_DBG("%s wake on semaphore", __func__);
 
-	n = regs->SAF_ECP_STATUS;
-	/* clear hardware status and check for errors */
-	if (n & err_mask) {
-		regs->SAF_ECP_STATUS = n;
+	/* ISR saved and cleared HW status */
+	if ((data->ecp_hwstatus & XEC_TAFS_ECP_SR_ERR_MSK) != 0) {
 		LOG_ERR("%s error %x", __func__, n);
 		return -EIO;
 	}
 
-	if (cmd == MCHP_SAF_ECP_CMD_READ) {
+	if (cmd == XEC_TAFS_ECP_CTYPE_READ) {
 		memcpy(pckt->buf, slave_mem, pckt->len);
 	}
+
+ecp_acc_exit:
+	k_mutex_unlock(&data->ecp_lock);
 
 	return rc;
 }
 
 /* Flash read using SAF EC Portal */
-static int saf_xec_flash_read(const struct device *dev,
-			      struct espi_saf_packet *pckt)
+static int taf_xec_v2_flash_read(const struct device *dev, struct espi_saf_packet *pckt)
 {
-	LOG_DBG("%s", __func__);
-	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_READ);
+	return taf_v2_ecp_access(dev, pckt, XEC_TAFS_ECP_CTYPE_READ);
 }
 
 /* Flash write using SAF EC Portal */
-static int saf_xec_flash_write(const struct device *dev,
-			       struct espi_saf_packet *pckt)
+static int taf_xec_v2_flash_write(const struct device *dev, struct espi_saf_packet *pckt)
 {
-	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_WRITE);
+	return taf_v2_ecp_access(dev, pckt, XEC_TAFS_ECP_CTYPE_WRITE);
 }
 
 /* Flash erase using SAF EC Portal */
-static int saf_xec_flash_erase(const struct device *dev,
-			       struct espi_saf_packet *pckt)
+static int taf_xec_v2_flash_erase(const struct device *dev, struct espi_saf_packet *pckt)
 {
-	return saf_ecp_access(dev, pckt, MCHP_SAF_ECP_CMD_ERASE);
+	return taf_v2_ecp_access(dev, pckt, XEC_TAFS_ECP_CTYPE_ERASE);
 }
 
-static int espi_saf_xec_manage_callback(const struct device *dev,
-					struct espi_callback *callback,
-					bool set)
+#ifdef CONFIG_ESPI_TAF_XEC_V2_RPMC_SUPPORT
+/* TODO will this work? struct espi_saf_packet may not have the correct members for
+ * RPMC OP1 operation.
+ */
+int mchp_xec_espi_taf_rpmc_op1(const struct device *dev, struct espi_saf_packet *pkt, uint8_t cs)
 {
-	struct espi_saf_xec_data *data = dev->data;
+	uint8_t cmd = XEC_TAFS_ECP_CTYPE_RPMC_OP1_CS0;
+
+	if (cs != 0) {
+		cmd = XEC_TAFS_ECP_CTYPE_RPMC_OP1_CS1;
+	}
+
+	return taf_v2_ecp_access(dev, pkt, cmd);
+}
+
+/* TODO will this work? struct espi_saf_packet may not have the correct members for
+ * RPMC OP1 operation.
+ */
+int mchp_xec_espi_taf_rpmc_op2(const struct device *dev, struct espi_saf_packet *pkt, uint8_t cs)
+{
+	uint8_t cmd = XEC_TAFS_ECP_CTYPE_RPMC_OP2_CS0;
+
+	if (cs != 0) {
+		cmd = XEC_TAFS_ECP_CTYPE_RPMC_OP2_CS1;
+	}
+
+	return taf_v2_ecp_access(dev, pkt, cmd);
+}
+#endif /* CONFIG_ESPI_TAF_XEC_V2_RPMC_SUPPORT */
+
+static int espi_taf_xec_v2_manage_callback(const struct device *dev,
+                                           struct espi_callback *callback, bool set)
+{
+	struct espi_taf_xec_data *const data = dev->data;
 
 	return espi_manage_callback(&data->callbacks, callback, set);
 }
 
-static int espi_saf_xec_activate(const struct device *dev)
+static int espi_taf_xec_v2_activate(const struct device *dev)
 {
-	if (dev == NULL) {
-		return -EINVAL;
-	}
+	const struct espi_taf_xec_config *const xcfg = dev->config;
+	mm_reg_t tb = xcfg->taf_base;
 
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct mchp_espi_saf * const regs = xcfg->saf_base;
-	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[1];
+	/* clear any eSPI bus monitor or portal status */
+	sys_write32(XEC_TAFS_BR_ECP_SR_MSK, tb + XEC_TAFS_BR_ECP_SR_OFS);
+	sys_write32(XEC_TAFS_BR_ESPI_ERR_MSK, tb + XEC_TAFS_BR_ESPI_ERR_SR_OFS);
 
-	regs->SAF_ESPI_MON_STATUS = MCHP_SAF_ESPI_MON_STS_IEN_MSK;
-	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
+	soc_ecia_girq_status_clear(xcfg->girq_bmon, xcfg->girq_bmon_pos);
 
-	regs->SAF_FL_CFG_MISC |= MCHP_SAF_FL_CFG_MISC_SAF_EN;
-	regs->SAF_ESPI_MON_INTEN = (BIT(MCHP_SAF_ESPI_MON_STS_IEN_TMOUT_POS) |
-				    BIT(MCHP_SAF_ESPI_MON_STS_IEN_OOR_POS) |
-				    BIT(MCHP_SAF_ESPI_MON_STS_IEN_AV_POS) |
-				    BIT(MCHP_SAF_ESPI_MON_STS_IEN_BND_4K_POS) |
-				    BIT(MCHP_SAF_ESPI_MON_STS_IEN_ERSZ_POS));
+	/* Activate TAF. Hardware locks QMSPI. QMSPI registers become inaccessible by the EC */
+	sys_set_bit(tb + XEC_TAFS_BR_CFG_MISC_OFS, XEC_TAFS_CR_CFG_MISC_TAF_MODE_EN_POS);
 
-	k_busy_wait(1000); /* TODO FIXME get estimate of time interval */
+	/* enable interrupts in bus monitor */
+	sys_write32(XEC_TAFS_BR_ESPI_ERR_MSK, tb + XEC_TAFS_BR_ESPI_BMON_IER_OFS);
+
+	/* delay for hardware to sort itself out */
+	k_busy_wait(TAF_ACTIVATION_DELAY_US);
 
 	return 0;
 }
 
-static void espi_saf_done_isr(const struct device *dev)
+static void espi_xec_taf_v2_done_isr(const struct device *dev)
 {
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct espi_saf_xec_data *data = dev->data;
-	struct mchp_espi_saf * const regs = xcfg->saf_base;
-	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[0];
-	uint32_t ecp_status = regs->SAF_ECP_STATUS;
-	struct espi_event evt = { .evt_type = ESPI_BUS_TAF_NOTIFICATION,
-				  .evt_details = BIT(0),
-				  .evt_data = ecp_status };
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	struct espi_taf_xec_data *const data = dev->data;
+	mm_reg_t tb  = xcfg->taf_base;
+	struct espi_event evt = { 0 };
+	uint32_t ecp_status = sys_read32(tb + XEC_TAFS_BR_ECP_SR_OFS);
 
-	regs->SAF_ECP_INTEN = 0u;
-	regs->SAF_ECP_STATUS = BIT(MCHP_SAF_ECP_STS_DONE_POS);
-	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
+	sys_write32(0, tb + XEC_TAFS_BR_ECP_IER_OFS);
+	sys_write32(ecp_status, tb + XEC_TAFS_BR_ECP_SR_OFS);
+	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
 
-	data->hwstatus = ecp_status;
+	data->ecp_hwstatus = ecp_status;
 
 	LOG_DBG("SAF Done ISR: status=0x%x", ecp_status);
 
-	espi_send_callbacks(&data->callbacks, dev, evt);
+	evt.evt_type = ESPI_BUS_TAF_NOTIFICATION;
+	evt.evt_details = ESPI_TAF_EVENT_EC0_REQUEST;
+	evt.evt_data = ecp_status;
 
-	k_sem_give(&data->ecp_lock);
+	/* Signal the driver API hardware is done */
+	k_sem_give(&data->sync);
+	/* relase the API lock in case the application want to start another transfer
+	 * in the callback.
+	 */
+	k_mutex_unlock(&data->ecp_lock);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
-static void espi_saf_err_isr(const struct device *dev)
+/* Interrupt handler for Host TAF requests completing with or without errors.
+ * The application may register a callback to see these events.
+ */
+static void espi_taf_xec_v2_busmon_isr(const struct device *dev)
 {
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct espi_saf_xec_data *data = dev->data;
-	struct mchp_espi_saf * const regs = xcfg->saf_base;
-	const struct espi_xec_irq_info *safirq = &xcfg->irq_info_list[1];
-	uint32_t mon_status = regs->SAF_ESPI_MON_STATUS;
-	struct espi_event evt = { .evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
-				  .evt_details = BIT(7),
-				  .evt_data = mon_status };
+	const struct espi_taf_xec_config *xcfg = dev->config;
+	struct espi_taf_xec_data *const data = dev->data;
+	mm_reg_t tb = xcfg->taf_base;
+	struct espi_event evt = { 0 };
+	uint32_t mon_status = sys_read32(tb + XEC_TAFS_BR_ESPI_ERR_SR_OFS);
 
-	regs->SAF_ESPI_MON_STATUS = mon_status;
-	mchp_xec_ecia_girq_src_clr(safirq->gid, safirq->gpos);
+	sys_write32(mon_status, tb + XEC_TAFS_BR_ESPI_ERR_SR_OFS);
+	soc_ecia_girq_status_clear(xcfg->girq_bmon, xcfg->girq_bmon_pos);
 
 	data->hwstatus = mon_status;
+
+	evt.evt_type = ESPI_BUS_TAF_NOTIFICATION;
+	evt.evt_details = ESPI_TAF_EVENT_HOST_REQUEST;
+	evt.evt_data = mon_status;
+
 	espi_send_callbacks(&data->callbacks, dev, evt);
 }
 
-static DEVICE_API(espi_saf, espi_saf_xec_driver_api) = {
+static DEVICE_API(espi_taf, espi_taf_xec_driver_api) = {
 	.config = espi_saf_xec_configuration,
 	.set_protection_regions = espi_saf_xec_set_pr,
-	.activate = espi_saf_xec_activate,
+	.activate = espi_taf_xec_v2_activate,
 	.get_channel_status = espi_saf_xec_channel_ready,
-	.flash_read = saf_xec_flash_read,
-	.flash_write = saf_xec_flash_write,
-	.flash_erase = saf_xec_flash_erase,
-	.manage_callback = espi_saf_xec_manage_callback,
+	.flash_read = taf_xec_v2_flash_read,
+	.flash_write = taf_xec_v2_flash_write,
+	.flash_erase = taf_xec_v2_flash_erase,
+	.manage_callback = espi_taf_xec_v2_manage_callback,
 };
 
-static int espi_saf_xec_init(const struct device *dev)
+static int espi_taf_xec_v2_init(const struct device *dev)
 {
-	const struct espi_saf_xec_config * const xcfg = dev->config;
-	struct espi_saf_xec_data * const data = dev->data;
-	struct espi_iom_regs * const espi_iom = xcfg->iom_base;
+	const struct espi_taf_xec_config * xcfg = dev->config;
+	struct espi_taf_xec_data * const data = dev->data;
+	struct xec_espi_cap_reg *cap_regs =
+		(struct xec_espi_cap_regs *)(xcfg->espi_ioc_base + MCHP_ESPI_IO_CAP_OFS);
+	uint8_t temp8 = 0;
 
 	/* ungate SAF clocks by disabling PCR sleep enable */
-	z_mchp_xec_pcr_periph_sleep(xcfg->pcr_idx, xcfg->pcr_pos, 0);
+	soc_xec_pcr_sleep_en_clear(xcfg->enc_pcr);
 
 	/* Configure the channels and its capabilities based on build config */
-	espi_iom->CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
-	espi_iom->CAPFC &= ~(MCHP_ESPI_FC_CAP_SHARE_MASK);
-	espi_iom->CAPFC |= MCHP_ESPI_FC_CAP_SHARE_MAF_SAF;
+	cap_regs->CAP0 |= MCHP_ESPI_GBL_CAP0_FC_SUPP;
+	temp8 = cap_regs->CAPFC & ~(MCHP_ESPI_FC_CAP_SHARE_MASK);
+	cap_regs->CAPFC = temp8 | MCHP_ESPI_FC_CAP_SHARE_CAF_TAF;
 
-	xcfg->irq_config_func();
+	if (xcfg->irq_config_func != NULL) {
+		xcfg->irq_config_func();
+		soc_ecia_girq_ctrl(xcfg->girq, xcfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
+		soc_ecia_girq_ctrl(xcfg->girq_bmon, xcfg->girq_bmon_pos, MCHP_MEC_ECIA_GIRQ_EN);
+	}
 
-	k_sem_init(&data->ecp_lock, 0, 1);
+	k_mutex_init(&data->ecp_lock);
+	k_sem_init(&data->sync, 0, 1);
 
 	return 0;
 }
 
+#define XEC_TAF_DT_GIRQ(inst, pos)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, pos))
+#define XEC_TAF_DT_GIRQ_POS(inst, pos) \
+	MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, pos))
 
-/* n = node-id, p = property, i = index */
-#define XEC_SAF_IRQ_INFO(n, p, i)					    \
-	{								    \
-		.gid = MCHP_XEC_ECIA_GIRQ(DT_PROP_BY_IDX(n, p, i)),	    \
-		.gpos = MCHP_XEC_ECIA_GIRQ_POS(DT_PROP_BY_IDX(n, p, i)),    \
-		.anid = MCHP_XEC_ECIA_NVIC_AGGR(DT_PROP_BY_IDX(n, p, i)),   \
-		.dnid = MCHP_XEC_ECIA_NVIC_DIRECT(DT_PROP_BY_IDX(n, p, i)), \
-	},
-
-#define ESPI_SAF_XEC_DEVICE(n)								\
-											\
-	static struct espi_saf_xec_data espisaf_xec_data_##n;				\
-											\
-	static void espi_saf_xec_connect_irqs_##n(void);				\
-											\
-	static const struct espi_xec_irq_info espi_saf_xec_irq_info_##n[] = {		\
-		DT_INST_FOREACH_PROP_ELEM(n, girqs, XEC_SAF_IRQ_INFO)			\
-	};										\
-											\
-	static const struct espi_saf_xec_config espisaf_xec_config_##n = {		\
-		.saf_base = (struct mchp_espi_saf * const)(				\
-					DT_INST_REG_ADDR_BY_IDX(n, 0)),			\
-		.qmspi_base = (struct qmspi_regs * const)(				\
-						DT_INST_REG_ADDR_BY_IDX(n, 1)),		\
-		.saf_comm_base = (struct mchp_espi_saf_comm * const)(			\
-							DT_INST_REG_ADDR_BY_IDX(n, 2)),	\
-		.iom_base = (struct espi_iom_regs * const)(				\
-					DT_REG_ADDR_BY_NAME(DT_INST_PARENT(n), io)),	\
+#define ESPI_TAF_XEC_DEVICE(n)								\
+	static uint32_t ecp_mem##n[MAX_SAF_ECP_BUFFER_SIZE]; \
+	static struct espi_taf_xec_data espi_taf_xec_drv_data##n; \
+	static void espi_taf_xec_connect_irqs##n(void)					\
+	{										\
+		/* TAF data transfer done */						\
+		IRQ_CONNECT(DT_INST_IRQ_BY_IDX(n, 0, irq),				\
+				DT_INST_IRQ_BY_IDX(n, 0, priority),			\
+				espi_xec_taf_v2_done_isr,				\
+				DEVICE_DT_INST_GET(n), 0);				\
+		irq_enable(DT_INST_IRQ_BY_IDX(n, 0, irq));				\
+		/* TAF Bus Monitor */							\
+		IRQ_CONNECT(DT_INST_IRQ_BY_IDX(n, 1, irq),				\
+				DT_INST_IRQ_BY_IDX(n, 1, priority),			\
+				espi_taf_xec_v2_busmon_isr,				\
+				DEVICE_DT_INST_GET(n), 0);				\
+		irq_enable(DT_INST_IRQ_BY_IDX(n, 1, irq));				\
+	}										\
+	static const struct espi_taf_xec_config espi_taf_xec_drv_cfg##n = {		\
+		.taf_base = (mm_reg_t)(DT_INST_REG_ADDR_BY_IDX(n, 0)),			\
+		.taf_comm_base = (mm_reg_t)(DT_INST_REG_ADDR_BY_IDX(n, 2)), \
+		.espi_ioc_base = (mm_reg_t)(DT_REG_ADDR_BY_NAME(DT_INST_PARENT(n), io)), \
+		.qmspi_base = (mm_reg_t)(DT_INST_REG_ADDR_BY_IDX(n, 1)),		\
+		.ecp_mem = ecp_mem##n, \
+		.irq_config_func = espi_taf_xec_connect_irqs##n, \
 		.poll_timeout = DT_INST_PROP_OR(n, poll_timeout,			\
 						MCHP_SAF_FLASH_POLL_TIMEOUT),		\
 		.consec_rd_timeout = DT_INST_PROP_OR(					\
@@ -1133,43 +1269,16 @@ static int espi_saf_xec_init(const struct device *dev)
 						    MCHP_SAF_FLASH_SUS_RSM_INTERVAL),	\
 		.poll_interval = DT_INST_PROP_OR(n, poll_interval,			\
 						 MCHP_SAF_FLASH_POLL_INTERVAL),		\
-		.pcr_idx = DT_INST_PROP_BY_IDX(n, pcrs, 0),				\
-		.pcr_pos = DT_INST_PROP_BY_IDX(n, pcrs, 1),				\
-		.irq_config_func = espi_saf_xec_connect_irqs_##n,			\
-		.irq_info_size = ARRAY_SIZE(espi_saf_xec_irq_info_##n),			\
-		.irq_info_list = espi_saf_xec_irq_info_##n,				\
+		.girq = XEC_TAF_DT_GIRQ(n, 0), \
+		.girq_pos = XEC_TAF_DT_GIRQ_POS(n, 0), \
+		.girq_bmon = XEC_TAF_DT_GIRQ(n, 1), \
+		.girq_bmon_pos = XEC_TAF_DT_GIRQ_POS(n, 1), \
+		.enc_pcr = DT_INST_PROP(n, pcr_scr), \
 	};										\
-	DEVICE_DT_INST_DEFINE(0, &espi_saf_xec_init, NULL,				\
-				  &espisaf_xec_data_##n,				\
-				  &espisaf_xec_config_##n, POST_KERNEL,			\
+	DEVICE_DT_INST_DEFINE(0, &espi_taf_xec_v2_init, NULL,				\
+				  &espi_taf_xec_drv_data##n,				\
+				  &espi_taf_xec_drv_cfg##n, POST_KERNEL, \
 				  CONFIG_ESPI_TAF_INIT_PRIORITY,			\
-				  &espi_saf_xec_driver_api);				\
-											\
-	static void espi_saf_xec_connect_irqs_##n(void)					\
-	{										\
-		uint8_t girq, gpos;							\
-											\
-		/* SAF Done */								\
-		IRQ_CONNECT(DT_INST_IRQ_BY_IDX(n, 0, irq),				\
-				DT_INST_IRQ_BY_IDX(n, 0, priority),			\
-				espi_saf_done_isr,					\
-				DEVICE_DT_INST_GET(n), 0);				\
-		irq_enable(DT_INST_IRQ_BY_IDX(n, 0, irq));				\
-											\
-		girq = MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(n, girqs, 0));		\
-		gpos = MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(n, girqs, 0));	\
-		mchp_xec_ecia_girq_src_en(girq, gpos);					\
-											\
-		/* SAF Error */								\
-		IRQ_CONNECT(DT_INST_IRQ_BY_IDX(n, 1, irq),				\
-				DT_INST_IRQ_BY_IDX(n, 1, priority),			\
-				espi_saf_err_isr,					\
-				DEVICE_DT_INST_GET(n), 0);				\
-		irq_enable(DT_INST_IRQ_BY_IDX(n, 1, irq));				\
-											\
-		girq = MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(n, girqs, 1));		\
-		gpos = MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(n, girqs, 1));	\
-		mchp_xec_ecia_girq_src_en(girq, gpos);					\
-	}
+				  &espi_taf_xec_v2_driver_api);
 
-DT_INST_FOREACH_STATUS_OKAY(ESPI_SAF_XEC_DEVICE)
+DT_INST_FOREACH_STATUS_OKAY(ESPI_TAF_XEC_DEVICE)
