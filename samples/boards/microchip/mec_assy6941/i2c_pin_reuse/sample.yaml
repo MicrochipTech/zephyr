@@ -1,0 +1,11 @@
+sample:
+  description: mec_assy6941 with MEC1753Q-LJ I2C pin reuse
+  name: mec_assy6941_mec1753_qlj I2C-pin-reuse
+tests:
+  sample.board.mec_assy6941.i2c_pin_reuse:
+    build_only: true
+    platform_allow: mec_assy6941/mec1753_qlj
+    tags: i2c
+    depends_on:
+      - gpio
+      - i2c

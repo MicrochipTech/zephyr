@@ -1,0 +1,84 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		i2c0 = &i2c_smb_0;
+	};
+
+	zephyr,user {
+		i2c-port0-gpios = <MCHP_GPIO_DECODE_003 GPIO_ACTIVE_HIGH>,
+				  <MCHP_GPIO_DECODE_004 GPIO_ACTIVE_HIGH>;
+
+/*		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>; */
+	};
+};
+
+/*
+&pinctrl {
+	i2c00_sda_gpio003_sleep: i2c00_sda_gpio003_sleep {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_GPIO)>;
+		low-power-enable;
+	};
+
+	i2c00_scl_gpio004_sleep: i2c00_scl_gpio004_sleep {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_GPIO)>;
+		low-power-enable;
+	};
+
+	i2c00_sda_gpio003_gpio: i2c00_sda_gpio003_gpio {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_GPIO)>;
+	};
+
+	i2c00_scl_gpio004_gpio: i2c00_scl_gpio004_gpio {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_GPIO)>;
+	};
+};
+*/
+
+/* I2C Port 0 */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v2";
+	status = "okay";
+
+	port-sel = <0>;
+
+	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_ACTIVE_HIGH>;
+	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_ACTIVE_HIGH>;
+
+	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+	pinctrl-names = "default";
+/*
+	pinctrl-1 = <&i2c00_sda_gpio003_sleep &i2c00_scl_gpio004_sleep>;
+	pinctrl-names = "default", "sleep";
+*/
+	pca9555_evb: pca9555@26 {
+		/* compatible = "nxp,pca9555"; */
+		reg = <0x26>;
+		/* ngpios = <16>; */
+		/* gpio-controller; */
+		/* #gpio-cells = <2>; */
+	};
+
+	ltc2489_evb: ltc2489@34 {
+		reg = <0x34>;
+		#io-channels-cells = <1>;
+	};
+};

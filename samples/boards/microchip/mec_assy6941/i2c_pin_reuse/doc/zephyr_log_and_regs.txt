@@ -1,0 +1,61 @@
+2026-03-13
+
+Zephyr LOG running assy_6941 EVB with MEC1753Q-LJ 
+Jumpers configured to connect I2C Port 0 to on-board PCA9555 and LTC ADC.
+
+*** Booting Zephyr OS build v4.3.0-7346-g5b37ebb85d66 ***
+[00:00:00.020,050] [0m<inf> app: I2C pin reuse test app: main entry[0m
+[00:00:00.020,080] [0m<inf> app: Read PCA9555 I2C device port 0 and port 1 registers[0m
+[00:00:00.020,629] [0m<inf> app: PCA9555 Input Port0 = 0xFC  Port1 = 0xFF[0m
+[00:00:00.020,660] [0m<inf> app: Re-use I2C Port 0 pins[0m
+[00:00:00.020,660] [0m<inf> app: 1. Disable I2C Controller 0[0m
+[00:00:00.020,660] [0m<inf> app: 2. Save I2C Controller 0 pin GPIO control register values[0m
+[00:00:00.020,660] [0m<inf> app: Saved GPIO 003 Control reg = 0x1011740[0m
+[00:00:00.020,660] [0m<inf> app: Saved GPIO 004 Control reg = 0x1011740[0m
+[00:00:00.020,660] [0m<inf> app: 3. Reconfigure I2C Port 0 pins as GPIO Output drive high and enable input[0m
+[00:00:00.020,690] [0m<inf> app: Reconfig of GPIO003 as GPIO = 0x1010640[0m
+[00:00:00.020,690] [0m<inf> app: Reconfig of GPIO004 as GPIO = 0x1010640[0m
+[00:00:00.020,690] [0m<inf> app: 4. Use the pins as GPIOs[0m
+[00:00:00.020,690] [0m<inf> app: 5. Drive a square wave on SDA[0m
+[00:00:00.020,904] [0m<inf> app: 6. Before restoring pins for I2C, generate an I2C STOP to ensure any I2C devices are OK[0m
+[00:00:00.020,935] [0m<inf> app: 7. Restore pins GPIO Control registers back to I2C driver PINCTRL settings[0m
+[00:00:00.020,965] [0m<inf> app: 8. Read PCA9555 I2C device port 0 and port 1 registers[0m
+[00:00:00.021,545] [0m<inf> app: PCA9555 Input Port0 = 0xFC  Port1 = 0xFF[0m
+[00:00:00.021,545] [0m<inf> app: Application End[0m
+
+
+Registers after app has finished.
+
+(gdb) show_i2c 0
+I2C Controller 0
+Status:    0x40004000:	0x81
+OwnAddr:   0x40004004:	0x00000000
+HCMD:      0x4000400c:	0x00000000
+TCMD:      0x40004010:	0x00000000
+PEC:       0x40004014:	0x00000000
+RPSHT:     0x40004018:	0x0000004d
+EXTLEN:    0x4000401c:	0x00000000
+CMPL:      0x40004020:	0x20000000
+IdleScale: 0x40004024:	0x01fc01ed
+Config:    0x40004028:	0x00004500
+BusClock:  0x4000402c:	0x00004f4f
+BBCTRL:    0x40004038:	0x00000060
+DataTim:   0x40004040:	0x0c4d5006
+TimeoutSc: 0x40004044:	0x4b9cc2c7
+FSM:       0x40004058:	0x10000000
+FSM-NL:    0x4000405c:	0x00000000
+WakeSts:   0x40004060:	0x00000001
+WakeEn:    0x40004064:	0x00000000
+TargetAddr: 0x4000406c:	0x000000fc
+Promisc Interrupt: 0x40004070:	0x00000000
+Promisc Interrupt Enable: 0x40004074:	0x00000000
+Promisc Control: 0x40004078:	0x00000000
+SHAD_DATA: 0x4000407c:	0x000000ff
+
+(gdb) show_gpio 003
+GPIO 0003 CTRL  @ 0x4008100c:	0x01011740
+GPIO 0003 CTRL2 @ 0x4008150c:	0x00000010
+(gdb) show_gpio 004
+GPIO 0004 CTRL  @ 0x40081010:	0x01011740
+GPIO 0004 CTRL2 @ 0x40081510:	0x00000010
+
