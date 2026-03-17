@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _SOC_MCHP_PCR_H_
-#define _SOC_MCHP_PCR_H_
+#ifndef _SOC_MICROCHIP_MEC_COMMON_SOC_PCR_H_
+#define _SOC_MICROCHIP_MEC_COMMON_SOC_PCR_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,7 +39,7 @@ extern "C" {
 #define MCHP_XEC_CLK_CPU_CLK_DIV_48 48u
 
 /* slow clock divider */
-#define MCHP_XEC_CLK_SLOW_MASK         GENMASK(8, 0)
+#define MCHP_XEC_CLK_SLOW_MASK         GENMASK(9, 0)
 #define MCHP_XEC_CLK_SLOW_CLK_DIV_100K 480u
 
 #define MCHP_XEC_CLK_SRC_POS  24
@@ -49,6 +49,20 @@ extern "C" {
 
 #define MCHP_XEC_CLK_SRC_SET(v, c)                                                                 \
 	(((v) & ~MCHP_XEC_CLK_SRC_MASK) | (((c) << MCHP_XEC_CLK_SRC_POS) & MCHP_XEC_CLK_SRC_MASK))
+
+enum xec_pll_clk32k_src {
+	XEC_PLL_CLK32K_SRC_NONE = 0,
+	XEC_PLL_CLK32K_SRC_SI,
+	XEC_PLL_CLK32K_SRC_XTAL,
+	XEC_PLL_CLK32K_SRC_PIN,
+};
+
+enum xec_periph_clk32k_src {
+	XEC_PERIPH_CLK32K_SRC_SI_SI,
+	XEC_PERIPH_CLK32K_SRC_XTAL_XTAL,
+	XEC_PERIPH_CLK32K_SRC_PIN_SI,
+	XEC_PERIPH_CLK32K_SRC_PIN_XTAL,
+};
 
 /*
  * b[31:24] = clock source
@@ -94,8 +108,11 @@ static ALWAYS_INLINE int soc_xec_pcr_clk_req(uint8_t enc_pcr_scr)
 
 void soc_xec_pcr_reset_en(uint16_t enc_pcr_scr);
 
+int soc_xec_pcr_cpu_clk_div_set(uint8_t cpu_clk_div);
+int soc_xec_pcr_cpu_clk_div_get(uint8_t *cpu_clk_div);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _SOC_MCHP_PCR_H_ */
+#endif /* _SOC_MICROCHIP_MEC_COMMON_SOC_PCR_H_ */
