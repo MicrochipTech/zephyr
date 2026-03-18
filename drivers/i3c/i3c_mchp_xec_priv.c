@@ -1398,10 +1398,10 @@ void XEC_I3C_Soft_Reset(const struct device *host_dev)
 	const struct xec_i3c_config *drvcfg = host_dev->config;
 	mm_reg_t hrb = drvcfg->regbase;
 
-	sys_set_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS);
+	sys_set_bit(hrb + XEC_I3C_RST_CR_OFS, XEC_I3C_RST_CR_SRST_POS);
 
 	/* wait for hardware to clear the bit */
-	while (sys_test_bit(hrb + XEC_I3C_HC_RST_CR_OFS, XEC_I3C_HC_RST_CR_SOFT_POS) != 0) {
+	while (sys_test_bit(hrb + XEC_I3C_RST_CR_SRST_POS, XEC_I3C_RST_CR_SRST_POS) != 0) {
 	}
 }
 

@@ -495,6 +495,8 @@ static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payloa
 				pending_xfer_ctxt.node[0].read = true;
 			}
 
+			target->num_xfer = target->data_len;
+
 			XEC_I3C_DO_CCC(dev, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
 
 			if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
@@ -506,6 +508,9 @@ static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payloa
 				ret = -EIO;
 				break;
 			}
+
+			target->num_xfer = pending_xfer_ctxt.node[0].ret_data_len;
+
 		} /* end for */
 	}
 
@@ -1151,7 +1156,6 @@ static void _drv_tgt_rx_handler(const struct device *dev)
 	struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
 	const struct i3c_target_callbacks *target_cbks;
 	struct i3c_tgt_pvt_receive_node *tgt_rx_node;
-	uint16_t i;
 	uint8_t idx = 0;
 
 	target_cbks = xec_data->target_config->callbacks;
@@ -1168,8 +1172,15 @@ static void _drv_tgt_rx_handler(const struct device *dev)
 		if ((TGT_RX_NODE_ISR_UPDATED == tgt_rx_node->state) ||
 		    (TGT_RX_NODE_ISR_UPDATED_THR == tgt_rx_node->state)) {
 			if (!tgt_rx_node->error_status) {
+
+#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
 				/* Inform the application of the received data */
-				for (i = 0; i < tgt_rx_node->data_len; i++) {
+				target_cbks->buf_write_received_cb(xec_data->target_config,
+								   &tgt_rx_node->data_buf[0],
+								   tgt_rx_node->data_len);
+#else
+				/* Inform the application of the received data */
+				for (int i = 0; i < tgt_rx_node->data_len; i++) {
 					/* Note we are using only the write_received_cb to send all
 					 * the data byte by byte as expected by the Zephyr Model.
 					 * write_requested_cb which is used when write is initiated
@@ -1179,6 +1190,7 @@ static void _drv_tgt_rx_handler(const struct device *dev)
 					target_cbks->write_received_cb(xec_data->target_config,
 								       tgt_rx_node->data_buf[i]);
 				}
+#endif
 				if (TGT_RX_NODE_ISR_UPDATED == tgt_rx_node->state) {
 					/* Inform the end of transaction */
 					target_cbks->stop_cb(xec_data->target_config);
@@ -1195,7 +1207,9 @@ static void _drv_tgt_rx_handler(const struct device *dev)
 static void _drv_tgt_tx_done_handler(const struct device *dev)
 {
 	struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
+	const struct i3c_target_callbacks *target_cbks;
 
+	target_cbks = xec_data->target_config->callbacks;
 	xec_data->tgt_pvt_tx_sts = 0x0;
 	xec_data->tgt_pvt_tx_rem_data_len = 0x0;
 
@@ -1204,7 +1218,11 @@ static void _drv_tgt_tx_done_handler(const struct device *dev)
 	 */
 	xec_data->tgt_tx_queued = false;
 
-	/* Keeping this function for possible enhancements later */
+#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
+	target_cbks->buf_read_requested_cb(xec_data->target_config, NULL, NULL, NULL);
+#else
+	target_cbks->read_processed_cb(xec_data->target_config, NULL);
+#endif
 }
 
 static bool _drv_i3c_ibi_isr(mm_reg_t regbase, struct xec_i3c_data *data)
