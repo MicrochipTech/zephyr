@@ -20,6 +20,8 @@
 #include "espi_utils.h"
 #include "espi_mchp_xec_v2.h"
 
+LOG_MODULE_REGISTER(espi_host, CONFIG_ESPI_LOG_LEVEL);
+
 #define CONNECT_IRQ_MBOX0    NULL
 #define CONNECT_IRQ_KBC0     NULL
 #define CONNECT_IRQ_ACPI_EC0 NULL
@@ -856,7 +858,7 @@ static const struct xec_acpi_ec_config xec_acpi_ec1_cfg = {
 	.obe_ecia_info = DT_PROP_BY_IDX(XEC_AEC1_NODE, girqs, 1),
 	.host_mem_addr = DT_PROP_OR(XEC_AEC1_NODE, host_mem, UINT32_MAX),
 	.host_io_addr = DT_PROP_OR(XEC_AEC1_NODE, host_io, UINT16_MAX),
-	.obf_sirq_slot_val = MCHP_ESPI_IO_SIRQ_DIS,
+	.obf_sirq_slot_val = 0x05,
 };
 
 static void acpi_ec1_ibf_isr(const struct device *dev)
@@ -944,14 +946,15 @@ static int init_acpi_ec1(const struct device *dev)
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 	bar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(CONFIG_ESPI_PERIPHERAL_HOST_CMD_DATA_PORT_NUM);
 #elif CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT
-	bar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM);
-#else
+// 	bar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT_PORT_NUM);
+// #else
 	if (xec_acpi_ec1_cfg.host_mem_addr != UINT32_MAX) {
+		LOG_WRN("xec_acpi_ec1_cfg.host_mem_addr = 0x%x", xec_acpi_ec1_cfg.host_mem_addr);
 		xec_espi_mbar_host_set(devcfg->mc_base_addr, MEMB_ACPI_EC1,
 				       xec_acpi_ec1_cfg.host_mem_addr, true);
 	}
 
-	if (xec_acpi_ec2_cfg.host_io_addr != UINT16_MAX) {
+	if (xec_acpi_ec1_cfg.host_io_addr != UINT16_MAX) {
 		bar_val = MCHP_ESPI_IO_BAR_HOST_ADDR_SET((uint32_t)xec_acpi_ec1_cfg.host_io_addr);
 	}
 #endif
@@ -1083,7 +1086,7 @@ static const struct xec_acpi_ec_config xec_acpi_ec2_cfg = {
 	.obe_ecia_info = DT_PROP_BY_IDX(XEC_AEC2_NODE, girqs, 1),
 	.host_mem_addr = DT_PROP_OR(XEC_AEC2_NODE, host_mem, UINT32_MAX),
 	.host_io_addr = DT_PROP_OR(XEC_AEC2_NODE, host_io, UINT16_MAX),
-	.obf_sirq_slot_val = MCHP_ESPI_IO_SIRQ_DIS,
+	.obf_sirq_slot_val = 0x0A,
 };
 
 static void acpi_ec2_ibf_isr(const struct device *dev)
@@ -1627,7 +1630,10 @@ typedef int (*host_dev_init)(const struct device *dev);
 static const host_dev_init hd_init_tbl[] = {
 	INIT_MBOX0,    INIT_KBC0,     INIT_ACPI_EC0, INIT_ACPI_EC1, INIT_ACPI_EC2,
 	INIT_ACPI_EC3, INIT_ACPI_EC4, INIT_ACPI_PM1, INIT_EMI0,     INIT_EMI1,
-	INIT_EMI2,     INIT_RTC0,     INIT_P80BD0,   INIT_UART,
+	INIT_EMI2,     INIT_RTC0,     INIT_P80BD0,   
+#ifdef CONFIG_ESPI_PERIPHERAL_UART	
+	INIT_UART,
+#endif
 };
 
 int xec_host_dev_connect_irqs(const struct device *dev)
