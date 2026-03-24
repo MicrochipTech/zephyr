@@ -3,9 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+
 #define DT_DRV_COMPAT microchip_xec_i3c
 
 #include <soc.h>
+#include <zephyr/arch/cpu.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
@@ -17,2058 +19,3276 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(i3c_mchp_xec, CONFIG_I3C_LOG_LEVEL);
 
-#include "i3c_mchp_xec_priv.h"
+#include "i3c_mchp_xec.h"
 
-#define DRV_RESP_WAIT_MS 1000U
+#define MEC_DIV_ROUND_UP(n, d) (((uint32_t)(n) + ((uint32_t)(d) / 2)) / (uint32_t)(d))
 
-#define DRV_EVENT_BIT_HANDLE_IBI         (0x01U << 1U)
-#define DRV_EVENT_BIT_HANDLE_TGT_RX      (0x01U << 2U)
-#define DRV_EVENT_BIT_HANDLE_TGT_TX_DONE (0x01U << 3U)
-
-enum target_states {
-	TGT_STATE_NOT_PRESENT,
-	TGT_STATE_ADDR_ASSIGNED,
-	TGT_STATE_NEEDS_DAA,
-	TGT_STATE_DAA_IN_PROGRESS,
-	TGT_STATE_MAX
+/* DAA request entry — stack-local in i3c_xec_do_daa */
+struct daa_entry {
+    struct i3c_device_desc *desc;   /* NULL for hot-join devices */
+    struct xec_i3c_dev_priv *priv;
+    uint8_t intended_addr;
+    uint8_t dat_idx;
 };
 
-enum ibi_node_states {
-	IBI_NODE_STATE_FREE,
-	IBI_NODE_STATE_IN_USE,
-	IBI_NODE_ISR_UPDATED,
-};
+/* --- Section 1: Low-level register access --- */
 
-enum tgt_pvt_receive_node_states {
-	TGT_RX_NODE_STATE_FREE,
-	TGT_RX_NODE_STATE_IN_USE,
-	TGT_RX_NODE_STATE_IN_USE_DMA,
-	TGT_RX_NODE_ISR_UPDATED,
-	TGT_RX_NODE_ISR_UPDATED_THR,
-};
+__maybe_unused static uint32_t xec_i3c_intr_sts_get(mm_reg_t regbase)
+{
+    return sys_read32(regbase + XEC_I3C_INTR_SR_OFS);
+}
 
-enum pending_xfer_type {
-	XFER_TYPE_INVALID,
-	XFER_TYPE_CCC,
-	XFER_TYPE_ENTDAA,
-	XFER_TYPE_PVT_RW,
-	XFER_TYPE_TGT_RAISE_IBI,
-	XFER_TYPE_TGT_RAISE_IBI_MR,
-	XFER_TYPE_TGT_PVT_RD,
-};
+static void xec_i3c_intr_sts_clear(mm_reg_t regbase, uint32_t mask)
+{
+    sys_write32(mask, regbase + XEC_I3C_INTR_SR_OFS);
+}
 
-#define THRESHOLD_SIZE 32
+static void xec_i3c_intr_sts_enable(mm_reg_t regbase, uint32_t mask)
+{
+    sys_write32(mask, regbase + XEC_I3C_INTR_EN_OFS);
+}
 
-/* Pending Transfer Context data */
-struct i3c_pending_xfer pending_xfer_ctxt;
+static void xec_i3c_intr_IBI_enable(mm_reg_t regbase)
+{
+    sys_set_bit(regbase + XEC_I3C_INTR_EN_OFS, XEC_I3C_ISR_IBI_THLD_POS);
+    sys_set_bit(regbase + XEC_I3C_INTR_SIG_EN_OFS, XEC_I3C_ISR_IBI_THLD_POS);
+}
 
-/* Tier1 change: round2: Static inline helper functions to avoid code duplication for role checks */
-/* Check if controller is in master mode */
+static void xec_i3c_intr_IBI_disable(mm_reg_t regbase)
+{
+    sys_clear_bit(regbase + XEC_I3C_INTR_EN_OFS, XEC_I3C_ISR_IBI_THLD_POS);
+    sys_clear_bit(regbase + XEC_I3C_INTR_SIG_EN_OFS, XEC_I3C_ISR_IBI_THLD_POS);
+}
+
+static void xec_i3c_intr_sgnl_enable(mm_reg_t regbase, uint32_t mask)
+{
+    sys_write32(mask, regbase + XEC_I3C_INTR_SIG_EN_OFS);
+}
+
+static void xec_i3c_resp_queue_threshold_set(mm_reg_t regbase, uint8_t threshold)
+{
+    if (threshold < XEC_I3C_RESPONSE_BUF_DEPTH) {
+        soc_mmcr_mask_set(regbase + XEC_I3C_QT_CR_OFS,
+                  XEC_I3C_QT_CR_RBT_SET((uint32_t)threshold),
+                  XEC_I3C_QT_CR_RBT_MSK);
+    }
+}
+
+static void xec_i3c_cmd_queue_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_QT_CR_OFS,
+              XEC_I3C_QT_CR_CEBT_SET(val), XEC_I3C_QT_CR_CEBT_MSK);
+}
+
+static void xec_i3c_ibi_data_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_QT_CR_OFS,
+              XEC_I3C_QT_CR_IDT_SET(val), XEC_I3C_QT_CR_IDT_MSK);
+}
+
+static void xec_i3c_ibi_status_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_QT_CR_OFS,
+              XEC_I3C_QT_CR_IST_SET(val), XEC_I3C_QT_CR_IST_MSK);
+}
+
+static void xec_i3c_tx_buf_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_DBT_CR_OFS,
+              XEC_I3C_DBT_CR_TXEB_SET(val), XEC_I3C_DBT_CR_TXEB_MSK);
+}
+
+static void xec_i3c_rx_buf_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_DBT_CR_OFS,
+              XEC_I3C_DBT_CR_RXB_SET(val), XEC_I3C_DBT_CR_RXB_MSK);
+}
+
+static void xec_i3c_tx_start_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_DBT_CR_OFS,
+              XEC_I3C_DBT_CR_TXST_SET(val), XEC_I3C_DBT_CR_TXST_MSK);
+}
+
+static void xec_i3c_rx_start_threshold_set(mm_reg_t regbase, uint32_t val)
+{
+    soc_mmcr_mask_set(regbase + XEC_I3C_DBT_CR_OFS,
+              XEC_I3C_DBT_CR_RXST_SET(val), XEC_I3C_DBT_CR_RXST_MSK);
+}
+
+static void xec_i3c_notify_sir_reject(mm_reg_t regbase, bool opt)
+{
+    if (opt) {
+        sys_set_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_TIRC_POS);
+    } else {
+        sys_clear_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_TIRC_POS);
+    }
+}
+
+static void xec_i3c_notify_mr_reject(mm_reg_t regbase, bool opt)
+{
+    if (opt) {
+        sys_set_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_HRC_POS);
+    } else {
+        sys_clear_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_HRC_POS);
+    }
+}
+
+static void xec_i3c_notify_hj_reject(mm_reg_t regbase, bool opt)
+{
+    if (opt) {
+        sys_set_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_HJ_POS);
+    } else {
+        sys_clear_bit(regbase + XEC_I3C_IBI_QUE_CR_OFS, XEC_I3C_IBI_QUE_CR_NR_HJ_POS);
+    }
+}
+
+static void xec_i3c_dynamic_addr_set(mm_reg_t regbase, uint8_t address)
+{
+    uint32_t mask = XEC_I3C_DEV_ADDR_DYA_MSK | BIT(XEC_I2C_DEV_ADDR_DYAV_POS);
+    uint32_t rval = XEC_I3C_DEV_ADDR_DYA_SET((uint32_t)address) |
+            BIT(XEC_I2C_DEV_ADDR_DYAV_POS);
+
+    soc_mmcr_mask_set(regbase + XEC_I3C_DEV_ADDR_OFS, rval, mask);
+}
+
+static void xec_i3c_static_addr_set(mm_reg_t regbase, uint8_t address)
+{
+    uint32_t mask = XEC_I3C_DEV_ADDR_STA_MSK | BIT(XEC_I3C_DEV_ADDR_STAV_POS);
+    uint32_t rval = XEC_I3C_DEV_ADDR_STA_SET((uint32_t)address) |
+            BIT(XEC_I3C_DEV_ADDR_STAV_POS);
+
+    soc_mmcr_mask_set(regbase + XEC_I3C_DEV_ADDR_OFS, rval, mask);
+}
+
+static void xec_i3c_operation_mode_set(mm_reg_t regbase, uint8_t mode)
+{
+    uint32_t val = (mode != XEC_I3C_OP_MODE_CTL) ? XEC_I3C_DEV_EXT_CR_OPM_SC
+                              : XEC_I3C_DEV_EXT_CR_OPM_HC;
+
+    soc_mmcr_mask_set(regbase + XEC_I3C_DEV_EXT_CR_OFS,
+              XEC_I3C_DEV_EXT_CR_OPM_SET(val), XEC_I3C_DEV_EXT_CR_OPM_MSK);
+}
+
+static void xec_i3c_enable(mm_reg_t regbase, uint8_t mode, bool enable_dma)
+{
+    uint32_t mask = BIT(XEC_I3C_DEV_CR_EN_POS) | BIT(XEC_I3C_DEV_CR_IBAI_POS) |
+            BIT(XEC_I3C_DEV_CR_DMA_EN_POS);
+    uint32_t rval = sys_read32(regbase + XEC_I3C_DEV_CR_OFS);
+
+    rval |= BIT(XEC_I3C_DEV_CR_EN_POS);
+    if (XEC_I3C_DEV_EXT_CR_OPM_HC == mode) {
+        rval |= BIT(XEC_I3C_DEV_CR_IBAI_POS);
+    }
+    if (enable_dma) {
+        rval |= BIT(XEC_I3C_DEV_CR_DMA_EN_POS);
+    }
+    soc_mmcr_mask_set(regbase + XEC_I3C_DEV_CR_OFS, rval, mask);
+}
+
+static void xec_i3c_disable(mm_reg_t regbase)
+{
+    sys_clear_bit(regbase + XEC_I3C_DEV_CR_OFS, XEC_I3C_DEV_CR_EN_POS);
+}
+
+static void xec_i3c_resume(mm_reg_t regbase)
+{
+    sys_set_bit(regbase + XEC_I3C_DEV_CR_OFS, XEC_I3C_DEV_CR_RESUME_POS);
+}
+
+static void xec_i3c_xfer_err_sts_clr(mm_reg_t regbase)
+{
+    if (sys_test_bit(regbase + XEC_I3C_INTR_SR_OFS, XEC_I3C_ISR_XERR_POS) != 0) {
+        sys_write32(BIT(XEC_I3C_ISR_XERR_POS), regbase + XEC_I3C_INTR_SR_OFS);
+    }
+}
+
+static void xec_i3c_tgt_hot_join_disable(mm_reg_t regbase)
+{
+    uint32_t targ_ev_status = sys_read32(regbase + XEC_I3C_SC_TEVT_SR_OFS);
+
+    targ_ev_status &= (uint32_t)~(BIT(XEC_I3C_SC_TEVT_SR_HJ_EN_POS) |
+                       BIT(XEC_I3C_SC_TEVT_SR_MRL_UPD_POS) |
+                       BIT(XEC_I3C_SC_TEVT_SR_MWL_UPD_POS));
+    sys_write32(targ_ev_status, regbase + XEC_I3C_SC_TEVT_SR_OFS);
+}
+
+static void xec_i3c_hot_join_enable(mm_reg_t regbase)
+{
+    sys_clear_bit(regbase + XEC_I3C_DEV_CR_OFS, XEC_I3C_DEV_CR_HJND_POS);
+}
+
+static void xec_i3c_hot_join_disable(mm_reg_t regbase)
+{
+    sys_set_bit(regbase + XEC_I3C_DEV_CR_OFS, XEC_I3C_DEV_CR_HJND_POS);
+}
+
+static void xec_i3c_ibi_ctrl_reject_all(mm_reg_t regbase)
+{
+    xec_i3c_notify_sir_reject(regbase, true);
+    xec_i3c_notify_mr_reject(regbase, true);
+}
+
+/* --- Section 2: Bus timing --- */
+
+static void xec_i3c_bus_free_timing_set(mm_reg_t srb, uint32_t core_clk_freq_ns)
+{
+    uint32_t clk_period_ps = core_clk_freq_ns * 1000U;
+    uint32_t cnt = (XEC_I3C_BUS_TCAS_PS + clk_period_ps - 1U) / clk_period_ps;
+
+    cnt = CLAMP(cnt, XEC_I3C_SCL_TIMING_COUNT_MIN, XEC_I3C_SCL_TIMING_COUNT_MAX);
+    soc_mmcr_mask_set(srb + XEC_I3C_BUS_FREE_TM_OFS,
+              XEC_I3C_BUS_FREE_TM_FT_SET(cnt), XEC_I3C_BUS_FREE_TM_FT_MSK);
+}
+
+static void xec_i3c_bus_available_timing_set(mm_reg_t srb, uint32_t core_clk_freq_ns)
+{
+    uint32_t cnt = (XEC_I3C_TGT_BUS_AVAIL_COND_NS + core_clk_freq_ns - 1U) /
+               core_clk_freq_ns;
+
+    cnt = CLAMP(cnt, XEC_I3C_SCL_TIMING_COUNT_MIN, XEC_I3C_SCL_TIMING_COUNT_MAX);
+    soc_mmcr_mask_set(srb + XEC_I3C_BUS_FREE_TM_OFS,
+              XEC_I3C_BUS_FREE_TM_AV_SET(cnt), XEC_I3C_BUS_FREE_TM_AV_MSK);
+}
+
+static void xec_i3c_bus_idle_timing_set(mm_reg_t srb, uint32_t core_clk_freq_ns)
+{
+    uint32_t cnt = (XEC_I3C_TGT_BUS_IDLE_COND_NS + core_clk_freq_ns - 1U) /
+               core_clk_freq_ns;
+
+    cnt = CLAMP(cnt, XEC_I3C_SCL_TIMING_COUNT_MIN, XEC_I3C_SCL_TIMING_COUNT_MAX);
+    soc_mmcr_mask_set(srb + XEC_I3C_BUS_IDLE_TM_OFS, cnt, GENMASK(15, 0));
+}
+
+static void xec_i3c_sda_hld_switch_delay_timing_set(mm_reg_t srb, uint8_t sda_od_pp_switch_dly,
+                             uint8_t sda_pp_od_switch_dly,
+                             uint8_t sda_tx_hold)
+{
+    uint32_t msk = XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_MSK |
+               XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_MSK |
+               XEC_I3C_SDA_HMSD_TM_SDA_TXH_MSK;
+    uint32_t val = XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_SET((uint32_t)sda_od_pp_switch_dly) |
+               XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_SET((uint32_t)sda_pp_od_switch_dly) |
+               XEC_I3C_SDA_HMSD_TM_SDA_TXH_SET((uint32_t)sda_tx_hold);
+
+    soc_mmcr_mask_set(srb + XEC_I3C_SDA_HMSD_TM_OFS, val, msk);
+}
+
+static void xec_i3c_sda_hld_timing_set(mm_reg_t rb, uint8_t sda_tx_hold)
+{
+    soc_mmcr_mask_set(rb + XEC_I3C_SDA_HMSD_TM_OFS,
+              XEC_I3C_SDA_HMSD_TM_SDA_TXH_SET((uint32_t)sda_tx_hold),
+              XEC_I3C_SDA_HMSD_TM_SDA_TXH_MSK);
+}
+
+static void xec_i3c_read_term_bit_low_count_set(mm_reg_t rb, uint8_t read_term_low_count)
+{
+    soc_mmcr_mask_set(rb + XEC_I3C_SCL_TBLC_OFS,
+              XEC_I3C_SCL_TBLC_ETLC_SET((uint32_t)read_term_low_count),
+              XEC_I3C_SCL_TBLC_ETLC_MSK);
+}
+
+static void xec_i3c_scl_low_mst_tout_set(mm_reg_t rb, uint32_t tout_val)
+{
+    sys_write32(tout_val, rb + XEC_I3C_SCL_LMST_TM_OFS);
+}
+
+static void xec_i3c_push_pull_timing_set(mm_reg_t hrb, uint32_t core_clk_freq_ns,
+                      uint32_t i3c_freq_ns)
+{
+    uint32_t low_count, high_count, sdr_elcnt, val, msk;
+
+    high_count = (XEC_I3C_PUSH_PULL_SCL_MIN_HIGH_PER_NS + core_clk_freq_ns - 1U) /
+             core_clk_freq_ns;
+    if (high_count > 0U) {
+        high_count -= 1U;
+    }
+    high_count = CLAMP(high_count, XEC_I3C_SCL_TIMING_COUNT_MIN,
+               XEC_I3C_SCL_TIMING_COUNT_MAX);
+
+    low_count = (i3c_freq_ns + core_clk_freq_ns - 1U) / core_clk_freq_ns;
+    low_count = (low_count > high_count) ? (low_count - high_count)
+                         : XEC_I3C_SCL_TIMING_COUNT_MIN;
+    low_count = CLAMP(low_count, XEC_I3C_SCL_TIMING_COUNT_MIN,
+              XEC_I3C_SCL_TIMING_COUNT_MAX);
+
+    msk = XEC_I3C_SCL_PP_TM_LCNT_MSK | XEC_I3C_SCL_PP_TM_HCNT_MSK;
+    val = XEC_I3C_SCL_PP_TM_LCNT_SET(low_count) | XEC_I3C_SCL_PP_TM_HCNT_SET(high_count);
+    soc_mmcr_mask_set(hrb + XEC_I3C_SCL_PP_TM_OFS, val, msk);
+
+    /* Recalculate bus free timing if no I2C present */
+    if (sys_test_bit(hrb + XEC_I3C_DEV_CR_OFS, XEC_I3C_DEV_CR_I2C_PRES_POS) == 0) {
+        uint32_t clk_period_ps = core_clk_freq_ns * 1000U;
+        uint32_t free_count = (XEC_I3C_BUS_TCAS_PS + clk_period_ps - 1U) / clk_period_ps;
+
+        free_count = CLAMP(free_count, XEC_I3C_SCL_TIMING_COUNT_MIN,
+                   XEC_I3C_SCL_TIMING_COUNT_MAX);
+        soc_mmcr_mask_set(hrb + XEC_I3C_BUS_FREE_TM_OFS,
+                  XEC_I3C_BUS_FREE_TM_FT_SET(free_count),
+                  XEC_I3C_BUS_FREE_TM_FT_MSK);
+    }
+
+    /* Program SDR extended low count timing for SDR1-SDR4 */
+    sdr_elcnt = (XEC_I3C_BUS_SDR1_SCL_PER_NS + core_clk_freq_ns - 1U) /
+            core_clk_freq_ns - high_count;
+    val = XEC_I3C_SCL_ELC_TM_CNT1_SET(sdr_elcnt);
+    sdr_elcnt = (XEC_I3C_BUS_SDR2_SCL_PER_NS + core_clk_freq_ns - 1U) /
+            core_clk_freq_ns - high_count;
+    val |= XEC_I3C_SCL_ELC_TM_CNT2_SET(sdr_elcnt);
+    sdr_elcnt = (XEC_I3C_BUS_SDR3_SCL_PER_NS + core_clk_freq_ns - 1U) /
+            core_clk_freq_ns - high_count;
+    val |= XEC_I3C_SCL_ELC_TM_CNT3_SET(sdr_elcnt);
+    sdr_elcnt = (XEC_I3C_BUS_SDR4_SCL_PER_NS + core_clk_freq_ns - 1U) /
+            core_clk_freq_ns - high_count;
+    val |= XEC_I3C_SCL_ELC_TM_CNT4_SET(sdr_elcnt);
+
+    msk = XEC_I3C_SCL_ELC_TM_CNT1_MSK | XEC_I3C_SCL_ELC_TM_CNT2_MSK |
+          XEC_I3C_SCL_ELC_TM_CNT3_MSK | XEC_I3C_SCL_ELC_TM_CNT4_MSK;
+    soc_mmcr_mask_set(hrb + XEC_I3C_SCL_ELC_TM_OFS, val, msk);
+}
+
+static void xec_i3c_open_drain_timing_set(mm_reg_t hrb, uint32_t od_scl_min_high_ns,
+                       uint32_t od_scl_min_low_ns,
+                       uint32_t core_clk_freq_ns)
+{
+    uint32_t low_count, high_count;
+
+    high_count = (od_scl_min_high_ns + core_clk_freq_ns - 1U) / core_clk_freq_ns;
+    if (high_count > 0U) {
+        high_count -= 1U;
+    }
+    high_count = CLAMP(high_count, XEC_I3C_SCL_TIMING_COUNT_MIN,
+               XEC_I3C_SCL_TIMING_COUNT_MAX);
+
+    low_count = (od_scl_min_low_ns + core_clk_freq_ns - 1U) / core_clk_freq_ns;
+    low_count = CLAMP(low_count, XEC_I3C_SCL_TIMING_COUNT_MIN,
+              XEC_I3C_SCL_TIMING_COUNT_MAX);
+
+    soc_mmcr_mask_set(hrb + XEC_I3C_SCL_OD_TM_OFS,
+              XEC_I3C_SCL_OD_TM_LCNT_SET(low_count) |
+              XEC_I3C_SCL_OD_TM_HCNT_SET(high_count),
+              XEC_I3C_SCL_OD_TM_LCNT_MSK | XEC_I3C_SCL_OD_TM_HCNT_MSK);
+}
+
+/* --- Section 3: FIFO, DAT, IBI data, target register-level --- */
+
+static void xec_i3c_ibi_data_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len)
+{
+    uint32_t *dword_ptr = NULL;
+    uint8_t *bptr = NULL;
+    uint32_t last_dword = 0, ibi_data = 0;
+    uint16_t i = 0, remaining_bytes = 0;
+    volatile uint32_t drain_dword = 0;
+    bool drain_flag = (buffer == NULL);
+    bool aligned_buffer = IS_ALIGNED(buffer, 4);
+
+    if (aligned_buffer) {
+        dword_ptr = (uint32_t *)buffer;
+    } else {
+        bptr = buffer;
+    }
+
+    if (len >= 4) {
+        if (drain_flag) {
+            for (i = 0; i < len / 4; i++) {
+                drain_dword |= sys_read32(hrb + XEC_I3C_IBI_QUE_SR_OFS);
+            }
+        } else {
+            for (i = 0; i < len / 4; i++) {
+                ibi_data = sys_read32(hrb + XEC_I3C_IBI_QUE_SR_OFS);
+                if (aligned_buffer) {
+                    dword_ptr[i] = ibi_data;
+                } else {
+                    *bptr++ = ibi_data;
+                    *bptr++ = (uint8_t)(ibi_data >> 8);
+                    *bptr++ = (uint8_t)(ibi_data >> 16);
+                    *bptr++ = (uint8_t)(ibi_data >> 24);
+                }
+            }
+        }
+    }
+
+    remaining_bytes = len % 4;
+    if (remaining_bytes != 0) {
+        last_dword = sys_read32(hrb + XEC_I3C_IBI_QUE_SR_OFS);
+        if (!drain_flag) {
+            memcpy(buffer + (len & ~0x3), &last_dword, remaining_bytes);
+        }
+    }
+}
+
+static void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len)
+{
+    uint32_t i = 0, data32 = 0, rem_bytes = 0;
+    uint8_t *remptr = NULL;
+
+    if ((buffer == NULL) || (len == 0)) {
+        return;
+    }
+
+    if (IS_ALIGNED(buffer, 4)) {
+        uint32_t *aligned_ptr = (uint32_t *)buffer;
+
+        for (i = 0; i < len / 4U; i++) {
+            sys_write32(*aligned_ptr++, regbase + XEC_I3C_TX_DATA_OFS);
+        }
+        remptr = (uint8_t *)aligned_ptr;
+    } else if (IS_ALIGNED(buffer, 2)) {
+        uint16_t *aligned_ptr16 = (uint16_t *)buffer;
+
+        for (i = 0; i < len / 4U; i++) {
+            data32 = *aligned_ptr16++;
+            data32 |= ((uint32_t)*aligned_ptr16++ << 16);
+            sys_write32(data32, regbase + XEC_I3C_TX_DATA_OFS);
+        }
+        remptr = (uint8_t *)aligned_ptr16;
+    } else {
+        for (i = 0; i < len / 4U; i++) {
+            data32 = buffer[3]; data32 <<= 8;
+            data32 |= buffer[2]; data32 <<= 8;
+            data32 |= buffer[1]; data32 <<= 8;
+            data32 |= buffer[0];
+            sys_write32(data32, regbase + XEC_I3C_TX_DATA_OFS);
+            buffer += 4u;
+        }
+        remptr = buffer;
+    }
+
+    rem_bytes = len % 4U;
+    if (rem_bytes != 0) {
+        data32 = 0;
+        memcpy(&data32, remptr, rem_bytes);
+        sys_write32(data32, regbase + XEC_I3C_TX_DATA_OFS);
+    }
+}
+
+static void xec_i3c_fifo_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len)
+{
+    uint32_t data32 = 0, n = 0, num_rem = 0;
+    uint8_t *remptr = NULL;
+
+    if (IS_PTR_ALIGNED(buffer, uint32_t)) {
+        uint32_t *p = (uint32_t *)buffer;
+
+        for (n = 0; n < len / 4U; n++) {
+            *p++ = sys_read32(hrb + XEC_I2C_RX_DATA_OFS);
+        }
+        remptr = (uint8_t *)p;
+    } else if (IS_PTR_ALIGNED(buffer, uint16_t)) {
+        uint16_t *p16 = (uint16_t *)buffer;
+
+        for (n = 0; n < len / 4U; n++) {
+            data32 = sys_read32(hrb + XEC_I2C_RX_DATA_OFS);
+            *p16++ = (uint16_t)data32;
+            *p16++ = (uint16_t)(data32 >> 16);
+        }
+        remptr = (uint8_t *)p16;
+    } else {
+        uint8_t *p = buffer;
+
+        for (n = 0; n < len / 4U; n++) {
+            data32 = sys_read32(hrb + XEC_I2C_RX_DATA_OFS);
+            *p++ = (uint8_t)data32;
+            *p++ = (uint8_t)(data32 >> 8);
+            *p++ = (uint8_t)(data32 >> 16);
+            *p++ = (uint8_t)(data32 >> 24);
+        }
+        remptr = p;
+    }
+
+    num_rem = len % 4U;
+    if (num_rem) {
+        data32 = sys_read32(hrb + XEC_I2C_RX_DATA_OFS);
+        memcpy(remptr, &data32, num_rem);
+    }
+}
+
+static void xec_i3c_DAT_write(mm_reg_t regbase, uint16_t DAT_start, uint8_t DAT_idx,
+                   uint32_t val)
+{
+    uint32_t *entry = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DAT_start +
+                       ((uintptr_t)DAT_idx * sizeof(uint32_t)));
+    *entry = val;
+}
+
+static uint32_t xec_i3c_DAT_read(mm_reg_t regbase, uint16_t DAT_start, uint8_t DAT_idx)
+{
+    uint32_t *entry = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DAT_start +
+                       ((uintptr_t)DAT_idx * sizeof(uint32_t)));
+    return *entry;
+}
+
+static void xec_i3c_tgt_MRL_get(mm_reg_t srb, uint16_t *max_rd_len)
+{
+    *max_rd_len = (uint16_t)XEC_I3C_SC_MAX_RW_LEN_RL_GET(
+        sys_read32(srb + XEC_I3C_SC_MAX_RW_LEN_OFS));
+}
+
+static void xec_i3c_tgt_MWL_get(mm_reg_t srb, uint16_t *max_wr_len)
+{
+    *max_wr_len = (uint16_t)XEC_I3C_SC_MAX_RW_LEN_WL_GET(
+        sys_read32(srb + XEC_I3C_SC_MAX_RW_LEN_OFS));
+}
+
+static int xec_i3c_tgt_MRL_updated(mm_reg_t srb)
+{
+    return sys_test_and_set_bit(srb + XEC_I3C_SC_TEVT_SR_OFS,
+                    XEC_I3C_SC_TEVT_SR_MRL_UPD_POS);
+}
+
+static int xec_i3c_tgt_MWL_updated(mm_reg_t srb)
+{
+    return sys_test_and_set_bit(srb + XEC_I3C_SC_TEVT_SR_OFS,
+                    XEC_I3C_SC_TEVT_SR_MWL_UPD_POS);
+}
+
+static void xec_i3c_tgt_max_speed_update(mm_reg_t srb, uint8_t max_rd_speed,
+                      uint8_t max_wr_speed)
+{
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_MXDS_OFS,
+              XEC_I3C_SC_MXDS_MWS_SET((uint32_t)max_wr_speed) |
+              XEC_I3C_SC_MXDS_MRS_SET((uint32_t)max_rd_speed),
+              XEC_I3C_SC_MXDS_MWS_MSK | XEC_I3C_SC_MXDS_MRS_MSK);
+}
+
+static void xec_i3c_tgt_clk_to_data_turn_update(mm_reg_t srb, uint8_t clk_data_turn_time)
+{
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_MXDS_OFS,
+              XEC_I3C_SC_MXDS_CDT_SET((uint32_t)clk_data_turn_time),
+              XEC_I3C_SC_MXDS_CDT_MSK);
+}
+
+static void xec_i3c_tgt_MRL_MWL_set(mm_reg_t srb, uint16_t max_rd_len, uint16_t max_wr_len)
+{
+    sys_write32(XEC_I3C_SC_MAX_RW_LEN_WL_SET((uint32_t)max_wr_len) |
+            XEC_I3C_SC_MAX_RW_LEN_RL_SET((uint32_t)max_rd_len),
+            srb + XEC_I3C_SC_MAX_RW_LEN_OFS);
+}
+
+static void xec_i3c_tgt_pid_set(mm_reg_t srb, uint16_t tgt_mipi_mfg_id, bool is_random_prov_id,
+                 uint16_t tgt_part_id, uint8_t tgt_inst_id, uint16_t tgt_pid_dcr)
+{
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_MID_OFS,
+              XEC_I3C_SC_MID_MFG_ID_SET((uint32_t)tgt_mipi_mfg_id),
+              XEC_I3C_SC_MID_MFG_ID_MSK);
+
+    if (!is_random_prov_id) {
+        uint32_t msk = XEC_I3C_SC_PROV_ID_PID_DCR_MSK | XEC_I3C_SC_PROV_ID_INST_MSK |
+                   XEC_I3C_SC_PROV_ID_PART_MSK;
+        uint32_t val = XEC_I3C_SC_PROV_ID_PID_DCR_SET((uint32_t)tgt_pid_dcr) |
+                   XEC_I3C_SC_PROV_ID_INST_SET((uint32_t)tgt_inst_id) |
+                   XEC_I3C_SC_PROV_ID_PART_SET((uint32_t)tgt_part_id);
+
+        soc_mmcr_mask_set(srb + XEC_I3C_SC_PROV_ID_OFS, val, msk);
+    }
+}
+
+static void xec_i3c_tgt_raise_ibi_SIR(mm_reg_t srb, uint8_t *sir_data, uint8_t sir_datalen,
+                       uint8_t mdb)
+{
+    uint32_t sir_data_dword = 0;
+
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_TIREQ_OFS,
+              XEC_I3C_SC_TIREQ_MDB_SET((uint32_t)mdb) |
+              XEC_I3C_SC_TIREQ_TDL_SET((uint32_t)sir_datalen),
+              XEC_I3C_SC_TIREQ_MDB_MSK | XEC_I3C_SC_TIREQ_TDL_MSK);
+
+    if (sir_datalen != 0) {
+        for (int i = 0; i < sir_datalen; i++) {
+            sir_data_dword <<= 8;
+            sir_data_dword |= sir_data[i];
+        }
+        sys_write32(sir_data_dword, srb + XEC_I3C_SC_TIREQ_DAT_OFS);
+    }
+    sys_set_bit(srb + XEC_I3C_SC_TIREQ_OFS, XEC_I3C_SC_TIREQ_TIR_POS);
+}
+
+/* --- Section 4: Host / Secondary host configuration --- */
+
+static void xec_i3c_host_dma_tx_burst_length_set(mm_reg_t hrb, uint32_t val)
+{ soc_mmcr_mask_set(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_TXBT_SET(val), XEC_I3C_HC_CFG_DMA_TXBT_MSK); }
+static void xec_i3c_host_dma_rx_burst_length_set(mm_reg_t hrb, uint32_t val)
+{ soc_mmcr_mask_set(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_RXBT_SET(val), XEC_I3C_HC_CFG_DMA_RXBT_MSK); }
+static void xec_i3c_host_port_set(mm_reg_t hrb, uint32_t port_sel)
+{ soc_mmcr_mask_set(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_PORT_SET(port_sel), XEC_I3C_HC_CFG_PORT_MSK); }
+
+static void xec_i3c_host_stuck_sda_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val)
+{
+    uint32_t rv = 0;
+
+    if (en != HOST_CFG_STUCK_SDA_DISABLE) {
+        rv = XEC_I3C_HC_STK_SDA_TMOUT_VAL_SET(tout_val);
+        sys_set_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_SSDA_EN_POS);
+    } else {
+        sys_clear_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_SSDA_EN_POS);
+    }
+    soc_mmcr_mask_set(hrb + XEC_I3C_HC_STK_SDA_TMOUT_OFS, rv,
+              XEC_I3C_HC_STK_SDA_TMOUT_VAL_MSK);
+}
+
+static void xec_i3c_host_tx_dma_tout_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val)
+{
+    uint32_t fv = 0;
+
+    if (en != XEC_I3C_CFG_DMA_TMOUT_DIS) {
+        fv = XEC_I3C_HC_DMA_TMOUT_SET(tout_val);
+        sys_set_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_TTMO_EN_POS);
+    } else {
+        sys_clear_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_TTMO_EN_POS);
+    }
+    soc_mmcr_mask_set(hrb + XEC_I3C_HC_DMA_TX_TMOUT_OFS, fv, XEC_I3C_HC_DMA_TMOUT_MSK);
+}
+
+static void xec_i3c_host_rx_dma_tout_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val)
+{
+    uint32_t fv = 0;
+
+    if (en != XEC_I3C_CFG_DMA_TMOUT_DIS) {
+        fv = XEC_I3C_HC_DMA_TMOUT_SET(tout_val);
+        sys_set_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_RTMO_EN_POS);
+    } else {
+        sys_clear_bit(hrb + XEC_I3C_HC_CFG_OFS, XEC_I3C_HC_CFG_DMA_RTMO_EN_POS);
+    }
+    soc_mmcr_mask_set(hrb + XEC_I3C_HC_DMA_RX_TMOUT_OFS, fv, XEC_I3C_HC_DMA_TMOUT_MSK);
+}
+
+static void xec_i3c_sec_host_port_set(mm_reg_t srb, uint32_t port_sel)
+{ soc_mmcr_mask_set(srb + XEC_I3C_SC_CFG_OFS, XEC_I3C_SC_CFG_PORT_SET(port_sel), XEC_I3C_SC_CFG_PORT_MSK); }
+static void xec_i3c_sec_host_dma_tx_burst_length_set(mm_reg_t srb, uint32_t val)
+{ soc_mmcr_mask_set(srb + XEC_I3C_SC_CFG_OFS, XEC_I3C_SC_CFG_DMA_TXBT_SET(val), XEC_I3C_SC_CFG_DMA_TXBT_MSK); }
+static void xec_i3c_sec_host_dma_rx_burst_length_set(mm_reg_t srb, uint32_t val)
+{ soc_mmcr_mask_set(srb + XEC_I3C_SC_CFG_OFS, XEC_I3C_SC_CFG_DMA_RXBT_SET(val), XEC_I3C_SC_CFG_DMA_RXBT_MSK); }
+
+static void xec_i3c_sec_host_stuck_sda_scl_config(mm_reg_t srb, uint32_t en,
+                           uint32_t sda_tout_val, uint32_t scl_tout_val)
+{
+    uint32_t val = XEC_I3C_SC_TMO_SSDA_SET(XEC_I3C_SC_TMO_SDDA_DIS) |
+               XEC_I3C_SC_TMO_SCL_LO_SET(XEC_I3C_SC_TMO_SCL_LO_DIS);
+
+    if (en != SEC_HOST_STK_SDA_SCL_DIS) {
+        val = XEC_I3C_SC_TMO_SSDA_SET(sda_tout_val) |
+              XEC_I3C_SC_TMO_SCL_LO_SET(scl_tout_val);
+        sys_set_bit(srb + XEC_I3C_SC_CFG_OFS, XEC_I3C_SC_CFG_SSDA_EN_POS);
+    } else {
+        sys_clear_bit(srb + XEC_I3C_SC_CFG_OFS, XEC_I3C_SC_CFG_SSDA_EN_POS);
+    }
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_TMO_CR_OFS, val,
+              XEC_I3C_SC_TMO_SSDA_MSK | XEC_I3C_SC_TMO_SCL_LO_MSK);
+}
+
+static void xec_i3c_sec_host_tx_dma_tout_config(mm_reg_t srb, uint32_t en, uint32_t tout_val)
+{
+    uint32_t fv = (en != XEC_I3C_CFG_DMA_TMOUT_DIS) ? XEC_I3C_SC_DMA_TMOUT_SET(tout_val) : 0;
+
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_DMA_TX_TMOUT_OFS, fv, XEC_I3C_SC_DMA_TMOUT_MSK);
+}
+
+static void xec_i3c_sec_host_rx_dma_tout_config(mm_reg_t srb, uint32_t en, uint32_t tout_val)
+{
+    uint32_t fv = (en != XEC_I3C_CFG_DMA_TMOUT_DIS) ? XEC_I3C_SC_DMA_TMOUT_SET(tout_val) : 0;
+
+    soc_mmcr_mask_set(srb + XEC_I3C_SC_DMA_RX_TMOUT_OFS, fv, XEC_I3C_SC_DMA_TMOUT_MSK);
+}
+
+/* --- Section 5: FIFO depth queries --- */
+
+static uint32_t xec_i3c_tx_fifo_depth_get(mm_reg_t rb)
+{ return (2 << XEC_I3C_QSZ_CAP_TX_GET(sys_read32(rb + XEC_I3C_QSZ_CAP_OFS))) * 4u; }
+static uint32_t xec_i3c_rx_fifo_depth_get(mm_reg_t rb)
+{ return (2 << XEC_I3C_QSZ_CAP_RX_GET(sys_read32(rb + XEC_I3C_QSZ_CAP_OFS))) * 4u; }
+static uint32_t xec_i3c_cmd_fifo_depth_get(mm_reg_t rb)
+{ return (2 << XEC_I3C_QSZ_CAP_CMD_GET(sys_read32(rb + XEC_I3C_QSZ_CAP_OFS))) * 4u; }
+static uint32_t xec_i3c_resp_fifo_depth_get(mm_reg_t rb)
+{ return (2 << XEC_I3C_QSZ_CAP_RESP_GET(sys_read32(rb + XEC_I3C_QSZ_CAP_OFS))) * 4u; }
+static uint32_t xec_i3c_ibi_fifo_depth_get(mm_reg_t rb)
+{ return (2 << XEC_I3C_QSZ_CAP_IBI_GET(sys_read32(rb + XEC_I3C_QSZ_CAP_OFS))) * 4u; }
+
+/* --- Section 6: High-level device helpers --- */
+
+static void XEC_I3C_Controller_Clk_Cfg(const struct device *dev, uint32_t core_clk_rate_mhz,
+                    uint32_t i3c_freq, uint32_t od_scl_min_high_ns,
+                    uint32_t od_scl_min_low_ns)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t core_clk_freq_ns, i3c_freq_ns;
+
+    core_clk_freq_ns = MEC_DIV_ROUND_UP(MHZ(1000), core_clk_rate_mhz);
+    i3c_freq_ns = MEC_DIV_ROUND_UP(MHZ(1000), i3c_freq);
+
+    xec_i3c_push_pull_timing_set(regbase, core_clk_freq_ns, i3c_freq_ns);
+    xec_i3c_open_drain_timing_set(regbase, od_scl_min_high_ns, od_scl_min_low_ns,
+                       core_clk_freq_ns);
+    xec_i3c_sda_hld_timing_set(regbase, XEC_I3C_SDA_HMSD_TM_SDA_TXH_4);
+    xec_i3c_read_term_bit_low_count_set(regbase, XEC_I3C_SCL_TBLC_ETLC_4);
+}
+
+static void XEC_I3C_Controller_Clk_Init(const struct device *dev, uint32_t core_clk_rate_mhz,
+                     uint32_t i3c_freq, uint32_t od_scl_min_high_ns,
+                     uint32_t od_scl_min_low_ns)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+
+    soc_xec_pcr_sleep_en_clear(drvcfg->hwctx.pcr_scr);
+    soc_xec_pcr_reset_en(drvcfg->hwctx.pcr_scr);
+    XEC_I3C_Controller_Clk_Cfg(dev, core_clk_rate_mhz, i3c_freq,
+                    od_scl_min_high_ns, od_scl_min_low_ns);
+}
+
+static void XEC_I3C_Target_Init(const struct device *dev, uint32_t core_clk_rate_mhz,
+                uint16_t *max_rd_len, uint16_t *max_wr_len)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t core_clk_freq_ns;
+
+    soc_xec_pcr_sleep_en_clear(drvcfg->hwctx.pcr_scr);
+    soc_xec_pcr_reset_en(drvcfg->hwctx.pcr_scr);
+
+    core_clk_freq_ns = MEC_DIV_ROUND_UP(MHZ(1000), core_clk_rate_mhz);
+
+    xec_i3c_bus_available_timing_set(regbase, core_clk_freq_ns);
+    xec_i3c_bus_idle_timing_set(regbase, core_clk_freq_ns);
+    xec_i3c_bus_free_timing_set(regbase, core_clk_freq_ns);
+    xec_i3c_tgt_MRL_get(regbase, max_rd_len);
+    xec_i3c_tgt_MWL_get(regbase, max_wr_len);
+    xec_i3c_sda_hld_switch_delay_timing_set(regbase, SDA_OD_PP_SWITCH_DLY_0,
+                         SDA_PP_OD_SWITCH_DLY_0, SDA_TX_HOLD_1);
+    xec_i3c_scl_low_mst_tout_set(regbase, XEC_I3C_SCL_LMST_TM_DFLT);
+    xec_i3c_tgt_max_speed_update(regbase, TGT_MAX_RD_DATA_SPEED, TGT_MAX_WR_DATA_SPEED);
+    xec_i3c_tgt_clk_to_data_turn_update(regbase, TGT_CLK_TO_DATA_TURN);
+}
+
+static void XEC_I3C_Target_MRL_MWL_update(const struct device *dev, uint16_t *max_rd_len,
+                       uint16_t *max_wr_len)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    if (xec_i3c_tgt_MRL_updated(regbase) != 0) {
+        xec_i3c_tgt_MRL_get(regbase, max_rd_len);
+    }
+    if (xec_i3c_tgt_MWL_updated(regbase) != 0) {
+        xec_i3c_tgt_MWL_get(regbase, max_wr_len);
+    }
+}
+
+static void XEC_I3C_Target_MRL_MWL_set(const struct device *dev, uint16_t max_rd_len,
+                    uint16_t max_wr_len)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+
+    xec_i3c_tgt_MRL_MWL_set(drvcfg->regbase, max_rd_len, max_wr_len);
+}
+
+static void XEC_I3C_Target_Interrupts_Init(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    const struct mec_i3c_ctx *ctx = &drvcfg->hwctx;
+    uint32_t mask = UINT32_MAX;
+
+    soc_ecia_girq_ctrl(ctx->girq, ctx->girq_pos, 0);
+    soc_xec_pcr_sleep_en_clear(ctx->pcr_scr);
+    xec_i3c_intr_sts_clear(regbase, mask);
+
+    mask = (BIT(XEC_I3C_ISR_RRDY_POS) | BIT(XEC_I3C_ISR_CCC_UPD_POS) |
+        BIT(XEC_I3C_ISR_DYNA_POS) | BIT(XEC_I3C_ISR_DEFTR_POS) |
+        BIT(XEC_I3C_ISR_RRR_POS) | BIT(XEC_I3C_ISR_IBI_UPD_POS) |
+        BIT(XEC_I3C_ISR_BUS_OUPD_POS));
+
+    xec_i3c_intr_sts_enable(regbase, mask);
+    xec_i3c_intr_sgnl_enable(regbase, mask);
+    soc_ecia_girq_status_clear(ctx->girq, ctx->girq_pos);
+    soc_ecia_girq_ctrl(ctx->girq, ctx->girq_pos, 1);
+}
+
+static void XEC_I3C_Controller_Interrupts_Init(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    const struct mec_i3c_ctx *ctx = &drvcfg->hwctx;
+    uint32_t mask = UINT32_MAX;
+
+    soc_ecia_girq_ctrl(ctx->girq, ctx->girq_pos, 0);
+    soc_xec_pcr_sleep_en_clear(ctx->pcr_scr);
+    xec_i3c_intr_sts_clear(regbase, mask);
+
+    mask = (BIT(XEC_I3C_ISR_RRDY_POS) | BIT(XEC_I3C_ISR_XFR_ABRT_POS) |
+        BIT(XEC_I3C_ISR_XERR_POS) | BIT(XEC_I3C_ISR_DEFTR_POS) |
+        BIT(XEC_I3C_ISR_BUS_OUPD_POS) | BIT(XEC_I3C_ISR_BUS_RD_POS));
+
+    xec_i3c_intr_sts_enable(regbase, mask);
+    xec_i3c_intr_sgnl_enable(regbase, mask);
+    soc_ecia_girq_status_clear(ctx->girq, ctx->girq_pos);
+    soc_ecia_girq_ctrl(ctx->girq, ctx->girq_pos, 1);
+}
+
+static void XEC_I3C_Thresholds_Init(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    xec_i3c_cmd_queue_threshold_set(regbase, 0x00);
+    xec_i3c_resp_queue_threshold_set(regbase, 0x00);
+    xec_i3c_ibi_data_threshold_set(regbase, 10);
+    xec_i3c_ibi_status_threshold_set(regbase, 0x00);
+    xec_i3c_tx_buf_threshold_set(regbase, DATA_BUF_THLD_FIFO_1);
+    xec_i3c_rx_buf_threshold_set(regbase, DATA_BUF_THLD_FIFO_1);
+    xec_i3c_tx_start_threshold_set(regbase, DATA_BUF_THLD_FIFO_1);
+    xec_i3c_rx_start_threshold_set(regbase, DATA_BUF_THLD_FIFO_1);
+    xec_i3c_notify_sir_reject(regbase, false);
+    xec_i3c_notify_mr_reject(regbase, false);
+    xec_i3c_notify_hj_reject(regbase, false);
+}
+
+static void XEC_I3C_Host_Config(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    xec_i3c_host_dma_tx_burst_length_set(regbase, XEC_I3C_HC_CFG_DMA_BEAT_DW_4);
+    xec_i3c_host_dma_rx_burst_length_set(regbase, XEC_I3C_HC_CFG_DMA_BEAT_DW_4);
+    xec_i3c_host_port_set(regbase, XEC_I3C_HC_PORT_I3C1);
+    xec_i3c_host_stuck_sda_config(regbase, HOST_CFG_STUCK_SDA_DISABLE, 0);
+    xec_i3c_host_tx_dma_tout_config(regbase, XEC_I3C_CFG_DMA_TMOUT_DIS, 0);
+    xec_i3c_host_rx_dma_tout_config(regbase, XEC_I3C_CFG_DMA_TMOUT_DIS, 0);
+}
+
+static void XEC_I3C_Sec_Host_Config(const struct device *sec_dev)
+{
+    const struct xec_i3c_config *drvcfg = sec_dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    xec_i3c_sec_host_dma_tx_burst_length_set(regbase, XEC_I3C_SC_CFG_DMA_BEAT_DW_4);
+    xec_i3c_sec_host_dma_rx_burst_length_set(regbase, XEC_I3C_SC_CFG_DMA_BEAT_DW_4);
+    xec_i3c_sec_host_port_set(regbase, XEC_I3C_SC_PORT_I3C0);
+    xec_i3c_sec_host_stuck_sda_scl_config(regbase, SEC_HOST_STK_SDA_SCL_DIS, 0, 0);
+    xec_i3c_sec_host_tx_dma_tout_config(regbase, XEC_I3C_CFG_DMA_TMOUT_DIS, 0);
+    xec_i3c_sec_host_rx_dma_tout_config(regbase, XEC_I3C_CFG_DMA_TMOUT_DIS, 0);
+}
+
+static void XEC_I3C_Soft_Reset(const struct device *host_dev)
+{
+    const struct xec_i3c_config *drvcfg = host_dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+
+    sys_set_bit(hrb + XEC_I3C_RST_CR_OFS, XEC_I3C_RST_CR_SRST_POS);
+    while (sys_test_bit(hrb + XEC_I3C_RST_CR_OFS, XEC_I3C_RST_CR_SRST_POS) != 0) {
+    }
+}
+
+static void XEC_I3C_queue_depths_get(const struct device *dev, struct queue_depths *fd)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    if (fd == NULL) {
+        return;
+    }
+    fd->tx_fifo_depth = xec_i3c_tx_fifo_depth_get(regbase);
+    fd->rx_fifo_depth = xec_i3c_rx_fifo_depth_get(regbase);
+    fd->cmd_fifo_depth = xec_i3c_cmd_fifo_depth_get(regbase);
+    fd->resp_fifo_depth = xec_i3c_resp_fifo_depth_get(regbase);
+    fd->ibi_fifo_depth = xec_i3c_ibi_fifo_depth_get(regbase);
+}
+
+static void XEC_I3C_Enable(const struct device *dev, uint8_t address, uint8_t config)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint8_t mode = XEC_I3C_OP_MODE_CTL;
+    bool enable_dma = false;
+
+    if (sbit_MODE_TARGET & config) {
+        mode = XEC_I3C_OP_MODE_TGT;
+        xec_i3c_static_addr_set(regbase, address);
+    } else {
+        xec_i3c_dynamic_addr_set(regbase, address);
+    }
+
+    if (sbit_HOTJOIN_DISABLE & config) {
+        if (sbit_MODE_TARGET & config) {
+            xec_i3c_tgt_hot_join_disable(regbase);
+        } else {
+            xec_i3c_hot_join_disable(regbase);
+        }
+    } else {
+        if (!(sbit_MODE_TARGET & config)) {
+            xec_i3c_intr_IBI_enable(regbase);
+        }
+    }
+
+    if (sbit_CONFG_ENABLE & config) {
+        xec_i3c_operation_mode_set(regbase, mode);
+        if (sbit_DMA_MODE & config) {
+            enable_dma = true;
+        }
+        xec_i3c_enable(regbase, mode, enable_dma);
+    } else {
+        xec_i3c_disable(regbase);
+    }
+}
+
+static void XEC_I3C_SDCT_read(const struct device *dev, uint16_t DCT_start, uint16_t idx,
+                   struct mec_i3c_SDCT_info *info)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t *entry_addr;
+    uint32_t sdct_val;
+
+    entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DCT_start +
+                  ((uintptr_t)idx * sizeof(uint32_t)));
+    sdct_val = *entry_addr;
+
+    info->dynamic_addr = (uint8_t)(sdct_val & 0xFFu);
+    info->dcr = (uint8_t)((sdct_val >> 8) & 0xFFu);
+    info->bcr = (uint8_t)((sdct_val >> 16) & 0xFFu);
+    info->static_addr = (uint8_t)((sdct_val >> 24) & 0xFFu);
+}
+
+static void XEC_I3C_TGT_DEFTGTS_DAT_write(const struct device *dev, uint16_t DCT_start,
+                       uint16_t DAT_start, uint8_t targets_count)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    struct mec_i3c_SDCT_info sdct_info = {0};
+    uint32_t val = 0;
+
+    for (uint8_t i = 0; i < targets_count; i++) {
+        XEC_I3C_SDCT_read(dev, DCT_start, i, &sdct_info);
+        val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(sdct_info.dynamic_addr);
+        if (sdct_info.static_addr) {
+            val |= DEV_ADDR_TABLE1_LOC1_STATIC_ADDR(sdct_info.static_addr);
+        }
+        xec_i3c_DAT_write(regbase, DAT_start, i, val);
+    }
+}
+
+static void XEC_I3C_DCT_read(const struct device *dev, uint16_t DCT_start, uint16_t DCT_idx,
+                  struct mec_i3c_DCT_info *info)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t *entry_addr;
+    uint64_t prov_id;
+
+    /* Each DCT entry is 4 x 32-bit words (16 bytes) */
+    entry_addr = (uint32_t *)((uintptr_t)regbase + (uintptr_t)DCT_start +
+                  ((uintptr_t)DCT_idx * 4u * sizeof(uint32_t)));
+
+    prov_id = (uint64_t)entry_addr[0];
+    info->pid = (prov_id << 16) | ((uint64_t)entry_addr[1] & 0xFFFFu);
+    info->dcr = (uint8_t)(entry_addr[2] & 0xFFu);
+    info->bcr = (uint8_t)((entry_addr[2] >> 8) & 0xFFu);
+    info->dynamic_addr = (uint8_t)(entry_addr[3] & 0x7Fu);
+}
+
+/* --- Section 7: Command / transfer / IBI operations --- */
+
+static uint8_t xec_i3c_ccc_to_xfer_speed(uint8_t ccc_id)
+{
+    switch (ccc_id) {
+    case I3C_CCC_ENTHDR0:
+        return MEC_XFER_SPEED_HDR_DDR;
+    case I3C_CCC_ENTHDR1:
+        return MEC_XFER_SPEED_HDR_TS;
+    default:
+        return MEC_XFER_SPEED_SDR0;
+    }
+}
+
+static int xec_i3c_map_xfer_error(uint8_t hw_error)
+{
+    switch (hw_error) {
+    case RESPONSE_ERROR_ADDRESS_NACK:
+        return -ENODEV;
+    case RESPONSE_ERROR_PARITY:
+    case RESPONSE_ERROR_CRC:
+    case RESPONSE_ERROR_FRAME:
+        return -EIO;
+    case RESPONSE_ERROR_OVER_UNDER_FLOW:
+        return -ENOSPC;
+    case RESPONSE_ERROR_TRANSF_ABORT:
+        return -ECANCELED;
+    case RESPONSE_ERROR_I2C_W_NACK_ERR:
+        return -ENXIO;
+    case RESPONSE_ERROR_IBA_NACK:
+        return -ENODEV;
+    case RESPONSE_NO_ERROR:
+        return 0;
+    default:
+        return -EIO;
+    }
+}
+
+static void XEC_I3C_DO_DAA(const struct device *dev, uint8_t tgt_idx, uint8_t tgts_count,
+                uint8_t *tid_xfer)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t command;
+
+    data->tid = ((data->tid + 1U) > (XEC_I3C_CMD_TID_MAX - 1U)) ? 0U : (data->tid + 1U);
+    *tid_xfer = data->tid;
+
+    command = (data->tid << COMMAND_AA_TID_BITPOS) |
+          (tgt_idx << COMMAND_AA_DEV_IDX_BITPOS) |
+          (MEC_I3C_CCC_ENTDAA << COMMAND_AA_CMD_BITPOS) |
+          (tgts_count << COMMAND_AA_DEV_CNT_BITPOS) | COMMAND_STOP_ON_COMPLETION |
+          COMMAND_RESPONSE_ON_COMPLETION | COMMAND_ATTR_ADDR_ASSGN_CMD;
+
+    xec_i3c_resp_queue_threshold_set(regbase, 0);
+    sys_write32(command, regbase + XEC_I3C_CMD_OFS);
+}
+
+
+static void XEC_I3C_DO_CCC(const struct device *dev, struct mec_i3c_DO_CCC *tgt,
+                uint8_t *tid_xfer)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t command = 0, argument = 0;
+
+    /* Build the transfer argument */
+    argument = COMMAND_ATTR_XFER_ARG;
+    argument |= (tgt->data_len << COMMAND_XFER_ARG_DATA_LEN_BITPOS);
+    if (tgt->defining_byte_valid) {
+        argument |= (tgt->defining_byte << COMMAND_XFER_DEF_BYTE_BITPOS);
+    }
+
+    data->tid = ((data->tid + 1U) > (XEC_I3C_CMD_TID_MAX - 1U)) ? 0U : (data->tid + 1U);
+    *tid_xfer = data->tid;
+
+    command = (data->tid << COMMAND_TID_BITPOS) |
+          (tgt->tgt_idx << COMMAND_DEV_IDX_BITPOS) |
+          (tgt->ccc_id << COMMAND_CMD_BITPOS) |
+          (tgt->xfer_speed << COMMAND_SPEED_BITPOS) |
+          COMMAND_STOP_ON_COMPLETION |
+          COMMAND_RESPONSE_ON_COMPLETION | COMMAND_CMD_PRESENT | COMMAND_ATTR_XFER_CMD;
+
+    if (tgt->defining_byte_valid) {
+        command |= COMMAND_DEF_BYTE_PRESENT;
+    }
+
+    if (tgt->read != 0) {
+        /* CCC Get — read transfer, no FIFO write needed */
+        command |= COMMAND_READ_XFER;
+    } else {
+        /* CCC Set — write data to TX FIFO (not using Short Data Argument) */
+        if (tgt->data_len != 0) {
+            xec_i3c_fifo_write(regbase, tgt->data_buf, tgt->data_len);
+        }
+    }
+
+    /* Set Response Buffer Threshold as 1 entry */
+    xec_i3c_resp_queue_threshold_set(regbase, 0);
+
+    if (tgt->data_len || tgt->defining_byte_valid) {
+        /* Write the transfer argument */
+        sys_write32(argument, regbase + XEC_I3C_CMD_OFS);
+    }
+
+    /* Write the Command */
+    sys_write32(command, regbase + XEC_I3C_CMD_OFS);
+}
+
+static void XEC_I3C_DO_Xfer_Prep(const struct device *dev, struct mec_i3c_dw_cmd *cmd,
+                  uint8_t *tid_xfer)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t command = 0, argument = 0;
+
+    argument = (cmd->data_len << COMMAND_XFER_ARG_DATA_LEN_BITPOS) | COMMAND_ATTR_XFER_ARG;
+
+    data->tid = ((data->tid + 1U) > (XEC_I3C_CMD_TID_MAX - 1U)) ? 0U : (data->tid + 1U);
+    *tid_xfer = data->tid;
+
+    command = (data->tid << COMMAND_TID_BITPOS) |
+          (cmd->tgt_idx << COMMAND_DEV_IDX_BITPOS) |
+          (cmd->xfer_speed << COMMAND_SPEED_BITPOS) | COMMAND_RESPONSE_ON_COMPLETION |
+          COMMAND_ATTR_XFER_CMD;
+
+    if (cmd->stop) {
+        command |= COMMAND_STOP_ON_COMPLETION;
+    }
+    if (cmd->pec_en) {
+        command |= COMMAND_PACKET_ERROR_CHECK;
+    }
+
+    if (cmd->read != 0) {
+        command |= COMMAND_READ_XFER;
+        if (MEC_XFER_SPEED_HDR_DDR == cmd->xfer_speed) {
+            command |= (COMMAND_CMD_PRESENT | COMMAND_HDR_DDR_READ);
+        }
+    } else {
+        if (MEC_XFER_SPEED_HDR_DDR == cmd->xfer_speed) {
+            command |= (COMMAND_CMD_PRESENT | COMMAND_HDR_DDR_WRITE);
+        }
+        xec_i3c_fifo_write(regbase, cmd->data_buf, cmd->data_len);
+    }
+
+    cmd->cmd = command;
+    cmd->arg = argument;
+}
+
+static void XEC_I3C_DO_Xfer(const struct device *dev, struct mec_i3c_dw_cmd *tgt)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+
+    sys_write32(tgt->arg, regbase + XEC_I3C_CMD_OFS);
+    sys_write32(tgt->cmd, regbase + XEC_I3C_CMD_OFS);
+}
+
+static void XEC_I3C_DO_TGT_Xfer(const struct device *dev, uint8_t *data_buf, uint16_t data_len)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t command;
+
+    data->tid = ((data->tid + 1U) > (XEC_I3C_CMD_TID_MAX - 1U)) ? 0U : (data->tid + 1U);
+
+    xec_i3c_fifo_write(regbase, data_buf, data_len);
+
+    command = ((data_len << COMMAND_XFER_ARG_DATA_LEN_BITPOS) |
+           (data->tid << COMMAND_TID_BITPOS));
+    sys_write32(command, regbase + XEC_I3C_CMD_OFS);
+}
+
+static void XEC_I3C_IBI_SIR_Enable(const struct device *dev, struct mec_i3c_IBI_SIR *ibi_sir_info,
+                    bool enable_ibi_interrupt)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t dat_value;
+
+    dat_value = xec_i3c_DAT_read(regbase, ibi_sir_info->DAT_start,
+                     ibi_sir_info->tgt_dat_idx);
+    dat_value &= ~DEV_ADDR_TABLE1_LOC1_SIR_REJECT;
+    if (ibi_sir_info->ibi_has_payload) {
+        dat_value |= DEV_ADDR_TABLE1_LOC1_IBI_WITH_DATA;
+    }
+    xec_i3c_DAT_write(regbase, ibi_sir_info->DAT_start, ibi_sir_info->tgt_dat_idx, dat_value);
+
+    if ((0 == data->targets_ibi_enable_sts) && enable_ibi_interrupt) {
+        xec_i3c_intr_IBI_enable(regbase);
+    }
+    data->targets_ibi_enable_sts |= (1 << ibi_sir_info->tgt_dat_idx);
+}
+
+static void XEC_I3C_IBI_SIR_Disable(const struct device *dev,
+                     struct mec_i3c_IBI_SIR *ibi_sir_info,
+                     bool disable_ibi_interrupt)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t dat_value;
+
+    dat_value = xec_i3c_DAT_read(regbase, ibi_sir_info->DAT_start,
+                     ibi_sir_info->tgt_dat_idx);
+    dat_value |= DEV_ADDR_TABLE1_LOC1_SIR_REJECT;
+    xec_i3c_DAT_write(regbase, ibi_sir_info->DAT_start, ibi_sir_info->tgt_dat_idx, dat_value);
+
+    data->targets_ibi_enable_sts &= (uint32_t)~(1 << ibi_sir_info->tgt_dat_idx);
+    if ((0 == data->targets_ibi_enable_sts) && disable_ibi_interrupt) {
+        xec_i3c_intr_IBI_disable(regbase);
+    }
+}
+
+static void XEC_I3C_TGT_PID_set(const struct device *dev, uint64_t pid, bool pid_random)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+
+    xec_i3c_tgt_pid_set(drvcfg->regbase, TGT_MIPI_MFG_ID(pid), pid_random,
+                TGT_PART_ID(pid), TGT_INST_ID(pid), TGT_PID_DCR(pid));
+}
+
+__maybe_unused static void XEC_I3C_TGT_MXDS_set(const struct device *dev, uint8_t wr_speed, uint8_t rd_speed,
+                  uint8_t tsco, uint32_t rd_trnd_us)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t msk = XEC_I3C_SC_MXDS_MWS_MSK | XEC_I3C_SC_MXDS_MRS_MSK |
+               XEC_I3C_SC_MXDS_CDT_MSK;
+    uint32_t val = XEC_I3C_SC_MXDS_MWS_SET((uint32_t)wr_speed) |
+               XEC_I3C_SC_MXDS_MRS_SET((uint32_t)rd_speed) |
+               XEC_I3C_SC_MXDS_CDT_SET((uint32_t)tsco);
+
+    soc_mmcr_mask_set(regbase + XEC_I3C_SC_MXDS_OFS, val, msk);
+    soc_mmcr_mask_set(regbase + XEC_I3C_SC_MXRT_OFS,
+              XEC_I3C_SC_MXRT_MRT_SET(rd_trnd_us), XEC_I3C_SC_MXRT_MRT_MSK);
+}
+
+static int XEC_I3C_TGT_IBI_SIR_Raise(const struct device *dev,
+                      struct mec_i3c_raise_IBI_SIR *ibi_sir_request)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t srb = drvcfg->regbase;
+
+    if (sys_test_bit(srb + XEC_I3C_SC_TEVT_SR_OFS, XEC_I3C_SC_TEVT_SR_TIR_EN_POS) != 0) {
+        xec_i3c_tgt_raise_ibi_SIR(srb, ibi_sir_request->data_buf,
+                       ibi_sir_request->data_len, ibi_sir_request->mdb);
+        return 0;
+    }
+    return 1;
+}
+
+static int XEC_I3C_TGT_IBI_MR_Raise(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t srb = drvcfg->regbase;
+
+    if (sys_test_bit(srb + XEC_I3C_SC_TEVT_SR_OFS, XEC_I3C_SC_TEVT_SR_HR_EN_POS) != 0) {
+        sys_set_bit(srb + XEC_I3C_SC_TIREQ_OFS, XEC_I3C_SC_TIREQ_HR_POS);
+        sys_clear_bit(srb + XEC_I3C_DEV_EXT_CR_OFS, XEC_I3C_DEV_EXT_CR_TM_NAK_CCC_POS);
+        return 0;
+    }
+    return 1;
+}
+
+static void XEC_I3C_TGT_IBI_SIR_Residual_handle(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+
+    sys_set_bit(hrb + XEC_I3C_RST_CR_OFS, XEC_I3C_RST_CR_TX_FIFO_POS);
+    xec_i3c_resume(hrb);
+}
+
+static void XEC_I3C_TGT_Error_Recovery(const struct device *dev, uint8_t err_sts)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+
+    if ((err_sts == TARGET_RESP_ERR_CRC) || (err_sts == TARGET_RESP_ERR_PARITY) ||
+        (err_sts == TARGET_RESP_ERR_UNDERFLOW_OVERFLOW)) {
+        sys_set_bit(hrb + XEC_I3C_RST_CR_OFS, XEC_I3C_RST_CR_RX_FIFO_POS);
+    } else {
+        sys_set_bits(hrb + XEC_I3C_RST_CR_OFS,
+                 BIT(XEC_I3C_RST_CR_TX_FIFO_POS) | BIT(XEC_I3C_RST_CR_CMDQ_POS));
+    }
+    xec_i3c_resume(hrb);
+}
+
+static void XEC_I3C_TGT_RoleSwitch_Resume(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+
+    sys_set_bits(hrb + XEC_I3C_RST_CR_OFS,
+             BIT(XEC_I3C_RST_CR_TX_FIFO_POS) | BIT(XEC_I3C_RST_CR_RX_FIFO_POS) |
+             BIT(XEC_I3C_RST_CR_CMDQ_POS));
+    xec_i3c_resume(hrb);
+}
+
+static void XEC_I3C_Xfer_Error_Resume(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+
+    xec_i3c_resume(hrb);
+    xec_i3c_xfer_err_sts_clr(hrb);
+}
+
+static void XEC_I3C_Xfer_Reset(const struct device *dev)
+{
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t hrb = drvcfg->regbase;
+    uint32_t rstval = (BIT(XEC_I3C_RST_CR_CMDQ_POS) | BIT(XEC_I3C_RST_CR_RESPQ_POS) |
+               BIT(XEC_I3C_RST_CR_TX_FIFO_POS) | BIT(XEC_I3C_RST_CR_RX_FIFO_POS));
+    uint32_t rv;
+
+    sys_write32(rstval, hrb + XEC_I3C_RST_CR_OFS);
+    do {
+        rv = sys_read32(hrb + XEC_I3C_RST_CR_OFS) & rstval;
+    } while (rv != 0);
+}
+
+/* --- Section 8: Role check helpers --- */
+
 static inline bool xec_i3c_is_current_role_master(mm_reg_t regbase)
 {
-	uint32_t dev_ext_cr = sys_read32(regbase + XEC_I3C_DEV_EXT_CR_OFS);
-	uint32_t opmode = XEC_I3C_DEV_EXT_CR_OPM_GET(dev_ext_cr);
-	uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
-	uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
+    uint32_t dev_ext_cr = sys_read32(regbase + XEC_I3C_DEV_EXT_CR_OFS);
+    uint32_t opmode = XEC_I3C_DEV_EXT_CR_OPM_GET(dev_ext_cr);
+    uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
+    uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
 
-	if (((role == XEC_I3C_HW_CAP_ROLE_SC) && (opmode != XEC_I3C_DEV_EXT_CR_OPM_HC)) ||
-	    (role == XEC_I3C_HW_CAP_ROLE_TGT)) {
-		return false;
-	}
-	return true;
+    if (((role == XEC_I3C_HW_CAP_ROLE_SC) && (opmode != XEC_I3C_DEV_EXT_CR_OPM_HC)) ||
+        (role == XEC_I3C_HW_CAP_ROLE_TGT)) {
+        return false;
+    }
+    return true;
 }
 
-/* Check if controller is current bus master */
 static inline bool xec_i3c_is_current_role_bus_master(mm_reg_t regbase)
 {
-	uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
-	uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
+    uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
+    uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
 
-	if ((role == XEC_I3C_HW_CAP_ROLE_SC) &&
-	    (sys_test_bit(regbase + XEC_I3C_PRES_ST_OFS, XEC_I3C_PRES_ST_CH_POS) == 0)) {
-		return false;
-	}
-	return true;
+    if ((role == XEC_I3C_HW_CAP_ROLE_SC) &&
+        (sys_test_bit(regbase + XEC_I3C_PRES_ST_OFS, XEC_I3C_PRES_ST_CH_POS) == 0)) {
+        return false;
+    }
+    return true;
 }
 
-/* Check if controller is configured as primary */
 static inline bool xec_i3c_is_current_role_primary(mm_reg_t regbase)
 {
-	uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
-	uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
+    uint32_t hwcap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
+    uint32_t role = XEC_I3C_HW_CAP_ROLE_GET(hwcap);
 
-	return (role == XEC_I3C_HW_CAP_ROLE_HC);
+    return (role == XEC_I3C_HW_CAP_ROLE_HC);
 }
 
-#ifdef CONFIG_I3C_USE_IBI
-static struct ibi_node *_drv_i3c_free_ibi_node_get_isr(struct xec_i3c_data *xec_data)
-{
-	uint8_t idx;
-	struct ibi_node *ret = NULL;
+/* --- Section 9: Internal driver helpers --- */
 
-	for (idx = 0; idx < XEC_I3C_MAX_IBI_LIST_COUNT; idx++) {
-		if (xec_data->ibis[idx].state == IBI_NODE_STATE_FREE) {
-			xec_data->ibis[idx].state = IBI_NODE_STATE_IN_USE;
-			ret = &xec_data->ibis[idx];
-			break;
-		}
-	}
-	return ret;
+#ifdef CONFIG_I3C_USE_IBI
+static struct ibi_node *_drvi3c_free_ibi_node_get_isr(struct xec_i3c_data *xec_data)
+{
+    for (uint8_t idx = 0; idx < XEC_I3C_MAX_IBI_LIST_COUNT; idx++) {
+        if (xec_data->ibis[idx].state == IBI_NODE_STATE_FREE) {
+            xec_data->ibis[idx].state = IBI_NODE_STATE_IN_USE;
+            return &xec_data->ibis[idx];
+        }
+    }
+    return NULL;
 }
 #endif
 
 static struct i3c_tgt_pvt_receive_node *
 _drv_i3c_free_tgt_rx_node_get_isr(struct xec_i3c_data *xec_data, bool dma_flag)
 {
-	uint8_t idx;
-	struct i3c_tgt_pvt_receive_node *ret = NULL;
-
-	for (idx = 0; idx < XEC_I3C_MAX_TGT_RX_LIST_COUNT; idx++) {
-		if (xec_data->tgt_pvt_rx[idx].state == TGT_RX_NODE_STATE_FREE) {
-			if (dma_flag) {
-				xec_data->tgt_pvt_rx[idx].state = TGT_RX_NODE_STATE_IN_USE_DMA;
-			} else {
-				xec_data->tgt_pvt_rx[idx].state = TGT_RX_NODE_STATE_IN_USE;
-			}
-			ret = &xec_data->tgt_pvt_rx[idx];
-			break;
-		}
-	}
-	return ret;
+    for (uint8_t idx = 0; idx < XEC_I3C_MAX_TGT_RX_LIST_COUNT; idx++) {
+        if (xec_data->tgt_pvt_rx[idx].state == TGT_RX_NODE_STATE_FREE) {
+            xec_data->tgt_pvt_rx[idx].state = dma_flag ?
+                TGT_RX_NODE_STATE_IN_USE_DMA : TGT_RX_NODE_STATE_IN_USE;
+            return &xec_data->tgt_pvt_rx[idx];
+        }
+    }
+    return NULL;
 }
 
-static int _drv_i3c_targets_free_pos_get(const struct xec_i3c_data *xec_data, uint8_t *free_posn)
+static struct xec_i3c_dev_priv *_drv_dev_priv_alloc(struct xec_i3c_data *data)
 {
-	uint8_t idx;
-	int ret = -1;
-
-	for (idx = 0; idx < XEC_I3C_MAX_TARGETS; idx++) {
-		if (xec_data->targets[idx].state == TGT_STATE_NOT_PRESENT) {
-			*free_posn = idx;
-			ret = 0;
-			break;
-		}
-	}
-	return ret;
+    for (uint8_t i = 0; i < XEC_I3C_MAX_TARGETS; i++) {
+        if (!data->dev_priv_pool[i].allocated) {
+            data->dev_priv_pool[i].allocated = true;
+            data->dev_priv_pool[i].dat_idx = XEC_I3C_DAT_IDX_NONE;
+            return &data->dev_priv_pool[i];
+        }
+    }
+    return NULL;
 }
 
-static int _drv_i3c_targets_next_DAA_get(struct xec_i3c_data *xec_data,
-					 struct targets_on_bus **tgt_DAA)
+static void _drv_dev_priv_free(struct xec_i3c_dev_priv *priv)
 {
-	uint8_t idx;
-	int ret = -1;
-
-	for (idx = 0; idx < XEC_I3C_MAX_TARGETS; idx++) {
-		if (xec_data->targets[idx].state == TGT_STATE_NEEDS_DAA) {
-			*tgt_DAA = &xec_data->targets[idx];
-			ret = 0;
-			break;
-		}
-	}
-	return ret;
+    if (priv != NULL) {
+        priv->allocated = false;
+        priv->dat_idx = XEC_I3C_DAT_IDX_NONE;
+    }
 }
 
-/* Updates actual address assigned during DAA */
-static void _drv_i3c_targets_DAA_addr_update(struct xec_i3c_data *data, uint64_t pid,
-					     uint8_t new_addr, uint8_t new_dat_idx)
+/* Search device list for DAT index by dynamic or static address */
+static int _drv_i3c_DAT_idx_get(const struct device *dev, uint8_t tgt_addr, uint8_t *dat_idx)
 {
-	uint8_t idx;
+    const struct xec_i3c_config *config = dev->config;
+    const struct i3c_dev_list *dev_list = &config->common.dev_list;
 
-	for (idx = 0; idx < XEC_I3C_MAX_TARGETS; idx++) {
-		if (data->targets[idx].state == TGT_STATE_DAA_IN_PROGRESS) {
-			if (pid == data->targets[idx].pid) {
-				data->targets[idx].address = new_addr;
-				data->targets[idx].dat_idx = new_dat_idx;
-				break;
-			}
-		}
-	}
-}
+    for (uint16_t i = 0; i < dev_list->num_i3c; i++) {
+        struct i3c_device_desc *desc = &dev_list->i3c[i];
 
-static void _drv_i3c_targets_DAA_done(const struct device *dev, bool DAA_success,
-				      uint16_t dat_success_idx)
-{
-	struct xec_i3c_data *data = dev->data;
-	const struct xec_i3c_config *config = dev->config;
-	mm_reg_t regbase = config->regbase;
-	uint8_t idx = 0, dat_idx = 0;
+        if (desc->controller_priv == NULL) {
+            continue;
+        }
+        if (desc->dynamic_addr == tgt_addr || desc->static_addr == tgt_addr) {
+            struct xec_i3c_dev_priv *priv = desc->controller_priv;
 
-	for (idx = 0; idx < XEC_I3C_MAX_TARGETS; idx++) {
-		if (data->targets[idx].state == TGT_STATE_DAA_IN_PROGRESS) {
-			dat_idx = data->targets[idx].dat_idx;
-			if (DAA_success && dat_idx <= dat_success_idx) {
-				/* Mark state as address assigned */
-				data->targets[idx].state = TGT_STATE_ADDR_ASSIGNED;
-			} else {
-				/* Tier1 change: round2: XEC_I3C_DAT_DynamicAddr_write - Write
-				 * dynamic address to DAT entry */
-				uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(0);
-				uintptr_t entry_addr = (uintptr_t)regbase +
-						       (uintptr_t)data->DAT_start_addr +
-						       ((uintptr_t)dat_idx * 4u);
-
-				sys_write32(val, (mm_reg_t)entry_addr);
-
-				/* Mark the DAT position as free */
-				data->DAT_free_positions |= (1U << dat_idx);
-				/* Mark state as needs DAA */
-				data->targets[idx].state = TGT_STATE_NEEDS_DAA;
-			}
-		}
-	}
+            if (priv->dat_idx != XEC_I3C_DAT_IDX_NONE) {
+                *dat_idx = priv->dat_idx;
+                return 0;
+            }
+        }
+    }
+    return -1;
 }
 
 static int _drv_i3c_DAT_free_pos_get(const struct xec_i3c_data *xec_data, uint16_t *free_posn)
 {
-	uint16_t max_positions_bitmask = 0U;
-	uint16_t free_positions_bitmask = 0U;
-	uint16_t posn = 0U;
-	int ret = 0;
+    uint16_t max_mask = GENMASK(xec_data->DAT_depth - 1, 0);
+    uint16_t posn = 0U;
 
-	max_positions_bitmask = GENMASK(xec_data->DAT_depth - 1, 0);
-	if (xec_data->DAT_free_positions & max_positions_bitmask) {
-		/* Get Leftmost Set bit in DAT_free_positions */
-		free_positions_bitmask = xec_data->DAT_free_positions;
-		while (!(free_positions_bitmask & (0x01U << posn))) {
-			posn++;
-		}
-		*free_posn = posn;
-	} else {
-		ret = -1;
-	}
-	return ret;
+    if (xec_data->DAT_free_positions & max_mask) {
+        uint16_t free_bitmask = xec_data->DAT_free_positions;
+
+        while (!(free_bitmask & (0x01U << posn))) {
+            posn++;
+        }
+        *free_posn = posn;
+        return 0;
+    }
+    return -1;
 }
 
-static int _drv_i3c_DAT_idx_get(const struct xec_i3c_data *xec_data, const uint8_t tgt_addr,
-				uint8_t *tgt_posn)
+static void _drv_pending_xfer_node_init(struct i3c_pending_xfer_node *node)
 {
-	uint8_t idx;
-	int ret = -1;
-
-	for (idx = 0; idx < xec_data->DAT_depth; idx++) {
-		if (TGT_STATE_ADDR_ASSIGNED == xec_data->targets[idx].state) {
-			if (tgt_addr == xec_data->targets[idx].address) {
-				*tgt_posn = xec_data->targets[idx].dat_idx;
-				ret = 0;
-				break;
-			}
-		}
-	}
-	return ret;
+    node->data_buf = NULL;
+    node->read = false;
+    node->error_status = 0;
+    node->tid = 0;
+    node->ret_data_len = 0;
 }
 
-static int i3c_xec_attach_device(const struct device *dev, struct i3c_device_desc *desc)
+static void _drv_pending_xfer_ctxt_init(struct i3c_pending_xfer *ctxt)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	uint16_t free_posn_DAT = 0;
-	uint8_t target_info_idx = 0;
-	uint8_t addr = desc->static_addr; /* TODO API removed addr parameter. Use static? */
-	bool program_dyn_addr = false;
-	int ret = -1;
-
-	if (_drv_i3c_DAT_free_pos_get(data, &free_posn_DAT)) {
-		/* Unable to find a free location in DAT */
-		LOG_ERR("%s: no space in DAT for i3c device: %s", dev->name, desc->dev->name);
-		return ret;
-	}
-
-	if (_drv_i3c_targets_free_pos_get(data, &target_info_idx)) {
-		/* Unable to find a free location in targets list */
-		LOG_ERR("%s: no space in targets list for i3c device: %s", dev->name,
-			desc->dev->name);
-		return ret;
-	}
-
-	/* Initialize the target info node */
-	data->targets[target_info_idx].state = TGT_STATE_ADDR_ASSIGNED;
-	data->targets[target_info_idx].address = addr;
-	data->targets[target_info_idx].pid = desc->pid;
-	desc->controller_priv = &data->targets[target_info_idx];
-
-	/* Check if address is a dynamic address (set by primary controller) */
-	if (desc->dynamic_addr != 0) {
-		program_dyn_addr = true;
-	}
-
-	/* Check if dynamic address will be assigned by SETDASA */
-	if ((desc->dynamic_addr == 0) && (desc->static_addr != 0)) {
-		program_dyn_addr = true;
-	}
-
-	if (program_dyn_addr) {
-		/* Tier1 change: round2: XEC_I3C_DAT_DynamicAddr_write - Write dynamic address to
-		 * DAT entry */
-		uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(addr);
-		uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
-				       ((uintptr_t)free_posn_DAT * 4u);
-
-		sys_write32(val, (mm_reg_t)entry_addr);
-
-		data->targets[target_info_idx].dat_idx = free_posn_DAT;
-		/* Mark the free position as used */
-		data->DAT_free_positions &= ~(1U << free_posn_DAT);
-	} else {
-		data->targets[target_info_idx].state = TGT_STATE_NEEDS_DAA;
-	}
-
-	return 0;
-}
-
-static int i3c_xec_detach_device(const struct device *dev, struct i3c_device_desc *desc)
-{
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct targets_on_bus *target_info = desc->controller_priv;
-
-	if (NULL == target_info) {
-		LOG_ERR("%s: %s: device not attached", dev->name, desc->dev->name);
-		return -EINVAL;
-	}
-
-	/* Tier1 change: round2: XEC_I3C_DAT_DynamicAddr_write - Invalidate DAT entry by writing
-	 * address 0 */
-	uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(0);
-	uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
-			       ((uintptr_t)target_info->dat_idx * 4u);
-
-	sys_write32(val, (mm_reg_t)entry_addr);
-
-	/* Mark the DAT position as free */
-	data->DAT_free_positions |= (1U << target_info->dat_idx);
-
-	/* Reclaim the target info node */
-	target_info->state = TGT_STATE_NOT_PRESENT;
-	target_info->address = 0;
-	target_info->dat_idx = 0;
-
-	/* Clear the target info */
-	desc->controller_priv = NULL;
-
-	return 0;
-}
-
-static int i3c_xec_reattach_device(const struct device *dev, struct i3c_device_desc *desc,
-				   uint8_t old_dyn_addr)
-{
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct targets_on_bus *target_info = desc->controller_priv;
-
-	if (NULL == target_info) {
-		LOG_ERR("%s: %s: device not attached", dev->name, desc->dev->name);
-		return -EINVAL;
-	}
-
-	if (target_info->address != old_dyn_addr) {
-		LOG_ERR("Old dynamic address doesn't match the one in DAT");
-		return -EINVAL;
-	}
-
-	/* Tier1 change: round2: XEC_I3C_DAT_DynamicAddr_write - Update DAT entry with new dynamic
-	 * address */
-	uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(desc->dynamic_addr);
-	uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
-			       ((uintptr_t)target_info->dat_idx * 4u);
-	sys_write32(val, (mm_reg_t)entry_addr);
-
-	/* Update the target info node with new address */
-	target_info->address = desc->dynamic_addr;
-
-	return 0;
-}
-
-static void _drv_pending_xfer_ctxt_init(void)
-{
-	int i = 0;
-
-	pending_xfer_ctxt.xfer_type = 0;
-	for (i = 0; i < XEC_I3C_MAX_MSGS; i++) {
-		pending_xfer_ctxt.node[i].data_buf = NULL;
-		pending_xfer_ctxt.node[i].read = false;
-		pending_xfer_ctxt.node[i].error_status = 0;
-		pending_xfer_ctxt.node[i].tid = 0;
-		pending_xfer_ctxt.node[i].ret_data_len = 0;
-	}
+    ctxt->xfer_type = 0;
+    ctxt->xfer_status = 0;
+    for (int i = 0; i < XEC_I3C_MAX_MSGS; i++) {
+        _drv_pending_xfer_node_init(&ctxt->node[i]);
+    }
 }
 
 static void _drv_dct_info_init(struct mec_i3c_DCT_info *info)
 {
-	info->bcr = 0x0;
-	info->dcr = 0x0;
-	info->dynamic_addr = 0x0;
-	info->pid = 0x0;
+    info->bcr = 0;
+    info->dcr = 0;
+    info->dynamic_addr = 0;
+    info->pid = 0;
 }
+
+/* --- Section 10: Zephyr I3C API — attach / detach / reattach --- */
+
+static int i3c_xec_attach_device(const struct device *dev, struct i3c_device_desc *desc)
+{
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    uint16_t free_posn_DAT = 0;
+    uint8_t dat_addr = 0;
+
+    if (desc == NULL) {
+        return -EINVAL;
+    }
+
+    struct xec_i3c_dev_priv *priv = _drv_dev_priv_alloc(data);
+
+    if (priv == NULL) {
+        LOG_ERR("%s: no priv slot for: %s", dev->name, desc->dev->name);
+        return -ENOMEM;
+    }
+    desc->controller_priv = priv;
+
+    /* Determine address: use dynamic if assigned, else static */
+    if (desc->dynamic_addr != 0) {
+        dat_addr = desc->dynamic_addr;
+    } else if (desc->static_addr != 0) {
+        dat_addr = desc->static_addr;
+    } else {
+        /* No address — device needs DAA */
+        return 0;
+    }
+
+    if (_drv_i3c_DAT_free_pos_get(data, &free_posn_DAT)) {
+        LOG_ERR("%s: no space in DAT for: %s", dev->name, desc->dev->name);
+        _drv_dev_priv_free(priv);
+        desc->controller_priv = NULL;
+        return -ENOMEM;
+    }
+
+    /* Program DAT with address, static addr, and IBI flags from BCR */
+    uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(dat_addr);
+
+    if (desc->static_addr != 0) {
+        val |= DEV_ADDR_TABLE1_LOC1_STATIC_ADDR(desc->static_addr);
+    }
+    if (desc->bcr & I3C_BCR_IBI_REQUEST_CAPABLE) {
+        val |= DEV_ADDR_TABLE1_LOC1_SIR_REJECT;
+        if (desc->bcr & I3C_BCR_IBI_PAYLOAD_HAS_DATA_BYTE) {
+            val |= DEV_ADDR_TABLE1_LOC1_IBI_WITH_DATA;
+        }
+    }
+
+    uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
+                   ((uintptr_t)free_posn_DAT * 4u);
+
+    sys_write32(val, (mm_reg_t)entry_addr);
+    priv->dat_idx = free_posn_DAT;
+    data->DAT_free_positions &= ~(1U << free_posn_DAT);
+    i3c_addr_slots_mark_i3c(&data->common.attached_dev.addr_slots, dat_addr);
+
+    return 0;
+}
+
+static int i3c_xec_detach_device(const struct device *dev, struct i3c_device_desc *desc)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *config = dev->config;
+    mm_reg_t regbase = config->regbase;
+
+    if (desc == NULL) {
+        return -EINVAL;
+    }
+
+    struct xec_i3c_dev_priv *priv = desc->controller_priv;
+
+    if (priv == NULL) {
+        LOG_ERR("%s: %s: device not attached", dev->name, desc->dev->name);
+        return -EINVAL;
+    }
+
+    if (priv->dat_idx != XEC_I3C_DAT_IDX_NONE) {
+        uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(0);
+        uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
+                       ((uintptr_t)priv->dat_idx * 4u);
+
+        sys_write32(val, (mm_reg_t)entry_addr);
+        data->DAT_free_positions |= (1U << priv->dat_idx);
+    }
+
+    if (desc->dynamic_addr != 0) {
+        i3c_addr_slots_mark_free(&data->common.attached_dev.addr_slots,
+                     desc->dynamic_addr);
+    }
+
+    _drv_dev_priv_free(priv);
+    desc->dynamic_addr = 0;
+    desc->controller_priv = NULL;
+    return 0;
+}
+
+static int i3c_xec_reattach_device(const struct device *dev, struct i3c_device_desc *desc,
+                    uint8_t old_dyn_addr)
+{
+    struct xec_i3c_data *data = dev->data;
+    const struct xec_i3c_config *config = dev->config;
+    mm_reg_t regbase = config->regbase;
+
+    if (desc == NULL) {
+        return -EINVAL;
+    }
+
+    struct xec_i3c_dev_priv *priv = desc->controller_priv;
+
+    if (priv == NULL) {
+        LOG_ERR("%s: %s: device not attached", dev->name, desc->dev->name);
+        return -EINVAL;
+    }
+
+    if (priv->dat_idx != XEC_I3C_DAT_IDX_NONE) {
+        uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(desc->dynamic_addr);
+        uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
+                       ((uintptr_t)priv->dat_idx * 4u);
+
+        sys_write32(val, (mm_reg_t)entry_addr);
+    }
+
+    if (old_dyn_addr != 0) {
+        i3c_addr_slots_mark_free(&data->common.attached_dev.addr_slots, old_dyn_addr);
+    }
+    if (desc->dynamic_addr != 0) {
+        i3c_addr_slots_mark_i3c(&data->common.attached_dev.addr_slots,
+                    desc->dynamic_addr);
+    }
+    return 0;
+}
+
+/* --- Section 11: CCC, DAA, private transfer --- */
 
 static int _drv_i3c_CCC(const struct device *dev, struct i3c_ccc_payload *payload,
-			uint8_t *response)
+             uint8_t *response)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *xec_data = dev->data;
-	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct mec_i3c_DO_CCC do_ccc_instance;
-	struct i3c_ccc_target_payload *target;
-	int ret = 0;
-	int n;
-	uint8_t num_targets;
-	uint8_t DAT_idx; /* Index of the device in Device Address Table */
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *xec_data = dev->data;
+    struct mec_i3c_ctx *hwctx = &xec_data->ctx;
+    struct i3c_pending_xfer *pxfer = &xec_data->pending_xfer_ctxt;
+    struct mec_i3c_DO_CCC do_ccc_instance;
+    struct i3c_ccc_target_payload *target;
+    int ret = 0;
+    int n;
+    uint8_t num_targets;
+    uint8_t DAT_idx;
 
-	hwctx->base = (mm_reg_t)config->regbase;
-	*response = 0;
+    hwctx->base = (mm_reg_t)config->regbase;
+    *response = 0;
+    memset(&do_ccc_instance, 0x00, sizeof(do_ccc_instance));
 
-	memset(&do_ccc_instance, 0x00, sizeof(do_ccc_instance));
+    if (payload->ccc.id <= I3C_CCC_BROADCAST_MAX_ID) {
+        /* Reject ENTDAA through CCC path — must use do_daa */
+        if (payload->ccc.id == I3C_CCC_ENTDAA) {
+            LOG_ERR("%s: ENTDAA must use do_daa API", dev->name);
+            return -EINVAL;
+        }
 
-	/* Handle Broadcast Write CCC */
-	if (payload->ccc.id <= I3C_CCC_BROADCAST_MAX_ID) {
-		do_ccc_instance.read = false; /* No Broadcast Read */
-		do_ccc_instance.defining_byte_valid = false;
-		do_ccc_instance.ccc_id = payload->ccc.id;
+        do_ccc_instance.read = false;
+        do_ccc_instance.defining_byte_valid = false;
+        do_ccc_instance.ccc_id = payload->ccc.id;
+        do_ccc_instance.xfer_speed =
+        			((payload->ccc.id >= I3C_CCC_ENTHDR0) &&
+        			 (payload->ccc.id <= I3C_CCC_ENTHDR7))
+        			? xec_i3c_ccc_to_xfer_speed(payload->ccc.id)
+        			: MEC_XFER_SPEED_SDR0;
 
-		if (payload->ccc.data_len) {
-			/* Set the first byte as the optional defining byte */
-			do_ccc_instance.defining_byte = payload->ccc.data[0];
-			do_ccc_instance.defining_byte_valid = true;
+        if (payload->ccc.data_len) {
+            do_ccc_instance.defining_byte = payload->ccc.data[0];
+            do_ccc_instance.defining_byte_valid = true;
+            if (1 < payload->ccc.data_len) {
+                do_ccc_instance.data_buf = &payload->ccc.data[1];
+                do_ccc_instance.data_len = payload->ccc.data_len - 1;
+            }
+        }
 
-			/* Handle optional write data*/
-			if (1 < payload->ccc.data_len) {
-				do_ccc_instance.data_buf = &payload->ccc.data[1];
-				do_ccc_instance.data_len = payload->ccc.data_len - 1;
-			}
-		}
+        _drv_pending_xfer_ctxt_init(pxfer);
+        pxfer->xfer_type = XFER_TYPE_CCC;
+        pxfer->xfer_sem = &xec_data->xfer_sem;
 
-		_drv_pending_xfer_ctxt_init();
-		pending_xfer_ctxt.xfer_type = XFER_TYPE_CCC;
-		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
+        XEC_I3C_DO_CCC(dev, &do_ccc_instance, &pxfer->node[0].tid);
 
-		XEC_I3C_DO_CCC(dev, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
+        if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+            XEC_I3C_Xfer_Reset(dev);
+            ret = -ETIMEDOUT;
+        } else if (pxfer->xfer_status) {
+            *response = pxfer->xfer_status;
+            ret = xec_i3c_map_xfer_error(pxfer->xfer_status);
+        }
+    } else {
+        /* Directed CCC */
+        num_targets = payload->targets.num_targets;
+        if ((0 == num_targets) || (XEC_I3C_MAX_TARGETS < num_targets)) {
+            return -EINVAL;
+        }
 
-		if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			XEC_I3C_Xfer_Reset(dev);
-			ret = -EBUSY;
-		} else if (pending_xfer_ctxt.xfer_status) {
-			*response = pending_xfer_ctxt.xfer_status;
-			ret = -EIO;
-		}
-	} else { /* Handle Directed CCC */
-		num_targets = payload->targets.num_targets;
+        for (n = 0; n < num_targets; n++) {
+            do_ccc_instance.defining_byte_valid = false;
+            do_ccc_instance.ccc_id = payload->ccc.id;
+            do_ccc_instance.xfer_speed = MEC_XFER_SPEED_SDR0;
 
-		/* Ensure num_targets is valid */
-		if ((0 == num_targets) || (XEC_I3C_MAX_TARGETS < num_targets)) {
-			return -EINVAL;
-		}
+            pxfer->xfer_type = XFER_TYPE_CCC;
+            pxfer->xfer_sem = &xec_data->xfer_sem;
+            pxfer->xfer_status = 0;
+            _drv_pending_xfer_node_init(&pxfer->node[0]);
 
-		for (n = 0; n < num_targets; n++) {
-			do_ccc_instance.defining_byte_valid = false;
-			do_ccc_instance.ccc_id = payload->ccc.id;
+            if (payload->ccc.data_len) {
+                do_ccc_instance.defining_byte = payload->ccc.data[0];
+                do_ccc_instance.defining_byte_valid = true;
+            }
 
-			_drv_pending_xfer_ctxt_init();
-			pending_xfer_ctxt.xfer_type = XFER_TYPE_CCC;
-			pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
+            target = &payload->targets.payloads[n];
+            DAT_idx = 0;
+            if (_drv_i3c_DAT_idx_get(dev, target->addr, &DAT_idx)) {
+                ret = -EINVAL;
+                break;
+            }
 
-			if (payload->ccc.data_len) {
-				/* Take only the defining byte from the ccc data, if any other
-				 * data then we are ignoring since for directed CCC there is
-				 * only defining byte before the target slave address
-				 */
-				do_ccc_instance.defining_byte = payload->ccc.data[0];
-				do_ccc_instance.defining_byte_valid = true;
-			}
+            /* For SETDASA: program static+dynamic address into DAT */
+            if (payload->ccc.id == I3C_CCC_SETDASA) {
+                if (target->data_len >= 1) {
+                    uint8_t new_da = target->data[0] >> 1;
+                    uint32_t dat_val =
+                        DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(new_da) |
+                        DEV_ADDR_TABLE1_LOC1_STATIC_ADDR(target->addr);
 
-			target = &payload->targets.payloads[n];
-			DAT_idx = 0;
-			if (_drv_i3c_DAT_idx_get(xec_data, target->addr, &DAT_idx)) {
-				/* Unable to locate target in target list */
-				ret = -EINVAL;
-				break;
-			}
+                    xec_i3c_DAT_write(config->regbase,
+                              xec_data->DAT_start_addr,
+                              DAT_idx, dat_val);
+                }
+            }
 
-			do_ccc_instance.tgt_idx = DAT_idx;
-			do_ccc_instance.data_buf = target->data;
-			do_ccc_instance.data_len = target->data_len;
+            do_ccc_instance.tgt_idx = DAT_idx;
+            do_ccc_instance.data_buf = target->data;
+            do_ccc_instance.data_len = target->data_len;
 
-			if (target->rnw) {
-				do_ccc_instance.read = true;
-				pending_xfer_ctxt.node[0].data_buf = do_ccc_instance.data_buf;
-				pending_xfer_ctxt.node[0].read = true;
-			}
+            if (target->rnw) {
+                do_ccc_instance.read = true;
+                pxfer->node[0].data_buf = do_ccc_instance.data_buf;
+                pxfer->node[0].read = true;
+            }
 
-			target->num_xfer = target->data_len;
+            target->num_xfer = target->data_len;
+            XEC_I3C_DO_CCC(dev, &do_ccc_instance, &pxfer->node[0].tid);
 
-			XEC_I3C_DO_CCC(dev, &do_ccc_instance, &pending_xfer_ctxt.node[0].tid);
-
-			if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-				XEC_I3C_Xfer_Reset(dev);
-				ret = -EBUSY;
-				break;
-			} else if (pending_xfer_ctxt.xfer_status) {
-				*response = pending_xfer_ctxt.xfer_status;
-				ret = -EIO;
-				break;
-			}
-
-			target->num_xfer = pending_xfer_ctxt.node[0].ret_data_len;
-
-		} /* end for */
-	}
-
-	return ret;
+            if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+                XEC_I3C_Xfer_Reset(dev);
+                ret = -ETIMEDOUT;
+                break;
+            } else if (pxfer->xfer_status) {
+                *response = pxfer->xfer_status;
+                ret = xec_i3c_map_xfer_error(pxfer->xfer_status);
+                break;
+            }
+            target->num_xfer = pxfer->node[0].ret_data_len;
+        }
+    }
+    return ret;
 }
 
-/**
- * @brief Send Common Command Code (CCC).
- *
- * @see i3c_do_ccc
- *
- * @param dev Pointer to controller device driver instance.
- * @param payload Pointer to CCC payload.
- *
- * @return @see i3c_do_ccc
- */
 static int i3c_xec_do_ccc(const struct device *dev, struct i3c_ccc_payload *payload)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	uint8_t response = 0;
-	int ret = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    uint8_t response = 0;
+    int ret = 0;
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master and bus master
-	 * mode */
-	if (false == xec_i3c_is_current_role_master(regbase) &&
-	    xec_i3c_is_current_role_bus_master(regbase)) {
-		ret = -EACCES;
-		goto exit_ccc;
-	}
+    if (!xec_i3c_is_current_role_master(regbase) ||
+        !xec_i3c_is_current_role_bus_master(regbase)) {
+        return -EACCES;
+    }
 
-	k_mutex_lock(&data->xfer_lock, K_FOREVER);
+    k_mutex_lock(&data->xfer_lock, K_FOREVER);
+    LOG_DBG("[%s] - Sending CCC = 0x%02X", __func__, payload->ccc.id);
+    ret = _drv_i3c_CCC(dev, payload, &response);
+    k_mutex_unlock(&data->xfer_lock);
 
-	LOG_DBG("[%s] - Sending CCC = 0x%02X", __func__, payload->ccc.id);
-
-	ret = _drv_i3c_CCC(dev, payload, &response);
-
-	k_mutex_unlock(&data->xfer_lock);
-
-	if ((!ret) && response) { /* Error in Response */
-		LOG_ERR("!!Error - 0x%08x - %d!!", response, ret);
-	}
-
-exit_ccc:
-	return ret;
+    if ((!ret) && response) {
+        LOG_ERR("CCC error - 0x%08x - %d", response, ret);
+    }
+    return ret;
 }
 
-/**
- * @brief Perform Dynamic Address Assignment.
+/*
+ * Dynamic Address Assignment (ENTDAA).
  *
- * @see i3c_do_daa
- *
- * @param dev Pointer to controller device driver instance.
- *
- * @return @see i3c_do_daa
+ * Uses a stack-local daa_list[] built from:
+ *   Phase 1:  Static device list entries needing DAA
+ *   Phase 1b: Hot-join pending entries
+ * Then programs DAT, sends ENTDAA, matches PIDs via i3c_device_find,
+ * and cleans up failed entries.
  */
 static int i3c_xec_do_daa(const struct device *dev)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct targets_on_bus *target_needs_DAA = NULL;
-	uint64_t pid = 0;
-	uint16_t DAA_entries_count = 0;
-	uint16_t DAA_success_count = 0;
-	uint16_t DAT_first_free_posn = 0;
-	struct mec_i3c_DCT_info dct_info;
-	int ret = 0, idx;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    struct i3c_pending_xfer *pxfer = &data->pending_xfer_ctxt;
+    const struct i3c_dev_list *dev_list = &config->common.dev_list;
+    struct daa_entry daa_list[XEC_I3C_MAX_TARGETS];
+    uint16_t daa_count = 0;
+    uint16_t daa_success_count = 0;
+    uint16_t dat_first_free = 0;
+    struct mec_i3c_DCT_info dct_info;
+    int ret = 0;
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master and bus master
-	 * mode */
-	if (false == xec_i3c_is_current_role_master(regbase) &&
-	    xec_i3c_is_current_role_bus_master(regbase)) {
-		ret = -EACCES;
-		goto exit_da;
-	}
+    if (!xec_i3c_is_current_role_master(regbase) ||
+        !xec_i3c_is_current_role_bus_master(regbase)) {
+        return -EACCES;
+    }
 
-	if (_drv_i3c_DAT_free_pos_get(data, &DAT_first_free_posn)) {
-		/* No free location in DAT */
-		LOG_ERR("%s: no space in DAT", dev->name);
-		ret = -ENOMEM;
-		goto exit_da;
-	}
+    k_mutex_lock(&data->xfer_lock, K_FOREVER);
 
-	k_mutex_lock(&data->xfer_lock, K_FOREVER);
+    /* Phase 1: Attached devices needing DAA (dynamic_addr == 0, no DAT) */
+    for (uint16_t i = 0; i < dev_list->num_i3c && daa_count < XEC_I3C_MAX_TARGETS; i++) {
+        struct i3c_device_desc *desc = &dev_list->i3c[i];
 
-	for (idx = DAT_first_free_posn; idx < data->DAT_depth; idx++) {
-		/* Ensure DAT position is free */
-		if (!(data->DAT_free_positions & (1U << idx))) {
-			/* DAT position is not available; can occur during Hot Join
-			 * Go for the next DAT position
-			 */
-			continue;
-		}
+        if (desc->controller_priv == NULL || desc->dynamic_addr != 0) {
+            continue;
+        }
+        struct xec_i3c_dev_priv *priv = desc->controller_priv;
 
-		if (_drv_i3c_targets_next_DAA_get(data, &target_needs_DAA)) {
-			break;
-			/* IF DISCOVERY: Add logic to fill the remaining entries in DAT with
-			 * possible dynamic address so that new devices on the bus can be
-			 * discovered
-			 */
-		} else if (NULL != target_needs_DAA) {
-			target_needs_DAA->dat_idx = idx;
+        if (priv->dat_idx != XEC_I3C_DAT_IDX_NONE) {
+            continue;
+        }
 
-			/* Tier1 change: round2: XEC_I3C_DAT_DynamicAddrAssign_write - Write dynamic
-			 * address with parity for DAA */
-			uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(target_needs_DAA->address);
-			if (!__builtin_parity(target_needs_DAA->address)) {
-				val |= DEV_ADDR_TABLE1_LOC1_PARITY;
-			}
-			uintptr_t entry_addr = (uintptr_t)regbase +
-					       (uintptr_t)data->DAT_start_addr +
-					       ((uintptr_t)idx * 4u);
+        uint8_t addr = i3c_addr_slots_next_free_find(
+            &data->common.attached_dev.addr_slots, 0);
 
-			sys_write32(val, (mm_reg_t)entry_addr);
+        if (addr == 0) {
+            LOG_ERR("%s: no free address for DAA", dev->name);
+            continue;
+        }
+        daa_list[daa_count].desc = desc;
+        daa_list[daa_count].priv = priv;
+        daa_list[daa_count].intended_addr = addr;
+        daa_list[daa_count].dat_idx = 0;
+        daa_count++;
+    }
 
-			/* Mark the free position as used */
-			data->DAT_free_positions &= ~(1U << idx);
-			DAA_entries_count++;
-			target_needs_DAA->state = TGT_STATE_DAA_IN_PROGRESS;
-			/* Note: PID will be 0 for hot join device */
-			LOG_DBG("ENTDAA in progress for 0x%04x%08x",
-				(uint16_t)(target_needs_DAA->pid >> 32U),
-				(uint32_t)(target_needs_DAA->pid & 0xFFFFFFFFU));
-		}
-	}
+    /* Phase 1b: Hot-join pending entries (always added; HW deduplicates via PID) */
+    for (uint8_t i = 0; i < XEC_I3C_MAX_HOTJOIN && daa_count < XEC_I3C_MAX_TARGETS; i++) {
+        if (!data->hotjoin_pending[i].pending) {
+            continue;
+        }
+        struct xec_i3c_dev_priv *priv = _drv_dev_priv_alloc(data);
 
-	if (DAA_entries_count) {
-		_drv_pending_xfer_ctxt_init();
-		pending_xfer_ctxt.xfer_type = XFER_TYPE_ENTDAA;
-		pending_xfer_ctxt.xfer_sem = &data->xfer_sem;
+        if (priv == NULL) {
+            LOG_ERR("%s: no priv for hot-join DAA", dev->name);
+            data->hotjoin_pending[i].pending = false;
+            continue;
+        }
+        daa_list[daa_count].desc = NULL;
+        daa_list[daa_count].priv = priv;
+        daa_list[daa_count].intended_addr = data->hotjoin_pending[i].intended_addr;
+        daa_list[daa_count].dat_idx = 0;
+        daa_count++;
+        data->hotjoin_pending[i].pending = false;
+    }
 
-		/* Start the DAA process */
-		XEC_I3C_DO_DAA(dev, DAT_first_free_posn, DAA_entries_count,
-			       &pending_xfer_ctxt.node[0].tid);
+    if (daa_count == 0) {
+        LOG_DBG("%s: no devices need DAA", dev->name);
+        goto exit_da;
+    }
 
-		if (k_sem_take(&data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			XEC_I3C_Xfer_Reset(dev);
-			ret = -EBUSY;
-		} else if (pending_xfer_ctxt.xfer_status) {
-			LOG_ERR("DAA status error - 0x%x", pending_xfer_ctxt.xfer_status);
-			if (pending_xfer_ctxt.node[0].ret_data_len) {
-				LOG_ERR("DAA remaining devices count - %d",
-					pending_xfer_ctxt.node[0].ret_data_len);
-				/* Not all devices in the static list (meant for DAA) are
-				 * assigned addresses. This is an error condition?
-				 */
-			}
-			ret = -EIO;
-		}
+    /* Phase 2: Program DAT entries */
+    if (_drv_i3c_DAT_free_pos_get(data, &dat_first_free)) {
+        LOG_ERR("%s: no space in DAT", dev->name);
+        ret = -ENOMEM;
+        goto cleanup_all;
+    }
 
-		DAA_success_count = DAA_entries_count - pending_xfer_ctxt.node[0].ret_data_len;
+    uint16_t dat_idx = dat_first_free;
 
-		if (ret != -EBUSY) {
-			/* DAA is successful (maybe partial), but devices may have different
-			 * intended dynamic addresses due to arbitration.
-			 * Need to update accordingly
-			 */
-			for (idx = 0; idx < DAA_success_count; idx++) {
-				_drv_dct_info_init(&dct_info);
-				XEC_I3C_DCT_read(dev, data->DCT_start_addr, idx, &dct_info);
-				pid = dct_info.pid;
+    for (uint16_t i = 0; i < daa_count; i++) {
+        while (dat_idx < data->DAT_depth &&
+               !(data->DAT_free_positions & (1U << dat_idx))) {
+            dat_idx++;
+        }
+        if (dat_idx >= data->DAT_depth) {
+            LOG_ERR("%s: DAT full during DAA prep", dev->name);
+            /* Clean up entries that couldn't be programmed */
+            for (uint16_t j = i; j < daa_count; j++) {
+                daa_list[j].priv->dat_idx = XEC_I3C_DAT_IDX_NONE;
+                if (daa_list[j].desc == NULL) {
+                    _drv_dev_priv_free(daa_list[j].priv);
+                }
+            }
+            daa_count = i;
+            break;
+        }
 
-				const struct i3c_device_id i3c_id = I3C_DEVICE_ID(pid);
-				const uint16_t vendor_id = (uint16_t)(pid >> 32U);
-				const uint32_t part_no = (uint32_t)(pid & 0xFFFFFFFFU);
-				struct i3c_device_desc *target = i3c_device_find(dev, &i3c_id);
+        uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(daa_list[i].intended_addr);
 
-				if (target == NULL) {
-					LOG_DBG("%s: PID 0x%04x%08x is not in registered device "
-						"list, given DA 0x%02x",
-						dev->name, vendor_id, part_no,
-						dct_info.dynamic_addr);
-					/* This is probably an error condition ??
-					 * what should we do?
-					 */
-					i3c_addr_slots_mark_i3c(
-						&data->common.attached_dev.addr_slots,
-						dct_info.dynamic_addr);
-				} else {
-					target->dynamic_addr = dct_info.dynamic_addr;
-					target->bcr = dct_info.bcr;
-					target->dcr = dct_info.dcr;
-					_drv_i3c_targets_DAA_addr_update(data, pid,
-									 dct_info.dynamic_addr,
-									 DAT_first_free_posn + idx);
-					LOG_DBG("%s: PID 0x%04x%08x assigned dynamic address "
-						"0x%02x",
-						dev->name, vendor_id, part_no,
-						dct_info.dynamic_addr);
-				}
-			}
-		}
+        if (!__builtin_parity(daa_list[i].intended_addr)) {
+            val |= DEV_ADDR_TABLE1_LOC1_PARITY;
+        }
 
-		/* Need Review - should be (ret != -EBUSY)?? */
-		_drv_i3c_targets_DAA_done(dev, ret != EBUSY,
-					  DAT_first_free_posn + DAA_success_count - 1);
-	}
+        uintptr_t entry_addr = (uintptr_t)regbase + (uintptr_t)data->DAT_start_addr +
+                       ((uintptr_t)dat_idx * 4u);
+
+        sys_write32(val, (mm_reg_t)entry_addr);
+        daa_list[i].dat_idx = dat_idx;
+        daa_list[i].priv->dat_idx = dat_idx;
+        data->DAT_free_positions &= ~(1U << dat_idx);
+        dat_idx++;
+    }
+
+    if (daa_count == 0) {
+        ret = -ENOMEM;
+        goto exit_da;
+    }
+
+    /* Phase 3: Send ENTDAA */
+    _drv_pending_xfer_ctxt_init(pxfer);
+    pxfer->xfer_type = XFER_TYPE_ENTDAA;
+    pxfer->xfer_sem = &data->xfer_sem;
+
+    XEC_I3C_DO_DAA(dev, daa_list[0].dat_idx, daa_count, &pxfer->node[0].tid);
+
+    if (k_sem_take(&data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+        XEC_I3C_Xfer_Reset(dev);
+        ret = -ETIMEDOUT;
+    } else if (pxfer->xfer_status) {
+        LOG_ERR("DAA status error - 0x%x", pxfer->xfer_status);
+        ret = -EIO;
+    }
+
+    /* Calculate success count (force 0 on timeout for full cleanup) */
+    if (ret == -ETIMEDOUT) {
+        daa_success_count = 0;
+    } else if (pxfer->node[0].ret_data_len > daa_count) {
+        LOG_ERR("DAA: remaining %d exceeds entries %d",
+            pxfer->node[0].ret_data_len, daa_count);
+        daa_success_count = 0;
+    } else {
+        daa_success_count = daa_count - pxfer->node[0].ret_data_len;
+    }
+
+    /* Phase 4: Process successful results — match PIDs to devices */
+    if (daa_success_count > 0) {
+        for (uint16_t i = 0; i < daa_success_count; i++) {
+            _drv_dct_info_init(&dct_info);
+            XEC_I3C_DCT_read(dev, data->DCT_start_addr, i, &dct_info);
+
+            const struct i3c_device_id i3c_id = { .pid = dct_info.pid };
+            struct i3c_device_desc *matched = i3c_device_find(dev, &i3c_id);
+
+            if (matched != NULL) {
+                struct xec_i3c_dev_priv *mpriv = matched->controller_priv;
+                uint8_t old_addr = matched->dynamic_addr;
+
+                /* Free old DAT if different from new one */
+                if (mpriv != NULL &&
+                    mpriv->dat_idx != XEC_I3C_DAT_IDX_NONE &&
+                    mpriv->dat_idx != daa_list[i].dat_idx) {
+                    uint32_t clr = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(0);
+                    uintptr_t old_entry =
+                        (uintptr_t)regbase +
+                        (uintptr_t)data->DAT_start_addr +
+                        ((uintptr_t)mpriv->dat_idx * 4u);
+
+                    sys_write32(clr, (mm_reg_t)old_entry);
+                    data->DAT_free_positions |= (1U << mpriv->dat_idx);
+                }
+
+                /* Update dat_idx BEFORE reattach so it writes to correct DAT */
+                if (mpriv != NULL) {
+                    mpriv->dat_idx = daa_list[i].dat_idx;
+                }
+
+                matched->dynamic_addr = dct_info.dynamic_addr;
+                matched->bcr = dct_info.bcr;
+                matched->dcr = dct_info.dcr;
+                i3c_reattach_i3c_device(matched, old_addr);
+
+                /* Free temporary hot-join priv if PID matched a DT device */
+                if (daa_list[i].desc == NULL && daa_list[i].priv != mpriv) {
+                    _drv_dev_priv_free(daa_list[i].priv);
+                    daa_list[i].priv = mpriv;
+                }
+
+                LOG_DBG("%s: PID 0x%04x%08x assigned DA 0x%02x", dev->name,
+                    (uint16_t)(dct_info.pid >> 32U),
+                    (uint32_t)(dct_info.pid & 0xFFFFFFFFU),
+                    dct_info.dynamic_addr);
+            } else {
+                LOG_DBG("%s: unknown PID 0x%04x%08x at DA 0x%02x", dev->name,
+                    (uint16_t)(dct_info.pid >> 32U),
+                    (uint32_t)(dct_info.pid & 0xFFFFFFFFU),
+                    dct_info.dynamic_addr);
+                i3c_addr_slots_mark_i3c(&data->common.attached_dev.addr_slots,
+                            dct_info.dynamic_addr);
+            }
+        }
+    }
+
+    /* Phase 5: Cleanup failed entries (guard against unprogrammed DAT) */
+cleanup_all:
+    for (uint16_t i = daa_success_count; i < daa_count; i++) {
+        uint8_t didx = daa_list[i].priv->dat_idx;
+
+        if (didx != XEC_I3C_DAT_IDX_NONE) {
+            uint32_t val = DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(0);
+            uintptr_t entry_addr = (uintptr_t)regbase +
+                           (uintptr_t)data->DAT_start_addr +
+                           ((uintptr_t)didx * 4u);
+
+            sys_write32(val, (mm_reg_t)entry_addr);
+            data->DAT_free_positions |= (1U << didx);
+        }
+        daa_list[i].priv->dat_idx = XEC_I3C_DAT_IDX_NONE;
+        if (daa_list[i].desc == NULL) {
+            _drv_dev_priv_free(daa_list[i].priv);
+        }
+    }
 
 exit_da:
-	k_mutex_unlock(&data->xfer_lock);
-	return ret;
+    k_mutex_unlock(&data->xfer_lock);
+    return ret;
 }
 
-/**
- * @brief Transfer messages in I3C mode
- *
- * @see _drv_i3c_xfers
- *
- * @param dev Pointer to controller device driver instance.
- * @param msgs Pointer to I3C messages.
- * @param response Pointer to xfer response
- * @return @see _drv_i3c_xfers
- */
+/* Controller ISR response handler */
+static void _drv_i3c_isr_xfers(const struct device *dev, uint16_t num_responses)
+{
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    struct i3c_pending_xfer *pxfer = &data->pending_xfer_ctxt;
+    mm_reg_t rb = config->regbase;
+
+    for (int i = 0; i < num_responses; i++) {
+        uint32_t response = sys_read32(rb + XEC_I3C_RESP_OFS);
+        uint16_t data_len = (uint16_t)(response & 0xffffu);
+        uint8_t tid = (uint8_t)((response & RESPONSE_TID_BITMASK) >> RESPONSE_TID_BITPOS);
+        uint8_t resp_sts = (uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >>
+                         RESPONSE_ERR_STS_BITPOS);
+
+        pxfer->node[i].error_status = resp_sts;
+        pxfer->node[i].ret_data_len = data_len;
+
+        if (tid == pxfer->node[i].tid) {
+            if ((!resp_sts) && data_len) {
+                if (pxfer->node[i].read) {
+                    xec_i3c_fifo_read(rb, pxfer->node[i].data_buf, data_len);
+                } else {
+                    LOG_ERR("Read data with no matching read request");
+                }
+            }
+        } else {
+            LOG_ERR("TID match error - need to investigate");
+        }
+    }
+
+    pxfer->xfer_status = 0;
+    for (int i = 0; i < num_responses; i++) {
+        switch (pxfer->node[i].error_status) {
+        case RESPONSE_ERROR_PARITY:
+            LOG_ERR("RESPONSE_ERROR_PARITY"); break;
+        case RESPONSE_ERROR_IBA_NACK:
+            LOG_ERR("RESPONSE_ERROR_IBA_NACK"); break;
+        case RESPONSE_ERROR_TRANSF_ABORT:
+            LOG_ERR("RESPONSE_ERROR_TRANSF_ABORT"); break;
+        case RESPONSE_ERROR_CRC:
+            LOG_ERR("RESPONSE_ERROR_CRC"); break;
+        case RESPONSE_ERROR_FRAME:
+            LOG_ERR("RESPONSE_ERROR_FRAME"); break;
+        case RESPONSE_ERROR_OVER_UNDER_FLOW:
+            LOG_ERR("RESPONSE_ERROR_OVER_UNDER_FLOW"); break;
+        case RESPONSE_ERROR_I2C_W_NACK_ERR:
+            LOG_ERR("RESPONSE_ERROR_I2C_W_NACK_ERR"); break;
+        case RESPONSE_ERROR_ADDRESS_NACK:
+            LOG_ERR("RESPONSE_ERROR_ADDRESS_NACK"); break;
+        case RESPONSE_NO_ERROR:
+            __fallthrough;
+        default:
+            break;
+        }
+        if (pxfer->node[i].error_status) {
+            pxfer->xfer_status = pxfer->node[i].error_status;
+            break;
+        }
+    }
+
+    if (pxfer->xfer_status) {
+        XEC_I3C_Xfer_Error_Resume(dev);
+    }
+    k_sem_give(pxfer->xfer_sem);
+}
+
 static int _drv_i3c_xfers(const struct device *dev, struct i3c_msg *msgs, uint8_t num_msgs,
-			  uint8_t tgt_addr, uint8_t *response)
+               uint8_t tgt_addr, uint8_t *response)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *xec_data = dev->data;
-	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct mec_i3c_XFER do_xfer_instance;
-	uint8_t i = 0;
-	int ret = 0;
-	uint8_t DAT_idx; /* Index of the device in Device Address Table */
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *xec_data = dev->data;
+    struct mec_i3c_ctx *hwctx = &xec_data->ctx;
+    struct i3c_pending_xfer *pxfer = &xec_data->pending_xfer_ctxt;
+    struct mec_i3c_XFER do_xfer_instance;
+    uint8_t i = 0;
+    int ret = 0;
+    uint8_t DAT_idx = 0;
 
-	hwctx->base = (mm_reg_t)config->regbase;
-	*response = 0;
+    hwctx->base = (mm_reg_t)config->regbase;
+    *response = 0;
+    memset(&do_xfer_instance, 0x00, sizeof(do_xfer_instance));
 
-	memset(&do_xfer_instance, 0x00, sizeof(do_xfer_instance));
+    _drv_pending_xfer_ctxt_init(pxfer);
+    pxfer->xfer_type = XFER_TYPE_PVT_RW;
+    pxfer->xfer_sem = &xec_data->xfer_sem;
 
-	_drv_pending_xfer_ctxt_init();
-	pending_xfer_ctxt.xfer_type = XFER_TYPE_PVT_RW;
-	pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
+    /* Look up DAT index once — all messages go to same target */
+    if (_drv_i3c_DAT_idx_get(dev, tgt_addr, &DAT_idx)) {
+        LOG_ERR("Target 0x%02x not found in DAT", tgt_addr);
+        return -EINVAL;
+    }
 
-	for (i = 0; i < num_msgs; i++) {
-		if (I3C_MSG_READ == (msgs[i].flags & I3C_MSG_RW_MASK)) {
-			LOG_DBG("Read [%d] bytes from target [0x%02x]", msgs[i].len, tgt_addr);
-			do_xfer_instance.cmds[i].read = true;
-		} else {
-			LOG_DBG("Send [%d] bytes to target [0x%02x]", msgs[i].len, tgt_addr);
-			do_xfer_instance.cmds[i].read = false;
-		}
+    for (i = 0; i < num_msgs; i++) {
+        do_xfer_instance.cmds[i].read =
+            (I3C_MSG_READ == (msgs[i].flags & I3C_MSG_RW_MASK));
+        do_xfer_instance.cmds[i].stop =
+            (I3C_MSG_STOP == (msgs[i].flags & I3C_MSG_STOP));
 
-		if (I3C_MSG_STOP == (msgs[i].flags & I3C_MSG_STOP)) {
-			do_xfer_instance.cmds[i].stop = true;
-		} else {
-			do_xfer_instance.cmds[i].stop = false;
-		}
+        if (I3C_MSG_HDR == (msgs[i].flags & I3C_MSG_HDR)) {
+            if (!(xec_data->common.ctrl_config.supported_hdr & I3C_MSG_HDR_DDR)) {
+                LOG_ERR("HDR-DDR not supported by this controller");
+                ret = -ENOTSUP;
+                break;
+            }
+            do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_HDR_DDR;
+        } else {
+            do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_SDR0;
+        }
 
-		if (I3C_MSG_HDR == (msgs[i].flags & I3C_MSG_HDR)) {
-			/* Only DDR supported */
-			do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_HDR_DDR;
-		} else {
-			/* Use SDR0 for fast xfer */
-			do_xfer_instance.cmds[i].xfer_speed = MEC_XFER_SPEED_SDR0;
-		}
+        do_xfer_instance.cmds[i].pec_en = false;
+        do_xfer_instance.cmds[i].tgt_idx = DAT_idx;
+        do_xfer_instance.cmds[i].data_buf = msgs[i].buf;
+        do_xfer_instance.cmds[i].data_len = msgs[i].len;
 
-		do_xfer_instance.cmds[i].pec_en = false;
+        pxfer->node[i].read = do_xfer_instance.cmds[i].read;
+        pxfer->node[i].data_buf = do_xfer_instance.cmds[i].data_buf;
 
-		DAT_idx = 0;
-		if (_drv_i3c_DAT_idx_get(xec_data, tgt_addr, &DAT_idx)) {
-			/* Unable to locate target in target list */
-			ret = -EINVAL;
-			break;
-		}
+        XEC_I3C_DO_Xfer_Prep(dev, &do_xfer_instance.cmds[i], &pxfer->node[i].tid);
+    }
 
-		do_xfer_instance.cmds[i].tgt_idx = DAT_idx;
-		do_xfer_instance.cmds[i].data_buf = msgs[i].buf;
-		do_xfer_instance.cmds[i].data_len = msgs[i].len;
+    /* Clean up partially written TX FIFO on prep failure */
+    if (ret) {
+        XEC_I3C_Xfer_Reset(dev);
+        return ret;
+    }
 
-		pending_xfer_ctxt.node[i].read = do_xfer_instance.cmds[i].read;
-		pending_xfer_ctxt.node[i].data_buf = do_xfer_instance.cmds[i].data_buf;
+    if (num_msgs > 0U) {
+        uint8_t threshold = (uint8_t)(num_msgs - 1U);
 
-		XEC_I3C_DO_Xfer_Prep(dev, &do_xfer_instance.cmds[i],
-				     &pending_xfer_ctxt.node[i].tid);
-	}
+        if (threshold < XEC_I3C_RESPONSE_BUF_DEPTH) {
+            soc_mmcr_mask_set(config->regbase + XEC_I3C_QT_CR_OFS,
+                      XEC_I3C_QT_CR_RBT_SET((uint32_t)threshold),
+                      XEC_I3C_QT_CR_RBT_MSK);
+        }
+    }
 
-	/* Tier1 change: round2: XEC_I3C_Thresholds_Response_buf_set - Set response buffer threshold
-	 * (fixed underflow) */
-	if (num_msgs > 0U) {
-		uint8_t threshold = (uint8_t)(num_msgs - 1U);
-		if (threshold < XEC_I3C_RESPONSE_BUF_DEPTH) {
-			uint32_t msk = XEC_I3C_QT_CR_RBT_MSK;
-			uint32_t val = XEC_I3C_QT_CR_RBT_SET((uint32_t)threshold);
-			soc_mmcr_mask_set(config->regbase + XEC_I3C_QT_CR_OFS, val, msk);
-		}
-	}
+    for (i = 0; i < num_msgs; i++) {
+        XEC_I3C_DO_Xfer(dev, &do_xfer_instance.cmds[i]);
+    }
 
-	for (i = 0; i < num_msgs; i++) {
-		XEC_I3C_DO_Xfer(dev, &do_xfer_instance.cmds[i]);
-	}
+    if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+        ret = -ETIMEDOUT;
+        XEC_I3C_Xfer_Reset(dev);
+    } else if (pxfer->xfer_status) {
+        *response = pxfer->xfer_status;
+        ret = xec_i3c_map_xfer_error(pxfer->xfer_status);
+    }
 
-	if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-		ret = -EBUSY;
-		XEC_I3C_Xfer_Reset(dev);
-	} else {
-		if (pending_xfer_ctxt.xfer_status) {
-			*response = pending_xfer_ctxt.xfer_status;
-			ret = -EIO;
-		}
-	}
-
-	return ret;
+    /* Update read message lengths with actual bytes received */
+    if (ret == 0) {
+        for (i = 0; i < num_msgs; i++) {
+            if (pxfer->node[i].read) {
+                msgs[i].len = pxfer->node[i].ret_data_len;
+            }
+        }
+    }
+    return ret;
 }
 
-/**
- * @brief Transfer messages in I3C mode
- *
- * @see i3c_xec_xfers
- *
- * @param dev Pointer to controller device driver instance.
- * @param msgs Pointer to I3C messages.
- *
- * @return @see i3c_xec_xfers
- */
 static int i3c_xec_xfers(const struct device *dev, struct i3c_device_desc *target,
-			 struct i3c_msg *msgs, uint8_t num_msgs)
+              struct i3c_msg *msgs, uint8_t num_msgs)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	uint32_t nrxwords = 0, ntxwords = 0;
-	uint8_t response = 0;
-	int ret = 0, i = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    uint32_t nrxwords = 0, ntxwords = 0;
+    uint8_t response = 0;
+    int ret = 0;
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master mode */
-	if (false == xec_i3c_is_current_role_master(regbase)) {
-		ret = -EACCES;
-		goto exit_xfer;
-	}
+    if (!xec_i3c_is_current_role_master(regbase)) {
+        return -EACCES;
+    }
+    if (num_msgs == 0) {
+        return 0;
+    }
+    if (0U == target->dynamic_addr) {
+        return -EINVAL;
+    }
+    if (num_msgs > data->fifo_depths.cmd_fifo_depth) {
+        return -ENOTSUP;
+    }
 
-	if (num_msgs == 0) {
-		ret = 0;
-		goto exit_xfer;
-	}
+    for (int i = 0; i < num_msgs; i++) {
+        if (I3C_MSG_READ == (msgs[i].flags & I3C_MSG_RW_MASK)) {
+            nrxwords += DIV_ROUND_UP(msgs[i].len, 4);
+        } else {
+            ntxwords += DIV_ROUND_UP(msgs[i].len, 4);
+        }
+    }
+    if (ntxwords > data->fifo_depths.tx_fifo_depth ||
+        nrxwords > data->fifo_depths.rx_fifo_depth) {
+        return -ENOTSUP;
+    }
 
-	if (0U == target->dynamic_addr) {
-		ret = -EINVAL;
-		goto exit_xfer;
-	}
+    k_mutex_lock(&data->xfer_lock, K_FOREVER);
+    ret = _drv_i3c_xfers(dev, msgs, num_msgs, target->dynamic_addr, &response);
+    k_mutex_unlock(&data->xfer_lock);
 
-	if (num_msgs > data->fifo_depths.cmd_fifo_depth) {
-		ret = -ENOTSUP;
-		goto exit_xfer;
-	}
-
-	for (i = 0; i < num_msgs; i++) {
-		if (I3C_MSG_READ == (msgs[i].flags & I3C_MSG_RW_MASK)) {
-			nrxwords += DIV_ROUND_UP(msgs[i].len, 4);
-		} else {
-			ntxwords += DIV_ROUND_UP(msgs[i].len, 4);
-		}
-	}
-
-	if (ntxwords > data->fifo_depths.tx_fifo_depth ||
-	    nrxwords > data->fifo_depths.rx_fifo_depth) {
-		ret = -ENOTSUP;
-		goto exit_xfer;
-	}
-
-	k_mutex_lock(&data->xfer_lock, K_FOREVER);
-
-	ret = _drv_i3c_xfers(dev, msgs, num_msgs, target->dynamic_addr, &response);
-
-	k_mutex_unlock(&data->xfer_lock);
-
-	if ((!ret) && response) { /* Error in Response */
-		LOG_ERR("!!Error - 0x%08x - %d!!", response, ret);
-	}
-
-exit_xfer:
-	return ret;
+    if ((!ret) && response) {
+        LOG_ERR("Xfer error - 0x%08x - %d", response, ret);
+    }
+    return ret;
 }
+
+/* --- Section 12: IBI API functions and IBI ISR support --- */
 
 #ifdef CONFIG_I3C_USE_IBI
+
 static int i3c_xec_ibi_enable(const struct device *dev, struct i3c_device_desc *target)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct i3c_ccc_events i3c_events;
-	struct mec_i3c_IBI_SIR enable_ibi_instance;
-	uint8_t DAT_idx = 0; /* Index of the device in Device Address Table */
-	int ret = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    struct i3c_ccc_events i3c_events;
+    struct mec_i3c_IBI_SIR enable_ibi_instance;
+    uint8_t DAT_idx = 0;
+    int ret = 0;
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master mode */
-	if (false == xec_i3c_is_current_role_master(regbase)) {
-		return -EACCES;
-	}
+    if (!xec_i3c_is_current_role_master(regbase)) {
+        return -EACCES;
+    }
 
-	if (0U == target->dynamic_addr) {
-		return -EINVAL;
-	}
+    if (0U == target->dynamic_addr) {
+        return -EINVAL;
+    }
 
-	if (!i3c_device_is_ibi_capable(target)) {
-		return -EINVAL;
-	}
+    if (!i3c_device_is_ibi_capable(target)) {
+        return -EINVAL;
+    }
 
-	DAT_idx = 0;
-	if (_drv_i3c_DAT_idx_get(data, target->dynamic_addr, &DAT_idx)) {
-		/* Unable to locate target in target list */
-		return -EINVAL;
-	}
+    if (_drv_i3c_DAT_idx_get(dev, target->dynamic_addr, &DAT_idx)) {
+        return -EINVAL;
+    }
 
-	LOG_DBG("%s: IBI enabling for 0x%02x (BCR 0x%02x)", dev->name, target->dynamic_addr,
-		target->bcr);
+    LOG_DBG("%s: IBI enabling for 0x%02x (BCR 0x%02x)", dev->name,
+        target->dynamic_addr, target->bcr);
 
-	/* Tell target to enable IBI */
-	i3c_events.events = I3C_CCC_EVT_INTR;
-	ret = i3c_ccc_do_events_set(target, true, &i3c_events);
-	if (ret != 0) {
-		LOG_ERR("%s: Error sending IBI ENEC for 0x%02x (%d)", dev->name,
-			target->dynamic_addr, ret);
-		return ret;
-	}
+    i3c_events.events = I3C_CCC_EVT_INTR;
+    ret = i3c_ccc_do_events_set(target, true, &i3c_events);
+    if (ret != 0) {
+        LOG_ERR("%s: Error sending IBI ENEC for 0x%02x (%d)", dev->name,
+            target->dynamic_addr, ret);
+        return ret;
+    }
 
-	enable_ibi_instance.DAT_start = data->DAT_start_addr;
-	enable_ibi_instance.tgt_dat_idx = DAT_idx;
-	enable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
+    enable_ibi_instance.DAT_start = data->DAT_start_addr;
+    enable_ibi_instance.tgt_dat_idx = DAT_idx;
+    enable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
 
-	XEC_I3C_IBI_SIR_Enable(dev, &enable_ibi_instance, !data->ibi_intr_enabled_init);
+    XEC_I3C_IBI_SIR_Enable(dev, &enable_ibi_instance, !data->ibi_intr_enabled_init);
 
-	return 0;
+    return 0;
 }
 
 static int i3c_xec_ibi_disable(const struct device *dev, struct i3c_device_desc *target)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct i3c_ccc_events i3c_events;
-	struct mec_i3c_IBI_SIR disable_ibi_instance;
-	uint8_t DAT_idx = 0; /* Index of the device in Device Address Table */
-	int ret = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    struct i3c_ccc_events i3c_events;
+    struct mec_i3c_IBI_SIR disable_ibi_instance;
+    uint8_t DAT_idx = 0;
+    int ret = 0;
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master mode */
-	if (false == xec_i3c_is_current_role_master(regbase)) {
-		return -EACCES;
-	}
+    if (!xec_i3c_is_current_role_master(regbase)) {
+        return -EACCES;
+    }
 
-	if (0U == target->dynamic_addr) {
-		return -EINVAL;
-	}
+    if (0U == target->dynamic_addr) {
+        return -EINVAL;
+    }
 
-	if (!i3c_device_is_ibi_capable(target)) {
-		return -EINVAL;
-	}
+    if (!i3c_device_is_ibi_capable(target)) {
+        return -EINVAL;
+    }
 
-	DAT_idx = 0;
-	if (_drv_i3c_DAT_idx_get(data, target->dynamic_addr, &DAT_idx)) {
-		/* Unable to locate target in target list */
-		return -EINVAL;
-	}
+    if (_drv_i3c_DAT_idx_get(dev, target->dynamic_addr, &DAT_idx)) {
+        return -EINVAL;
+    }
 
-	LOG_DBG("%s: IBI disabling for 0x%02x (BCR 0x%02x)", dev->name, target->dynamic_addr,
-		target->bcr);
+    LOG_DBG("%s: IBI disabling for 0x%02x (BCR 0x%02x)", dev->name,
+        target->dynamic_addr, target->bcr);
 
-	/* Tell target to enable IBI */
-	i3c_events.events = I3C_CCC_EVT_INTR;
-	ret = i3c_ccc_do_events_set(target, false, &i3c_events);
-	if (ret != 0) {
-		LOG_ERR("%s: Error sending IBI DISEC for 0x%02x (%d)", dev->name,
-			target->dynamic_addr, ret);
-		return ret;
-	}
+    i3c_events.events = I3C_CCC_EVT_INTR;
+    ret = i3c_ccc_do_events_set(target, false, &i3c_events);
+    if (ret != 0) {
+        LOG_ERR("%s: Error sending IBI DISEC for 0x%02x (%d)", dev->name,
+            target->dynamic_addr, ret);
+        return ret;
+    }
 
-	disable_ibi_instance.DAT_start = data->DCT_start_addr;
-	disable_ibi_instance.tgt_dat_idx = DAT_idx;
-	disable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
+    disable_ibi_instance.DAT_start = data->DAT_start_addr;
+    disable_ibi_instance.tgt_dat_idx = DAT_idx;
+    disable_ibi_instance.ibi_has_payload = i3c_ibi_has_payload(target);
 
-	XEC_I3C_IBI_SIR_Disable(dev, &disable_ibi_instance, !data->ibi_intr_enabled_init);
+    XEC_I3C_IBI_SIR_Disable(dev, &disable_ibi_instance, !data->ibi_intr_enabled_init);
 
-	return 0;
+    return 0;
 }
 
 static int i3c_xec_target_ibi_raise(const struct device *dev, struct i3c_ibi *request)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *xec_data = dev->data;
-	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-	struct mec_i3c_raise_IBI_SIR ibi_sir_request;
-	int ret = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *xec_data = dev->data;
+    struct mec_i3c_ctx *hwctx = &xec_data->ctx;
+    struct i3c_pending_xfer *pxfer = &xec_data->pending_xfer_ctxt;
+    struct mec_i3c_raise_IBI_SIR ibi_sir_request;
+    int ret = 0;
 
-	hwctx->base = config->regbase;
+    hwctx->base = config->regbase;
 
-	if (request == NULL) {
-		return -EINVAL;
-	}
+    if (request == NULL) {
+        return -EINVAL;
+    }
 
-	switch (request->ibi_type) {
-	case I3C_IBI_TARGET_INTR:
-		if ((0 == request->payload_len) || (request->payload_len > 5)) {
-			LOG_ERR("%s: Invalid IBI SIR payload len (%d)", dev->name,
-				request->payload_len);
-			return -EINVAL;
-		}
+    switch (request->ibi_type) {
+    case I3C_IBI_TARGET_INTR:
+        if ((0 == request->payload_len) || (request->payload_len > 5)) {
+            LOG_ERR("%s: Invalid IBI SIR payload len (%d)", dev->name,
+                request->payload_len);
+            return -EINVAL;
+        }
 
-		k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
+        k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
 
-		ibi_sir_request.mdb = request->payload[0];
-		ibi_sir_request.data_buf = &request->payload[1];
-		ibi_sir_request.data_len = (request->payload_len - 1U);
+        ibi_sir_request.mdb = request->payload[0];
+        ibi_sir_request.data_buf = &request->payload[1];
+        ibi_sir_request.data_len = (request->payload_len - 1U);
 
-		_drv_pending_xfer_ctxt_init();
-		pending_xfer_ctxt.xfer_type = XFER_TYPE_TGT_RAISE_IBI;
-		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
+        _drv_pending_xfer_ctxt_init(pxfer);
+        pxfer->xfer_type = XFER_TYPE_TGT_RAISE_IBI;
+        pxfer->xfer_sem = &xec_data->xfer_sem;
 
-		LOG_DBG("[%s] - Raise IBI SIR", __func__);
+        XEC_I3C_TGT_IBI_SIR_Raise(dev, &ibi_sir_request);
 
-		XEC_I3C_TGT_IBI_SIR_Raise(dev, &ibi_sir_request);
+        k_mutex_unlock(&xec_data->xfer_lock);
 
-		k_mutex_unlock(&xec_data->xfer_lock);
+        if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+            ret = -ETIMEDOUT;
+        } else if (pxfer->xfer_status) {
+            LOG_ERR("!!TGT Raise IBI SIR Error - 0x%08x !!", pxfer->xfer_status);
+            ret = -EIO;
+        }
+        break;
 
-		if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			ret = -EBUSY;
-			break;
-		} else if (pending_xfer_ctxt.xfer_status) {
-			LOG_ERR("!!TGT Raise IBI SIR Error - 0x%08x !!",
-				pending_xfer_ctxt.xfer_status);
-			ret = -EIO;
-			break;
-		}
-		break;
+    case I3C_IBI_CONTROLLER_ROLE_REQUEST:
+        k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
 
-	case I3C_IBI_CONTROLLER_ROLE_REQUEST:
-		/* We need to wait to process all outstanding responses/data from the
-		 * Response Queue / Rx-FIFO
-		 */
-		k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
+        _drv_pending_xfer_ctxt_init(pxfer);
+        pxfer->xfer_type = XFER_TYPE_TGT_RAISE_IBI_MR;
+        pxfer->xfer_sem = &xec_data->xfer_sem;
 
-		_drv_pending_xfer_ctxt_init();
-		pending_xfer_ctxt.xfer_type = XFER_TYPE_TGT_RAISE_IBI_MR;
-		pending_xfer_ctxt.xfer_sem = &xec_data->xfer_sem;
+        XEC_I3C_TGT_IBI_MR_Raise(dev);
 
-		LOG_DBG("[%s] - Raise IBI MR", __func__);
+        k_mutex_unlock(&xec_data->xfer_lock);
 
-		XEC_I3C_TGT_IBI_MR_Raise(dev);
+        if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
+            ret = -ETIMEDOUT;
+        } else if (pxfer->xfer_status) {
+            LOG_ERR("!!TGT Raise IBI MR Error - 0x%08x !!", pxfer->xfer_status);
+            ret = -EIO;
+        }
+        break;
 
-		k_mutex_unlock(&xec_data->xfer_lock);
+    case I3C_IBI_HOTJOIN:
+        return -ENOTSUP;
 
-		if (k_sem_take(&xec_data->xfer_sem, K_MSEC(DRV_RESP_WAIT_MS))) {
-			ret = -EBUSY;
-			break;
-		} else if (pending_xfer_ctxt.xfer_status) {
-			LOG_ERR("!!TGT Raise IBI MR Error - 0x%08x !!",
-				pending_xfer_ctxt.xfer_status);
-			ret = -EIO;
-			break;
-		}
-		break;
+    default:
+        return -EINVAL;
+    }
 
-	case I3C_IBI_HOTJOIN:
-		return -ENOTSUP;
-		/* return _drv_i3c_target_ibi_raise_hj(dev); */
-
-	default:
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int _drv_i3c_initiate_hotjoin(const struct device *dev)
-{
-	struct xec_i3c_data *data = dev->data;
-	uint8_t target_info_idx = 0;
-	uint8_t free_addr = 0;
-	int ret = -1;
-
-	free_addr = i3c_addr_slots_next_free_find(&data->common.attached_dev.addr_slots, 0);
-	if (!free_addr) {
-		LOG_ERR("%s: no free address available for hot join", dev->name);
-		return ret;
-	}
-
-	if (_drv_i3c_targets_free_pos_get(data, &target_info_idx)) {
-		/* Unable to find a free location in targets list */
-		LOG_ERR("%s: no space in targets list for i3c device (hot join)", dev->name);
-		return ret;
-	}
-
-	/* Initialize the target info node */
-	data->targets[target_info_idx].state = TGT_STATE_NEEDS_DAA;
-	data->targets[target_info_idx].address = free_addr;
-	data->targets[target_info_idx].pid = 0;
-
-	/* Now that we have created the target info node, proceed to DAA */
-	if (i3c_xec_do_daa(dev)) {
-		/* Unable to retrieve target PID */
-		LOG_ERR("%s: DAA for hot join: fail", dev->name);
-		return ret;
-	}
-
-	return 0;
+    return ret;
 }
 
 /**
- * @brief IBI Work Queue Callback
- *
- * @param work pointer to k_work item
+ * Allocate a free address and hot-join slot, then initiate DAA for the
+ * newly joined device.
  */
+static int _drv_i3c_initiate_hotjoin(const struct device *dev)
+{
+    struct xec_i3c_data *data = dev->data;
+    uint8_t free_addr;
+    int slot = -1;
+
+    free_addr = i3c_addr_slots_next_free_find(&data->common.attached_dev.addr_slots, 0);
+    if (!free_addr) {
+        LOG_ERR("%s: no free address for hot join", dev->name);
+        return -ENOMEM;
+    }
+
+    /* Find free hot-join pending slot */
+    for (int i = 0; i < XEC_I3C_MAX_HOTJOIN; i++) {
+        if (!data->hotjoin_pending[i].pending) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) {
+        LOG_ERR("%s: no hot-join slot available", dev->name);
+        return -ENOMEM;
+    }
+
+    data->hotjoin_pending[slot].intended_addr = free_addr;
+    data->hotjoin_pending[slot].pending = true;
+
+    if (i3c_xec_do_daa(dev)) {
+        LOG_ERR("%s: DAA for hot join: fail", dev->name);
+        /* do_daa cleans up on failure, but ensure slot is cleared */
+        data->hotjoin_pending[slot].pending = false;
+        return -EIO;
+    }
+
+    return 0;
+}
+
+#ifdef CONFIG_I3C_USE_IBI
 static void i3c_xec_ibi_work_cb(struct k_work *work)
 {
-	struct i3c_ibi_work *i3c_ibi_work = CONTAINER_OF(work, struct i3c_ibi_work, work);
-	const struct device *dev = i3c_ibi_work->controller;
-	struct xec_i3c_data *xec_data = dev->data;
-	struct i3c_device_desc *target = NULL;
-	uint8_t idx = 0, ibi_addr = 0;
+    struct i3c_ibi_work *i3c_ibi_work = CONTAINER_OF(work, struct i3c_ibi_work, work);
+    const struct device *dev = i3c_ibi_work->controller;
+    struct xec_i3c_data *xec_data = dev->data;
+    struct i3c_device_desc *target = NULL;
+    uint8_t ibi_addr = 0;
 
-	for (idx = 0; idx < XEC_I3C_MAX_IBI_LIST_COUNT; idx++) {
-		if (IBI_NODE_ISR_UPDATED == xec_data->ibis[idx].state) {
-			if (I3C_IBI_TARGET_INTR == xec_data->ibis[idx].ibi_type) {
-				ibi_addr = xec_data->ibis[idx].addr;
-				target = i3c_dev_list_i3c_addr_find(dev, ibi_addr);
-				if (target != NULL) {
-					/* Inform the application with IBI Payload */
-					(void)target->ibi_cb(target, &xec_data->ibis[idx].payload);
-					/* Note: we are ignoring the return value from this
-					 * callback because the hardware will automatically ACK the
-					 * target which is expected to send an IBI
-					 */
-				} else {
-					LOG_ERR("IBI SIR from unknown device %x", ibi_addr);
-				}
-			} else if (I3C_IBI_HOTJOIN == xec_data->ibis[idx].ibi_type) {
-				LOG_DBG("Received HJ request");
-				if (_drv_i3c_initiate_hotjoin(dev)) {
-					LOG_ERR("unable to complete DAA for HJ request "
-						"device 0x%x",
-						ibi_addr);
-				}
-			} else {
-				LOG_DBG("MR from device %x", ibi_addr);
-			}
-			xec_data->ibis[idx].state = IBI_NODE_STATE_FREE;
-		}
-	}
+    for (uint8_t idx = 0; idx < XEC_I3C_MAX_IBI_LIST_COUNT; idx++) {
+        if (IBI_NODE_ISR_UPDATED == xec_data->ibis[idx].state) {
+            if (I3C_IBI_TARGET_INTR == xec_data->ibis[idx].ibi_type) {
+                ibi_addr = xec_data->ibis[idx].addr;
+                target = i3c_dev_list_i3c_addr_find(dev, ibi_addr);
+
+                if (target != NULL) {
+                    if (target->ibi_cb != NULL) {
+                        (void)target->ibi_cb(
+                            target,
+                            &xec_data->ibis[idx].payload);
+                    } else {
+                        LOG_WRN("IBI from 0x%02x but no "
+                            "callback registered",
+                            ibi_addr);
+                    }
+                } else {
+                    LOG_ERR("IBI SIR from unknown device %x",
+                        ibi_addr);
+                }
+            } else if (I3C_IBI_HOTJOIN == xec_data->ibis[idx].ibi_type) {
+                LOG_DBG("Received HJ request");
+                if (_drv_i3c_initiate_hotjoin(dev)) {
+                    LOG_ERR("unable to complete DAA for HJ request");
+                }
+            } else {
+                LOG_DBG("MR from device %x",
+                    xec_data->ibis[idx].addr);
+            }
+
+            xec_data->ibis[idx].state = IBI_NODE_STATE_FREE;
+        }
+    }
+}
+#endif
+
+static bool _drv_i3c_ibi_isr(mm_reg_t regbase, struct xec_i3c_data *data)
+{
+    uint32_t ibi_sts = 0;
+    uint8_t ibi_addr, ibi_datalen;
+    struct ibi_node *ibi_node_ptr = NULL;
+    bool ibi_error = false;
+
+    uint8_t num_ibis = (uint8_t)XEC_I3C_QL_SR_IBC_GET(
+        sys_read32(regbase + XEC_I3C_QL_SR_OFS));
+
+    for (uint8_t i = 0; i < num_ibis; i++) {
+        ibi_sts = sys_read32(regbase + XEC_I3C_IBI_QUE_SR_OFS);
+        ibi_datalen = IBI_QUEUE_STATUS_DATA_LEN(ibi_sts);
+        ibi_addr = IBI_QUEUE_IBI_ADDR(ibi_sts);
+
+        ibi_node_ptr = _drvi3c_free_ibi_node_get_isr(data);
+
+        if (ibi_node_ptr) {
+            if (ibi_datalen) {
+                if (ibi_datalen <= CONFIG_I3C_IBI_MAX_PAYLOAD_SIZE) {
+                    ibi_node_ptr->payload.payload_len = ibi_datalen;
+                    xec_i3c_ibi_data_read(regbase,
+                        &ibi_node_ptr->payload.payload[0],
+                        ibi_datalen);
+                } else {
+                    LOG_ERR("IBI DataLen > MAX_IBI_PAYLOAD_LEN");
+                    ibi_error = true;
+                }
+            } else {
+                ibi_node_ptr->payload.payload_len = 0;
+            }
+
+            if (IBI_TYPE_SIRQ(ibi_sts)) {
+                ibi_node_ptr->ibi_type = I3C_IBI_TARGET_INTR;
+            } else if (IBI_TYPE_HJ(ibi_sts)) {
+                ibi_node_ptr->ibi_type = I3C_IBI_HOTJOIN;
+            } else if (IBI_TYPE_MR(ibi_sts)) {
+                ibi_node_ptr->ibi_type = I3C_IBI_CONTROLLER_ROLE_REQUEST;
+            }
+
+            ibi_node_ptr->state = IBI_NODE_ISR_UPDATED;
+            ibi_node_ptr->addr = ibi_addr;
+        } else {
+            LOG_ERR("No free IBI nodes");
+            ibi_error = true;
+        }
+    }
+
+    if (ibi_error) {
+        xec_i3c_ibi_data_read(regbase, NULL, IBI_QUEUE_STATUS_DATA_LEN(ibi_sts));
+    }
+
+    return ibi_error;
+}
+
+#endif /* CONFIG_I3C_USE_IBI */
+
+/* --- Section 13: Device find, target TX, register/unregister, config --- */
+
+static struct i3c_device_desc *i3c_xec_device_find(const struct device *dev,
+                            const struct i3c_device_id *id)
+{
+    const struct xec_i3c_config *config = dev->config;
+
+    return i3c_dev_list_find(&config->common.dev_list, id);
+}
+
+static int i3c_xec_target_tx_write(const struct device *dev, uint8_t *buf, uint16_t len,
+                    uint8_t hdr_mode)
+{
+    struct xec_i3c_data *xec_data = dev->data;
+
+    if (buf == NULL || len == 0) {
+        return -EINVAL;
+    }
+
+    if (hdr_mode != 0) {
+        if (!(xec_data->common.ctrl_config.supported_hdr & hdr_mode)) {
+            LOG_ERR("Unsupported HDR mode 0x%x for target TX", hdr_mode);
+            return -ENOTSUP;
+        }
+    }
+
+    if (xec_data->tgt_tx_queued) {
+        LOG_DBG("Target TX is in progress");
+        return -EBUSY;
+    }
+
+    xec_data->tgt_tx_queued = true;
+
+    if (len > xec_data->i3c_cfg_as_tgt.max_write_len) {
+        LOG_DBG("[%s] - Target write data len %d greater than SLV MAX WR LEN %d",
+            __func__, len, xec_data->i3c_cfg_as_tgt.max_write_len);
+        len = xec_data->i3c_cfg_as_tgt.max_write_len;
+    }
+
+    if (len > xec_data->fifo_depths.tx_fifo_depth) {
+        LOG_DBG("[%s] - Clamping target TX len %d to FIFO depth %d",
+            __func__, len, xec_data->fifo_depths.tx_fifo_depth);
+        len = xec_data->fifo_depths.tx_fifo_depth;
+    }
+
+    k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
+    XEC_I3C_DO_TGT_Xfer(dev, buf, len);
+    k_mutex_unlock(&xec_data->xfer_lock);
+
+    return len;
+}
+
+static int i3c_xec_target_register(const struct device *dev, struct i3c_target_config *cfg)
+{
+    struct xec_i3c_data *data = dev->data;
+
+    if (cfg == NULL || cfg->callbacks == NULL) {
+        return -EINVAL;
+    }
+
+    data->target_config = cfg;
+
+    /* Program target static address if provided */
+    if (cfg->address != 0) {
+        const struct xec_i3c_config *config = dev->config;
+
+        xec_i3c_static_addr_set(config->regbase, cfg->address);
+    }
+
+    return 0;
+}
+
+static int i3c_xec_target_unregister(const struct device *dev, struct i3c_target_config *cfg)
+{
+    struct xec_i3c_data *data = dev->data;
+
+    if (cfg != data->target_config) {
+        return -EINVAL;
+    }
+
+    data->target_config = NULL;
+
+    return 0;
+}
+
+static int i3c_xec_config_get(const struct device *dev, enum i3c_config_type type, void *config)
+{
+    struct xec_i3c_data *xec_data = dev->data;
+
+    if ((type != I3C_CONFIG_CONTROLLER) || (config == NULL)) {
+        return -EINVAL;
+    }
+
+    (void)memcpy(config, &xec_data->common.ctrl_config,
+             sizeof(xec_data->common.ctrl_config));
+
+    return 0;
+}
+
+static int i3c_xec_configure(const struct device *dev, enum i3c_config_type type, void *config)
+{
+    const struct xec_i3c_config *xec_config = dev->config;
+    struct xec_i3c_data *xec_data = dev->data;
+    mm_reg_t regbase = xec_config->regbase;
+
+    if (config == NULL) {
+        return -EINVAL;
+    }
+
+    if (type == I3C_CONFIG_TARGET) {
+        if (xec_i3c_is_current_role_master(regbase)) {
+            return -EINVAL;
+        }
+
+        struct i3c_config_target *tgt_cfg = (struct i3c_config_target *)config;
+
+        XEC_I3C_TGT_PID_set(dev, tgt_cfg->pid, tgt_cfg->pid_random);
+
+        /* Program MRL/MWL so controller can read via GETMRL/GETMWL CCCs */
+        if (tgt_cfg->max_read_len > 0 || tgt_cfg->max_write_len > 0) {
+            XEC_I3C_Target_MRL_MWL_set(dev,
+                           tgt_cfg->max_read_len,
+                           tgt_cfg->max_write_len);
+            xec_data->i3c_cfg_as_tgt.max_read_len = tgt_cfg->max_read_len;
+            xec_data->i3c_cfg_as_tgt.max_write_len = tgt_cfg->max_write_len;
+        }
+    } else if (type == I3C_CONFIG_CONTROLLER) {
+        if (!xec_i3c_is_current_role_master(regbase)) {
+            return -EINVAL;
+        }
+
+        struct i3c_config_controller *ctrl_cfg = (struct i3c_config_controller *)config;
+
+        if ((ctrl_cfg->scl.i2c == 0U) || (ctrl_cfg->scl.i3c == 0U)) {
+            return -EINVAL;
+        }
+
+        (void)memcpy(&xec_data->common.ctrl_config, ctrl_cfg, sizeof(*ctrl_cfg));
+
+        XEC_I3C_Controller_Clk_Cfg(dev, xec_config->clock,
+                       xec_data->common.ctrl_config.scl.i3c,
+                       xec_config->scl_od_min.high_ns,
+                       xec_config->scl_od_min.low_ns);
+    } else {
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+/* --- Section 14: ISR handlers --- */
+
+static void _drv_tgt_tx_done_handler(const struct device *dev)
+{
+    struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
+
+    xec_data->tgt_pvt_tx_sts = 0;
+    xec_data->tgt_pvt_tx_rem_data_len = 0;
+    xec_data->tgt_tx_queued = false;
+
+    if (xec_data->target_config == NULL ||
+        xec_data->target_config->callbacks == NULL) {
+        LOG_WRN("Target TX done but no config/callbacks registered");
+        return;
+    }
+
+    const struct i3c_target_callbacks *cbks = xec_data->target_config->callbacks;
+
+#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
+    if (cbks->buf_read_requested_cb != NULL) {
+        cbks->buf_read_requested_cb(xec_data->target_config, NULL, NULL, NULL);
+    }
+#else
+    if (cbks->read_processed_cb != NULL) {
+        cbks->read_processed_cb(xec_data->target_config, NULL);
+    }
+#endif
 }
 
 static void _drv_tgt_rx_handler(const struct device *dev)
 {
-	struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
-	const struct i3c_target_callbacks *target_cbks;
-	struct i3c_tgt_pvt_receive_node *tgt_rx_node;
-	uint8_t idx = 0;
+    struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
 
-	target_cbks = xec_data->target_config->callbacks;
+    if (xec_data->target_config == NULL ||
+        xec_data->target_config->callbacks == NULL) {
+        LOG_WRN("Target RX data but no config/callbacks registered");
+        /* Drain rx nodes to prevent them staying in ISR_UPDATED state */
+        for (uint8_t idx = 0; idx < XEC_I3C_MAX_TGT_RX_LIST_COUNT; idx++) {
+            struct i3c_tgt_pvt_receive_node *node = &xec_data->tgt_pvt_rx[idx];
 
-	/* Tier1 change: round2: XEC_I3C_TGT_dyn_addr_get - Get target dynamic address from register
-	 */
-	const struct xec_i3c_config *drvcfg = dev->config;
-	mm_reg_t regbase = drvcfg->regbase;
-	uint32_t da = sys_read32(regbase + XEC_I3C_DEV_ADDR_OFS);
-	xec_data->target_config->address = (uint8_t)XEC_I3C_DEV_ADDR_DYA_GET(da);
+            if ((TGT_RX_NODE_ISR_UPDATED == node->state) ||
+                (TGT_RX_NODE_ISR_UPDATED_THR == node->state)) {
+                node->state = TGT_RX_NODE_STATE_FREE;
+            }
+        }
+        return;
+    }
 
-	for (idx = 0; idx < XEC_I3C_MAX_TGT_RX_LIST_COUNT; idx++) {
-		tgt_rx_node = &xec_data->tgt_pvt_rx[idx];
-		if ((TGT_RX_NODE_ISR_UPDATED == tgt_rx_node->state) ||
-		    (TGT_RX_NODE_ISR_UPDATED_THR == tgt_rx_node->state)) {
-			if (!tgt_rx_node->error_status) {
+    const struct i3c_target_callbacks *cbks = xec_data->target_config->callbacks;
+    const struct xec_i3c_config *drvcfg = dev->config;
+    mm_reg_t regbase = drvcfg->regbase;
+    uint32_t da = sys_read32(regbase + XEC_I3C_DEV_ADDR_OFS);
 
+    xec_data->target_config->address = (uint8_t)XEC_I3C_DEV_ADDR_DYA_GET(da);
+
+    for (uint8_t idx = 0; idx < XEC_I3C_MAX_TGT_RX_LIST_COUNT; idx++) {
+        struct i3c_tgt_pvt_receive_node *node = &xec_data->tgt_pvt_rx[idx];
+
+        if ((TGT_RX_NODE_ISR_UPDATED == node->state) ||
+            (TGT_RX_NODE_ISR_UPDATED_THR == node->state)) {
+            if (!node->error_status) {
 #ifdef CONFIG_I3C_TARGET_BUFFER_MODE
-				/* Inform the application of the received data */
-				target_cbks->buf_write_received_cb(xec_data->target_config,
-								   &tgt_rx_node->data_buf[0],
-								   tgt_rx_node->data_len);
+                if (cbks->buf_write_received_cb != NULL) {
+                    cbks->buf_write_received_cb(
+                        xec_data->target_config,
+                        &node->data_buf[0], node->data_len);
+                }
 #else
-				/* Inform the application of the received data */
-				for (int i = 0; i < tgt_rx_node->data_len; i++) {
-					/* Note we are using only the write_received_cb to send all
-					 * the data byte by byte as expected by the Zephyr Model.
-					 * write_requested_cb which is used when write is initiated
-					 * is not used as we are not supporting ACK/NACK based on
-					 * application's decision.
-					 */
-					target_cbks->write_received_cb(xec_data->target_config,
-								       tgt_rx_node->data_buf[i]);
-				}
+                if (cbks->write_received_cb != NULL) {
+                    for (int i = 0; i < node->data_len; i++) {
+                        cbks->write_received_cb(
+                            xec_data->target_config,
+                            node->data_buf[i]);
+                    }
+                }
 #endif
-				if (TGT_RX_NODE_ISR_UPDATED == tgt_rx_node->state) {
-					/* Inform the end of transaction */
-					target_cbks->stop_cb(xec_data->target_config);
-				}
-			} else {
-				LOG_ERR("Error status for Target Private Receive 0x%x",
-					tgt_rx_node->error_status);
-			}
-			tgt_rx_node->state = TGT_RX_NODE_STATE_FREE;
-		}
-	}
-}
+                if (TGT_RX_NODE_ISR_UPDATED == node->state) {
+                    if (cbks->stop_cb != NULL) {
+                        cbks->stop_cb(xec_data->target_config);
+                    }
+                }
+            } else {
+                LOG_ERR("Target Private Receive error 0x%x",
+                    node->error_status);
+            }
 
-static void _drv_tgt_tx_done_handler(const struct device *dev)
-{
-	struct xec_i3c_data *xec_data = (struct xec_i3c_data *)dev->data;
-	const struct i3c_target_callbacks *target_cbks;
-
-	target_cbks = xec_data->target_config->callbacks;
-	xec_data->tgt_pvt_tx_sts = 0x0;
-	xec_data->tgt_pvt_tx_rem_data_len = 0x0;
-
-	/* Clear the tx queued flag to allow application to start another
-	 * target tx
-	 */
-	xec_data->tgt_tx_queued = false;
-
-#ifdef CONFIG_I3C_TARGET_BUFFER_MODE
-	target_cbks->buf_read_requested_cb(xec_data->target_config, NULL, NULL, NULL);
-#else
-	target_cbks->read_processed_cb(xec_data->target_config, NULL);
-#endif
-}
-
-static bool _drv_i3c_ibi_isr(mm_reg_t regbase, struct xec_i3c_data *data)
-{
-	uint8_t num_ibis = 0;
-	uint8_t i = 0;
-	uint32_t ibi_sts = 0;
-	uint8_t ibi_addr = 0;
-	uint8_t ibi_datalen = 0;
-	struct ibi_node *ibi_node_ptr = NULL;
-	bool ibi_error = false;
-
-	/* Tier1 change: round2: xec_i3c_ibi_status_count_get - Get IBI status count from queue
-	 * status register */
-	uint32_t qlvl = sys_read32(regbase + XEC_I3C_QL_SR_OFS);
-	num_ibis = (uint8_t)XEC_I3C_QL_SR_IBC_GET(qlvl);
-
-	for (i = 0; i < num_ibis; i++) {
-		/* Tier1 change: round2: xec_i3c_ibi_queue_status_get - Get IBI queue status
-		 * register value */
-		ibi_sts = sys_read32(regbase + XEC_I3C_IBI_QUE_SR_OFS);
-
-		ibi_datalen = IBI_QUEUE_STATUS_DATA_LEN(ibi_sts);
-		ibi_addr = IBI_QUEUE_IBI_ADDR(ibi_sts);
-
-		LOG_DBG("[%s] - ibi_sts = 0x%08x, ibi_addr = 0x%02x ibi_datalen = %d", __func__,
-			ibi_sts, ibi_addr, ibi_datalen);
-
-		ibi_node_ptr = _drv_i3c_free_ibi_node_get_isr(data);
-		if (ibi_node_ptr) {
-			if (ibi_datalen) {
-				if (ibi_datalen <= CONFIG_I3C_IBI_MAX_PAYLOAD_SIZE) {
-					ibi_node_ptr->payload.payload_len = ibi_datalen;
-					xec_i3c_ibi_data_read(regbase,
-							      &ibi_node_ptr->payload.payload[0],
-							      ibi_datalen);
-				} else {
-					LOG_ERR("IBI DataLen > MAX_IBI_PAYLOAD_LEN");
-					ibi_error = true;
-				}
-			} else {
-				ibi_node_ptr->payload.payload_len = 0;
-				LOG_ERR("IBI DataLen 0");
-			}
-
-			if (IBI_TYPE_SIRQ(ibi_sts)) {
-				LOG_DBG("SIRQ IBI received");
-				ibi_node_ptr->ibi_type = I3C_IBI_TARGET_INTR;
-			}
-			if (IBI_TYPE_HJ(ibi_sts)) {
-				LOG_DBG("HOT Join IBI received");
-				ibi_node_ptr->ibi_type = I3C_IBI_HOTJOIN;
-			}
-			if (IBI_TYPE_MR(ibi_sts)) {
-				LOG_DBG("MR IBI received");
-				ibi_node_ptr->ibi_type = I3C_IBI_CONTROLLER_ROLE_REQUEST;
-			}
-
-			ibi_node_ptr->state = IBI_NODE_ISR_UPDATED;
-			ibi_node_ptr->addr = ibi_addr;
-			LOG_DBG("Node updated");
-		} else {
-			LOG_ERR("No free IBI nodes");
-			ibi_error = true;
-		}
-	}
-
-	if (ibi_error) {
-		/* Drain the IBI Queue for this IBI */
-		xec_i3c_ibi_data_read(regbase, NULL, IBI_QUEUE_STATUS_DATA_LEN(ibi_sts));
-	}
-
-	return ibi_error;
-}
-#endif
-
-/**
- * @brief Find a registered I3C target device.
- *
- * This returns the I3C device descriptor of the I3C device
- * matching the incoming @p id.
- *
- * @param dev Pointer to controller device driver instance.
- * @param id Pointer to I3C device ID.
- *
- * @return @see i3c_device_find.
- */
-static struct i3c_device_desc *i3c_xec_device_find(const struct device *dev,
-						   const struct i3c_device_id *id)
-{
-	const struct xec_i3c_config *config = dev->config;
-
-	return i3c_dev_list_find(&config->common.dev_list, id);
-}
-
-/**
- * @brief Writes to the Target's TX FIFO
- *
- * @param dev Pointer to the device structure for an I3C controller
- *            driver configured in target mode.
- * @param buf Pointer to the buffer
- * @param len Length of the buffer
- *
- * @retval Number of bytes written
- */
-/* TODO API change. Added hdr_mode parameter */
-static int i3c_xec_target_tx_write(const struct device *dev, uint8_t *buf, uint16_t len,
-				   uint8_t hdr_mode)
-{
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *xec_data = dev->data;
-	struct mec_i3c_ctx *hwctx = &xec_data->ctx;
-
-	hwctx->base = config->regbase;
-
-	if (xec_data->tgt_tx_queued) {
-		LOG_DBG("Target TX is in progress");
-		return -EBUSY;
-	}
-
-	xec_data->tgt_tx_queued = true;
-
-	if (len > xec_data->i3c_cfg_as_tgt.max_write_len) {
-		LOG_DBG("[%s] - Target write data len %d greater than SLV MAX WR LEN %d", __func__,
-			len, xec_data->i3c_cfg_as_tgt.max_write_len);
-		len = xec_data->i3c_cfg_as_tgt.max_write_len;
-	}
-
-	if (len > xec_data->fifo_depths.tx_fifo_depth) {
-		len = 0;
-		goto exit_tgt_xfer;
-	}
-
-	k_mutex_lock(&xec_data->xfer_lock, K_FOREVER);
-
-	XEC_I3C_DO_TGT_Xfer(dev, buf, len);
-
-	k_mutex_unlock(&xec_data->xfer_lock);
-
-exit_tgt_xfer:
-	return len;
-}
-
-/**
- * @brief Register itself as target (to the I3C Controller)
- *
- * This tells the controller to act as a target device
- * on the I3C bus.
- *
- * @param dev Pointer to target device driver instance.
- * @param cfg Config struct with functions and parameters used by the I3C driver
- * to send bus events
- *
- * @return @see i3c_device_find.
- */
-static int i3c_xec_target_register(const struct device *dev, struct i3c_target_config *cfg)
-{
-	struct xec_i3c_data *data = dev->data;
-
-	data->target_config = cfg;
-
-	return 0;
-}
-
-/**
- * @brief Unregisters the provided config as Target device
- *
- * This tells the controller to stop acting as a target device
- * on the I3C bus.
- *
- * @param dev Pointer to target device driver instance.
- * @param cfg I3C target device configuration
- *
- */
-static int i3c_xec_target_unregister(const struct device *dev, struct i3c_target_config *cfg)
-{
-	struct xec_i3c_data *data = dev->data;
-
-	if (cfg == data->target_config) {
-		data->target_config = NULL;
-	}
-
-	return 0;
-}
-
-/**
- * @brief Get I3C Configuration
- *
- * Retrieve current configuration of I3C controller
- *
- *
- * @param dev Pointer to controller device driver instance.
- * @param type Type of configuration parameters expected
- * @param config Pointer to the configuration parameters.
- *
- * @retval 0 If successful.
- * @retval -EIO General Input/Output errors.
- * @retval -ENOSYS If not implemented.
- */
-static int i3c_xec_config_get(const struct device *dev, enum i3c_config_type type, void *config)
-{
-	struct xec_i3c_data *xec_data = dev->data;
-	int ret = 0;
-
-	if ((type != I3C_CONFIG_CONTROLLER) || (config == NULL)) {
-		return -EINVAL;
-	}
-
-	(void)memcpy(config, &xec_data->common.ctrl_config, sizeof(xec_data->common.ctrl_config));
-
-	return ret;
-}
-
-/**
- * @brief Configure I3C hardware.
- *
- * @param dev Pointer to controller device driver instance.
- * @param type Type of configuration parameters being passed
- *             in @p config.
- * @param config Pointer to the configuration parameters.
- *
- * @retval 0 If successful.
- * @retval -EINVAL Invalid parameters.
- */
-static int i3c_xec_configure(const struct device *dev, enum i3c_config_type type, void *config)
-{
-	const struct xec_i3c_config *xec_config = dev->config;
-	struct xec_i3c_data *xec_data = dev->data;
-	mm_reg_t regbase = xec_config->regbase;
-	uint32_t core_clock = xec_config->clock;
-	struct i3c_config_controller *ctrl_cfg;
-	struct i3c_config_target *tgt_cfg;
-
-	if (type == I3C_CONFIG_TARGET) {
-		/* Tier1 change: round2: Use inline helper - Check if controller is in master mode
-		 */
-		if (true == xec_i3c_is_current_role_master(regbase)) {
-			return -EINVAL;
-		}
-
-		tgt_cfg = (struct i3c_config_target *)config;
-
-		XEC_I3C_TGT_PID_set(dev, tgt_cfg->pid, tgt_cfg->pid_random);
-	} else if (type == I3C_CONFIG_CONTROLLER) {
-		/* Tier1 change: round2: Use inline helper - Check if controller is in master mode
-		 */
-		if (false == xec_i3c_is_current_role_master(regbase)) {
-			return -EINVAL;
-		}
-
-		ctrl_cfg = (struct i3c_config_controller *)config;
-
-		if ((ctrl_cfg->scl.i2c == 0U) || (ctrl_cfg->scl.i3c == 0U)) {
-			return -EINVAL;
-		}
-
-		/* Save the config */
-		(void)memcpy(&xec_data->common.ctrl_config, ctrl_cfg, sizeof(*ctrl_cfg));
-
-		XEC_I3C_Controller_Clk_Cfg(dev, core_clock, xec_data->common.ctrl_config.scl.i3c);
-	}
-
-	return 0;
-}
-
-static void _drv_i3c_isr_xfers(const struct device *dev, uint16_t num_responses)
-{
-	const struct xec_i3c_config *config = dev->config;
-	mm_reg_t rb = config->regbase;
-	uint16_t data_len = 0;
-	uint8_t resp_sts = 0;
-	uint8_t tid = 0;
-
-	/* Note: We are handling multiple responses only for chained private xfers */
-	for (int i = 0; i < num_responses; i++) {
-		/* Tier1 change: round2: xec_i3c_response_sts_get - Get response status and extract
-		 * data length and TID */
-		uint32_t response = sys_read32(rb + XEC_I3C_RESP_OFS);
-		data_len = (uint16_t)(response & 0xffffu);
-		tid = (uint8_t)((response & RESPONSE_TID_BITMASK) >> RESPONSE_TID_BITPOS);
-		resp_sts =
-			(uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >> RESPONSE_ERR_STS_BITPOS);
-
-		pending_xfer_ctxt.node[i].error_status = resp_sts;
-		pending_xfer_ctxt.node[i].ret_data_len = data_len;
-
-		LOG_DBG("[%s] - tid = %d, resp_sts = 0x%08x data_len = %d", __func__, tid, resp_sts,
-			data_len);
-
-		/* Ensure TID of response match pending transfer */
-		if (tid == pending_xfer_ctxt.node[i].tid) {
-			if ((!resp_sts) && data_len) { /* Read response bytes from Fifo */
-				if (pending_xfer_ctxt.node[i].read) {
-					LOG_DBG("[%s] - Reading [%d] bytes into [0x%08x]", __func__,
-						data_len,
-						(uint32_t)pending_xfer_ctxt.node[i].data_buf);
-					xec_i3c_fifo_read(rb, pending_xfer_ctxt.node[i].data_buf,
-							  data_len);
-				} else {
-					LOG_ERR("Read data encountered with no matching "
-						"read request");
-				}
-			}
-		} else {
-			LOG_ERR("TID match error - need to investigate");
-		}
-	}
-
-	pending_xfer_ctxt.xfer_status = 0;
-	for (int i = 0; i < num_responses; i++) {
-		switch (pending_xfer_ctxt.node[i].error_status) {
-		case RESPONSE_ERROR_PARITY:
-			LOG_ERR("RESPONSE_ERROR_PARITY");
-			break;
-		case RESPONSE_ERROR_IBA_NACK:
-			LOG_ERR("RESPONSE_ERROR_IBA_NACK");
-			break;
-		case RESPONSE_ERROR_TRANSF_ABORT:
-			LOG_ERR("RESPONSE_ERROR_TRANSF_ABORT");
-			break;
-		case RESPONSE_ERROR_CRC:
-			LOG_ERR("RESPONSE_ERROR_CRC");
-			break;
-		case RESPONSE_ERROR_FRAME:
-			LOG_ERR("RESPONSE_ERROR_FRAME");
-			break;
-		case RESPONSE_ERROR_OVER_UNDER_FLOW:
-			LOG_ERR("RESPONSE_ERROR_OVER_UNDER_FLOW");
-			break;
-		case RESPONSE_ERROR_I2C_W_NACK_ERR:
-			LOG_ERR("RESPONSE_ERROR_I2C_W_NACK_ERR");
-			break;
-		case RESPONSE_ERROR_ADDRESS_NACK:
-			LOG_ERR("RESPONSE_ERROR_ADDRESS_NACK");
-			break;
-		case RESPONSE_NO_ERROR:
-			__fallthrough;
-		default:
-			break;
-		}
-
-		if (pending_xfer_ctxt.node[i].error_status) {
-			/* Mark as Transaction error */
-			pending_xfer_ctxt.xfer_status = pending_xfer_ctxt.node[i].error_status;
-			break;
-		}
-	} /* end for */
-
-	if (pending_xfer_ctxt.xfer_status) { /* Error Handling */
-		XEC_I3C_Xfer_Error_Resume(dev);
-	}
-
-	k_sem_give(pending_xfer_ctxt.xfer_sem);
+            node->state = TGT_RX_NODE_STATE_FREE;
+        }
+    }
 }
 
 static bool _drv_i3c_isr_target_xfers(const struct device *dev, uint16_t num_responses)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t rb = config->regbase;
-	struct i3c_tgt_pvt_receive_node *tgt_rx_node;
-	uint16_t data_len = 0;
-	uint8_t resp_sts = 0;
-	uint8_t tid = 0;
-	bool notify_app = false;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t rb = config->regbase;
+    bool notify_app = false;
 
-	/*Note: We are expecting only one response in the ISR */
-	for (int i = 0; i < num_responses; i++) {
-		/* Tier1 change: round2: xec_i3c_tgt_response_sts_get - Get target response status
-		 * with RX indication (fixed loop bug) */
-		bool tgt_receive = false; /* Reset for each iteration */
-		uint32_t response = sys_read32(rb + XEC_I3C_RESP_OFS);
-		data_len = (uint16_t)(response & 0xFFFFu);
-		tid = (uint8_t)((response & RESPONSE_TID_TGT_BITMASK) >> RESPONSE_TID_BITPOS);
-		if (((response & RESPONSE_RX_RESP_BITMASK) >> RESPONSE_RX_RESP_BITPOS) != 0) {
-			tgt_receive = true;
-		}
-		resp_sts =
-			(uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >> RESPONSE_ERR_STS_BITPOS);
+    for (int i = 0; i < num_responses; i++) {
+        bool tgt_receive = false;
+        uint32_t response = sys_read32(rb + XEC_I3C_RESP_OFS);
+        uint16_t data_len = (uint16_t)(response & 0xFFFFu);
+        uint8_t tid = (uint8_t)((response & RESPONSE_TID_TGT_BITMASK) >>
+                    RESPONSE_TID_BITPOS);
+        uint8_t resp_sts = (uint8_t)((response & RESPONSE_ERR_STS_BITMASK) >>
+                         RESPONSE_ERR_STS_BITPOS);
 
-		LOG_DBG("[%s] - tid = %d, resp_sts = 0x%08x data_len = %d", __func__, tid, resp_sts,
-			data_len);
+        if (((response & RESPONSE_RX_RESP_BITMASK) >> RESPONSE_RX_RESP_BITPOS) != 0) {
+            tgt_receive = true;
+        }
 
-		if (tgt_receive) {
-			if (tid == RESPONSE_TID_DEFTGTS) { /* Response for DEFSLVS */
-				if (data_len <= data->DAT_depth) {
-					LOG_DBG("[%s] - DEFSLVS response: no of targets %d",
-						__func__, data_len);
-					XEC_I3C_TGT_DEFTGTS_DAT_write(dev, data->DCT_start_addr,
-								      data->DAT_start_addr,
-								      data_len);
-				} else {
-					LOG_DBG("[%s] - DEFSLVS response: no of targets "
-						"%d > DAT Depth %d",
-						__func__, data_len, data->DAT_depth);
-				}
-			} else { /* Private Receive Transfer - Controller Write */
-				tgt_rx_node = _drv_i3c_free_tgt_rx_node_get_isr(data, false);
-				if (tgt_rx_node) {
-					tgt_rx_node->error_status = resp_sts;
-					tgt_rx_node->data_len = data_len;
+        if (tgt_receive) {
+            if (tid == RESPONSE_TID_DEFTGTS) {
+                if (data_len <= data->DAT_depth) {
+                    XEC_I3C_TGT_DEFTGTS_DAT_write(dev, data->DCT_start_addr,
+                        data->DAT_start_addr, data_len);
+                }
+            } else {
+                struct i3c_tgt_pvt_receive_node *node =
+                    _drv_i3c_free_tgt_rx_node_get_isr(data, false);
 
-					if (data_len > data->i3c_cfg_as_tgt.max_read_len) {
-						LOG_DBG("[%s] - Received data len %d greater than "
-							"SLV MAX RD LEN %d",
-							__func__, data_len,
-							data->i3c_cfg_as_tgt.max_read_len);
-					}
+                if (node) {
+                    node->error_status = resp_sts;
+                    node->data_len = data_len;
+                    if ((!resp_sts) && data_len) {
+                        xec_i3c_fifo_read(rb, node->data_buf, data_len);
+                    }
+                    node->state = TGT_RX_NODE_ISR_UPDATED;
+                    notify_app = true;
 
-					/* Read response bytes from Fifo */
-					if ((!resp_sts) && data_len) {
-						LOG_DBG("[%s] - Reading [%d] bytes into [0x%08x]",
-							__func__, data_len,
-							(uint32_t)tgt_rx_node->data_buf);
-						xec_i3c_fifo_read(rb, tgt_rx_node->data_buf,
-								  data_len);
-					}
+                    if (resp_sts) {
+                        XEC_I3C_TGT_Error_Recovery(dev, resp_sts);
+                        break;
+                    }
+                } else {
+                    LOG_ERR("Target RX Node Unavailable");
+                }
+            }
+        } else {
+            data->tgt_pvt_tx_rem_data_len = data_len;
+            data->tgt_pvt_tx_sts = resp_sts;
+            _drv_tgt_tx_done_handler(dev);
 
-					tgt_rx_node->state = TGT_RX_NODE_ISR_UPDATED;
-					notify_app = true;
-					LOG_DBG("Node updated");
+            if (resp_sts || data_len != 0) {
+                XEC_I3C_TGT_Error_Recovery(dev, resp_sts);
+                break;
+            }
+        }
+    }
 
-					if (resp_sts) {
-						XEC_I3C_TGT_Error_Recovery(dev, resp_sts);
-						/* Controller is expected to issue GETSTATUS CCC
-						 * to clear error status from CCC_DEVICE_STATUS
-						 * register.
-						 */
-						break; /* break out of the for loop */
-					}
-				} else {
-					LOG_ERR("Target RX Node Unavailable");
-				}
-			}
-		} else { /* Private Write Transfer - Controller Read */
-			data->tgt_pvt_tx_rem_data_len = data_len;
-			data->tgt_pvt_tx_sts = resp_sts;
-
-			/* Prepare for next Target TX */
-			_drv_tgt_tx_done_handler(dev);
-
-			if ((resp_sts) || (data_len != 0)) {
-				XEC_I3C_TGT_Error_Recovery(dev, resp_sts);
-				/* Controller is expected to issue GETSTATUS CCC to clear
-				 * error status from CCC_DEVICE_STATUS register
-				 */
-				break; /* break out of the for loop */
-			}
-		}
-	}
-
-	return notify_app;
+    return notify_app;
 }
 
 static bool _drv_i3c_isr_target(const struct device *dev, uint32_t intr_sts)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t rb = config->regbase;
-	uint8_t ibi_sir_rem_datalen = 0;
-	uint16_t num_responses = 0;
-	bool notify_app = false;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    struct i3c_pending_xfer *pxfer = &data->pending_xfer_ctxt;
+    mm_reg_t rb = config->regbase;
+    bool notify_app = false;
+    uint32_t handled = 0;
 
-	/* Tier1 change: round2: xec_i3c_resp_buf_level_get - Get response buffer level from queue
-	 * status register */
-	uint32_t qlvl = sys_read32(rb + XEC_I3C_QL_SR_OFS);
-	num_responses = (uint8_t)XEC_I3C_QL_SR_RBL_GET(qlvl);
+    uint16_t num_responses = (uint8_t)XEC_I3C_QL_SR_RBL_GET(
+        sys_read32(rb + XEC_I3C_QL_SR_OFS));
 
-	LOG_DBG("[%s] - num_responses = %d", __func__, num_responses);
+    if (num_responses) {
+        handled |= BIT(XEC_I3C_ISR_RRDY_POS);
+        notify_app = _drv_i3c_isr_target_xfers(dev, num_responses);
+    }
 
-	if (num_responses) {
-		notify_app = _drv_i3c_isr_target_xfers(dev, num_responses);
-	}
+    if (intr_sts & BIT(XEC_I3C_ISR_IBI_UPD_POS)) {
+        handled |= BIT(XEC_I3C_ISR_IBI_UPD_POS);
 
-	if (intr_sts & BIT(XEC_I3C_ISR_IBI_UPD_POS)) {
-		LOG_DBG("[%s] IBI updated status", __func__);
-		/* Ensure there is corresponding pending context */
-		if ((XFER_TYPE_TGT_RAISE_IBI == pending_xfer_ctxt.xfer_type) ||
-		    (XFER_TYPE_TGT_RAISE_IBI_MR == pending_xfer_ctxt.xfer_type)) {
-			pending_xfer_ctxt.xfer_status = 1;
+        if ((XFER_TYPE_TGT_RAISE_IBI == pxfer->xfer_type) ||
+            (XFER_TYPE_TGT_RAISE_IBI_MR == pxfer->xfer_type)) {
+            pxfer->xfer_status = 1;
 
-			/* Tier1 change: round2: xec_i3c_tgt_ibi_resp_get - Get target IBI response
-			 * status */
-			uint32_t resp = sys_read32(rb + XEC_I3C_SC_TIBI_RESP_OFS);
-			ibi_sir_rem_datalen = XEC_I3C_SC_TIBI_RESP_LEN_GET(resp);
-			if (XEC_I3C_SC_TIBI_RESP_STS_GET(resp) == XEC_I3C_SC_TIBI_RESP_STS_ACK) {
-				pending_xfer_ctxt.xfer_status = 0;
-			} else {
-				LOG_DBG("[%s] Target Raise IBI SIR error, ibi_sir_rem_dlen = %d",
-					__func__, ibi_sir_rem_datalen);
-			}
+            uint32_t resp = sys_read32(rb + XEC_I3C_SC_TIBI_RESP_OFS);
+            uint8_t rem = XEC_I3C_SC_TIBI_RESP_LEN_GET(resp);
 
-			/* Error Handling */
-			if (pending_xfer_ctxt.xfer_status && ibi_sir_rem_datalen) {
-				LOG_DBG("[%s] Handle Target Raise IBI SIR Residual data", __func__);
-				XEC_I3C_TGT_IBI_SIR_Residual_handle(dev);
-			}
+            if (XEC_I3C_SC_TIBI_RESP_STS_GET(resp) ==
+                XEC_I3C_SC_TIBI_RESP_STS_ACK) {
+                pxfer->xfer_status = 0;
+            }
 
-			if (XFER_TYPE_TGT_RAISE_IBI == pending_xfer_ctxt.xfer_type) {
-				k_sem_give(pending_xfer_ctxt.xfer_sem);
-			} else if ((XFER_TYPE_TGT_RAISE_IBI_MR == pending_xfer_ctxt.xfer_type) &&
-				   pending_xfer_ctxt.xfer_status) {
-				k_sem_give(pending_xfer_ctxt.xfer_sem);
-			}
-		} else {
-			LOG_DBG("[%s] IBI Updated Sts without raising IBI ??", __func__);
-		}
-	}
+            if (pxfer->xfer_status && rem) {
+                XEC_I3C_TGT_IBI_SIR_Residual_handle(dev);
+            }
 
-	if (intr_sts & BIT(XEC_I3C_ISR_CCC_UPD_POS)) {
-		LOG_DBG("[%s] CCC updated by master", __func__);
-		/* Check and update MRL, MWL */
-		XEC_I3C_Target_MRL_MWL_update(dev, &data->i3c_cfg_as_tgt.max_read_len,
-					      &data->i3c_cfg_as_tgt.max_write_len);
-	}
+            if (XFER_TYPE_TGT_RAISE_IBI == pxfer->xfer_type) {
+                k_sem_give(pxfer->xfer_sem);
+            } else if (pxfer->xfer_status) {
+                k_sem_give(pxfer->xfer_sem);
+            }
+        }
+    }
 
-	if (intr_sts & BIT(XEC_I3C_ISR_DYNA_POS)) {
-		/* Tier1 change: round2: XEC_I3C_TGT_is_dyn_addr_valid - Check if target dynamic
-		 * address is valid */
-		if (sys_test_bit(rb + XEC_I3C_DEV_ADDR_OFS, XEC_I2C_DEV_ADDR_DYAV_POS) != 0) {
-			LOG_DBG("[%s] DA assigned by master", __func__);
-		} else {
-			LOG_DBG("[%s] DA reset by master", __func__);
-		}
-	}
+    if (intr_sts & BIT(XEC_I3C_ISR_CCC_UPD_POS)) {
+        handled |= BIT(XEC_I3C_ISR_CCC_UPD_POS);
+        XEC_I3C_Target_MRL_MWL_update(dev, &data->i3c_cfg_as_tgt.max_read_len,
+                           &data->i3c_cfg_as_tgt.max_write_len);
+    }
 
-	if (intr_sts & BIT(XEC_I3C_ISR_DEFTR_POS)) {
-		LOG_DBG("[%s] DEFSLV CCC sent by master", __func__);
-	}
+    if (intr_sts & BIT(XEC_I3C_ISR_DYNA_POS)) {
+        handled |= BIT(XEC_I3C_ISR_DYNA_POS);
+        if (sys_test_bit(rb + XEC_I3C_DEV_ADDR_OFS, XEC_I2C_DEV_ADDR_DYAV_POS) != 0) {
+            LOG_DBG("[%s] DA assigned by master", __func__);
+        } else {
+            LOG_DBG("[%s] DA reset by master", __func__);
+        }
+    }
 
-	if (intr_sts & BIT(XEC_I3C_ISR_RRR_POS)) {
-		LOG_DBG("[%s] READ_REQ_RECV_STS No valid command in command Q", __func__);
-	}
+    if (intr_sts & BIT(XEC_I3C_ISR_DEFTR_POS)) {
+        handled |= BIT(XEC_I3C_ISR_DEFTR_POS);
+        LOG_DBG("[%s] DEFSLV CCC sent by master", __func__);
+    }
 
-	if (intr_sts & BIT(XEC_I3C_ISR_BUS_OUPD_POS)) {
-		LOG_DBG("[%s] TGT: Bus owner was changed", __func__);
-		/* Bus Owner has changed; flush all fifos and queues and program resume bit */
-		XEC_I3C_TGT_RoleSwitch_Resume(dev);
+    if (intr_sts & BIT(XEC_I3C_ISR_RRR_POS)) {
+        handled |= BIT(XEC_I3C_ISR_RRR_POS);
+        LOG_DBG("[%s] READ_REQ_RECV_STS No valid command in command Q", __func__);
+    }
 
-		/* Ensure there is corresponding pending context to inform the raise IBI API */
-		if ((XFER_TYPE_TGT_RAISE_IBI_MR == pending_xfer_ctxt.xfer_type) &&
-		    (!pending_xfer_ctxt.xfer_status)) {
-			k_sem_give(pending_xfer_ctxt.xfer_sem);
-		}
-	}
+    /* Handle bus owner change — reconfigure interrupts if role switched */
+    if (intr_sts & BIT(XEC_I3C_ISR_BUS_OUPD_POS)) {
+        handled |= BIT(XEC_I3C_ISR_BUS_OUPD_POS);
+        LOG_DBG("[%s] TGT: Bus owner changed", __func__);
 
-	return notify_app;
+        XEC_I3C_TGT_RoleSwitch_Resume(dev);
+
+        if (xec_i3c_is_current_role_master(rb)) {
+            LOG_DBG("[%s] Became active controller — switching interrupts",
+                __func__);
+            XEC_I3C_Controller_Interrupts_Init(dev);
+        }
+
+        if ((XFER_TYPE_TGT_RAISE_IBI_MR == pxfer->xfer_type) &&
+            !pxfer->xfer_status) {
+            k_sem_give(pxfer->xfer_sem);
+        }
+    }
+
+    uint32_t unhandled = intr_sts & ~handled;
+
+    if (unhandled) {
+        LOG_WRN("[%s] Unhandled target ISR bits: 0x%08x", __func__, unhandled);
+    }
+
+    return notify_app;
 }
 
 static void _drv_i3c_isr_controller(const struct device *dev, uint32_t intr_sts)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t rb = config->regbase;
-	uint16_t num_responses = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t rb = config->regbase;
+    uint32_t handled = 0;
 
-	/* Tier1 change: round2: xec_i3c_resp_buf_level_get - Get response buffer level from queue
-	 * status register */
-	uint32_t qlvl = sys_read32(rb + XEC_I3C_QL_SR_OFS);
-	num_responses = (uint8_t)XEC_I3C_QL_SR_RBL_GET(qlvl);
+    /* Handle transfer abort before processing responses —
+     * response queue may be inconsistent after an abort.
+     */
+    if (intr_sts & BIT(XEC_I3C_ISR_XFR_ABRT_POS)) {
+        LOG_ERR("[%s] Transfer abort", __func__);
+        handled |= BIT(XEC_I3C_ISR_XFR_ABRT_POS);
 
-	/* LOG_DBG("[%s] - num_responses = %d", __func__, num_responses); */
+        XEC_I3C_Xfer_Reset(dev);
 
-	if (num_responses) {
-		_drv_i3c_isr_xfers(dev, num_responses);
-	}
+        struct i3c_pending_xfer *pxfer = &data->pending_xfer_ctxt;
 
+        if (pxfer->xfer_sem != NULL) {
+            pxfer->xfer_status = RESPONSE_ERROR_TRANSF_ABORT;
+            k_sem_give(pxfer->xfer_sem);
+        }
+
+        goto check_ibi;
+    }
+
+    if (intr_sts & BIT(XEC_I3C_ISR_XERR_POS)) {
+        LOG_ERR("[%s] Transfer error", __func__);
+        handled |= BIT(XEC_I3C_ISR_XERR_POS);
+        xec_i3c_xfer_err_sts_clr(rb);
+    }
+
+    /* Process responses */
+    uint16_t num_responses = (uint8_t)XEC_I3C_QL_SR_RBL_GET(
+        sys_read32(rb + XEC_I3C_QL_SR_OFS));
+
+    if (num_responses) {
+        handled |= BIT(XEC_I3C_ISR_RRDY_POS);
+        _drv_i3c_isr_xfers(dev, num_responses);
+    }
+
+check_ibi:
 #ifdef CONFIG_I3C_USE_IBI
-	if (intr_sts & BIT(XEC_I3C_ISR_IBI_THLD_POS)) {
-		if (false != _drv_i3c_ibi_isr(rb, data)) {
-			LOG_ERR("[%s] - Error handling IBI", __func__);
-		} else {
-			LOG_DBG("[%s] - Schedule IBI Task", __func__);
-			i3c_ibi_work_enqueue_cb(dev, i3c_xec_ibi_work_cb);
-		}
-	}
+    if (intr_sts & BIT(XEC_I3C_ISR_IBI_THLD_POS)) {
+        handled |= BIT(XEC_I3C_ISR_IBI_THLD_POS);
+        if (_drv_i3c_ibi_isr(rb, data)) {
+            LOG_ERR("[%s] - Error handling IBI", __func__);
+        } else {
+            i3c_ibi_work_enqueue_cb(dev, i3c_xec_ibi_work_cb);
+        }
+    }
 #endif
 
-	if (intr_sts & BIT(XEC_I3C_ISR_BUS_OUPD_POS)) {
-		LOG_DBG("[%s] CNTRLR: Bus owner was changed", __func__);
-	}
+    /* Flush queues after bus reset to restore consistent HW state */
+    if (intr_sts & BIT(XEC_I3C_ISR_BUS_RD_POS)) {
+        LOG_DBG("[%s] Bus reset done", __func__);
+        handled |= BIT(XEC_I3C_ISR_BUS_RD_POS);
+        XEC_I3C_Xfer_Reset(dev);
+    }
+
+    /* Handle bus owner change — reconfigure interrupts for new role */
+    if (intr_sts & BIT(XEC_I3C_ISR_BUS_OUPD_POS)) {
+        handled |= BIT(XEC_I3C_ISR_BUS_OUPD_POS);
+
+        if (!xec_i3c_is_current_role_master(rb)) {
+            LOG_DBG("[%s] Lost controller role — switching to target mode",
+                __func__);
+            XEC_I3C_TGT_RoleSwitch_Resume(dev);
+            XEC_I3C_Target_Interrupts_Init(dev);
+        } else {
+            LOG_DBG("[%s] Bus owner changed (still controller)", __func__);
+        }
+    }
+
+    if (intr_sts & BIT(XEC_I3C_ISR_DEFTR_POS)) {
+        handled |= BIT(XEC_I3C_ISR_DEFTR_POS);
+    }
+
+    uint32_t unhandled = intr_sts & ~handled;
+
+    if (unhandled) {
+        LOG_WRN("[%s] Unhandled ISR bits: 0x%08x", __func__, unhandled);
+    }
 }
 
-/**
- * @brief Interrupt Service Routine
- *
- * @see i3c_xec_isr
- *
- * @param dev Pointer to controller device driver instance.
- * @param payload Pointer to CCC payload.
- *
- * @return @see i3c_do_ccc
- */
+/* --- Section 15: Top-level ISR --- */
+ 
 static void i3c_xec_isr(const struct device *dev)
 {
-	const struct xec_i3c_config *config = dev->config;
-	mm_reg_t rb = config->regbase;
-	uint32_t intr_sts = 0;
-	bool notify_app = false;
+    const struct xec_i3c_config *config = dev->config;
+    mm_reg_t rb = config->regbase;
 
-	intr_sts = sys_read32(rb + XEC_I3C_INTR_SR_OFS);
+    uint32_t intr_sts = sys_read32(rb + XEC_I3C_INTR_SR_OFS);
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is in master mode */
-	if (false == xec_i3c_is_current_role_master(rb)) {
-		notify_app = _drv_i3c_isr_target(dev, intr_sts);
-		if (notify_app) {
-			_drv_tgt_rx_handler(dev);
-		}
-	} else {
-		_drv_i3c_isr_controller(dev, intr_sts);
-	}
+    if (!xec_i3c_is_current_role_master(rb)) {
+        if (_drv_i3c_isr_target(dev, intr_sts)) {
+            _drv_tgt_rx_handler(dev);
+        }
+    } else {
+        _drv_i3c_isr_controller(dev, intr_sts);
+    }
 
-	sys_write32(intr_sts, rb + XEC_I3C_INTR_SR_OFS);
-
-	/* Tier1 change: round2: XEC_I3C_GIRQ_Status_Clr - Clear GIRQ interrupt status */
-	soc_ecia_girq_status_clear(config->hwctx.girq, config->hwctx.girq_pos);
+    sys_write32(intr_sts, rb + XEC_I3C_INTR_SR_OFS);
+    soc_ecia_girq_status_clear(config->hwctx.girq, config->hwctx.girq_pos);
 }
 
-/**
- * @brief Initialize the hardware.
- *
- * @param dev Pointer to controller device driver instance.
- */
+/* --- Section 16: Initialization --- */
+
 static int i3c_xec_init(const struct device *dev)
 {
-	const struct xec_i3c_config *config = dev->config;
-	struct xec_i3c_data *data = dev->data;
-	mm_reg_t regbase = config->regbase;
-	struct i3c_config_controller *ctrl_config = &data->common.ctrl_config;
-	int i3c_bus_mode = I3C_BUS_MODE_PURE;
-	uint32_t core_clock = config->clock;
-	int i = 0, ret = 0;
-	uint8_t enable_config = 0;
+    const struct xec_i3c_config *config = dev->config;
+    struct xec_i3c_data *data = dev->data;
+    mm_reg_t regbase = config->regbase;
+    struct i3c_config_controller *ctrl_config = &data->common.ctrl_config;
+    uint32_t core_clock = config->clock;
+    int ret = 0;
+    uint8_t enable_config = 0;
+    uint8_t enable_addr;
 
-	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
-	if (ret != 0) {
-		LOG_ERR("XEC I3C pinctrl init failed (%d)", ret);
-		return ret;
-	}
+    ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+    if (ret != 0) {
+        LOG_ERR("XEC I3C pinctrl init failed (%d)", ret);
+        return ret;
+    }
 
-	/* Soft reset before configuration */
-	XEC_I3C_Soft_Reset(dev);
+    XEC_I3C_Soft_Reset(dev);
 
-	ctrl_config->is_secondary = false;
+    ctrl_config->is_secondary = !xec_i3c_is_current_role_primary(regbase);
 
-	/* Tier1 change: round2: Use inline helper - Check if controller is configured as primary */
-	if (!xec_i3c_is_current_role_primary(regbase)) {
-		ctrl_config->is_secondary = true;
-	}
+    __ASSERT_NO_MSG((IS_ENABLED(CONFIG_I3C_TARGET) && ctrl_config->is_secondary) ||
+            (IS_ENABLED(CONFIG_I3C_CONTROLLER) && !ctrl_config->is_secondary));
 
-	if (ctrl_config->is_secondary) {
-		XEC_I3C_Target_Init(dev, core_clock, &data->i3c_cfg_as_tgt.max_read_len,
-				    &data->i3c_cfg_as_tgt.max_write_len);
-		data->tgt_tx_queued = false;
-	} else {
-		switch (i3c_bus_mode) {
-		case I3C_BUS_MODE_MIXED_FAST:
-		case I3C_BUS_MODE_MIXED_LIMITED:
-			XEC_I3C_Controller_Clk_I2C_Init(dev, core_clock);
-			__fallthrough;
-		case I3C_BUS_MODE_PURE:
-			XEC_I3C_Controller_Clk_Init(dev, core_clock,
-						    data->common.ctrl_config.scl.i3c);
-			break;
-		default:
-			return -EINVAL;
-		}
-	}
+    ctrl_config->supported_hdr = 0;
+    {
+        uint32_t hw_cap = sys_read32(regbase + XEC_I3C_HW_CAP_OFS);
 
-	/* Create Semaphore for synchronization with ISR -
-	 * Initial count is set to 0 so that we block when we first Take
-	 */
-	if (k_sem_init(&data->xfer_sem, 0, 1)) {
-		/* Semaphore creation error */
-		return -EIO;
-	}
+        if (hw_cap & BIT(XEC_I3C_HW_CAP_HDR_DDR_POS)) {
+            ctrl_config->supported_hdr |= I3C_MSG_HDR_DDR;
+        }
+        if (hw_cap & BIT(XEC_I3C_HW_CAP_HDR_TS_POS)) {
+            ctrl_config->supported_hdr |= I3C_MSG_HDR_TSP | I3C_MSG_HDR_TSL;
+        }
+    }
 
-	/* Create mutex for thread synchronization */
-	if (k_mutex_init(&data->xfer_lock)) {
-		/* Mutex creation error */
-		return -EIO;
-	}
+    if (ctrl_config->is_secondary) {
+        XEC_I3C_Target_Init(dev, core_clock, &data->i3c_cfg_as_tgt.max_read_len,
+                    &data->i3c_cfg_as_tgt.max_write_len);
+    } else {
+        XEC_I3C_Controller_Clk_Init(dev, core_clock,
+                        data->common.ctrl_config.scl.i3c,
+                        config->scl_od_min.high_ns,
+                        config->scl_od_min.low_ns);
+    }
 
-	if (ctrl_config->is_secondary) {
-		XEC_I3C_Sec_Host_Config(dev);
-	} else {
-		XEC_I3C_Host_Config(dev);
-	}
+    data->tgt_tx_queued = false;
 
-	/* Initialize the Queues and FIFO thresholds */
-	XEC_I3C_Thresholds_Init(dev);
+    if (k_sem_init(&data->xfer_sem, 0, 1)) {
+        return -EIO;
+    }
 
-	if (ctrl_config->is_secondary) {
-		/* Enable the i3c target interrupts */
-		XEC_I3C_Target_Interrupts_Init(dev);
-	} else {
-		/* Enable the i3c controller interrupts */
-		XEC_I3C_Controller_Interrupts_Init(dev);
-	}
+    if (k_mutex_init(&data->xfer_lock)) {
+        return -EIO;
+    }
 
-	if (config->irq_config_func) {
-		config->irq_config_func();
-	}
+    if (ctrl_config->is_secondary) {
+        XEC_I3C_Sec_Host_Config(dev);
+    } else {
+        XEC_I3C_Host_Config(dev);
+    }
 
-	enable_config = sbit_CONFG_ENABLE;
-	if (ctrl_config->is_secondary) {
-		enable_config |= sbit_MODE_TARGET;
-	}
+    XEC_I3C_Thresholds_Init(dev);
+
+    if (!ctrl_config->is_secondary) {
+        xec_i3c_ibi_ctrl_reject_all(regbase);
+    }
+
+    if (ctrl_config->is_secondary) {
+        XEC_I3C_Target_Interrupts_Init(dev);
+    } else {
+        XEC_I3C_Controller_Interrupts_Init(dev);
+    }
+
+    if (config->irq_config_func) {
+        config->irq_config_func();
+    }
+
+    enable_config = sbit_CONFG_ENABLE;
+
+    /* Use local variable for enable address to avoid writing to const config */
+    if (ctrl_config->is_secondary) {
+        enable_config |= sbit_MODE_TARGET;
+        enable_addr = data->i3c_cfg_as_tgt.static_addr;
+    } else {
+        enable_addr = config->primary_controller_da;
+    }
 
 #ifndef CONFIG_I3C_USE_IBI
-	enable_config |= sbit_HOTJOIN_DISABLE;
+    enable_config |= sbit_HOTJOIN_DISABLE;
 #endif
 
-	XEC_I3C_Enable(dev, config->address, enable_config);
+    if (!ctrl_config->is_secondary) {
+        xec_i3c_hot_join_disable(regbase);
+    }
+
+    XEC_I3C_Enable(dev, enable_addr, enable_config);
 
 #ifdef CONFIG_I3C_USE_IBI
-	data->ibi_intr_enabled_init = false;
-	if (!(ctrl_config->is_secondary)) {
-		data->ibi_intr_enabled_init = true;
-	}
+    data->ibi_intr_enabled_init = !ctrl_config->is_secondary;
 #endif
 
-	XEC_I3C_queue_depths_get(dev, &data->fifo_depths);
+    XEC_I3C_queue_depths_get(dev, &data->fifo_depths);
 
-	data->DAT_start_addr = 0;
-	data->DAT_depth = 0;
+    data->DAT_start_addr = 0;
+    data->DAT_depth = 0;
+    uint32_t dat_val = sys_read32(regbase + XEC_I3C_DAT_PTR_OFS);
 
-	/* Tier1 change: round2: XEC_I3C_DAT_info_get - Get Device Address Table information from
-	 * DAT pointer register */
-	uint32_t dat_val = sys_read32(regbase + XEC_I3C_DAT_PTR_OFS);
-	data->DAT_start_addr = XEC_I3C_DAT_PTR_STA_GET(dat_val);
-	data->DAT_depth = XEC_I3C_DAT_PTR_DEPTH_GET(dat_val);
+    data->DAT_start_addr = XEC_I3C_DAT_PTR_STA_GET(dat_val);
+    data->DAT_depth = XEC_I3C_DAT_PTR_DEPTH_GET(dat_val);
 
-	data->DCT_start_addr = 0;
-	data->DCT_depth = 0;
+    data->DCT_start_addr = 0;
+    data->DCT_depth = 0;
+    uint32_t dct_val = sys_read32(regbase + XEC_I3C_DCT_PTR_OFS);
 
-	/* Tier1 change: round2: XEC_I3C_DCT_info_get - Get Device Characteristic Table information
-	 * from DCT pointer register */
-	uint32_t dct_val = sys_read32(regbase + XEC_I3C_DCT_PTR_OFS);
-	data->DCT_start_addr = XEC_I3C_DCT_PTR_STA_GET(dct_val);
-	data->DCT_depth = XEC_I3C_DCT_PTR_DEPTH_GET(dct_val);
+    data->DCT_start_addr = XEC_I3C_DCT_PTR_STA_GET(dct_val);
+    data->DCT_depth = XEC_I3C_DCT_PTR_DEPTH_GET(dct_val);
 
-	for (i = 0; i < XEC_I3C_MAX_TARGETS; i++) {
-		data->targets[i].state = TGT_STATE_NOT_PRESENT;
-	}
+    for (int i = 0; i < XEC_I3C_MAX_TARGETS; i++) {
+        data->dev_priv_pool[i].allocated = false;
+        data->dev_priv_pool[i].dat_idx = XEC_I3C_DAT_IDX_NONE;
+    }
+
+    for (int i = 0; i < XEC_I3C_MAX_HOTJOIN; i++) {
+        data->hotjoin_pending[i].pending = false;
+    }
 
 #ifdef CONFIG_I3C_USE_IBI
-	for (i = 0; i < XEC_I3C_MAX_IBI_LIST_COUNT; i++) {
-		data->ibis[i].state = IBI_NODE_STATE_FREE;
-	}
+    for (int i = 0; i < XEC_I3C_MAX_IBI_LIST_COUNT; i++) {
+        data->ibis[i].state = IBI_NODE_STATE_FREE;
+    }
 #endif
 
-	/* Create bitmask of available positions in DAT */
-	data->DAT_free_positions = GENMASK(data->DAT_depth - 1, 0);
+    data->DAT_free_positions = GENMASK(data->DAT_depth - 1, 0);
 
-	if (ctrl_config->is_secondary) {
-		/* Call only for Target mode */
-		i3c_xec_configure(dev, I3C_CONFIG_TARGET, &data->i3c_cfg_as_tgt);
-	} else {
-		ret = i3c_addr_slots_init(dev);
-		if (ret != 0) {
-			return ret;
-		}
+    if (ctrl_config->is_secondary) {
+        i3c_xec_configure(dev, I3C_CONFIG_TARGET, &data->i3c_cfg_as_tgt);
+    } else {
+        ret = i3c_addr_slots_init(dev);
+        if (ret != 0) {
+            return ret;
+        }
 
-		/* Perform bus initialization */
-		ret = i3c_bus_init(dev, &config->common.dev_list);
-	}
+        {
+            uint8_t controller_da = config->primary_controller_da;
 
-	return ret;
+            if (controller_da != 0U) {
+                if (!i3c_addr_slots_is_free(
+                        &data->common.attached_dev.addr_slots,
+                        controller_da)) {
+                    controller_da = i3c_addr_slots_next_free_find(
+                        &data->common.attached_dev.addr_slots, 0);
+                    LOG_WRN("%s: DA 0x%02x unavailable, using 0x%02x",
+                        dev->name, config->primary_controller_da,
+                        controller_da);
+                }
+            } else {
+                controller_da = i3c_addr_slots_next_free_find(
+                    &data->common.attached_dev.addr_slots, 0);
+            }
+
+            i3c_addr_slots_mark_i3c(&data->common.attached_dev.addr_slots,
+                        controller_da);
+        }
+
+        if (config->common.dev_list.num_i3c > 0) {
+            ret = i3c_bus_init(dev, &config->common.dev_list);
+        }
+
+#ifdef CONFIG_I3C_USE_IBI
+        xec_i3c_hot_join_enable(regbase);
+#endif
+    }
+
+    return 0;
 }
 
-static const struct i3c_driver_api i3c_xec_driver_api = {
-	.configure = i3c_xec_configure,
-	.config_get = i3c_xec_config_get,
-	.attach_i3c_device = i3c_xec_attach_device,
-	.reattach_i3c_device = i3c_xec_reattach_device,
-	.detach_i3c_device = i3c_xec_detach_device,
-	.do_daa = i3c_xec_do_daa,
-	.do_ccc = i3c_xec_do_ccc,
-	.i3c_device_find = i3c_xec_device_find,
-	.i3c_xfers = i3c_xec_xfers,
-	.target_tx_write = i3c_xec_target_tx_write,
-	.target_register = i3c_xec_target_register,
-	.target_unregister = i3c_xec_target_unregister,
+/* --- Section 17: Driver API table and device instantiation macros --- */
+  
+static DEVICE_API(i3c, i3c_xec_driver_api) = {
+    .configure = i3c_xec_configure,
+    .config_get = i3c_xec_config_get,
+#ifdef CONFIG_I3C_CONTROLLER
+    .attach_i3c_device = i3c_xec_attach_device,
+    .reattach_i3c_device = i3c_xec_reattach_device,
+    .detach_i3c_device = i3c_xec_detach_device,
+    .do_daa = i3c_xec_do_daa,
+    .do_ccc = i3c_xec_do_ccc,
+    .i3c_device_find = i3c_xec_device_find,
+    .i3c_xfers = i3c_xec_xfers,
+#endif
+#ifdef CONFIG_I3C_TARGET
+    .target_tx_write = i3c_xec_target_tx_write,
+    .target_register = i3c_xec_target_register,
+    .target_unregister = i3c_xec_target_unregister,
+#endif
 #ifdef CONFIG_I3C_USE_IBI
-	.ibi_enable = i3c_xec_ibi_enable,
-	.ibi_disable = i3c_xec_ibi_disable,
-	.ibi_raise = i3c_xec_target_ibi_raise,
+#ifdef CONFIG_I3C_CONTROLLER
+    .ibi_enable = i3c_xec_ibi_enable,
+    .ibi_disable = i3c_xec_ibi_disable,
+#endif
+#ifdef CONFIG_I3C_TARGET
+    .ibi_raise = i3c_xec_target_ibi_raise,
+#endif
 #endif
 };
 
 #define XEC_I3C_GIRQ_DT(inst, idx)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, idx))
-#define XEC_I3C_GIRQ_POS_DT(inst, idx) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, idx))
+#define XEC_I3C_GIRQ_POS_DT(inst, idx) \
+    MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, idx))
 
-#define XEC_DT_I3C_HWCTX(id)                                                                       \
-	{                                                                                          \
-		.base = (mm_reg_t)DT_INST_REG_ADDR(id),                                            \
-		.pcr_scr = (uint16_t)DT_INST_PROP(id, pcr_scr),                                    \
-		.girq = (uint8_t)XEC_I3C_GIRQ_DT(id, 0),                                           \
-		.girq_pos = (uint8_t)XEC_I3C_GIRQ_POS_DT(id, 0),                                   \
-		.girq_wk_only = (uint8_t)XEC_I3C_GIRQ_DT(id, 1),                                   \
-		.girq_pos_wk_only = (uint8_t)XEC_I3C_GIRQ_POS_DT(id, 1),                           \
-	}
+#define XEC_DT_I3C_HWCTX(id)                                                                      \
+    {                                                                                          \
+        .base = (mm_reg_t)DT_INST_REG_ADDR(id),                                           \
+        .pcr_scr = (uint16_t)DT_INST_PROP(id, pcr_scr),                                   \
+        .girq = (uint8_t)XEC_I3C_GIRQ_DT(id, 0),                                          \
+        .girq_pos = (uint8_t)XEC_I3C_GIRQ_POS_DT(id, 0),                                  \
+        .girq_wk_only = (uint8_t)XEC_I3C_GIRQ_DT(id, 1),                                  \
+        .girq_pos_wk_only = (uint8_t)XEC_I3C_GIRQ_POS_DT(id, 1),                          \
+    }
 
-#define READ_PID_FROM_DTS(id)                                                                      \
-	(((uint64_t)DT_PROP_BY_IDX(id, i3c1_as_tgt_pid, 1) << 32) |                                \
-	 DT_PROP_BY_IDX(id, i3c1_as_tgt_pid, 2))
+#define READ_PID_FROM_DTS(id)                                                               \
+    (((uint64_t)DT_INST_PROP_BY_IDX(id, i3c1_as_tgt_pid, 0) << 32) |                        \
+     (uint64_t)DT_INST_PROP_BY_IDX(id, i3c1_as_tgt_pid, 1))
 
 #define I3C_MCHP_XEC_DEVICE(id)                                                                    \
-	static void i3c_xec_irq_config_func_##id(void)                                             \
-	{                                                                                          \
-		IRQ_CONNECT(DT_INST_IRQN(id), DT_INST_IRQ(id, priority), i3c_xec_isr,              \
-			    DEVICE_DT_INST_GET(id), 0);                                            \
-		irq_enable(DT_INST_IRQN(id));                                                      \
-	}                                                                                          \
-	PINCTRL_DT_INST_DEFINE(id);                                                                \
-	static struct i3c_device_desc xec_i3c_device_list_##id[] = I3C_DEVICE_ARRAY_DT_INST(id);   \
+    static void i3c_xec_irq_config_func_##id(void)                                            \
+    {                                                                                          \
+        IRQ_CONNECT(DT_INST_IRQN(id), DT_INST_IRQ(id, priority), i3c_xec_isr,             \
+                DEVICE_DT_INST_GET(id), 0);                                            \
+        irq_enable(DT_INST_IRQN(id));                                                      \
+    }                                                                                          \
+    PINCTRL_DT_INST_DEFINE(id);                                                                \
+    static struct i3c_device_desc xec_i3c_device_list_##id[] =                                 \
+        I3C_DEVICE_ARRAY_DT_INST(id);                                                      \
                                                                                                    \
-	static void i3c_xec_irq_config_func_##id(void);                                            \
+    static struct i3c_i2c_device_desc xec_i3c_i2c_device_list_##id[] =                         \
+        I3C_I2C_DEVICE_ARRAY_DT_INST(id);                                                  \
                                                                                                    \
-	static struct i3c_i2c_device_desc xec_i3c_i2c_device_list_##id[] =                         \
-		I3C_I2C_DEVICE_ARRAY_DT_INST(id);                                                  \
-                                                                                                   \
-	static const struct xec_i3c_config xec_i3c_config_##id = {                                 \
-		.regbase = (mm_reg_t)DT_INST_REG_ADDR(id),                                         \
-		.clock = DT_INST_PROP(id, input_clock_frequency),                                  \
-		.common.dev_list.i3c = xec_i3c_device_list_##id,                                   \
-		.common.dev_list.num_i3c = ARRAY_SIZE(xec_i3c_device_list_##id),                   \
-		.common.dev_list.i2c = xec_i3c_i2c_device_list_##id,                               \
-		.common.dev_list.num_i2c = ARRAY_SIZE(xec_i3c_i2c_device_list_##id),               \
-		.irq_config_func = i3c_xec_irq_config_func_##id,                                   \
-		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(id),                                        \
-		.hwctx = XEC_DT_I3C_HWCTX(id),                                                     \
-	};                                                                                         \
-	static struct xec_i3c_data i3c_data_##id = {                                               \
-		.common.ctrl_config.scl.i3c = DT_INST_PROP_OR(id, i3c_scl_hz, 0),                  \
-		.common.ctrl_config.scl.i2c = DT_INST_PROP_OR(id, i2c_scl_hz, 0),                  \
-		.i3c_cfg_as_tgt.static_addr = DT_INST_PROP_OR(id, i3c1_as_tgt_static_addr, 0),     \
-		.i3c_cfg_as_tgt.max_read_len = DT_INST_PROP_OR(id, i3c1_as_tgt_mrl, 8),            \
-		.i3c_cfg_as_tgt.max_write_len = DT_INST_PROP_OR(id, i3c1_as_tgt_mwl, 8),           \
-		.i3c_cfg_as_tgt.pid_random = DT_INST_PROP_OR(id, i3c1_as_tgt_pid_random, 0),       \
-		.i3c_cfg_as_tgt.pid = COND_CODE_1(DT_PROP(id, i3c1_as_tgt_pid),                    \
-                          READ_PID_FROM_DTS(id),                           \
-                          (0xB0123456789B)) };             \
-	DEVICE_DT_INST_DEFINE(id, i3c_xec_init, NULL, &i3c_data_##id, &xec_i3c_config_##id,        \
-			      POST_KERNEL, CONFIG_I3C_CONTROLLER_INIT_PRIORITY,                    \
-			      &i3c_xec_driver_api);
+    static const struct xec_i3c_config xec_i3c_config_##id = {                                 \
+        .regbase = (mm_reg_t)DT_INST_REG_ADDR(id),                                        \
+        .clock = DT_INST_PROP(id, input_clock_frequency),                                  \
+        .common.dev_list.i3c = xec_i3c_device_list_##id,                                   \
+        .common.dev_list.num_i3c = ARRAY_SIZE(xec_i3c_device_list_##id),                   \
+        .common.dev_list.i2c = xec_i3c_i2c_device_list_##id,                               \
+        .common.dev_list.num_i2c = ARRAY_SIZE(xec_i3c_i2c_device_list_##id),               \
+        .primary_controller_da = DT_INST_PROP_OR(id, primary_controller_da, 0),            \
+        .scl_od_min.high_ns = DT_INST_PROP(id, od_thigh_min_ns),                           \
+        .scl_od_min.low_ns = DT_INST_PROP(id, od_tlow_min_ns),                             \
+        .irq_config_func = i3c_xec_irq_config_func_##id,                                  \
+        .pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(id),                                        \
+        .hwctx = XEC_DT_I3C_HWCTX(id),                                                    \
+    };                                                                                         \
+    static struct xec_i3c_data i3c_data_##id = {                                               \
+        .common.ctrl_config.scl.i3c =                                                      \
+            DT_INST_PROP_OR(id, i3c_scl_hz, XEC_I3C_CLK_RATE_DEFAULT),                \
+        .common.ctrl_config.scl.i2c = DT_INST_PROP_OR(id, i2c_scl_hz, 0),                 \
+        .i3c_cfg_as_tgt.static_addr =                                                      \
+            DT_INST_PROP_OR(id, i3c1_as_tgt_static_addr, 0),                          \
+        .i3c_cfg_as_tgt.max_read_len = DT_INST_PROP_OR(id, i3c1_as_tgt_mrl, 8),           \
+        .i3c_cfg_as_tgt.max_write_len = DT_INST_PROP_OR(id, i3c1_as_tgt_mwl, 8),          \
+        .i3c_cfg_as_tgt.pid_random =                                                       \
+            DT_INST_PROP_OR(id, i3c1_as_tgt_pid_random, 0),                           \
+        .i3c_cfg_as_tgt.pid =                                                              \
+            COND_CODE_1(DT_INST_NODE_HAS_PROP(id, i3c1_as_tgt_pid),                   \
+                    (READ_PID_FROM_DTS(id)),                                       \
+                    (0xB0123456789B))                                               \
+    };                                                                                         \
+    DEVICE_DT_INST_DEFINE(id, i3c_xec_init, NULL, &i3c_data_##id, &xec_i3c_config_##id,       \
+                  POST_KERNEL, CONFIG_I3C_CONTROLLER_INIT_PRIORITY,                    \
+                  &i3c_xec_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(I3C_MCHP_XEC_DEVICE)

@@ -3,28 +3,66 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef _I3C_MCHP_XEC_PRIV_H_
-#define _I3C_MCHP_XEC_PRIV_H_
+
+#ifndef _I3C_MCHP_XEC_H_
+#define _I3C_MCHP_XEC_H_
 
 #include <stdint.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/i3c.h>
 #include <zephyr/drivers/i3c/target_device.h>
 
-/* Max number of target devices on the I3C bus */
-#define XEC_I3C_MAX_TARGETS 32U
+/* --- General driver constants --- */
 
-/* Max number of devices that can be assigned address using SETDASA */
+#define XEC_I3C_MAX_TARGETS         32U
 #define XEC_I3C_MAX_TARGETS_SETDASA 16U
+#define XEC_I3C_CLK_RATE_DEFAULT    12500000  /* 12.5 MHz */
+#define DRV_RESP_WAIT_MS            1000U
+#define THRESHOLD_SIZE              32
 
-/* XEC I3C register offsets. Some registers are common to both Host and Secondary controllers.
- * Those registers specific to Host or Secondary have HC or SC in their name.
- */
+#define DRV_EVENT_BIT_HANDLE_IBI         (0x01U << 1U)
+#define DRV_EVENT_BIT_HANDLE_TGT_RX      (0x01U << 2U)
+#define DRV_EVENT_BIT_HANDLE_TGT_TX_DONE (0x01U << 3U)
+
+/* DAT index sentinel value (no DAT entry assigned) */
+#define XEC_I3C_DAT_IDX_NONE  0xFFU
+/* Max concurrent hot-join pending entries */
+#define XEC_I3C_MAX_HOTJOIN   4U
+
+/* --- Driver enumerations --- */
+
+enum ibi_node_states {
+    IBI_NODE_STATE_FREE,
+    IBI_NODE_STATE_IN_USE,
+    IBI_NODE_ISR_UPDATED,
+};
+
+enum tgt_pvt_receive_node_states {
+    TGT_RX_NODE_STATE_FREE,
+    TGT_RX_NODE_STATE_IN_USE,
+    TGT_RX_NODE_STATE_IN_USE_DMA,
+    TGT_RX_NODE_ISR_UPDATED,
+    TGT_RX_NODE_ISR_UPDATED_THR,
+};
+
+enum pending_xfer_type {
+    XFER_TYPE_INVALID,
+    XFER_TYPE_CCC,
+    XFER_TYPE_ENTDAA,
+    XFER_TYPE_PVT_RW,
+    XFER_TYPE_TGT_RAISE_IBI,
+    XFER_TYPE_TGT_RAISE_IBI_MR,
+    XFER_TYPE_TGT_PVT_RD,
+};
+
+/* --- XEC I3C register offsets and bitfields --- */
+
+/* Device Control Register */
 #define XEC_I3C_DEV_CR_OFS           0
 #define XEC_I3C_DEV_CR_IBAI_POS      0
 #define XEC_I3C_DEV_CR_I2C_PRES_POS  7
 #define XEC_I3C_DEV_CR_HJND_POS      8
-#define XEC_I3C_DEV_CR_TC_ICM_POS    24 /* bit field in secondary only */
+#define XEC_I3C_DEV_CR_TC_ICM_POS    24
 #define XEC_I3C_DEV_CR_TC_ICM_MSK    GENMASK(25, 24)
 #define XEC_I3C_DEV_CR_TC_ICM_1      0
 #define XEC_I3C_DEV_CR_TC_ICM_2      1u
@@ -38,6 +76,7 @@
 #define XEC_I3C_DEV_CR_RESUME_POS    30
 #define XEC_I3C_DEV_CR_EN_POS        31
 
+/* Device Address Register */
 #define XEC_I3C_DEV_ADDR_OFS        0x04U
 #define XEC_I3C_DEV_ADDR_STA_POS    0
 #define XEC_I3C_DEV_ADDR_STA_MSK    GENMASK(6, 0)
@@ -50,7 +89,8 @@
 #define XEC_I3C_DEV_ADDR_DYA_GET(r) FIELD_GET(XEC_I3C_DEV_ADDR_DYA_MSK, (r))
 #define XEC_I2C_DEV_ADDR_DYAV_POS   31
 
-#define XEC_I3C_HW_CAP_OFS               0x8U /* RO */
+/* Hardware Capability Register */
+#define XEC_I3C_HW_CAP_OFS               0x8U
 #define XEC_I3C_HW_CAP_ROLE_POS          0
 #define XEC_I3C_HW_CAP_ROLE_MSK          GENMASK(2, 0)
 #define XEC_I3C_HW_CAP_ROLE_HC           1U
@@ -69,10 +109,11 @@
 #define XEC_I3C_HW_CAP_TGT_HJ_POS        18
 #define XEC_I3C_HW_CAP_TGT_IBI_POS       19
 
+/* Command Queue Port */
 #define XEC_I3C_CMD_OFS    0xCU
-/* TODO No explaination of 32-bit command queue format in data sheet */
 #define MEC_I3C_CCC_ENTDAA 0x07U
 
+/* Command word bit positions and flags */
 #define COMMAND_TID_BITPOS     3U
 #define COMMAND_CMD_BITPOS     7U
 #define COMMAND_DEV_IDX_BITPOS 16U
@@ -91,46 +132,47 @@
 #define COMMAND_XFER_ARG_DATA_LEN_BITPOS 16U
 #define COMMAND_XFER_DEF_BYTE_BITPOS     8U
 
+/* Address Assignment command bit positions */
 #define COMMAND_AA_TID_BITPOS     3U
 #define COMMAND_AA_CMD_BITPOS     7U
 #define COMMAND_AA_DEV_IDX_BITPOS 16U
 #define COMMAND_AA_DEV_CNT_BITPOS 21U
-
 #define COMMAND_AA_RESPONSE_ON_COMPLETION BIT(26)
 #define COMMAND_AA_STOP_ON_COMPLETION     BIT(30)
 
+/* Command attribute types */
 #define COMMAND_ATTR_XFER_CMD       0U
 #define COMMAND_ATTR_XFER_ARG       1U
 #define COMMAND_ATTR_SHORT_DATA_ARG 2U
 #define COMMAND_ATTR_ADDR_ASSGN_CMD 3U
 
+/* Response Queue Port */
 #define XEC_I3C_RESP_OFS 0x10U
 
-/* TODO Data sheet does not explain 32-bit response value
- * and these mask definitions are not clear.
- */
-#define RESPONSE_TID_BITPOS  24U
-#define RESPONSE_TID_BITMASK 0x0FFFFFFF // Bits 24:27
-
+#define RESPONSE_TID_BITPOS      24U
+#define RESPONSE_TID_BITMASK     0x0FFFFFFF
 #define RESPONSE_ERR_STS_BITPOS  28U
 #define RESPONSE_ERR_STS_BITMASK 0xF0FFFFFF
 
-/* For Target Response */
-#define RESPONSE_TID_TGT_BITMASK 0x07FFFFFF // Bits 24:26
+/* Target response fields */
+#define RESPONSE_TID_TGT_BITMASK 0x07FFFFFF
 #define RESPONSE_RX_RESP_BITPOS  27U
-#define RESPONSE_RX_RESP_BITMASK 0x0FFFFFFF // Bit 27
+#define RESPONSE_RX_RESP_BITMASK 0x0FFFFFFF
+#define RESPONSE_TID_DEFTGTS     0x7
 
-#define RESPONSE_TID_DEFTGTS 0x7 /* TID 26:24 all 1 indicate DEFTGTS response */
+/* TX/RX Data Port */
+#define XEC_I3C_TX_DATA_OFS    0x14U
+#define XEC_I2C_RX_DATA_OFS    0x14U
 
-#define XEC_I3C_TX_DATA_OFS    0x14U /* write-only */
-#define XEC_I2C_RX_DATA_OFS    0x14U /* read-only */
+/* IBI Queue Status */
 #define XEC_I3C_IBI_QUE_SR_OFS 0x18U
 
+/* Queue Threshold Control */
 #define XEC_I3C_QT_CR_OFS         0x1CU
 #define XEC_I3C_QT_CR_CEBT_POS    0
 #define XEC_I3C_QT_CR_CEBT_MSK    GENMASK(7, 0)
 #define XEC_I3C_QT_CR_CEBT_SET(c) FIELD_PREP(XEC_I3C_QT_CR_CEBT_MSK, (c))
-#define XEC_I3C_QT_CR_CEBT_GET(r) FIELD_GET(XEC_I3C_QT_CR_CECT_MSK, (r))
+#define XEC_I3C_QT_CR_CEBT_GET(r) FIELD_GET(XEC_I3C_QT_CR_CEBT_MSK, (r))
 #define XEC_I3C_QT_CR_RBT_POS     8
 #define XEC_I3C_QT_CR_RBT_MSK     GENMASK(15, 8)
 #define XEC_I3C_QT_CR_RBT_1       0
@@ -146,6 +188,7 @@
 #define XEC_I3C_QT_CR_IST_SET(s)  FIELD_PREP(XEC_I3C_QT_CR_IST_MSK, (s))
 #define XEC_i3C_QT_CR_IST_GET(r)  FIELD_GET(XEC_I3C_QT_CR_IST_MSK, (r))
 
+/* Data Buffer Threshold Control */
 #define XEC_I3C_DBT_CR_OFS         0x20U
 #define XEC_I3C_DBT_CR_TXEB_POS    0
 #define XEC_I3C_DBT_CR_TXEB_MSK    GENMASK(2, 0)
@@ -164,9 +207,7 @@
 #define XEC_I3C_DBT_CR_RXST_SET(v) FIELD_PREP(XEC_I3C_DBT_CR_RXST_MSK, (v))
 #define XEC_I3C_DBT_CR_RXST_GET(r) FIELD_GET(XEC_I3C_DBT_CR_RXST_MSK, (r))
 
-/* Use with XEC_I3C_DBT_CR_TXEB_SET(v), XEC_I3C_DBT_CR_RXB_SET(v), XEC_I3C_DBT_CR_TXST_SET(v),
- * and XEC_I3C_DBT_CR_RXST_SET(v) macros
- */
+/* Data buffer threshold FIFO level values */
 #define DATA_BUF_THLD_FIFO_1  0U
 #define DATA_BUF_THLD_FIFO_4  1U
 #define DATA_BUF_THLD_FIFO_8  2U
@@ -174,14 +215,16 @@
 #define DATA_BUF_THLD_FIFO_32 4U
 #define DATA_BUF_THLD_FIFO_64 5U
 
+/* IBI Queue Control */
 #define XEC_I3C_IBI_QUE_CR_OFS         0x24U
 #define XEC_I3C_IBI_QUE_CR_MSK         0x0BU
 #define XEC_I3C_IBI_QUE_CR_NR_HJ_POS   0
 #define XEC_I3C_IBI_QUE_CR_NR_HRC_POS  1
 #define XEC_I3C_IBI_QUE_CR_NR_TIRC_POS 3
 
+/* Reset Control */
 #define XEC_I3C_RST_CR_OFS              0x34U
-#define XEC_I3C_RST_CR_SRST_POS         0 /* bits[0:5] auto-cleared by HW */
+#define XEC_I3C_RST_CR_SRST_POS         0
 #define XEC_I3C_RST_CR_CMDQ_POS         1
 #define XEC_I3C_RST_CR_RESPQ_POS        2
 #define XEC_I3C_RST_CR_TX_FIFO_POS      3
@@ -193,31 +236,32 @@
 #define XEC_I3C_RST_CR_BUS_TYPE_SCL_LOW 0x3U
 #define XEC_I3C_RST_CR_BUS_TYPE_SET(v)  FIELD_PREP(XEC_I3C_RST_CR_BUS_TYPE_MSK, (v))
 #define XEC_I3C_RST_CR_BUS_TYPE_GET(r)  FIELD_GET(XEC_I3C_RST_CR_BUS_TYPE_MSK, (r))
-#define XEC_I3C_RST_CR_BUS_POS          31 /* auto-cleared by HW */
+#define XEC_I3C_RST_CR_BUS_POS          31
 
-#define XEC_I3C_SC_TEVT_SR_OFS         0x38U /* secondary only */
-#define XEC_I3C_SC_TEVT_SR_TIR_EN_POS  0     /* RO */
-#define XEC_I3C_SC_TEVT_SR_HR_EN_POS   1     /* RO */
-#define XEC_I3C_SC_TEVT_SR_HJ_EN_POS   3     /* RW */
-#define XEC_I3C_SC_TEVT_SR_AS_POS      4     /* RO */
+/* Secondary Controller Target Event Status (secondary only) */
+#define XEC_I3C_SC_TEVT_SR_OFS         0x38U
+#define XEC_I3C_SC_TEVT_SR_TIR_EN_POS  0
+#define XEC_I3C_SC_TEVT_SR_HR_EN_POS   1
+#define XEC_I3C_SC_TEVT_SR_HJ_EN_POS   3
+#define XEC_I3C_SC_TEVT_SR_AS_POS      4
 #define XEC_I3C_SC_TEVT_SR_AS_MSK      GENMASK(5, 4)
 #define XEC_I3C_SC_TEVT_SR_AS_ENTAS0   0
 #define XEC_I3C_SC_TEVT_SR_AS_ENTAS1   1u
 #define XEC_I3C_SC_TEVT_SR_AS_ENTAS2   2u
 #define XEC_I3C_SC_TEVT_SR_AS_ENTAS3   3u
-#define XEC_I3C_SC_TEVT_SR_AS_GET(r)   FIELD_GET(XEC_I3C_SC_TEVT_SR_ACTV_MSK, (r))
-#define XEC_I3C_SC_TEVT_SR_MRL_UPD_POS 6 /* R/W1C */
-#define XEC_I3C_SC_TEVT_SR_MWL_UPD_POS 7 /* R/W1C */
+#define XEC_I3C_SC_TEVT_SR_AS_GET(r)   FIELD_GET(XEC_I3C_SC_TEVT_SR_AS_MSK, (r))
+#define XEC_I3C_SC_TEVT_SR_MRL_UPD_POS 6  /* R/W1C */
+#define XEC_I3C_SC_TEVT_SR_MWL_UPD_POS 7  /* R/W1C */
 
-#define XEC_I3C_INTR_SR_OFS    0x3CU /* RO and RW */
+/* Interrupt Status / Enable / Signal Enable */
+#define XEC_I3C_INTR_SR_OFS    0x3CU
 #define XEC_I3C_INTR_SR_RO_MSK GENMASK(4, 0)
 #define XEC_I3C_INTR_SR_RW_MSK (GENMASK(6, 5) | GENMASK(13, 8) | BIT(15))
+#define XEC_I3C_INTR_EN_OFS       0x40U
+#define XEC_I3C_INTR_SIG_EN_OFS   0x44U
+#define XEC_I3C_INTR_FORCE_EN_OFS 0x48U
 
-#define XEC_I3C_INTR_EN_OFS       0x40U /* RW */
-#define XEC_I3C_INTR_SIG_EN_OFS   0x44U /* RW */
-#define XEC_I3C_INTR_FORCE_EN_OFS 0x48U /* WO */
-
-/* bits for all INTR_ registers */
+/* Interrupt bit positions (shared across status/enable/signal registers) */
 #define XEC_I3C_ISR_TX_THLD_POS  0
 #define XEC_I3C_ISR_RX_THLD_POS  1
 #define XEC_I3C_ISR_IBI_THLD_POS 2
@@ -233,7 +277,8 @@
 #define XEC_I3C_ISR_BUS_OUPD_POS 13
 #define XEC_I3C_ISR_BUS_RD_POS   15
 
-#define XEC_I3C_QL_SR_OFS        0x4CU /* RO */
+/* Queue Level Status */
+#define XEC_I3C_QL_SR_OFS        0x4CU
 #define XEC_I3C_QL_SR_CQE_POS    0
 #define XEC_I3C_QL_SR_CQE_MSK    GENMASK(7, 0)
 #define XEC_I3C_QL_SR_CQE_GET(r) FIELD_GET(XEC_I3C_QL_SR_CQE_MSK, (r))
@@ -249,7 +294,8 @@
 
 #define XEC_I3C_DB_STS_LVD_OFS 0x50U
 
-#define XEC_I3C_PRES_ST_OFS               0x54U /* RO */
+/* Present State */
+#define XEC_I3C_PRES_ST_OFS               0x54U
 #define XEC_I3C_PRES_ST_SCL_LVL_POS       0
 #define XEC_I3C_PRES_ST_SDA_LVL_POS       1
 #define XEC_I3C_PRES_ST_CH_POS            2
@@ -264,35 +310,39 @@
 #define XEC_I3C_PRES_ST_CMD_TID_GET(r)    FIELD_GET(XEC_I3C_PRES_ST_CMD_TID_MSK, (r))
 #define XEC_I3C_PRES_STS_CTLR_IDLE_POS    28
 
+/* Device Address Table Pointer */
 #define XEC_I3C_DAT_PTR_OFS          0x5CU
-#define XEC_I3C_DAT_PTR_STA_POS      0 /* RO */
+#define XEC_I3C_DAT_PTR_STA_POS      0
 #define XEC_I3C_DAT_PTR_STA_MSK      GENMASK(15, 0)
 #define XEC_I3C_DAT_PTR_STA_GET(r)   FIELD_GET(XEC_I3C_DAT_PTR_STA_MSK, (r))
-#define XEC_I3C_DAT_PTR_DEPTH_POS    16 /* RO */
+#define XEC_I3C_DAT_PTR_DEPTH_POS    16
 #define XEC_I3C_DAT_PTR_DEPTH_MSK    GENMASK(31, 16)
 #define XEC_I3C_DAT_PTR_DEPTH_GET(r) FIELD_GET(XEC_I3C_DAT_PTR_DEPTH_MSK, (r))
 
+/* Device Characteristics Table Pointer */
 #define XEC_I3C_DCT_PTR_OFS          0x60U
-#define XEC_I3C_DCT_PTR_STA_POS      0 /* RO */
+#define XEC_I3C_DCT_PTR_STA_POS      0
 #define XEC_I3C_DCT_PTR_STA_MSK      GENMASK(11, 0)
 #define XEC_I3C_DCT_PTR_STA_GET(r)   FIELD_GET(XEC_I3C_DCT_PTR_STA_MSK, (r))
-#define XEC_I3C_DCT_PTR_DEPTH_POS    12 /* RO */
+#define XEC_I3C_DCT_PTR_DEPTH_POS    12
 #define XEC_I3C_DCT_PTR_DEPTH_MSK    GENMASK(18, 12)
 #define XEC_I3C_DCT_PTR_DEPTH_GET(r) FIELD_GET(XEC_I3C_DCT_PTR_DEPTH_MSK, (r))
-#define XEC_I3C_DCT_PTR_IDX_POS      19 /* RW */
+#define XEC_I3C_DCT_PTR_IDX_POS      19
 #define XEC_I3C_DCT_PTR_IDX_MSK      GENMASK(31, 19)
 #define XEC_I3C_DCT_PTR_IDX_SET(i)   FIELD_PREP(XEC_I3C_DCT_PTR_IDX_MSK, (i))
 #define XEC_I3C_DCT_PTR_IDX_GET(r)   FIELD_GET(XEC_I3C_DCT_PTR_IDX_MSK, (r))
 
 #define XEC_I3C_VENR_PTR_OFS 0x6CU
 
-#define XEC_I3C_SC_MID_OFS            0x70U /* begin secondary only */
+/* Secondary Controller MIPI Manufacturer ID (secondary only) */
+#define XEC_I3C_SC_MID_OFS            0x70U
 #define XEC_I3C_SC_MID_TYPE_POS       0
 #define XEC_I3C_SC_MID_MFG_ID_POS     1
 #define XEC_I3C_SC_MID_MFG_ID_MSK     GENMASK(15, 1)
 #define XEC_I3C_SC_MID_MFG_ID_SET(id) FIELD_PREP(XEC_I3C_SC_MID_MFG_ID_MSK, (id))
 #define XEC_I3C_SC_MID_MFG_ID_GET(r)  FIELD_GET(XEC_I3C_SC_MID_MFG_ID_MSK, (r))
 
+/* Secondary Controller Provisioned ID */
 #define XEC_I3C_SC_PROV_ID_OFS             0x74U
 #define XEC_I3C_SC_PROV_ID_PID_DCR_POS     0
 #define XEC_I3C_SC_PROV_ID_PID_DCR_MSK     GENMASK(11, 0)
@@ -309,6 +359,7 @@
 
 #define XEC_I3C_SC_TARG_CHAR_OFS 0x78U
 
+/* Secondary Controller Max Read/Write Length */
 #define XEC_I3C_SC_MAX_RW_LEN_OFS       0x7CU
 #define XEC_I3C_SC_MAX_RW_LEN_WL_POS    0
 #define XEC_I3C_SC_MAX_RW_LEN_WL_MSK    GENMASK(15, 0)
@@ -319,12 +370,14 @@
 #define XEC_I3C_SC_MAX_RW_LEN_RL_SET(v) FIELD_PREP(XEC_I3C_SC_MAX_RW_LEN_RL_MSK, (v))
 #define XEC_I3C_SC_MAX_RW_LEN_RL_GET(r) FIELD_GET(XEC_I3C_SC_MAX_RW_LEN_RL_MSK, (r))
 
+/* Secondary Controller Max Read Turnaround */
 #define XEC_I3C_SC_MXRT_OFS        0x80U
 #define XEC_I3C_SC_MXRT_MRT_POS    0
 #define XEC_I3C_SC_MXRT_MRT_MSK    GENMASK(23, 0)
 #define XEC_I3C_SC_MXRT_MRT_SET(v) FIELD_PREP(XEC_I3C_SC_MXRT_MRT_MSK, (v))
 #define XEC_I3C_SC_MXRT_MRT_GET(r) FIELD_GET(XEC_I3C_SC_MXRT_MRT_MSK, (r))
 
+/* Secondary Controller Max Data Speed */
 #define XEC_I3C_SC_MXDS_OFS        0x84U
 #define XEC_I3C_SC_MXDS_MWS_POS    0
 #define XEC_I3C_SC_MXDS_MWS_MSK    GENMASK(2, 0)
@@ -351,6 +404,7 @@
 #define XEC_I3C_SC_MXDS_CDT_TCSO_3 3U
 #define XEC_I3C_SC_MXDS_CDT_TCSO_4 4U
 
+/* Target IBI Request */
 #define XEC_I3C_SC_TIREQ_OFS            0x8CU
 #define XEC_I3C_SC_TIREQ_TIR_POS        0
 #define XEC_I3C_SC_TIREQ_CR_POS         1
@@ -359,7 +413,7 @@
 #define XEC_I3C_SC_TIREQ_CR_GET(r)      FIELD_GET(XEC_I3C_SC_TIREQ_CR_MSK, (r))
 #define XEC_I3C_SC_TIREQ_HR_POS         3
 #define XEC_I3C_SC_TIREQ_TS_POS         4
-#define XEC_I3C_SC_TIREQ_IBI_STS_POS    8 /* RO */
+#define XEC_I3C_SC_TIREQ_IBI_STS_POS    8
 #define XEC_I3C_SC_TIREQ_IBI_STS_MSK    GENMASK(9, 8)
 #define XEC_I3C_SC_TIREQ_IBI_STS_GET(r) FIELD_GET(XEC_I3C_SC_TIREQ_IBI_STS_MSK, (r))
 #define XEC_I3C_SC_TIREQ_MDB_POS        10
@@ -371,6 +425,7 @@
 #define XEC_I3C_SC_TIREQ_TDL_SET(v)     FIELD_PREP(XEC_I3C_SC_TIREQ_TDL_MSK, (v))
 #define XEC_I3C_SC_TIREQ_TDL_GET(r)     FIELD_GET(XEC_I3C_SC_TIREQ_TDL_MSK, (r))
 
+/* Target IBI Request Data */
 #define XEC_I3C_SC_TIREQ_DAT_OFS       0x94U
 #define XEC_I3C_SC_TIREQ_DAT_B0_POS    0
 #define XEC_I3C_SC_TIREQ_DAT_B0_MSK    GENMASK(7, 0)
@@ -389,7 +444,8 @@
 #define XEC_I3C_SC_TIREQ_DAT_B3_SET(v) FIELD_PREP(XEC_I3C_SC_TIREQ_DAT_B3_MSK, (v))
 #define XEC_I3C_SC_TIREQ_DAT_B3_GET(r) FIELD_GET(XEC_I3C_SC_TIREQ_DAT_B3_MSK, (r))
 
-#define XEC_I3C_SC_TIBI_RESP_OFS        0x98U /* end secondary only */
+/* Target IBI Response */
+#define XEC_I3C_SC_TIBI_RESP_OFS        0x98U
 #define XEC_I3C_SC_TIBI_RESP_STS_POS    0
 #define XEC_I3C_SC_TIBI_RESP_STS_MSK    GENMASK(1, 0)
 #define XEC_I3C_SC_TIBI_RESP_STS_ACK    1U
@@ -400,6 +456,7 @@
 #define XEC_I3C_SC_TIBI_RESP_LEN_MSK    GENMASK(23, 8)
 #define XEC_I3C_SC_TIBI_RESP_LEN_GET(r) FIELD_GET(XEC_I3C_SC_TIBI_RESP_LEN_MSK, (r))
 
+/* Device Extended Control */
 #define XEC_I3C_DEV_EXT_CR_OFS            0xB0U
 #define XEC_I3C_DEV_EXT_CR_OPM_POS        0
 #define XEC_I3C_DEV_EXT_CR_OPM_MSK        GENMASK(1, 0)
@@ -409,6 +466,7 @@
 #define XEC_I3C_DEV_EXT_CR_OPM_GET(r)     FIELD_GET(XEC_I3C_DEV_EXT_CR_OPM_MSK, (r))
 #define XEC_I3C_DEV_EXT_CR_TM_NAK_CCC_POS 3
 
+/* SCL Timing Registers */
 #define XEC_I3C_SCL_OD_TM_OFS         0xB4U
 #define XEC_I3C_SCL_OD_TM_LCNT_POS    0
 #define XEC_I3C_SCL_OD_TM_LCNT_MSK    GENMASK(7, 0)
@@ -446,13 +504,14 @@
 #define XEC_I3C_SCL_I2C_FMP_TM_LCNT_MSK    GENMASK(15, 0)
 #define XEC_I3C_SCL_I2C_FMP_TM_LCNT_DFLT   0x10U
 #define XEC_I3C_SCL_I2C_FMP_TM_LCNT_SET(v) FIELD_PREP(XEC_I3C_SCL_I2C_FMP_TM_LCNT_MSK, (v))
-#define XEC_I3C_SCL_I2C_FMP_TM_LCNT_GET(r) FIELD_PREP(XEC_I3C_SCL_I2C_FMP_TM_LCNT_MSK, (r))
+#define XEC_I3C_SCL_I2C_FMP_TM_LCNT_GET(r) FIELD_GET(XEC_I3C_SCL_I2C_FMP_TM_LCNT_MSK, (r))
 #define XEC_I3C_SCL_I2C_FMP_TM_HCNT_POS    16
 #define XEC_I3C_SCL_I2C_FMP_TM_HCNT_MSK    GENMASK(23, 16)
 #define XEC_I3C_SCL_I2C_FMP_TM_HCNT_DFLT   0x10U
 #define XEC_I3C_SCL_I2C_FMP_TM_HCNT_SET(v) FIELD_PREP(XEC_I3C_SCL_I2C_FMP_TM_HCNT_MSK, (v))
-#define XEC_I3C_SCL_I2C_FMP_TM_HCNT_GET(r) FIELD_PREP(XEC_I3C_SCL_I2C_FMP_TM_HCNT_MSK, (r))
+#define XEC_I3C_SCL_I2C_FMP_TM_HCNT_GET(r) FIELD_GET(XEC_I3C_SCL_I2C_FMP_TM_HCNT_MSK, (r))
 
+/* SCL Extended Low Count Timing */
 #define XEC_I3C_SCL_ELC_TM_OFS         0xC8U
 #define XEC_I3C_SCL_ELC_TM_CNT1_POS    0
 #define XEC_I3C_SCL_ELC_TM_CNT1_MSK    GENMASK(7, 0)
@@ -475,6 +534,7 @@
 #define XEC_I3C_SCL_ELC_TM_CNT4_SET(v) FIELD_PREP(XEC_I3C_SCL_ELC_TM_CNT4_MSK, (v))
 #define XEC_I3C_SCL_ELC_TM_CNT4_GET(r) FIELD_GET(XEC_I3C_SCL_ELC_TM_CNT4_MSK, (r))
 
+/* SCL Termination Bit Low Count */
 #define XEC_I3C_SCL_TBLC_OFS         0xCCU
 #define XEC_I3C_SCL_TBLC_ETLC_POS    0
 #define XEC_I3C_SCL_TBLC_ETLC_MSK    GENMASK(3, 0)
@@ -493,12 +553,13 @@
 #define XEC_I3C_SCL_TBLC_SHC_SET(v)  FIELD_PREP(XEC_I3C_SCL_TBLC_SHC_MSK, (v))
 #define XEC_I3C_SCL_TBLC_SHC_GET(r)  FIELD_GET(XEC_I3C_SCL_TBLC_SHC_MSK, (r))
 
+/* SDA Hold / Mode Switch Delay Timing */
 #define XEC_I3C_SDA_HMSD_TM_OFS              0xD0U
-#define XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_POS    0 /* secondary only */
+#define XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_POS    0
 #define XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_MSK    GENMASK(2, 0)
 #define XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_SET(v) FIELD_PREP(XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_MSK, (v))
 #define XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_GET(r) FIELD_GET(XEC_I3C_SDA_HMSD_TM_SDA_OP_SD_MSK, (r))
-#define XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_POS    8 /* secondary only */
+#define XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_POS    8
 #define XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_MSK    GENMASK(10, 8)
 #define XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_SET(v) FIELD_PREP(XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_MSK, (v))
 #define XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_GET(r) FIELD_GET(XEC_I3C_SDA_HMSD_TM_SDA_PO_SD_MSK, (r))
@@ -514,18 +575,17 @@
 #define XEC_I3C_SDA_HMSD_TM_SDA_TXH_SET(v)   FIELD_PREP(XEC_I3C_SDA_HMSD_TM_SDA_TXH_MSK, (v))
 #define XEC_I3C_SDA_HMSD_TM_SDA_TXH_GET(r)   FIELD_GET(XEC_I3C_SDA_HMSD_TM_SDA_TXH_MSK, (r))
 
+/* SDA switch delay values */
 #define SDA_OD_PP_SWITCH_DLY_0 0U
 #define SDA_OD_PP_SWITCH_DLY_1 1U
 #define SDA_OD_PP_SWITCH_DLY_2 2U
 #define SDA_OD_PP_SWITCH_DLY_3 3U
 #define SDA_OD_PP_SWITCH_DLY_4 4U
-
 #define SDA_PP_OD_SWITCH_DLY_0 0
 #define SDA_PP_OD_SWITCH_DLY_1 1U
 #define SDA_PP_OD_SWITCH_DLY_2 2U
 #define SDA_PP_OD_SWITCH_DLY_3 3U
 #define SDA_PP_OD_SWITCH_DLY_4 4U
-
 #define SDA_TX_HOLD_1 1U
 #define SDA_TX_HOLD_2 2U
 #define SDA_TX_HOLD_3 3U
@@ -534,6 +594,7 @@
 #define SDA_TX_HOLD_6 6U
 #define SDA_TX_HOLD_7 7U
 
+/* Bus Free / Available / Idle Timing */
 #define XEC_I3C_BUS_FREE_TM_OFS       0xD4U
 #define XEC_I3C_BUS_FREE_TM_FT_OFS    0
 #define XEC_I3C_BUS_FREE_TM_FT_MSK    GENMASK(15, 0)
@@ -550,10 +611,12 @@
 #define XEC_I3C_SCL_LMST_TM_MSK  GENMASK(31, 0)
 #define XEC_I3C_SCL_LMST_TM_DFLT 0x003567E0U
 
+/* Version / ID */
 #define XEC_I3C_VER_ID_OFS   0xE0U
 #define XEC_I3C_VER_TYPE_OFS 0xE4U
 
-#define XEC_I3C_QSZ_CAP_OFS         0xE8U /* RO */
+/* Queue Size Capability */
+#define XEC_I3C_QSZ_CAP_OFS         0xE8U
 #define XEC_I3C_QSZ_CAP_TX_POS      0
 #define XEC_I3C_QSZ_CAP_TX_MSK      GENMASK(3, 0)
 #define XEC_I3C_QSZ_CAP_TX_GET(r)   FIELD_GET(XEC_I3C_QSZ_CAP_TX_MSK, (r))
@@ -570,17 +633,18 @@
 #define XEC_I3C_QSZ_CAP_IBI_MSK     GENMASK(19, 16)
 #define XEC_I3C_QSZ_CAP_IBI_GET(r)  FIELD_GET(XEC_I3C_QSZ_CAP_IBI_MSK, (r))
 
+/* DAT / DCT location offsets */
 #define XEC_I3C_HC_DCT_LOC_MAX_IDX 44U
 #define XEC_I3C_SC_DCT_LOC_MAX_IDX 88U
 #define XEC_I3C_DCT_LOC_OFS(idx)   (0x200U + ((uint32_t)(idx) * 4U))
-
 #define XEC_I3C_HC_DAT_LOC_MAX_IDX  11U
 #define XEC_I3C_SC_DAT_LOC_MAX_IDX  16U
 #define XEC_I3C_HC_DAT_LOC_OFS(idx) (0x2C0U + ((uint32_t)(idx) * 4U))
 #define XEC_I3C_SC_DAT_LOC_OFS(idx) (0x360U + ((uint32_t)(idx) * 4U))
 
+/* Host Controller Configuration */
 #define XEC_I3C_HC_CFG_OFS             0x300U
-#define XEC_I3C_HC_CFG_PORT_POS        0 /* port select */
+#define XEC_I3C_HC_CFG_PORT_POS        0
 #define XEC_I3C_HC_CFG_PORT_MSK        GENMASK(3, 0)
 #define XEC_I3C_HC_CFG_PORT_SET(p)     FIELD_PREP(XEC_I3C_HC_CFG_PORT_MSK, (p))
 #define XEC_I3C_HC_CFG_PORT_GET(r)     FIELD_GET(XEC_I3C_HC_CFG_PORT_MSK, (r))
@@ -596,16 +660,15 @@
 #define XEC_I3C_HC_CFG_DMA_RXBT_GET(r) FIELD_GET(XEC_I3C_HC_CFG_DMA_RXBT_MSK, (r))
 #define XEC_I3C_HC_CFG_DMA_RTMO_EN_POS 20
 #define XEC_I3C_HC_CFG_DMA_RTERM_POS   21
-#define XEC_I3C_HC_CFG_SSDA_EN_POS     24 /* enable stuck SDA timeout detection */
-#define XEC_I3C_HC_CFG_SSDA_CK2M_POS   25 /* select 2 MHz clock for stuck SDA counter else 32KHz */
+#define XEC_I3C_HC_CFG_SSDA_EN_POS     24
+#define XEC_I3C_HC_CFG_SSDA_CK2M_POS   25
 
-/* I3C Host config port field values */
 #define XEC_I3C_HC_PORT_I3C0 0U
 #define XEC_I3C_HC_PORT_I3C1 1U
 #define XEC_I3C_HC_PORT_I3C2 2U
 #define XEC_I3C_HC_PORT_I2C0 3U
 
-/* TX and RX DMA beat sizes: number of dwords in each burst */
+/* DMA beat sizes */
 #define XEC_I3C_HC_CFG_DMA_BEAT_DW_1  0
 #define XEC_I3C_HC_CFG_DMA_BEAT_DW_4  1U
 #define XEC_I3C_HC_CFG_DMA_BEAT_DW_8  2U
@@ -613,8 +676,9 @@
 #define XEC_I3C_HC_CFG_DMA_BEAT_DW_32 4U
 #define XEC_I3C_HC_CFG_DMA_BEAT_DW_64 5U
 
+/* Host Controller Reset / DMA Timeout / Stuck SDA */
 #define XEC_I3C_HC_RST_CR_OFS        0x304U
-#define XEC_I3C_HC_RST_CR_SOFT_POS   0 /* I3C block soft reset, auto cleared */
+#define XEC_I3C_HC_RST_CR_SOFT_POS   0
 #define XEC_I3C_HC_RST_CR_DMA_TX_POS 4U
 #define XEC_I3C_HC_RST_CR_DMA_RX_POS 5U
 
@@ -623,9 +687,9 @@
 #define XEC_I3C_HC_DMA_TMOUT_POS     0
 #define XEC_I3C_HC_DMA_TMOUT_MSK     GENMASK(7, 0)
 #define XEC_I3C_HC_DMA_TMOUT_SET(t)  FIELD_PREP(XEC_I3C_HC_DMA_TMOUT_MSK, (t))
-#define XEC_I3C_HC_DMA_TMOUT_GET(r)  FIELD_GEt(XEC_I3C_HC_DMA_TMOUT_MSK, (r))
+#define XEC_I3C_HC_DMA_TMOUT_GET(r)  FIELD_GET(XEC_I3C_HC_DMA_TMOUT_MSK, (r))
 #define XEC_I3C_HC_DMA_TMOUT_DIS     0
-#define XEC_I3C_HC_DMA_TMOUT_CLK_1   1U /* Number of clock pulses: 32KHz or 2MHz */
+#define XEC_I3C_HC_DMA_TMOUT_CLK_1   1U
 #define XEC_I3C_HC_DMA_TMOUT_CLK_2   2U
 #define XEC_I3C_HC_DMA_TMOUT_CLK_255 255U
 
@@ -635,46 +699,45 @@
 #define XEC_I3C_HC_STK_SDA_TMOUT_VAL_SET(v) FIELD_PREP(XEC_I3C_HC_STK_SDA_TMOUT_VAL_MSK, (v))
 #define XEC_I3C_HC_STK_SDA_TMOUT_VAL_GET(r) FIELD_GET(XEC_I3C_HC_STK_SDA_TMOUT_VAL_MSK, (r))
 
-#define XEC_I3C_HC_WSR_OFS  0x314U
-#define XEC_I3C_HC_WIER_OFS 0x318U
-
+#define XEC_I3C_HC_WSR_OFS      0x314U
+#define XEC_I3C_HC_WIER_OFS     0x318U
 #define XEC_I3C_HC_PAD_TEST_OFS 0x3D0U
 #define XEC_I3C_HC_DBG0_OFS     0x3D4U
 #define XEC_I3C_HC_DBG1_OFS     0x3D8U
 
+/* Secondary Controller Configuration */
 #define XEC_I3C_SC_CFG_OFS             0x400U
-#define XEC_I3C_SC_CFG_PORT_POS        0 /* port select */
+#define XEC_I3C_SC_CFG_PORT_POS        0
 #define XEC_I3C_SC_CFG_PORT_MSK        GENMASK(3, 0)
-#define XEC_I3C_SC_CFG_PORT_SET(p)     FIELD_PREP(XEC_I3C_HC_CFG_PORT_MSK, (p))
-#define XEC_I3C_SC_CFG_PORT_GET(r)     FIELD_GET(XEC_I3C_HC_CFG_PORT_MSK, (r))
+#define XEC_I3C_SC_CFG_PORT_SET(p)     FIELD_PREP(XEC_I3C_SC_CFG_PORT_MSK, (p))
+#define XEC_I3C_SC_CFG_PORT_GET(r)     FIELD_GET(XEC_I3C_SC_CFG_PORT_MSK, (r))
 #define XEC_I3C_SC_CFG_DMA_TXBT_POS    8
 #define XEC_I3C_SC_CFG_DMA_TXBT_MSK    GENMASK(10, 8)
-#define XEC_I3C_SC_CFG_DMA_TXBT_SET(b) FIELD_PREP(XEC_I3C_HC_CFG_DMA_TXBT_MSK, (b))
-#define XEC_I3C_SC_CFG_DMA_TXBT_GET(r) FIELD_GET(XEC_I3C_HC_CFG_DMA_TXBT_MSK, (r))
+#define XEC_I3C_SC_CFG_DMA_TXBT_SET(b) FIELD_PREP(XEC_I3C_SC_CFG_DMA_TXBT_MSK, (b))
+#define XEC_I3C_SC_CFG_DMA_TXBT_GET(r) FIELD_GET(XEC_I3C_SC_CFG_DMA_TXBT_MSK, (r))
 #define XEC_I3C_SC_CFG_DMA_TX_EN_POS   11
 #define XEC_I3C_SC_CFG_DMA_TTERM_POS   13
 #define XEC_I3C_SC_CFG_DMA_RXBT_POS    16
 #define XEC_I3C_SC_CFG_DMA_RXBT_MSK    GENMASK(18, 16)
-#define XEC_I3C_SC_CFG_DMA_RXBT_SET(b) FIELD_PREP(XEC_I3C_HC_CFG_DMA_RXBT_MSK, (b))
-#define XEC_I3C_SC_CFG_DMA_RXBT_GET(r) FIELD_GET(XEC_I3C_HC_CFG_DMA_RXBT_MSK, (r))
+#define XEC_I3C_SC_CFG_DMA_RXBT_SET(b) FIELD_PREP(XEC_I3C_SC_CFG_DMA_RXBT_MSK, (b))
+#define XEC_I3C_SC_CFG_DMA_RXBT_GET(r) FIELD_GET(XEC_I3C_SC_CFG_DMA_RXBT_MSK, (r))
 #define XEC_I3C_SC_CFG_DMA_RX_EN_POS   19
 #define XEC_I3C_SC_CFG_DMA_RTERM_POS   21
-#define XEC_I3C_SC_CFG_SSDA_EN_POS     24 /* enable stuck SDA timeout detection */
-#define XEC_I3C_SC_CFG_SSDA_CK32K_POS  25 /* select 32KHz clock for stuck SDA counter else 2MHz  */
+#define XEC_I3C_SC_CFG_SSDA_EN_POS     24
+#define XEC_I3C_SC_CFG_SSDA_CK32K_POS  25
 #define XEC_I3C_SC_CFG_SCL_LDET_POS    28
 
-/* I3C Secondary config port field values */
 #define XEC_I3C_SC_PORT_I3C0 0U
 #define XEC_I3C_SC_PORT_I3C1 1U
 #define XEC_I3C_SC_PORT_I3C2 2U
 
-/* Secondary TX and RX DMA beat sizes: number of dwords in each burst */
 #define XEC_I3C_SC_CFG_DMA_BEAT_DW_1  0
 #define XEC_I3C_SC_CFG_DMA_BEAT_DW_4  1U
 #define XEC_I3C_SC_CFG_DMA_BEAT_DW_8  2U
 #define XEC_I3C_SC_CFG_DMA_BEAT_DW_16 3U
 #define XEC_I3C_SC_CFG_DMA_BEAT_DW_32 4U
 
+/* Secondary Controller Reset / DMA Timeout / Stuck SDA */
 #define XEC_I3C_SC_RST_CR_OFS     0x404U
 #define XEC_I3C_SC_RST_SOFT_POS   0
 #define XEC_I3C_SR_RST_DMA_TX_POS 4U
@@ -703,23 +766,26 @@
 #define XEC_I3C_SC_TMO_SCL_LO_SET(t) FIELD_PREP(XEC_I3C_SC_TMO_SCL_LO_MSK, (t))
 #define XEC_I3C_SC_TMO_SCL_LO_GET(r) FIELD_GET(XEC_I3C_SC_TMO_SCL_LO_MSK, (r))
 
-#define XEC_I3C_SC_WSR_OFS     0x414U
-#define XEC_I3C_SC_WIER_OFS    0x418U
-#define XEC_I3C_SC_WT_CFG0_OFS 0x420U
-#define XEC_I3C_SC_WT_CFG1_OFS 0x424U
-#define XEC_I3C_SC_CFG2_OFS    0x428U
-#define XEC_I3C_SC_CFG3_OFS    0x42CU
-
+#define XEC_I3C_SC_WSR_OFS      0x414U
+#define XEC_I3C_SC_WIER_OFS     0x418U
+#define XEC_I3C_SC_WT_CFG0_OFS  0x420U
+#define XEC_I3C_SC_WT_CFG1_OFS  0x424U
+#define XEC_I3C_SC_CFG2_OFS     0x428U
+#define XEC_I3C_SC_CFG3_OFS     0x42CU
 #define XEC_I3C_SC_PAD_TEST_OFS 0x4D0U
 #define XEC_I3C_SC_DBG0_OFS     0x4D4U
 #define XEC_I3C_SC_DBG1_OFS     0x4D8U
 #define XEC_I3C_SC_DMA_DBG_OFS  0x4DCU
+
+/* --- DAT entry bitfield macros --- */
 
 #define DEV_ADDR_TABLE1_LOC1_DYNAMIC_ADDR(addr) ((uint32_t)(addr & 0x7F) << 16)
 #define DEV_ADDR_TABLE1_LOC1_STATIC_ADDR(addr)  (uint32_t)(addr & 0x7F)
 #define DEV_ADDR_TABLE1_LOC1_PARITY             BIT(23)
 #define DEV_ADDR_TABLE1_LOC1_SIR_REJECT         BIT(13)
 #define DEV_ADDR_TABLE1_LOC1_IBI_WITH_DATA      BIT(12)
+
+/* --- Target response error codes --- */
 
 #define TARGET_RESP_ERR_NO_ERROR           0U
 #define TARGET_RESP_ERR_CRC                1U
@@ -729,59 +795,45 @@
 #define TARGET_RESP_ERR_EARLY_TERM         10U
 
 enum xec_tgt_evt_sts_reg_bits {
-	XEC_I3C_TGT_EVT_SIR_EN_POS = 0,
-	XEC_I3C_TGT_EVT_MR_EN_POS = 1,
-	XEC_I3C_TGT_EVT_HJ_EN_POS = 3
+    XEC_I3C_TGT_EVT_SIR_EN_POS = 0,
+    XEC_I3C_TGT_EVT_MR_EN_POS = 1,
+    XEC_I3C_TGT_EVT_HJ_EN_POS = 3
 };
 
-/* MEC I3C Control structure required by API */
+/* --- Hardware context --- */
+
 struct mec_i3c_ctx {
-	mm_reg_t base;
-	uint16_t pcr_scr;
-	uint8_t girq;
-	uint8_t girq_pos;
-	uint8_t girq_wk_only;
-	uint8_t girq_pos_wk_only;
+    mm_reg_t base;
+    uint16_t pcr_scr;
+    uint8_t girq;
+    uint8_t girq_pos;
+    uint8_t girq_wk_only;
+    uint8_t girq_pos_wk_only;
 };
+
+/* --- DCT / SDCT info --- */
 
 struct mec_i3c_DCT_info {
-
-	/* 64 bit provisional id */
-	uint64_t pid;
-
-	/* Bus Characteristics Register */
-	uint8_t bcr;
-
-	/* Device Characteristics Register */
-	uint8_t dcr;
-
-	/* 7-bit dynamic address */
-	uint8_t dynamic_addr;
+    uint64_t pid;
+    uint8_t bcr;
+    uint8_t dcr;
+    uint8_t dynamic_addr;
 };
 
 struct mec_i3c_SDCT_info {
-
-	/* 7-bit dynamic address */
-	uint8_t dynamic_addr;
-
-	/* Device Characteristics Register Value */
-	uint8_t dcr;
-
-	/* Bus Characteristics Register Value */
-	uint8_t bcr;
-
-	/* 7-bit static address */
-	uint8_t static_addr;
+    uint8_t dynamic_addr;
+    uint8_t dcr;
+    uint8_t bcr;
+    uint8_t static_addr;
 };
 
-/* Enter Dynamic Address Assignment (Broadcast) */
-#define XEC_I3C_CCC_ENTDAA 0x07U
+/* --- Timing and protocol constants --- */
 
+#define XEC_I3C_CCC_ENTDAA 0x07U
 #define XEC_I3C_DO_CCC_SHORT_CMD_DATA_SIZE_MAX 3U
 
 #define XEC_I3C_PUSH_PULL_SCL_MIN_LOW_PER_NS  33U
 #define XEC_I3C_PUSH_PULL_SCL_MIN_HIGH_PER_NS 41U
-
 #define XEC_I3C_OPEN_DRAIN_SCL_MIN_LOW_PER_NS  200U
 #define XEC_I3C_OPEN_DRAIN_SCL_MIN_HIGH_PER_NS 41U
 
@@ -796,29 +848,27 @@ struct mec_i3c_SDCT_info {
 #define XEC_I3C_BUS_SDR4_SCL_PER_POS 24U
 
 #define XEC_I3C_BUS_MAX_SKEW_PER_NS 12.8F
-
 #define XEC_I3C_BUS_READ_TERM_LCNT_BITPOS  0U
 #define XEC_I3C_BUS_HDR_TS_SKEW_CNT_BITPOS 16U
 #define XEC_I3C_BUS_STOP_HOLD_CNT          28U
 
-#define XEC_I3C_SCL_TIMING_COUNT_MIN 7U
-#define XEC_I3C_SCL_12_5MHZ_PER_NS   80U
+#define XEC_I3C_SCL_TIMING_COUNT_MIN 5U
+#define XEC_I3C_SCL_TIMING_COUNT_MAX 255U
+#define XEC_I3C_SCL_12_5MHZ_PER_NS   70U
 
-/* Need to review and tweak */
 #define XEC_I2C_FM_SCL_MIN_LOW_PER_NS  1300U
 #define XEC_I2C_FM_SCL_MIN_HIGH_PER_NS 680U
-
 #define XEC_I2C_FMP_SCL_MIN_LOW_PER_NS  500U
 #define XEC_I2C_FMP_SCL_MIN_HIGH_PER_NS 260U
 
 #define XEC_I3C_RESPONSE_BUF_DEPTH 32U
 
+/* Max data speed values */
 #define MAX_DATA_SPEED_RD_12_5_MHZ 0U
 #define MAX_DATA_SPEED_RD_8_MHZ    1U
 #define MAX_DATA_SPEED_RD_6_MHZ    2U
 #define MAX_DATA_SPEED_RD_4_MHZ    3U
 #define MAX_DATA_SPEED_RD_2_MHZ    4U
-
 #define MAX_DATA_SPEED_WR_12_5_MHZ 0U
 #define MAX_DATA_SPEED_WR_8_MHZ    1U
 #define MAX_DATA_SPEED_WR_6_MHZ    2U
@@ -831,26 +881,33 @@ struct mec_i3c_SDCT_info {
 #define MAX_CLK_DATA_TURN_11_NS 3U
 #define MAX_CLK_DATA_TURN_12_NS 4U
 
-/*----------------------------------TIMING PARAMETERS------------------*/
+/* Default target timing parameters */
 #define TGT_MAX_RD_DATA_SPEED MAX_DATA_SPEED_RD_12_5_MHZ
-
 #define TGT_MAX_WR_DATA_SPEED MAX_DATA_SPEED_WR_12_5_MHZ
+#define TGT_CLK_TO_DATA_TURN  MAX_CLK_DATA_TURN_8_NS
 
-#define TGT_CLK_TO_DATA_TURN MAX_CLK_DATA_TURN_8_NS
+#define XEC_I3C_TGT_BUS_AVAIL_COND_NS    (1000U)
+#define XEC_I3C_TGT_BUS_IDLE_COND_NS     (1000U)
+#define XEC_I3C_TGT_BUS_FREE_DURATION_NS (13U * 1000U)
+#define XEC_I3C_BUS_TCAS_PS               38400U
 
-#define XEC_I3C_TGT_BUS_AVAIL_COND_NS    (13 * 1000)
-#define XEC_I3C_TGT_BUS_IDLE_COND_NS     (13 * 1000)
-#define XEC_I3C_TGT_BUS_FREE_DURATION_NS (13 * 1000)
+#define XEC_I3C_MAX_MSGS    32U
+/* TID is a 4-bit field in the command descriptor (bits [6:3]), values 0-15 */
+#define XEC_I3C_CMD_TID_MAX 16U
 
-#define XEC_I3C_MAX_MSGS             32U
+/* --- IBI macros --- */
+
 #define I3C_HOT_JOIN_ADDR            0x2U
+
 #define IBI_QUEUE_STATUS_IBI_ID(x)   (((x) & GENMASK(15, 8)) >> 8U)
 #define IBI_QUEUE_STATUS_DATA_LEN(x) ((x) & GENMASK(7, 0))
 #define IBI_QUEUE_IBI_ADDR(x)        (IBI_QUEUE_STATUS_IBI_ID(x) >> 1U)
 #define IBI_QUEUE_IBI_RNW(x)         (IBI_QUEUE_STATUS_IBI_ID(x) & BIT(0))
-#define IBI_TYPE_MR(x)               ((IBI_QUEUE_IBI_ADDR(x) != I3C_HOT_JOIN_ADDR) && !IBI_QUEUE_IBI_RNW(x))
-#define IBI_TYPE_HJ(x)               ((IBI_QUEUE_IBI_ADDR(x) == I3C_HOT_JOIN_ADDR) && !IBI_QUEUE_IBI_RNW(x))
-#define IBI_TYPE_SIRQ(x)             ((IBI_QUEUE_IBI_ADDR(x) != I3C_HOT_JOIN_ADDR) && IBI_QUEUE_IBI_RNW(x))
+#define IBI_TYPE_MR(x)   ((IBI_QUEUE_IBI_ADDR(x) != I3C_HOT_JOIN_ADDR) && !IBI_QUEUE_IBI_RNW(x))
+#define IBI_TYPE_HJ(x)   ((IBI_QUEUE_IBI_ADDR(x) == I3C_HOT_JOIN_ADDR) && !IBI_QUEUE_IBI_RNW(x))
+#define IBI_TYPE_SIRQ(x)  ((IBI_QUEUE_IBI_ADDR(x) != I3C_HOT_JOIN_ADDR) && IBI_QUEUE_IBI_RNW(x))
+
+/* --- Response error codes (controller mode) --- */
 
 #define RESPONSE_NO_ERROR              0U
 #define RESPONSE_ERROR_CRC             1U
@@ -862,203 +919,161 @@ struct mec_i3c_SDCT_info {
 #define RESPONSE_ERROR_TRANSF_ABORT    8U
 #define RESPONSE_ERROR_I2C_W_NACK_ERR  9U
 
+/* --- PID extraction macros --- */
+
 #define TGT_MIPI_MFG_ID(x) ((x & GENMASK64(47, 33)) >> 33U)
 #define TGT_PROV_ID_SEL(x) ((x & GENMASK64(32, 32)) >> 32U)
+#define TGT_PART_ID(x)     ((x & GENMASK64(31, 16)) >> 16U)
+#define TGT_INST_ID(x)     ((x & GENMASK64(15, 12)) >> 12U)
+#define TGT_PID_DCR(x)     ((x & GENMASK64(11, 0)) >> 0U)
 
-#define TGT_PART_ID(x) ((x & GENMASK64(31, 16)) >> 16U)
-#define TGT_INST_ID(x) ((x & GENMASK64(15, 12)) >> 12U)
-#define TGT_PID_DCR(x) ((x & GENMASK64(11, 0)) >> 0U)
+/* --- GIRQ control flags --- */
 
 #define MEC_I3C_GIRQ_EN      0x1
 #define MEC_I3C_GIRQ_DIS     0x2
 #define MEC_I3C_GIRQ_CLR_STS 0x4
 
+/* --- MEC I3C enumerations --- */
+
 enum mec_i3c_channels {
-	MEC_I3C_PRIM_CTRLR,
-	MEC_I3C_SEC_CTRLR,
-	MEC_I3C_CHAN_0 = MEC_I3C_PRIM_CTRLR,
-	MEC_I3C_CHAN_1 = MEC_I3C_SEC_CTRLR,
-	MEC_I3C_MAX_CHAN
+    MEC_I3C_PRIM_CTRLR,
+    MEC_I3C_SEC_CTRLR,
+    MEC_I3C_CHAN_0 = MEC_I3C_PRIM_CTRLR,
+    MEC_I3C_CHAN_1 = MEC_I3C_SEC_CTRLR,
+    MEC_I3C_MAX_CHAN
 };
 
 enum mec_i3c_role_cfg {
-	MEC_I3C_ROLE_CFG_PRIM_CTRLR = 1U,
-	MEC_I3C_ROLE_CFG_SEC_CTRLR = 3U,
-	MEC_I3C_ROLE_CFG_TGT = 4U,
-	MEC_I3C_MAX_ROLES
+    MEC_I3C_ROLE_CFG_PRIM_CTRLR = 1U,
+    MEC_I3C_ROLE_CFG_SEC_CTRLR = 3U,
+    MEC_I3C_ROLE_CFG_TGT = 4U,
+    MEC_I3C_MAX_ROLES
 };
 
-/* configuration bit definitions */
 enum mec_config_bits {
-	sbit_CONFG_ENABLE = BIT(0),
-	sbit_MODE_TARGET = BIT(1),
-	sbit_HOTJOIN_DISABLE = BIT(2),
-	sbit_DMA_MODE = BIT(3)
+    sbit_CONFG_ENABLE = BIT(0),
+    sbit_MODE_TARGET = BIT(1),
+    sbit_HOTJOIN_DISABLE = BIT(2),
+    sbit_DMA_MODE = BIT(3)
 };
 
 enum mec_i3c_xfer_speeds {
-	MEC_XFER_SPEED_SDR0 = 0 /* 12.5 MHz (~12.5Mbps)*/
-		,
-	MEC_XFER_SPEED_SDR1 /* 8MHz                */
-		,
-	MEC_XFER_SPEED_SDR2 /* 6MHz                */
-		,
-	MEC_XFER_SPEED_SDR3 /* 4MHz                */
-		,
-	MEC_XFER_SPEED_SDR4 /* 2MHz                */
-		,
-	MEC_XFER_SPEED_HDR_TS /* Not supported on KF */
-		,
-	MEC_XFER_SPEED_HDR_DDR /* 12.5MHz  (~25Mbps)  */
+    MEC_XFER_SPEED_SDR0 = 0,  /* 12.5 MHz */
+    MEC_XFER_SPEED_SDR1,       /* 8 MHz */
+    MEC_XFER_SPEED_SDR2,       /* 6 MHz */
+    MEC_XFER_SPEED_SDR3,       /* 4 MHz */
+    MEC_XFER_SPEED_SDR4,       /* 2 MHz */
+    MEC_XFER_SPEED_HDR_TS,
+    MEC_XFER_SPEED_HDR_DDR     /* 12.5 MHz (~25 Mbps) */
 };
 
 enum mec_i2c_xfer_speeds {
-	MEC_XFER_SPEED_FM = 0,
-	MEC_XFER_SPEED_FMP
+    MEC_XFER_SPEED_FM = 0,
+    MEC_XFER_SPEED_FMP
 };
 
 enum mec_mxds_max_wr_speed {
-	MEC_MXDS_MAX_WR_SPEED_12P5MHZ = 0,
-	MEC_MXDS_MAX_WR_SPEED_8MHZ,
-	MEC_MXDS_MAX_WR_SPEED_6MHZ,
-	MEC_MXDS_MAX_WR_SPEED_4MHZ,
-	MEC_MXDS_MAX_WR_SPEED_2MHZ
+    MEC_MXDS_MAX_WR_SPEED_12P5MHZ = 0,
+    MEC_MXDS_MAX_WR_SPEED_8MHZ,
+    MEC_MXDS_MAX_WR_SPEED_6MHZ,
+    MEC_MXDS_MAX_WR_SPEED_4MHZ,
+    MEC_MXDS_MAX_WR_SPEED_2MHZ
 };
 
 enum mec_mxds_max_rd_speed {
-	MEC_MXDS_MAX_RD_SPEED_12P5MHZ = 0,
-	MEC_MXDS_MAX_RD_SPEED_8MHZ,
-	MEC_MXDS_MAX_RD_SPEED_6MHZ,
-	MEC_MXDS_MAX_RD_SPEED_4MHZ,
-	MEC_MXDS_MAX_RD_SPEED_2MHZ
+    MEC_MXDS_MAX_RD_SPEED_12P5MHZ = 0,
+    MEC_MXDS_MAX_RD_SPEED_8MHZ,
+    MEC_MXDS_MAX_RD_SPEED_6MHZ,
+    MEC_MXDS_MAX_RD_SPEED_4MHZ,
+    MEC_MXDS_MAX_RD_SPEED_2MHZ
 };
 
 enum mec_mxds_tsco {
-	MEC_MXDS_TSCO_8NS = 0,
-	MEC_MXDS_TSCO_9NS,
-	MEC_MXDS_TSCO_10NS,
-	MEC_MXDS_TSCO_11NS,
-	MEC_MXDS_TSCO_12NS
+    MEC_MXDS_TSCO_8NS = 0,
+    MEC_MXDS_TSCO_9NS,
+    MEC_MXDS_TSCO_10NS,
+    MEC_MXDS_TSCO_11NS,
+    MEC_MXDS_TSCO_12NS
 };
 
-/**
- * @brief Structure to use by target to raise Target Interrupt Request (SIR)
- */
+/* --- Operation mode and misc constants --- */
+
+#define XEC_I3C_OP_MODE_CTL 0
+#define XEC_I3C_OP_MODE_TGT 1U
+#define XEC_I3C_DMA_DIS false
+#define XEC_I3C_DMA_EN  true
+
+#define HOST_CFG_STUCK_SDA_DISABLE 0
+#define HOST_CFG_STUCK_SDA_ENABLE  1U
+#define XEC_I3C_CFG_DMA_TMOUT_DIS 0
+#define XEC_I3C_CFG_DMA_TMOUT_EN  1U
+#define SEC_HOST_STK_SDA_SCL_DIS 0
+#define SEC_HOST_STK_SDA_SCL_EN  1U
+
+/* --- Transfer / command structures --- */
+
 struct mec_i3c_raise_IBI_SIR {
-
-	/** Pointer to buffer for SIR Data */
-	uint8_t *data_buf;
-
-	/** SIR data length */
-	uint8_t data_len;
-
-	/** Mandatory Byte */
-	uint8_t mdb;
+    uint8_t *data_buf;
+    uint8_t data_len;
+    uint8_t mdb;
 };
 
-/**
- * @brief Structure to use for DO CCC procedure
- */
 struct mec_i3c_DO_CCC {
-
-	/** Pointer to buffer for TX/RX Data */
-	uint8_t *data_buf;
-
-	/** Number of bytes to read/write */
-	uint16_t data_len;
-
-	/** CCC Id */
-	uint8_t ccc_id;
-
-	/** Target index */
-	uint8_t tgt_idx;
-
-	/** Defining Byte (optional) */
-	uint8_t defining_byte;
-
-	/** Set True for Read */
-	bool read;
-
-	/** Set True if defining byte is valid */
-	bool defining_byte_valid;
+    uint8_t *data_buf;
+    uint16_t data_len;
+    uint8_t ccc_id;
+    uint8_t tgt_idx;
+    uint8_t defining_byte;
+    bool read;
+    bool defining_byte_valid;
+    uint8_t xfer_speed;
 };
 
-/**
- * @brief Structure to use for Enable IBI procedure
- */
 struct mec_i3c_IBI_SIR {
-
-	/** DAT start address */
-	uint16_t DAT_start;
-
-	/** Target index in DAT */
-	uint8_t tgt_dat_idx;
-
-	/** True if target's IBI has payload */
-	bool ibi_has_payload;
+    uint16_t DAT_start;
+    uint8_t tgt_dat_idx;
+    bool ibi_has_payload;
 };
 
-/* Single command/transfer */
 struct mec_i3c_dw_cmd {
-
-	uint32_t cmd;
-
-	uint32_t arg;
-
-	/** Pointer to buffer for TX/RX Data */
-	uint8_t *data_buf;
-
-	/** Number of bytes to read/write */
-	uint16_t data_len;
-
-#if CONFIG_I3C_ENABLE_THRESHOLDS_INTR
-	/** Remaining data length - used with thresholds */
-	uint16_t rem_data_len;
-#endif
-
-	/** Target index */
-	uint8_t tgt_idx;
-
-	/** Set True for Read */
-	bool read;
-
-	/** Set True to enable PEC */
-	bool pec_en;
-
-	/** Set True for STOP */
-	bool stop;
-
-	/** Xfer speed */
-	uint8_t xfer_speed;
+    uint32_t cmd;
+    uint32_t arg;
+    uint8_t *data_buf;
+    uint16_t data_len;
+    uint8_t tgt_idx;
+    bool read;
+    bool pec_en;
+    bool stop;
+    uint8_t xfer_speed;
 };
 
-/**
- * @brief Structure to use for DO XFER procedure
- */
 struct mec_i3c_XFER {
-
-	struct mec_i3c_dw_cmd cmds[XEC_I3C_MAX_MSGS];
+    struct mec_i3c_dw_cmd cmds[XEC_I3C_MAX_MSGS];
 };
 
 typedef void (*XEC_I3C_CALLBACK)(uintptr_t context);
 
 typedef struct {
-	XEC_I3C_CALLBACK callback;
-	uintptr_t context;
+    XEC_I3C_CALLBACK callback;
+    uintptr_t context;
 } XEC_I3C_OBJECT;
 
-/* I3C driver configuration structure */
+/* --- Driver config / data structures --- */
+
 struct xec_i3c_config {
-	struct i3c_driver_config common;
-	mm_reg_t regbase;
-	const struct pinctrl_dev_config *pcfg;
-	void (*irq_config_func)();
-	uint32_t clock;  /* I3C Core Input Clock */
-	uint8_t address; /* I3C 7-bit address - dynamic for controller / static for target */
-	struct mec_i3c_ctx hwctx;
+    struct i3c_driver_config common;
+    mm_reg_t regbase;
+    uint8_t primary_controller_da;
+    struct {
+        uint32_t high_ns;  /* OD SCL min high period (ns) */
+        uint32_t low_ns;   /* OD SCL min low period (ns) */
+    } scl_od_min;
+    const struct pinctrl_dev_config *pcfg;
+    void (*irq_config_func)();
+    uint32_t clock;        /* Core input clock (Hz) */
+    struct mec_i3c_ctx hwctx;
 };
 
-/* I3C driver data structure */
 #define XEC_I3C_MAX_IBI_LIST_COUNT    10U
 #define XEC_I3C_TGT_RX_DATA_BUF_SIZE  128
 #define XEC_I3C_MAX_TGT_RX_LIST_COUNT 10U
@@ -1066,333 +1081,82 @@ struct xec_i3c_config {
 
 #ifdef CONFIG_I3C_USE_IBI
 struct ibi_node {
-	struct i3c_ibi_payload payload;
-
-	/** Type of IBI. */
-	enum i3c_ibi_type ibi_type;
-
-	/** 7-bit address of the device that initiated the IBI */
-	uint8_t addr;
-
-	/* IBI Node state */
-	uint8_t state;
+    struct i3c_ibi_payload payload;
+    enum i3c_ibi_type ibi_type;
+    uint8_t addr;
+    uint8_t state;
 };
 #endif
 
-struct targets_on_bus {
-	/* PID of the target */
-	uint64_t pid;
-
-	/* Target address assignment state */
-	uint8_t state;
-
-	/* Address of the target */
-	uint8_t address;
-
-	/* Index in the Device Address Table */
-	uint8_t dat_idx;
+/* Per-device HW private data — stores only the DAT index */
+struct xec_i3c_dev_priv {
+    uint8_t dat_idx;   /* HW DAT index, or XEC_I3C_DAT_IDX_NONE */
+    bool allocated;
 };
 
-/**
- * @brief Structure to use for Target Pvt RX
- */
+/* Hot-join pending slot for devices not in the static device list */
+struct xec_i3c_hotjoin_slot {
+    uint8_t intended_addr;
+    bool pending;
+};
+
 struct i3c_tgt_pvt_receive_node {
-	/** Pointer to buffer for RX Data */
-	uint8_t data_buf[XEC_I3C_TGT_RX_DATA_BUF_SIZE];
-
-	/* Data length of the Private Receive xfer */
-	uint16_t data_len;
-
-	/** Node Transfer status - 0 success, < 0 fail */
-	uint8_t error_status;
-
-	/* Node state */
-	uint8_t state;
+    uint8_t data_buf[XEC_I3C_TGT_RX_DATA_BUF_SIZE];
+    uint16_t data_len;
+    uint8_t error_status;
+    uint8_t state;
 };
 
-/**
- * @brief Structure to use for DO CCC procedure
- */
 struct i3c_pending_xfer_node {
-	/* Return data length*/
-	uint16_t ret_data_len;
-
-	/** Pointer to buffer for RX Data */
-	uint8_t *data_buf;
-
-	/** 4-bit TID for the transfer */
-	uint8_t tid;
-
-	/** Node Transfer status - 0 success, < 0 fail */
-	uint8_t error_status;
-
-	/** True if Read expected */
-	bool read;
+    uint16_t ret_data_len;
+    uint8_t *data_buf;
+    uint8_t tid;
+    uint8_t error_status;
+    bool read;
 };
 
-/**
- * @brief Structure to use for DO CCC procedure
- */
 struct i3c_pending_xfer {
-	/* Individual chained transfer details */
-	struct i3c_pending_xfer_node node[XEC_I3C_MAX_MSGS];
-
-	/* Semaphore used for the transfer */
-	struct k_sem *xfer_sem;
-
-	/** xfer type */
-	uint8_t xfer_type;
-
-	/** Transfer status - 0 success, < 0 fail */
-	uint8_t xfer_status;
+    struct i3c_pending_xfer_node node[XEC_I3C_MAX_MSGS];
+    struct k_sem *xfer_sem;
+    uint8_t xfer_type;
+    uint8_t xfer_status;
 };
 
 struct queue_depths {
-	/* Depth of tx FIFO */
-	uint8_t tx_fifo_depth;
-
-	/* Depth of rx FIFO */
-	uint8_t rx_fifo_depth;
-
-	/* Depth of command FIFO */
-	uint8_t cmd_fifo_depth;
-
-	/* Depth of response FIFO */
-	uint8_t resp_fifo_depth;
-
-	/* Depth of IBI FIFO */
-	uint8_t ibi_fifo_depth;
+    uint8_t tx_fifo_depth;
+    uint8_t rx_fifo_depth;
+    uint8_t cmd_fifo_depth;
+    uint8_t resp_fifo_depth;
+    uint8_t ibi_fifo_depth;
 };
 
 struct xec_i3c_data {
-	/** Common I3C Driver Data */
-	struct i3c_driver_data common;
-
-	/** Target configuration */
-	struct i3c_target_config *target_config;
-
-	struct mec_i3c_ctx ctx;
-
-	/* Semaphore to implement blocking functions for CCC and pvt transfers */
-	struct k_sem xfer_sem;
-
-	/* Mutex to implement thread synchronization */
-	struct k_mutex xfer_lock;
-
-	/* List of targets on bus */
-	struct targets_on_bus targets[XEC_I3C_MAX_TARGETS];
-
+    struct i3c_driver_data common;
+    struct i3c_target_config *target_config;
+    struct mec_i3c_ctx ctx;
+    struct k_sem xfer_sem;
+    struct k_mutex xfer_lock;
+    struct xec_i3c_dev_priv dev_priv_pool[XEC_I3C_MAX_TARGETS];
+    struct xec_i3c_hotjoin_slot hotjoin_pending[XEC_I3C_MAX_HOTJOIN];
 #ifdef CONFIG_I3C_USE_IBI
-	/* List of IBIs */
-	struct ibi_node ibis[XEC_I3C_MAX_IBI_LIST_COUNT];
-
-	/* Flag to indicate if IBI interrupt is enabled in Init */
-	bool ibi_intr_enabled_init;
+    struct ibi_node ibis[XEC_I3C_MAX_IBI_LIST_COUNT];
+    bool ibi_intr_enabled_init;
 #endif
-
-	struct i3c_tgt_pvt_receive_node tgt_pvt_rx[XEC_I3C_MAX_TGT_RX_LIST_COUNT];
-
-	/* Maximum depths of HW FIFO */
-	struct queue_depths fifo_depths;
-
-	/* Configuration parameters for I3C hardware to act as target device */
-	struct i3c_config_target i3c_cfg_as_tgt;
-
-	/* Free Positions in the Device Address Table */
-	uint32_t DAT_free_positions;
-
-	/* Start address of DAT */
-	uint16_t DAT_start_addr;
-
-	/* Maximum number of targets - depth of DAT */
-	uint16_t DAT_depth;
-
-	/* Start address of DCT */
-	uint16_t DCT_start_addr;
-
-	/* Depth of DCT */
-	uint16_t DCT_depth;
-
-	/* Remaining data length for Target Pvt TX Xfer */
-	uint16_t tgt_pvt_tx_rem_data_len;
-
-	/* Status for Target Pvt TX Xfer */
-	uint8_t tgt_pvt_tx_sts;
-
-	/* Flag to indicate if target TX has been queued */
-	bool tgt_tx_queued;
-
-	uint8_t tid;
-	uint32_t targets_ibi_enable_sts;
-	uint8_t target_tx_data_buf[XEC_I3C_MAX_TGT_TX_DATALEN];
+    struct i3c_tgt_pvt_receive_node tgt_pvt_rx[XEC_I3C_MAX_TGT_RX_LIST_COUNT];
+    struct queue_depths fifo_depths;
+    struct i3c_config_target i3c_cfg_as_tgt;
+    struct i3c_pending_xfer pending_xfer_ctxt;
+    uint32_t DAT_free_positions;
+    uint16_t DAT_start_addr;
+    uint16_t DAT_depth;
+    uint16_t DCT_start_addr;
+    uint16_t DCT_depth;
+    uint16_t tgt_pvt_tx_rem_data_len;
+    uint8_t tgt_pvt_tx_sts;
+    bool tgt_tx_queued;
+    uint8_t tid;
+    uint32_t targets_ibi_enable_sts;
+    uint8_t target_tx_data_buf[XEC_I3C_MAX_TGT_TX_DATALEN];
 };
 
-/* MEC I3C helpers */
-
-void xec_i3c_ibi_data_read(mm_reg_t hrb, uint8_t *buffer, uint16_t len);
-
-void xec_i3c_tgt_max_speed_update(mm_reg_t srb, uint8_t max_rd_speed, uint8_t max_wr_speed);
-
-void xec_i3c_tgt_clk_to_data_turn_update(mm_reg_t srb, uint8_t clk_data_turn_time);
-
-/* returns 1 if bit was set and it clears the bit else returns 0 */
-int xec_i3c_tgt_MRL_updated(mm_reg_t srb);
-int xec_i3c_tgt_MWL_updated(mm_reg_t srb);
-
-void xec_i3c_tgt_MRL_MWL_set(mm_reg_t srb, uint16_t max_rd_len, uint16_t max_wr_len);
-
-void xec_i3c_host_dma_tx_burst_length_set(mm_reg_t hrb, uint32_t val);
-void xec_i3c_host_dma_rx_burst_length_set(mm_reg_t hrb, uint32_t val);
-
-void xec_i3c_host_port_set(mm_reg_t hrb, uint32_t port_sel);
-void xec_i3c_sec_host_port_set(mm_reg_t srb, uint32_t port_sel);
-
-#define HOST_CFG_STUCK_SDA_DISABLE 0
-#define HOST_CFG_STUCK_SDA_ENABLE  1U
-void xec_i3c_host_stuck_sda_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val);
-
-#define XEC_I3C_CFG_DMA_TMOUT_DIS 0
-#define XEC_I3C_CFG_DMA_TMOUT_EN  1U
-void xec_i3c_host_tx_dma_tout_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val);
-void xec_i3c_host_rx_dma_tout_config(mm_reg_t hrb, uint32_t en, uint32_t tout_val);
-void xec_i3c_sec_host_tx_dma_tout_config(mm_reg_t srb, uint32_t en, uint32_t tout_val);
-void xec_i3c_sec_host_rx_dma_tout_config(mm_reg_t srb, uint32_t en, uint32_t tout_val);
-
-void xec_i3c_sec_host_dma_tx_burst_length_set(mm_reg_t srb, uint32_t val);
-void xec_i3c_sec_host_dma_rx_burst_length_set(mm_reg_t srb, uint32_t val);
-
-#define SEC_HOST_STK_SDA_SCL_DIS 0
-#define SEC_HOST_STK_SDA_SCL_EN  1U
-void xec_i3c_sec_host_stuck_sda_scl_config(mm_reg_t srb, uint32_t en, uint32_t sda_tout_val,
-					   uint32_t scl_tout_val);
-
-void xec_i3c_soft_reset(mm_reg_t hrb);
-
-/* Get device pointer from Host or Secondary Host controller */
-void xec_i3c_dev_addr_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint16_t *depth);
-
-/* Get device characteristics pointer from Host or Secondary Host controller */
-void xec_i3c_dev_char_table_ptr_get(mm_reg_t regbase, uint16_t *start_addr, uint16_t *depth);
-
-/* return FIFO size in bytes */
-uint32_t xec_i3c_tx_fifo_depth_get(mm_reg_t regbase);
-uint32_t xec_i3c_rx_fifo_depth_get(mm_reg_t regbase);
-uint32_t xec_i3c_cmd_fifo_depth_get(mm_reg_t regbase);
-uint32_t xec_i3c_resp_fifo_depth_get(mm_reg_t regbase);
-uint32_t xec_i3c_ibi_fifo_depth_get(mm_reg_t regbase);
-
-void xec_i3c_fifo_read(mm_reg_t regbase, uint8_t *buffer, uint16_t len);
-void xec_i3c_fifo_write(mm_reg_t regbase, uint8_t *buffer, uint16_t len);
-
-#define XEC_I3C_OP_MODE_CTL 0
-#define XEC_I3C_OP_MODE_TGT 1U
-
-#define XEC_I3C_DMA_DIS false
-#define XEC_I3C_DMA_EN  true
-
-void xec_i3c_operation_mode_set(mm_reg_t regbase, uint8_t mode);
-
-void xec_i3c_enable(mm_reg_t regbase, uint8_t mode, bool enable_dma);
-
-/* -------------------------------------------------------------------------------------- */
-void XEC_I3C_Soft_Reset(const struct device *dev);
-
-void XEC_I3C_Controller_Clk_Init(const struct device *dev, uint32_t core_clk_rate_mhz,
-				 uint32_t i3c_freq);
-
-void XEC_I3C_Controller_Clk_Cfg(const struct device *dev, uint32_t core_clk_rate_mhz,
-				uint32_t i3c_freq);
-
-void XEC_I3C_Controller_Clk_I2C_Init(const struct device *dev, uint32_t core_clk_rate_mhz);
-
-void XEC_I3C_Target_Init(const struct device *dev, uint32_t core_clk_rate_mhz, uint16_t *max_rd_len,
-			 uint16_t *max_wr_len);
-
-void XEC_I3C_Controller_Interrupts_Init(const struct device *dev);
-
-void XEC_I3C_Thresholds_Init(const struct device *dev);
-
-void XEC_I3C_queue_depths_get(const struct device *dev, struct queue_depths *fd);
-
-void XEC_I3C_Host_Config(const struct device *dev);
-
-void XEC_I3C_Sec_Host_Config(const struct device *dev);
-
-void XEC_I3C_Enable(const struct device *dev, uint8_t address, uint8_t config);
-
-void XEC_I3C_DO_DAA(const struct device *dev, uint8_t tgt_idx, uint8_t tgts_count,
-		    uint8_t *tid_xfer);
-
-void XEC_I3C_DO_CCC(const struct device *dev, struct mec_i3c_DO_CCC *tgt, uint8_t *tid_xfer);
-
-void XEC_I3C_CallbackRegister(uint32_t channel, XEC_I3C_CALLBACK callback, uintptr_t context);
-
-void XEC_I3C_Xfer_Error_Resume(const struct device *dev);
-
-void XEC_I3C_Xfer_Reset(const struct device *dev);
-
-void XEC_I3C_DCT_info_get(const struct device *dev, uint16_t *start_addr, uint16_t *depth);
-
-void XEC_I3C_DCT_read(const struct device *dev, uint16_t DCT_start, uint16_t DCT_idx,
-		      struct mec_i3c_DCT_info *info);
-
-void XEC_I3C_DO_Xfer_Prep(const struct device *dev, struct mec_i3c_dw_cmd *cmd, uint8_t *tid_xfer);
-
-void XEC_I3C_DO_Xfer(const struct device *dev, struct mec_i3c_dw_cmd *tgt);
-
-void XEC_I3C_IBI_SIR_Enable(const struct device *dev, struct mec_i3c_IBI_SIR *ibi_sir_info,
-			    bool enable_ibi_interrupt);
-
-void XEC_I3C_IBI_SIR_Disable(const struct device *dev, struct mec_i3c_IBI_SIR *ibi_sir_info,
-			     bool disable_ibi_interrupt);
-
-void XEC_I3C_TGT_PID_set(const struct device *dev, uint64_t pid, bool pid_random);
-
-void xec_i3c_tgt_MRL_get(mm_reg_t srb, uint16_t *max_rd_len);
-void xec_i3c_tgt_MWL_get(mm_reg_t srb, uint16_t *max_rd_len);
-
-void XEC_I3C_TGT_MRL_set(const struct device *dev, uint16_t mrl);
-
-void XEC_I3C_TGT_MWL_set(const struct device *dev, uint16_t mwl);
-
-void XEC_I3C_TGT_MXDS_set(const struct device *dev, uint8_t wr_speed, uint8_t rd_speed,
-			  uint8_t tsco, uint32_t rd_trnd_us);
-
-int XEC_I3C_TGT_IBI_SIR_Raise(const struct device *dev,
-			      struct mec_i3c_raise_IBI_SIR *ibi_sir_request);
-
-int XEC_I3C_TGT_IBI_MR_Raise(const struct device *dev);
-
-void XEC_I3C_Target_Interrupts_Init(const struct device *dev);
-
-void XEC_I3C_TGT_IBI_SIR_Residual_handle(const struct device *dev);
-
-void XEC_I3C_TGT_Error_Recovery(const struct device *dev, uint8_t err_sts);
-
-#if CONFIG_I3C_ENABLE_THRESHOLDS_INTR
-void XEC_I3C_DO_TGT_Xfer(const struct device *dev, uint8_t *data_buf, uint16_t data_len,
-			 uint16_t rem_data_len);
-#else
-void XEC_I3C_DO_TGT_Xfer(const struct device *dev, uint8_t *data_buf, uint16_t data_len);
-#endif
-
-void XEC_I3C_Target_MRL_MWL_update(const struct device *dev, uint16_t *max_rd_len,
-				   uint16_t *max_wr_len);
-
-void XEC_I3C_Target_MRL_MWL_set(const struct device *dev, uint16_t max_rd_len, uint16_t max_wr_len);
-
-void XEC_I3C_SDCT_read(const struct device *dev, uint16_t DCT_start, uint16_t idx,
-		       struct mec_i3c_SDCT_info *info);
-
-void XEC_I3C_TGT_DEFTGTS_DAT_write(const struct device *dev, uint16_t DCT_start, uint16_t DAT_start,
-				   uint8_t targets_count);
-
-void XEC_I3C_TGT_RoleSwitch_Resume(const struct device *dev);
-
-void XEC_I3C_GIRQ_CTRL(const struct device *dev, int flags);
-
-int XEC_I3C_GIRQ_Status(const struct device *dev);
-
-int XEC_I3C_GIRQ_Result(const struct device *dev);
-
-#endif /* _I3C_MCHP_XEC_PRIV_H_ */
+#endif /* _I3C_MCHP_XEC_H_ */
