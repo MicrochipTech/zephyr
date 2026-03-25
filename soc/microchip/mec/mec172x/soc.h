@@ -280,7 +280,9 @@ typedef enum {
 
 /* common SoC API */
 #include "../common/soc_dt.h"
+#include "../common/soc_ecia.h"
 #include "../common/soc_gpio.h"
+#include "../common/soc_mmcr.h"
 #include "../common/soc_pcr.h"
 #include "../common/soc_pins.h"
 #include "../common/soc_espi_channels.h"

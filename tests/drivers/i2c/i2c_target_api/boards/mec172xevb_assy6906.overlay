@@ -1,0 +1,56 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v2";
+	port-sel = <0>;
+	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+	pinctrl-names = "default";
+	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>;
+	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>;
+	status = "okay";
+
+	eeprom0: eeprom@54 {
+		compatible = "zephyr,i2c-target-eeprom";
+		reg = <0x54>;
+		address-width = <16>;
+		size = <1024>;
+	};
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v2";
+	port-sel = <4>;
+	pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
+	pinctrl-names = "default";
+	scl-gpios = <MCHP_GPIO_DECODE_144 GPIO_OPEN_DRAIN>;
+	sda-gpios = <MCHP_GPIO_DECODE_143 GPIO_OPEN_DRAIN>;
+	status = "okay";
+
+	eeprom1: eeprom@56 {
+		compatible = "zephyr,i2c-target-eeprom";
+		reg = <0x56>;
+		address-width = <16>;
+		size = <1024>;
+	};
+};
+
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+};
+
+&i2c04_sda_gpio143 {
+	drive-open-drain;
+};
+
+&i2c04_scl_gpio144 {
+	drive-open-drain;
+};
