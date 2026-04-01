@@ -130,7 +130,7 @@ int mec5_espi_oob_downstream(const struct device *dev, struct espi_oob_packet *p
 
 	mec_hal_espi_oob_rx_buffer_avail(iob);
 
-	return 0;
+	return ret;
 }
 
 
@@ -151,6 +151,12 @@ static void mec5_espi_oob_init(const struct device *dev)
 	struct mec_espi_oob_buf oob_buf = {0};
 	uint32_t ien = 0;
 	int ret = 0;
+
+	/* init semaphore */
+	k_sem_init(&oob_data->tx_sync, 1, 1);
+#ifndef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
+	k_sem_init(&oob_data->rx_sync, 1, 1);
+#endif
 
 	oob_buf.maddr = (uint32_t)&oob_data->tx_mem[0];
 	oob_buf.len = CONFIG_ESPI_OOB_BUFFER_SIZE;
@@ -191,7 +197,7 @@ static void mec5_espi_oob_up_isr(const struct device *dev)
 
 	oob_data->tx_status = status;
 	if (mec_hal_espi_oob_is_done(status, MEC_ESPI_OOB_DIR_UP)) {
-		mec_hal_espi_oob_status_clr_all(iob, MEC_ESPI_OOB_DIR_DN);
+		mec_hal_espi_oob_status_clr_all(iob, MEC_ESPI_OOB_DIR_UP);
 		k_sem_give(&oob_data->tx_sync);
 	}
 
