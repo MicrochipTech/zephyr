@@ -1147,6 +1147,7 @@ static int i2c_xec_v2_target_unregister(const struct device *dev, struct i2c_tar
 static DEVICE_API(i2c, i2c_xec_v2_driver_api) = {
 	.configure = i2c_xec_v2_configure,
 	.transfer = i2c_xec_v2_transfer,
+	.recover_bus = i2c_xec_v2_recover_bus,
 #ifdef CONFIG_I2C_TARGET
 	.target_register = i2c_xec_v2_target_register,
 	.target_unregister = i2c_xec_v2_target_unregister,
