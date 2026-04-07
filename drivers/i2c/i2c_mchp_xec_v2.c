@@ -10,10 +10,13 @@
 #include <soc.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/i2c_mchp_xec.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/device.h>
+#include <zephyr/pm/device_runtime.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
@@ -107,11 +110,16 @@ struct i2c_xec_data {
 	uint8_t state;
 	uint8_t read_discard;
 	uint8_t speed_id;
+	uint8_t port_sel;  /* current active port (mutable, init from config) */
 	uint8_t i2c_error;
 	struct k_mutex mux;
 	struct i2c_target_config *target_cfg;
 	bool target_attached;
 	bool target_read;
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	struct k_sem completion;   /* posted by ISR when PIN asserts (byte done) */
+	int isr_error;             /* error code set by ISR: 0, -EIO, -ECONNABORTED */
+#endif
 };
 
 static const struct xec_i2c_timing xec_i2c_nl_timing_tbl[] = {
@@ -131,9 +139,10 @@ static int i2c_xec_reset_config(const struct device *dev);
  */
 static void i2c_xec_ctrl_reset(const struct device *dev)
 {
+	struct i2c_xec_data *const data = dev->data;
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t regbase = drvcfg->base_addr;
-	uint32_t port_fe_val = XEC_I2C_CFG_PORT_SET(drvcfg->port_sel) | BIT(XEC_I2C_CFG_FEN_POS);
+	uint32_t port_fe_val = XEC_I2C_CFG_PORT_SET(data->port_sel) | BIT(XEC_I2C_CFG_FEN_POS);
 
 	soc_xec_pcr_reset_en(drvcfg->enc_pcr);
 	sys_write32(port_fe_val, regbase + XEC_I2C_CFG_OFS);
@@ -212,7 +221,7 @@ uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
 #else
 /* I2C HW v3.8 and above support a live control bit in the BB control register.
  * Enabling this bit allows the live state of the SCL and SDA pins to be read
- * with making a call to SoC layer or GPIO driver.
+ * without making a call to SoC layer or GPIO driver.
  */
 uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
 			  const struct gpio_dt_spec *sda_gpio)
@@ -260,6 +269,38 @@ static uint8_t i2c_sr_read(const struct device *dev)
 	return sr;
 }
 
+/* We wait for PIN 1->0(assertion) */
+static int wait_pin_assert(const struct device *dev, uint32_t pin_wait_us)
+{
+	struct i2c_xec_data *const data = dev->data;
+	const struct i2c_xec_config *drvcfg = dev->config;
+	mm_reg_t rb = drvcfg->base_addr;
+	int rc = 0;
+
+	data->i2c_error = 0;
+
+	if (!WAIT_FOR((soc_test_bit8(rb + XEC_I2C_SR_OFS, XEC_I2C_SR_PIN_POS) == 0), pin_wait_us,
+		      NULL)) {
+		data->i2c_error = I2C_XEC_ERR_TMOUT;
+		rc = -ETIMEDOUT;
+	}
+
+	data->i2c_status = sys_read8(rb + XEC_I2C_SR_OFS);
+	data->i2c_compl = sys_read32(rb + XEC_I2C_CMPL_OFS);
+
+	if ((data->i2c_status & BIT(XEC_I2C_SR_BER_POS)) != 0) {
+		data->i2c_error = I2C_XEC_ERR_BUS;
+		return -EIO;
+	}
+
+	if ((data->i2c_status & BIT(XEC_I2C_SR_LAB_POS)) != 0) {
+		data->i2c_error = I2C_XEC_ERR_LAB;
+		return -ECONNABORTED;
+	}
+
+	return rc;
+}
+
 /* Wait for I2C controller to detect the bus is free (idle) meaning both SCL and SDA are
  * released (high) for a certain number of the controller's 16 MHz BAUD clock.
  * Too many ways for I2C to malfunction:
@@ -296,12 +337,87 @@ static int wait_bus_free(const struct device *dev, uint32_t timeout_us)
 	return -ETIMEDOUT;
 }
 
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+static int wait_bus_free_isr(const struct device *dev, uint32_t timeout_us)
+{
+	struct i2c_xec_data *data = dev->data;
+	const struct i2c_xec_config *drvcfg = dev->config;
+	mm_reg_t rb = drvcfg->base_addr;
+	uint8_t sr;
+	int ret;
+
+	/* Quick check: already idle? */
+	sr = i2c_sr_read(dev);
+	if ((sr & BIT(XEC_I2C_SR_NBB_POS)) != 0) {
+		goto check_status;
+	}
+
+	/* Enable IDLE interrupt in Configuration register */
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+	data->isr_error = 0;
+	k_sem_reset(&data->completion);
+
+	ret = k_sem_take(&data->completion, K_USEC(timeout_us));
+
+	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+
+	if (ret == -EAGAIN) {
+		data->i2c_error = I2C_XEC_ERR_TMOUT;
+		return -ETIMEDOUT;
+	}
+
+	sr = data->i2c_status;
+
+check_status:
+	if (sr == (BIT(XEC_I2C_SR_PIN_POS) | BIT(XEC_I2C_SR_NBB_POS))) {
+		return 0;
+	}
+	if ((sr & BIT(XEC_I2C_SR_BER_POS)) != 0) {
+		data->i2c_error = I2C_XEC_ERR_BUS;
+		return -EIO;
+	}
+	if ((sr & BIT(XEC_I2C_SR_LAB_POS)) != 0) {
+		data->i2c_error = I2C_XEC_ERR_LAB;
+		return -ECONNABORTED;
+	}
+	return 0;
+}
+#endif /* CONFIG_I2C_XEC_INTERRUPT */
+
+static int xec_wait_pin(const struct device *dev, uint32_t timeout_us)
+{
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	return wait_pin_assert_isr(dev, timeout_us);
+#else
+	return wait_pin_assert(dev, timeout_us);
+#endif
+}
+
+static int xec_wait_bus_free(const struct device *dev, uint32_t timeout_us)
+{
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	return wait_bus_free_isr(dev, timeout_us);
+#else
+	return wait_bus_free(dev, timeout_us);
+#endif
+}
+
+static inline uint8_t xec_eni_bit(void)
+{
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	return BIT(XEC_I2C_CR_ENI_POS);
+#else
+	return 0;
+#endif
+}
+
 static void i2c_xec_initial_cfg(const struct device *dev)
 {
+	struct i2c_xec_data *const data = dev->data;
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t rb = drvcfg->base_addr;
 	uint32_t val = (BIT(XEC_I2C_CFG_GC_DIS_POS) | BIT(XEC_I2C_CFG_FEN_POS) |
-			XEC_I2C_CFG_PORT_SET((uint32_t)drvcfg->port_sel));
+			XEC_I2C_CFG_PORT_SET((uint32_t)data->port_sel));
 
 	sys_write32(val, rb + XEC_I2C_CFG_OFS);
 }
@@ -318,9 +434,16 @@ static int i2c_xec_reset_config(const struct device *dev)
 	data->read_discard = 0;
 
 	soc_xec_pcr_sleep_en_clear(drvcfg->enc_pcr);
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	/* Keep GIRQ enabled for controller mode interrupts */
+	i2c_xec_ctrl_reset(dev);
+	soc_ecia_girq_status_clear(drvcfg->girq, drvcfg->girq_pos);
+	soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, 1);
+#else
 	soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, 0);
 	i2c_xec_ctrl_reset(dev);
 	soc_ecia_girq_status_clear(drvcfg->girq, drvcfg->girq_pos);
+#endif
 
 	/* PIN=1 to clear all status except NBB and synchronize */
 	i2c_ctl_wr(dev, BIT(XEC_I2C_CR_PIN_POS));
@@ -348,14 +471,15 @@ static int i2c_xec_reset_config(const struct device *dev)
 	 * ACK=1 enable ACK generation when data/address is clocked in.
 	 */
 	i2c_ctl_wr(dev,
-		   (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_ACK_POS)));
+		   (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) |
+		    BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit()));
 
 	/* Enable controller */
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
 	k_busy_wait(RESET_WAIT_US);
 
 	/* wait for NBB=1, BER, LAB, or timeout */
-	return wait_bus_free(dev, WAIT_INTERVAL_US);
+	return xec_wait_bus_free(dev, WAIT_INTERVAL_US);
 }
 
 static uint32_t get_lines(const struct device *dev)
@@ -389,44 +513,33 @@ static void target_config_for_nack(const struct device *dev)
 }
 #endif
 
-/* We wait for PIN 1->0(assertion) */
-static int wait_pin_assert(const struct device *dev, uint32_t pin_wait_us)
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+static int wait_pin_assert_isr(const struct device *dev, uint32_t timeout_us)
 {
-	struct i2c_xec_data *const data = dev->data;
-	const struct i2c_xec_config *drvcfg = dev->config;
-	mm_reg_t rb = drvcfg->base_addr;
-	int rc = 0;
+	struct i2c_xec_data *data = dev->data;
+	int ret;
 
-	data->i2c_error = 0;
+	data->isr_error = 0;
+	k_sem_reset(&data->completion);
 
-	if (!WAIT_FOR((soc_test_bit8(rb + XEC_I2C_SR_OFS, XEC_I2C_SR_PIN_POS) == 0), pin_wait_us,
-		      NULL)) {
+	ret = k_sem_take(&data->completion, K_USEC(timeout_us));
+	if (ret == -EAGAIN) {
 		data->i2c_error = I2C_XEC_ERR_TMOUT;
-		rc = -ETIMEDOUT;
+		return -ETIMEDOUT;
 	}
 
-	data->i2c_status = sys_read8(rb + XEC_I2C_SR_OFS);
-	data->i2c_compl = sys_read32(rb + XEC_I2C_CMPL_OFS);
-
-	if ((data->i2c_status & BIT(XEC_I2C_SR_BER_POS)) != 0) {
-		data->i2c_error = I2C_XEC_ERR_BUS;
-		return -EIO;
-	}
-
-	if ((data->i2c_status & BIT(XEC_I2C_SR_LAB_POS)) != 0) {
-		data->i2c_error = I2C_XEC_ERR_LAB;
-		return -ECONNABORTED;
-	}
-
-	return rc;
+	/* ISR already read status and set isr_error */
+	return data->isr_error;
 }
+#endif /* CONFIG_I2C_XEC_INTERRUPT */
 
 static int gen_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 {
 	struct i2c_xec_data *const data = dev->data;
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t rb = drvcfg->base_addr;
-	uint8_t ctrl = BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_STA_POS) | BIT(XEC_I2C_CR_ACK_POS);
+	uint8_t ctrl = BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_STA_POS) |
+		       BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit();
 
 	data->i2c_addr = addr8;
 
@@ -459,7 +572,7 @@ static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 
 	gen_start(dev, addr8, is_repeated);
 
-	ret = wait_pin_assert(dev, PIN_WAIT_INTERVAL_US);
+	ret = xec_wait_pin(dev, PIN_WAIT_INTERVAL_US);
 	if (ret != 0) {
 		i2c_xec_reset_config(dev);
 		return ret;
@@ -469,7 +582,7 @@ static int do_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 	if ((data->i2c_status & BIT(XEC_I2C_SR_LRB_AD0_POS)) != 0) {
 		gen_stop(dev);
 
-		ret = wait_bus_free(dev, WAIT_INTERVAL_US);
+		ret = xec_wait_bus_free(dev, WAIT_INTERVAL_US);
 		if (ret != 0) {
 			i2c_xec_reset_config(dev);
 		}
@@ -667,7 +780,10 @@ static int do_stop(const struct device *dev, uint32_t nwait)
 
 	gen_stop(dev);
 
-	ret = wait_bus_free(dev, nwait);
+	/* TODO - if the I2C lines are not both released (pulled-high)
+	 * then our controller should notice and set BER?
+	 */
+	ret = xec_wait_bus_free(dev, nwait);
 	if (ret != 0) {
 		lines = get_lines(dev);
 
@@ -681,7 +797,7 @@ static int do_stop(const struct device *dev, uint32_t nwait)
 	if (ret == 0) {
 		/* stop success: prepare for next transaction */
 		i2c_ctl_wr(dev, (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) |
-				 BIT(XEC_I2C_CR_ACK_POS)));
+				 BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit()));
 	}
 
 	return ret;
@@ -703,7 +819,7 @@ static int ctrl_tx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 
 		if (data->state == I2C_XEC_STATE_STOPPED) {
 			/* Is bus free and controller ready? */
-			ret = wait_bus_free(dev, WAIT_INTERVAL_US);
+			ret = xec_wait_bus_free(dev, WAIT_INTERVAL_US);
 			if (ret != 0) {
 				ret = i2c_xec_v2_recover_bus(dev);
 				if (ret != 0) {
@@ -726,7 +842,7 @@ static int ctrl_tx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 		/* writing I2C.DATA register causes PIN status to de-assert */
 		sys_write8(msg->buf[n], rb + XEC_I2C_DATA_OFS);
 
-		ret = wait_pin_assert(dev, PIN_WAIT_INTERVAL_US);
+		ret = xec_wait_pin(dev, PIN_WAIT_INTERVAL_US);
 		if (ret != 0) {
 			i2c_xec_reset_config(dev);
 			return ret;
@@ -785,7 +901,7 @@ static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 		data->read_discard = 1U;
 		if (data->state == I2C_XEC_STATE_STOPPED) {
 			/* Is bus free and controller ready? */
-			ret = wait_bus_free(dev, WAIT_INTERVAL_US);
+			ret = xec_wait_bus_free(dev, WAIT_INTERVAL_US);
 			if (ret != 0) {
 				i2c_xec_reset_config(dev);
 				return ret;
@@ -824,7 +940,7 @@ static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 		if ((data_len <= 2U) && ((mflags & I2C_MSG_STOP) != 0)) {
 			if (data_len == 2U) {
 				/* turn-off auto-ACK for next byte and do not clear PIN */
-				i2c_ctl_wr(dev, BIT(XEC_I2C_CR_ESO_POS));
+				i2c_ctl_wr(dev, BIT(XEC_I2C_CR_ESO_POS) | xec_eni_bit());
 			} else {
 				/* exit loop, generate STOP, then read last data byte */
 				break;
@@ -842,7 +958,7 @@ static int ctrl_rx(const struct device *dev, struct i2c_msg *msg, uint16_t addr)
 			*p8++ = temp;
 		}
 
-		ret = wait_pin_assert(dev, PIN_WAIT_INTERVAL_US);
+		ret = xec_wait_pin(dev, PIN_WAIT_INTERVAL_US);
 		if (ret != 0) {
 			i2c_xec_reset_config(dev);
 			return ret;
@@ -1020,68 +1136,110 @@ static void target_addr_handler(const struct device *dev, const struct i2c_targe
 
 static void i2c_xec_v2_isr(const struct device *dev)
 {
-#ifdef CONFIG_I2C_TARGET
 	struct i2c_xec_data *const data = dev->data;
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t rb = drvcfg->base_addr;
-	struct i2c_target_config *tcfg = data->target_cfg;
-	const struct i2c_target_callbacks *tcbs = NULL;
-	uint32_t status = 0, compl_status = 0, config = 0;
+	uint8_t status;
+	uint32_t compl_status;
 
-	/* Get current status */
 	status = sys_read8(rb + XEC_I2C_SR_OFS);
 	compl_status = sys_read32(rb + XEC_I2C_CMPL_OFS) & XEC_I2C_CMPL_RW1C_MSK;
-	config = sys_read32(rb + XEC_I2C_CFG_OFS);
+	data->i2c_status = status;
+	data->i2c_compl = compl_status;
 
-	/* Idle interrupt enabled and active? */
-	if (((config & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0) &&
-	    ((compl_status & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0)) {
-		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	/* Controller mode: check if ENI is set (expecting interrupts) */
+	if ((data->i2c_ctrl & BIT(XEC_I2C_CR_ENI_POS)) != 0) {
+		/* PIN asserted (0) means byte done */
+		if ((status & BIT(XEC_I2C_SR_PIN_POS)) == 0) {
+			if ((status & BIT(XEC_I2C_SR_BER_POS)) != 0) {
+				data->i2c_error = I2C_XEC_ERR_BUS;
+				data->isr_error = -EIO;
+			} else if ((status & BIT(XEC_I2C_SR_LAB_POS)) != 0) {
+				data->i2c_error = I2C_XEC_ERR_LAB;
+				data->isr_error = -ECONNABORTED;
+			} else {
+				data->isr_error = 0;
+			}
 
-		if ((status & BIT(XEC_I2C_SR_NBB_POS)) != 0) {
+			k_sem_give(&data->completion);
+			goto clear_iag;
+		}
+
+		/* IDLE interrupt (bus free after STOP) */
+		{
+			uint32_t config = sys_read32(rb + XEC_I2C_CFG_OFS);
+
+			if (((config & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0) &&
+			    ((compl_status & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0)) {
+				sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+				data->i2c_status = status;
+				data->isr_error = 0;
+				k_sem_give(&data->completion);
+				goto clear_iag;
+			}
+		}
+	}
+#endif /* CONFIG_I2C_XEC_INTERRUPT */
+
+#ifdef CONFIG_I2C_TARGET
+	{
+		struct i2c_target_config *tcfg = data->target_cfg;
+		const struct i2c_target_callbacks *tcbs = NULL;
+		uint32_t config = sys_read32(rb + XEC_I2C_CFG_OFS);
+
+		/* Idle interrupt enabled and active? */
+		if (((config & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0) &&
+		    ((compl_status & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0)) {
+			sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+
+			if ((status & BIT(XEC_I2C_SR_NBB_POS)) != 0) {
+				restart_target(dev);
+				goto clear_iag;
+			}
+		}
+
+		if (data->target_attached == false) {
+			goto clear_iag;
+		}
+
+		if (tcfg != NULL) {
+			tcbs = tcfg->callbacks;
+		}
+
+		/* External STOP or Bus Error: restart target handling */
+		if ((status & (BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_STO_POS))) != 0) {
+			if ((status & BIT(XEC_I2C_SR_BER_POS)) != 0) {
+				data->i2c_error = I2C_XEC_ERR_BUS;
+			}
+			if ((tcbs != NULL) && (tcbs->stop != NULL)) {
+				tcbs->stop(data->target_cfg);
+			}
+
 			restart_target(dev);
 			goto clear_iag;
 		}
-	}
 
-	if (data->target_attached == false) {
-		goto clear_iag;
-	}
-
-	if (tcfg != NULL) {
-		tcbs = tcfg->callbacks;
-	}
-
-	/* External STOP or Bus Error: restart target handling */
-	if ((status & (BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_STO_POS))) != 0) {
-		if ((status & BIT(XEC_I2C_SR_BER_POS)) != 0) {
-			data->i2c_error = I2C_XEC_ERR_BUS;
-		}
-		if ((tcbs != NULL) && (tcbs->stop != NULL)) {
-			tcbs->stop(data->target_cfg);
+		/* Address byte handling. AAT status is only valid if PIN status bit == 0 */
+		if ((status & (BIT(XEC_I2C_SR_AAT_POS) | BIT(XEC_I2C_SR_PIN_POS))) ==
+		    BIT(XEC_I2C_SR_AAT_POS)) {
+			target_addr_handler(dev, tcbs);
+			goto clear_iag;
 		}
 
-		restart_target(dev);
-		goto clear_iag;
+		if (data->target_read == true) { /* Target transmitter mode */
+			target_tx_handler(dev, tcbs);
+		} else { /* target receiver mode */
+			target_rx_handler(dev, tcbs);
+		}
 	}
+#endif /* CONFIG_I2C_TARGET */
 
-	/* Address byte handling. AAT status is only valid if PIN status bit == 0 */
-	if ((status & (BIT(XEC_I2C_SR_AAT_POS) | BIT(XEC_I2C_SR_PIN_POS))) ==
-	    BIT(XEC_I2C_SR_AAT_POS)) {
-		target_addr_handler(dev, tcbs);
-		goto clear_iag;
-	}
-
-	if (data->target_read == true) { /* Target transmitter mode */
-		target_tx_handler(dev, tcbs);
-	} else { /* target receiver mode */
-		target_rx_handler(dev, tcbs);
-	}
-
+#if defined(CONFIG_I2C_XEC_INTERRUPT) || defined(CONFIG_I2C_TARGET)
 clear_iag:
+#endif
 	sys_write32(compl_status, rb + XEC_I2C_CMPL_OFS);
 	soc_ecia_girq_status_clear(drvcfg->girq, drvcfg->girq_pos);
-#endif
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -1144,6 +1302,94 @@ static int i2c_xec_v2_target_unregister(const struct device *dev, struct i2c_tar
 }
 #endif
 
+#ifdef CONFIG_I2C_XEC_MUX
+/*
+ * Switch the active bus port and optionally change the clock frequency.
+ * Called by the XEC internal mux driver (i2c_mchp_xec_mux.c).
+ *
+ * The controller is reset (clearing port and timing registers), then the
+ * new port and frequency are programmed before re-enabling the controller.
+ *
+ * @param dev       The parent XEC I2C controller device
+ * @param port_sel  New PORT_SEL value (0..15)
+ * @param clock_freq New clock frequency in Hz, or 0 to keep current
+ * @return 0 on success, negative errno on failure
+ */
+int i2c_xec_v2_switch_port(const struct device *dev, uint8_t port_sel, uint32_t clock_freq)
+{
+	struct i2c_xec_data *const data = dev->data;
+
+	if (port_sel >= XEC_I2C_CFG_MAX_PORT) {
+		return -EINVAL;
+	}
+
+	data->port_sel = port_sel;
+
+	if (clock_freq != 0) {
+		uint32_t bitrate_cfg = i2c_map_dt_bitrate(clock_freq);
+
+		if (bitrate_cfg == 0) {
+			return -EINVAL;
+		}
+		data->dev_config = I2C_MODE_CONTROLLER | bitrate_cfg;
+	}
+
+	return i2c_xec_reset_config(dev);
+}
+
+/** @brief Get current Port the I2C controller is using.
+ *
+ * @param dev      Pointer to the device structure for an I2C controller
+ *                 driver configured in controller mode.
+ * @param port_sel Pointer to an unsigned 8-bit type to hold the port number.
+ *
+ * @retval 0       If successful.
+ * @retval -EINVAL port_sel is NULL pointer
+ */
+int i2c_xec_v2_get_port(const struct device *dev, uint8_t *port_sel)
+{
+	struct i2c_xec_data *const data = dev->data;
+	const struct i2c_xec_config *drvcfg = dev->config;
+	mm_reg_t rb = drvcfg->base_addr;
+
+	if ((dev == NULL) || (port_sel == NULL)) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&data->mux, K_FOREVER);
+
+	*port_sel = (uint8_t)XEC_I2C_CFG_PORT_GET(sys_read32(rb + XEC_I2C_CFG_OFS));
+
+	k_mutex_unlock(&data->mux);
+
+	return 0;
+}
+
+int i2c_xec_v2_set_port(const struct device *dev, uint8_t port_sel, uint32_t clock_freq)
+{
+	struct i2c_xec_data *const data = dev->data;
+	int ret = 0;
+
+	if ((dev == NULL) || (port_sel >= XEC_I2C_CFG_MAX_PORT)) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&data->mux, K_FOREVER);
+
+	/* cannot switch ports if target is attached! */
+	if (data->target_attached == true) {
+		k_mutex_unlock(&data->mux);
+		return -EBUSY;
+	}
+
+	ret = i2c_xec_v2_switch_port(dev, port_sel, clock_freq);
+
+	k_mutex_unlock(&data->mux);
+
+	return ret;
+}
+#endif /* CONFIG_I2C_XEC_MUX */
+
 static DEVICE_API(i2c, i2c_xec_v2_driver_api) = {
 	.configure = i2c_xec_v2_configure,
 	.transfer = i2c_xec_v2_transfer,
@@ -1154,6 +1400,7 @@ static DEVICE_API(i2c, i2c_xec_v2_driver_api) = {
 #ifdef CONFIG_I2C_RTIO
 	.iodev_submit = i2c_iodev_submit_fallback,
 #endif
+	.recover_bus = i2c_xec_v2_recover_bus,
 };
 
 static int i2c_xec_v2_init(const struct device *dev)
@@ -1164,6 +1411,7 @@ static int i2c_xec_v2_init(const struct device *dev)
 	uint32_t bitrate_cfg = 0;
 
 	data->state = I2C_XEC_STATE_STOPPED;
+	data->port_sel = drvcfg->port_sel;
 	data->target_cfg = NULL;
 	data->target_attached = false;
 
@@ -1188,7 +1436,11 @@ static int i2c_xec_v2_init(const struct device *dev)
 
 	k_mutex_init(&data->mux);
 
-#ifdef CONFIG_I2C_TARGET
+#ifdef CONFIG_I2C_XEC_INTERRUPT
+	k_sem_init(&data->completion, 0, 1);
+#endif
+
+#if defined(CONFIG_I2C_TARGET) || defined(CONFIG_I2C_XEC_INTERRUPT)
 	if (drvcfg->irq_config_func != NULL) {
 		drvcfg->irq_config_func();
 	}

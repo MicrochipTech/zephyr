@@ -1,0 +1,93 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C internal port multiplexer.
+
+  The XEC SMB controller can route its SCL/SDA signals to one of 16
+  physical bus ports via the PORT_SEL field in the Configuration Register.
+  This binding represents the internal mux, with each child node
+  corresponding to one bus port.
+
+  Each child node is a standard I2C bus controller. Devices behind a
+  specific port are defined as children of that port node.
+
+  Example:
+
+    i2c0_mux: i2c-mux {
+        compatible = "microchip,xec-i2c-mux";
+        i2c-parent = <&i2c0>;
+
+        mux_port0: i2c@0 {
+            reg = <0>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+            clock-frequency = <400000>;
+
+            eeprom@50 {
+                compatible = "atmel,at24";
+                reg = <0x50>;
+            };
+        };
+
+        mux_port5: i2c@5 {
+            reg = <5>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+            clock-frequency = <100000>;
+        };
+    };
+
+compatible: "microchip,xec-i2c-mux"
+
+include: [base.yaml]
+
+properties:
+  i2c-parent:
+    type: phandle
+    required: true
+    description: |
+      Reference to the parent XEC I2C controller device that owns
+      the PORT_SEL hardware mux.
+
+  "#address-cells":
+    type: int
+    required: true
+    const: 1
+
+  "#size-cells":
+    type: int
+    required: true
+    const: 0
+
+child-binding:
+  description: |
+    XEC I2C mux port channel. The reg property specifies the PORT_SEL
+    value (0-15) for this channel.
+  bus: i2c
+
+  properties:
+    reg:
+      type: array
+      required: true
+      description: |
+        PORT_SEL value (0-15) identifying which physical bus port
+        this channel routes to.
+
+    clock-frequency:
+      type: int
+      description: |
+        Optional per-channel I2C clock frequency in Hz. When present,
+        the controller is reconfigured to this speed when switching to
+        this port. When absent, the parent controller's current speed
+        is used.
+
+    "#address-cells":
+      type: int
+      required: true
+      const: 1
+
+    "#size-cells":
+      type: int
+      required: true
+      const: 0

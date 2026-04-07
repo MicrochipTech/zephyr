@@ -18,3 +18,46 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_XEC_INTERRUPT
+	bool "XEC I2C interrupt-driven controller transfers"
+	default n
+	depends on I2C_XEC_V2
+	help
+	  Use interrupt-driven transfers for I2C controller (host) mode
+	  instead of polling. The ISR fires on PIN assertion after each
+	  byte and posts a semaphore to unblock the transfer thread.
+	  Reduces CPU utilization during I2C transfers.
+
+menuconfig I2C_XEC_MUX
+	bool "XEC I2C internal port multiplexer"
+	default y
+	depends on I2C_XEC_V2
+	depends on DT_HAS_MICROCHIP_XEC_I2C_MUX_ENABLED
+	help
+	  Enable the internal PORT_SEL-based I2C bus multiplexer for
+	  Microchip XEC controllers. Each port appears as a separate
+	  I2C bus device in the device tree.
+
+	  The XEC SMB controller can route SCL/SDA to one of 16 physical
+	  bus ports. This driver exposes each configured port as a
+	  standard Zephyr I2C bus, with transparent port switching.
+
+if I2C_XEC_MUX
+
+config I2C_XEC_MUX_ROOT_INIT_PRIO
+	int "XEC I2C mux root driver init priority"
+	default I2C_INIT_PRIORITY
+	help
+	  Init priority for the mux root device. Must be lower than
+	  I2C_XEC_MUX_CHANNEL_INIT_PRIO so the root initializes first.
+
+config I2C_XEC_MUX_CHANNEL_INIT_PRIO
+	int "XEC I2C mux channel driver init priority"
+	default 60
+	help
+	  Init priority for mux channel devices. Must be higher than
+	  I2C_XEC_MUX_ROOT_INIT_PRIO so channels initialize after
+	  their root.
+
+endif # I2C_XEC_MUX
