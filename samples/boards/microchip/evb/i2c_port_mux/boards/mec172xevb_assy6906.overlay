@@ -1,0 +1,113 @@
+/*
+ * Example device tree overlay for XEC I2C internal port mux.
+ *
+ * This overlay demonstrates how to configure the XEC SMB controller's
+ * internal PORT_SEL multiplexer using the Zephyr I2C mux subsystem.
+ *
+ * Each mux_portN child node becomes a standard I2C bus device that
+ * applications reference via DEVICE_DT_GET() or I2C_DT_SPEC_GET().
+ */
+
+/* Parent XEC I2C controller (SMB0) */
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v2";
+	status = "okay";
+	clock-frequency = <100000>;
+	port-sel = <0>;
+
+	/* Pins for all ports connected to this I2C controller must be here
+	 * Port MUX driver does not configure pins.
+	 * TODO - Check xec-i2c-v2 driver uses index into sda-gpios to get correct pin
+	 *        ISSUE: sda-gpios and scl-gpios are only needed for MEC172x
+	 *               MEC174x/5x and chips using I2C HW v3.8 can use BBCR register to
+	 *               get live SCL and SDA pin states.
+	 */
+	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>,
+		    <MCHP_GPIO_DECODE_141 GPIO_OPEN_DRAIN>;
+	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>,
+		    <MCHP_GPIO_DECODE_142 GPIO_OPEN_DRAIN>;
+
+	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004
+		     &i2c05_sda_gpio141 &i2c05_scl_gpio142>;
+	pinctrl-names = "default";
+};
+
+/ {
+	/* Internal port mux on SMB0 */
+	i2c0_mux: i2c-mux {
+		compatible = "microchip,xec-i2c-mux";
+		i2c-parent = <&i2c_smb_0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * Port 0: 100 KHz inherits parent clock speed
+		 * Devices on physical bus port 0
+		 */
+		mux_port0: i2c@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			gpmux_evb: gpmux@26 {
+				/* compatible = "nxp,pca9555"; */
+				reg = <0x26>;
+				/* ngpios = <16>; */
+				/* gpio-controller; */
+				/* #gpio-cells = <2>; */
+			};
+
+			ltc2489_evb: ltc2489@34 {
+				reg = <0x34>;
+				#io-channels-cells = <1>;
+			};
+		};
+
+		/*
+		 * Port 5: 400 KHz
+		 * Devices on physical bus port 5
+		 */
+		mux_port5: i2c@5 {
+			reg = <5>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clock-frequency = <400000>;
+
+			mb85rc256v_fram: mb86rc256v_fram@50 {
+				/* compatible = "fujitsu,mb85rcxx"; */
+				reg = <0x50>;
+				/* address-width = <16>; */
+				/* size = <32768>; */
+			};
+		};
+	};
+};
+
+/* I2C Port 0 */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
+
+/* I2C Port 5 */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+	drive-strength = <2>;
+};
