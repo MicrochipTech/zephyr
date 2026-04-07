@@ -42,6 +42,7 @@
 #define XEC_QSPI_CR_IFM_POS        0
 #define XEC_QSPI_CR_IFM_MSK        GENMASK(1, 0)
 #define XEC_QSPI_CR_IFM_FD         0
+#define XEC_QSPI_CR_IFM_SINGLE     0
 #define XEC_QSPI_CR_IFM_DUAL       1u
 #define XEC_QSPI_CR_IFM_QUAD       2u
 #define XEC_QSPI_CR_IFM_SET(m)     FIELD_PREP(XEC_QSPI_CR_IFM_MSK, (m))
