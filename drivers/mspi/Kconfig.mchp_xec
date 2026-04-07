@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MSPI_XEC_QSPI
+	bool "Microchip MSPI using QSPI controller with optional Local-DMA"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_QSPI_MSPI_ENABLED
+	select PINCTRL
+	imply MSPI_TIMING
+
+config MSPI_XEC_GPSPI
+	bool "Microchip MSPI using GPSPI controller"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_QSPI_GPSPI_ENABLED
+	select PINCTRL
+	imply MSPI_TIMING
+
+if MSPI_XEC_QSPI
+
+config MSPI_XEC_QSPI_LDMA
+	bool "Microchip QSPI Local-DMA channels will be used"
+	default n
+	help
+	  Microchip MEC QSPI controller has six local-DMA channels
+	  built into the controller. Three channels are dedicated for
+	  transmit and the other three for receive. If enabled, the
+	  driver will use Local-DMA to move data to/from the QMSPI
+	  TX and RX FIFOs. Otherwsise the driver must manually copy
+	  data into and out of the TX and RX FIFOs.
+
+config MSPI_XEC_QSPI_MAX_SPI_DEVICES
+	int "MCHP XEC maximum number of SPI devices"
+	default 2
+	help
+	  Microchip MEC QSPI controller implements two
+	  hardware controlled chip selects. GPIO chip
+	  selects may also be used. This value specifies
+	  the number of devices connected to the controller.
+	  The driver must instantiate a MSPI device structure
+	  for each device connected to the controller. If GPIO
+	  pins are need for additional chip selects this value
+	  should be adjusted.
+
+endif # MSPI_XEC_QSPI
