@@ -340,6 +340,11 @@ static int rtc_xec_set_alarm_time(const struct device *dev, uint16_t alarm_id, u
 		regs->HRS_ALRM = MCHP_RTC_ALRM_DONT_CARE;
 	}
 
+	/* WK_ALRM: only the low byte is the week alarm register */
+	regs->WK_ALRM = (alarm_mask & RTC_ALARM_TIME_MASK_WEEKDAY)
+			? (uint8_t)time_dat->tm_wday
+			: MCHP_RTC_ALRM_DONT_CARE;
+
 	if (alarm_mask) {
 		rtc_en_alrm_intr(regs, MCHP_RTC_REGB_ALRM_INTR_EN);
 		data->alrm_pending = true;
@@ -359,13 +364,14 @@ static int rtc_xec_get_alarm_time(const struct device *dev, uint16_t alarm_id, u
 	struct rtc_xec_data *data = dev->data;
 	struct rtc_xec_config const *cfg = dev->config;
 	struct rtc_regs *regs = cfg->regs;
-	uint8_t secs, mins, hrs;
+	uint8_t secs, mins, hrs, wka;
 
 	k_mutex_lock(&data->lock, K_FOREVER);
 
 	secs = regs->SECS_ALRM;
 	mins = regs->MINS_ALRM;
 	hrs  = regs->HRS_ALRM;
+	wka  = (uint8_t)regs->WK_ALRM;
 
 	k_mutex_unlock(&data->lock);
 
@@ -386,6 +392,11 @@ static int rtc_xec_get_alarm_time(const struct device *dev, uint16_t alarm_id, u
 		*alarm_mask |= RTC_ALARM_TIME_MASK_HOUR;
 	}
 
+	if ((wka & MCHP_RTC_ALRM_DONT_CARE) != MCHP_RTC_ALRM_DONT_CARE) {
+		time_dat->tm_wday = wka;
+		*alarm_mask |= RTC_ALARM_TIME_MASK_WEEKDAY;
+	}
+
 	return 0;
 }
 
@@ -395,7 +406,7 @@ static int rtc_xec_get_alarm_supported_fields(const struct device *dev, uint16_t
 	ARG_UNUSED(id);
 
 	*mask = RTC_ALARM_TIME_MASK_SECOND | RTC_ALARM_TIME_MASK_MINUTE |
-		RTC_ALARM_TIME_MASK_HOUR;
+		RTC_ALARM_TIME_MASK_HOUR | RTC_ALARM_TIME_MASK_WEEKDAY;
 
 	return 0;
 }
