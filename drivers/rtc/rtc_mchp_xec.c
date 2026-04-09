@@ -97,6 +97,7 @@ struct rtc_xec_data {
 	bool is_24;
 	struct k_mutex lock;
 	rtc_alarm_callback cb;
+	void *cb_user_data;
 };
 
 static bool is_valid_bcd8(uint8_t v)
@@ -226,7 +227,7 @@ static void rtc_xec_isr(const struct device *dev)
 	soc_ecia_girq_status_clear(cfg->girq_rtc, cfg->girq_pos_rtc);
 
 	if (data->cb) {
-		data->cb(dev, 0, 0);
+		data->cb(dev, 0, data->cb_user_data);
 		data->alrm_pending = false;
 	}
 }
@@ -402,6 +403,7 @@ static int rtc_xec_set_alarm_callback(const struct device *dev, uint16_t id,
 	k_mutex_lock(&data->lock, K_FOREVER);
 
 	data->cb = callback;
+	data->cb_user_data = user_data;
 	k_mutex_unlock(&data->lock);
 
 	return 0;
