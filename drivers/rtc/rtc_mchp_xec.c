@@ -50,10 +50,15 @@ LOG_MODULE_REGISTER(rtc_mchp_xec, CONFIG_RTC_LOG_LEVEL);
 #define MCHP_RTC_CTL_BLCK_EN_POS 0
 #define MCHP_RTC_CTL_BLCK_EN     BIT(MCHP_RTC_CTL_BLCK_EN_POS)
 
-/* Alarm masks */
-#define MCHP_RTC_PRDIC_INTR_EN_MASK    BIT(2)
-#define MCHP_RTC_ALRM_INTR_MASK        BIT(1)
-#define MCHP_RTC_UPDT_END_INTR_EN_MASK BIT(0)
+/* Bits [7:6] both set in an alarm register tell the hardware to ignore
+ * that field when comparing against the current time ("don't care").
+ *
+ * If a field is masked, the alarm condition remains true for the entire
+ * matching window.
+ * This may result in multiple interrupts (e.g., once per second) unless
+ * handled by software.
+ */
+#define MCHP_RTC_ALRM_DONT_CARE 0xC0
 
 /**
  * Structure type to access Real Time Clock (RTC).
@@ -301,46 +306,46 @@ static int rtc_xec_set_alarm_time(const struct device *dev, uint16_t alarm_id, u
 	struct rtc_xec_config const *cfg = dev->config;
 	struct rtc_regs *regs = cfg->regs;
 
-	if (time_dat == NULL && (alarm_mask & MCHP_RTC_ALRM_INTR_MASK)) {
+	if ((time_dat == NULL) && alarm_mask) {
 		LOG_ERR("RTC time_dat pointer is null");
+		return -EINVAL;
+	}
+
+	if (alarm_mask && !validate_rtc_alrm_time(time_dat, data)) {
+		LOG_ERR("RTC time validation fail");
 		return -EINVAL;
 	}
 
 	k_mutex_lock(&data->lock, K_FOREVER);
 
-	if (alarm_mask & MCHP_RTC_PRDIC_INTR_EN_MASK) {
-		regs->REGA |= CONFIG_RTC_PERIODIC_ALARM_RATE_SEL;
-		rtc_en_alrm_intr(cfg->regs, MCHP_RTC_REGB_PRDIC_INTR_EN);
-	} else {
-		rtc_dis_alrm_intr(cfg->regs, MCHP_RTC_REGB_PRDIC_INTR_EN);
-	}
+	/* Write matched fields; unmasked fields get don't-care so the
+	 * hardware ignores them during alarm comparison.
+	 */
+	regs->SECS_ALRM = (alarm_mask & RTC_ALARM_TIME_MASK_SECOND)
+			  ? (uint8_t)time_dat->tm_sec
+			  : MCHP_RTC_ALRM_DONT_CARE;
 
-	if (alarm_mask & MCHP_RTC_ALRM_INTR_MASK) {
-		if (!validate_rtc_alrm_time(time_dat, data)) {
-			LOG_ERR("RTC time validation fail");
-			return -EINVAL;
-		}
+	regs->MINS_ALRM = (alarm_mask & RTC_ALARM_TIME_MASK_MINUTE)
+			  ? (uint8_t)time_dat->tm_min
+			  : MCHP_RTC_ALRM_DONT_CARE;
 
-		regs->SECS_ALRM = (uint8_t)time_dat->tm_sec;
-		regs->MINS_ALRM = (uint8_t)time_dat->tm_min;
+	if (alarm_mask & RTC_ALARM_TIME_MASK_HOUR) {
 		regs->HRS_ALRM = ((uint8_t)time_dat->tm_hour) & MCHP_RTC_HOURS_MASK;
 		if (!data->is_24) {
 			regs->HRS_ALRM &= ~MCHP_RTC_HOURS_AM_PM_MASK;
-			regs->HRS_ALRM |= ((uint8_t)time_dat->tm_hour) & MCHP_RTC_HOURS_AM_PM_MASK;
+			regs->HRS_ALRM |=
+				((uint8_t)time_dat->tm_hour) & MCHP_RTC_HOURS_AM_PM_MASK;
 		}
-		rtc_en_alrm_intr(cfg->regs, MCHP_RTC_REGB_ALRM_INTR_EN);
 	} else {
-		rtc_dis_alrm_intr(cfg->regs, MCHP_RTC_REGB_ALRM_INTR_EN);
-	}
-
-	if (alarm_mask & MCHP_RTC_UPDT_END_INTR_EN_MASK) {
-		rtc_en_alrm_intr(cfg->regs, MCHP_RTC_REGB_UPDT_END_INTR_EN);
-	} else {
-		rtc_dis_alrm_intr(cfg->regs, MCHP_RTC_REGB_UPDT_END_INTR_EN);
+		regs->HRS_ALRM = MCHP_RTC_ALRM_DONT_CARE;
 	}
 
 	if (alarm_mask) {
+		rtc_en_alrm_intr(regs, MCHP_RTC_REGB_ALRM_INTR_EN);
 		data->alrm_pending = true;
+	} else {
+		rtc_dis_alrm_intr(regs, MCHP_RTC_REGB_ALRM_INTR_EN);
+		data->alrm_pending = false;
 	}
 
 	k_mutex_unlock(&data->lock);
@@ -354,14 +359,32 @@ static int rtc_xec_get_alarm_time(const struct device *dev, uint16_t alarm_id, u
 	struct rtc_xec_data *data = dev->data;
 	struct rtc_xec_config const *cfg = dev->config;
 	struct rtc_regs *regs = cfg->regs;
+	uint8_t secs, mins, hrs;
 
 	k_mutex_lock(&data->lock, K_FOREVER);
 
-	time_dat->tm_sec = regs->SECS;
-	time_dat->tm_min = regs->MINS;
-	time_dat->tm_hour = regs->HRS;
+	secs = regs->SECS_ALRM;
+	mins = regs->MINS_ALRM;
+	hrs  = regs->HRS_ALRM;
 
 	k_mutex_unlock(&data->lock);
+
+	*alarm_mask = 0;
+
+	if ((secs & MCHP_RTC_ALRM_DONT_CARE) != MCHP_RTC_ALRM_DONT_CARE) {
+		time_dat->tm_sec = secs;
+		*alarm_mask |= RTC_ALARM_TIME_MASK_SECOND;
+	}
+
+	if ((mins & MCHP_RTC_ALRM_DONT_CARE) != MCHP_RTC_ALRM_DONT_CARE) {
+		time_dat->tm_min = mins;
+		*alarm_mask |= RTC_ALARM_TIME_MASK_MINUTE;
+	}
+
+	if ((hrs & MCHP_RTC_ALRM_DONT_CARE) != MCHP_RTC_ALRM_DONT_CARE) {
+		time_dat->tm_hour = hrs & MCHP_RTC_HOURS_MASK;
+		*alarm_mask |= RTC_ALARM_TIME_MASK_HOUR;
+	}
 
 	return 0;
 }
@@ -371,8 +394,8 @@ static int rtc_xec_get_alarm_supported_fields(const struct device *dev, uint16_t
 	ARG_UNUSED(dev);
 	ARG_UNUSED(id);
 
-	*mask = (MCHP_RTC_PRDIC_INTR_EN_MASK | MCHP_RTC_ALRM_INTR_MASK |
-		 MCHP_RTC_UPDT_END_INTR_EN_MASK);
+	*mask = RTC_ALARM_TIME_MASK_SECOND | RTC_ALARM_TIME_MASK_MINUTE |
+		RTC_ALARM_TIME_MASK_HOUR;
 
 	return 0;
 }
