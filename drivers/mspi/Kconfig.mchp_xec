@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+config MSPI_XEC_QSPI
+	bool "Microchip MEC XEC QMSPI controller MSPI driver"
+	default y
+	depends on DT_HAS_MICROCHIP_MEC_QMSPI_CONTROLLER_ENABLED
+	select PINCTRL
+	help
+	  Enable the MSPI driver for Microchip MEC QMSPI controller.
+	  Supports PIO (FIFO) mode and optional local DMA mode.
+
+if MSPI_XEC_QSPI
+
+config MSPI_XEC_QSPI_LDMA
+	bool "Enable QMSPI local DMA transfer mode"
+	default y
+	help
+	  Use the QMSPI built-in local DMA channels for data transfers
+	  instead of PIO FIFO mode. This does NOT depend on CONFIG_MSPI_DMA
+	  or the Zephyr DMA subsystem. Local DMA channels are internal to
+	  the QMSPI peripheral.
+
+endif # MSPI_XEC_QSPI

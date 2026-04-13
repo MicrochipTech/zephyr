@@ -605,13 +605,18 @@
 			status = "disabled";
 		};
 
-		qspi0: spi@40070000 {
+		qspi0: mspi@40070000 {
+			compatible = "microchip,mec-qmspi-controller";
 			reg = <0x40070000 0x400>;
 			interrupts = <91 2>;
 			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(18, 1)>;
 			pcr = <MCHP_XEC_SCR_ENCODE(4, 8)>;
+			clock-frequency = <96000000>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			op-mode = "MSPI_OP_MODE_CONTROLLER";
+			duplex = "MSPI_HALF_DUPLEX";
+			software-multiperipheral;
 			status = "disabled";
 		};
 
