@@ -34,16 +34,17 @@ properties:
 
   sda-gpios:
     type: phandle-array
-    required: true
     description: |
       I2C controller versions older than v3.8 do not make pin
       state monitoring visible in the bit-bang register without
       switching the pins from I2C control to bit-bang control.
       This can cause disruption of an open I2C session. For older
       hardware access pin state using the GPIO driver.
+      Required on MEC172x/MEC15xx when the mux driver is not used.
+      When the mux driver is used, per-channel sda-gpios in the
+      mux child nodes are used instead. Not needed on v3.8 hardware.
 
   scl-gpios:
     type: phandle-array
-    required: true
     description: |
       Refer to the description of sda-gpios.

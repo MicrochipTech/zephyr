@@ -82,6 +82,20 @@ child-binding:
         this port. When absent, the parent controller's current speed
         is used.
 
+    sda-gpios:
+      type: phandle-array
+      description: |
+        SDA pin GPIO for this port. Required on MEC172x (I2C v3.7)
+        where pin state must be read via the GPIO driver. Not needed
+        on MEC174x/175x/165xB (I2C v3.8) where the hardware can read
+        pin state directly.
+
+    scl-gpios:
+      type: phandle-array
+      description: |
+        SCL pin GPIO for this port. Required on MEC172x (I2C v3.7).
+        See sda-gpios description.
+
     "#address-cells":
       type: int
       required: true

@@ -95,10 +95,13 @@ struct i2c_xec_config {
 	uint8_t girq_pos;
 	uint8_t enc_pcr;
 	uint8_t port_sel;
-	struct gpio_dt_spec sda_gpio;
-	struct gpio_dt_spec scl_gpio;
 	const struct pinctrl_dev_config *pcfg;
 	void (*irq_config_func)(void);
+#if defined(CONFIG_I2C_XEC_MUX) || defined(CONFIG_SOC_SERIES_MEC15XX) ||\
+    defined(CONFIG_SOC_SERIES_MEC172X)
+	const struct gpio_dt_spec scl_gpio;
+	const struct gpio_dt_spec sda_gpio;
+#endif
 };
 
 struct i2c_xec_data {
@@ -110,15 +113,19 @@ struct i2c_xec_data {
 	uint8_t state;
 	uint8_t read_discard;
 	uint8_t speed_id;
-	uint8_t port_sel;  /* current active port (mutable, init from config) */
+	uint8_t port_sel; /* current active port (mutable, init from config) */
 	uint8_t i2c_error;
 	struct k_mutex mux;
 	struct i2c_target_config *target_cfg;
 	bool target_attached;
 	bool target_read;
+#if defined(CONFIG_SOC_SERIES_MEC15XX) || defined(CONFIG_SOC_SERIES_MEC172X)
+	const struct gpio_dt_spec *active_sda_gpio;
+	const struct gpio_dt_spec *active_scl_gpio;
+#endif
 #ifdef CONFIG_I2C_XEC_INTERRUPT
-	struct k_sem completion;   /* posted by ISR when PIN asserts (byte done) */
-	int isr_error;             /* error code set by ISR: 0, -EIO, -ECONNABORTED */
+	struct k_sem completion; /* posted by ISR when PIN asserts (byte done) */
+	int isr_error;           /* error code set by ISR: 0, -EIO, -ECONNABORTED */
 #endif
 };
 
@@ -194,8 +201,8 @@ static uint32_t i2c_xec_freq_from_dev_config(uint32_t dev_config)
 }
 
 #if defined(CONFIG_SOC_SERIES_MEC15XX) || defined(CONFIG_SOC_SERIES_MEC172X)
-uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
-			  const struct gpio_dt_spec *sda_gpio)
+static uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
+				 const struct gpio_dt_spec *sda_gpio)
 {
 	gpio_port_value_t sda = 0, scl = 0;
 	uint8_t lines = 0;
@@ -212,7 +219,7 @@ uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
 		lines |= BIT(I2C_LINES_SCL_HI_POS);
 	}
 
-	if ((scl & BIT(sda_gpio->pin)) != 0) {
+	if ((sda & BIT(sda_gpio->pin)) != 0) {
 		lines |= BIT(I2C_LINES_SDA_HI_POS);
 	}
 
@@ -223,8 +230,7 @@ uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
  * Enabling this bit allows the live state of the SCL and SDA pins to be read
  * without making a call to SoC layer or GPIO driver.
  */
-uint8_t i2c_xec_get_lines(mm_reg_t regbase, const struct gpio_dt_spec *scl_gpio,
-			  const struct gpio_dt_spec *sda_gpio)
+static uint8_t i2c_xec_get_lines(mm_reg_t regbase)
 {
 	uint8_t bbcr = 0, lines = 0;
 
@@ -470,9 +476,8 @@ static int i2c_xec_reset_config(const struct device *dev)
 	 * ESO=1 enables output drivers
 	 * ACK=1 enable ACK generation when data/address is clocked in.
 	 */
-	i2c_ctl_wr(dev,
-		   (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) |
-		    BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit()));
+	i2c_ctl_wr(dev, (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) |
+			 BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit()));
 
 	/* Enable controller */
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
@@ -487,7 +492,13 @@ static uint32_t get_lines(const struct device *dev)
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t rb = drvcfg->base_addr;
 
-	return (uint32_t)i2c_xec_get_lines(rb, &drvcfg->scl_gpio, &drvcfg->sda_gpio);
+#if defined(CONFIG_SOC_SERIES_MEC15XX) || defined(CONFIG_SOC_SERIES_MEC172X)
+	struct i2c_xec_data *const data = dev->data;
+
+	return (uint32_t)i2c_xec_get_lines(rb, data->active_scl_gpio, data->active_sda_gpio);
+#else
+	return (uint32_t)i2c_xec_get_lines(rb);
+#endif
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -538,8 +549,8 @@ static int gen_start(const struct device *dev, uint8_t addr8, bool is_repeated)
 	struct i2c_xec_data *const data = dev->data;
 	const struct i2c_xec_config *drvcfg = dev->config;
 	mm_reg_t rb = drvcfg->base_addr;
-	uint8_t ctrl = BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_STA_POS) |
-		       BIT(XEC_I2C_CR_ACK_POS) | xec_eni_bit();
+	uint8_t ctrl = BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_STA_POS) | BIT(XEC_I2C_CR_ACK_POS) |
+		       xec_eni_bit();
 
 	data->i2c_addr = addr8;
 
@@ -1388,6 +1399,21 @@ int i2c_xec_v2_set_port(const struct device *dev, uint8_t port_sel, uint32_t clo
 
 	return ret;
 }
+
+#if defined(CONFIG_SOC_SERIES_MEC172X) || defined(CONFIG_SOC_SERIES_MEC15XX)
+void i2c_xec_v2_set_active_gpios(const struct device *dev, const struct gpio_dt_spec *scl,
+				 const struct gpio_dt_spec *sda)
+{
+	struct i2c_xec_data *const data = dev->data;
+
+	if (scl != NULL && scl->port != NULL) {
+		data->active_scl_gpio = scl;
+	}
+	if (sda != NULL && sda->port != NULL) {
+		data->active_sda_gpio = sda;
+	}
+}
+#endif
 #endif /* CONFIG_I2C_XEC_MUX */
 
 static DEVICE_API(i2c, i2c_xec_v2_driver_api) = {
@@ -1414,6 +1440,10 @@ static int i2c_xec_v2_init(const struct device *dev)
 	data->port_sel = drvcfg->port_sel;
 	data->target_cfg = NULL;
 	data->target_attached = false;
+#if defined(CONFIG_SOC_SERIES_MEC15XX) || defined(CONFIG_SOC_SERIES_MEC172X)
+	data->active_sda_gpio = &drvcfg->sda_gpio;
+	data->active_scl_gpio = &drvcfg->scl_gpio;
+#endif
 
 	ret = pinctrl_apply_state(drvcfg->pcfg, PINCTRL_STATE_DEFAULT);
 	if (ret != 0) {
@@ -1453,6 +1483,41 @@ static int i2c_xec_v2_init(const struct device *dev)
 #define XEC_I2C_GIRQ_POS_DT(inst, idx)                                                             \
 	(uint8_t)MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, idx))
 
+#if defined(CONFIG_SOC_SERIES_MEC15XX) || defined(CONFIG_SOC_SERIES_MEC172X)
+/* CONFIG_I2C_XEC_MUX */
+#if 1
+#define XEC_I2C_V2_SCL_SDA_GPIOS(i)                                                                \
+	.sda_gpio = GPIO_DT_SPEC_INST_GET_OR(i, sda_gpios, {0}),                                   \
+	.scl_gpio = GPIO_DT_SPEC_INST_GET_OR(i, scl_gpios, {0}),
+#endif /* 0 */
+#if 0
+#define XEC_I2C_V2_SCL_SDA_GPIOS_PARENT(nid)
+#define XEC_I2C_V2_SCL_SDA_GPIOS_CHILD(nid)
+
+#define XEC_I2C_V2_SCL_SDA_GPIOS(i) \
+	COND_CODE_1(DT_INST_NODE_HAS_PROP(i, scl_gpios), (), ())
+#endif
+
+#else
+#define XEC_I2C_V2_SCL_SDA_GPIOS(i)
+#endif
+
+#if 1
+/* ISSUE: children could be I2C devices are mux nodes with compat = "microchip,xec-i2c-mux" */
+
+#define M_HAS_CHILDREN(i) (DT_INST_CHILD_NUM(i) != 0)
+
+#define M_NO_CHILDREN(i)
+
+#define M_WITH_CHILDREN(i)
+
+#define M1(i) COND_CODE_1(M_HAS_CHILDREN(i), (M_WITH_CHILDREN), (M_NO_CHILDREN))
+
+#define M2A(nid)
+
+#define M2(i) DT_INST_FOREACH_CHILD_STATUS_OKAY(i, M2A)
+#endif
+
 #define I2C_XEC_DEVICE(n)                                                                          \
 	PINCTRL_DT_INST_DEFINE(n);                                                                 \
 	static void i2c_xec_irq_config_func_##n(void);                                             \
@@ -1466,9 +1531,7 @@ static int i2c_xec_v2_init(const struct device *dev)
 		.enc_pcr = DT_INST_PROP(n, pcr_scr),                                               \
 		.irq_config_func = i2c_xec_irq_config_func_##n,                                    \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),                                         \
-		.sda_gpio = GPIO_DT_SPEC_INST_GET(n, sda_gpios),                                   \
-		.scl_gpio = GPIO_DT_SPEC_INST_GET(n, scl_gpios),                                   \
-	};                                                                                         \
+		XEC_I2C_V2_SCL_SDA_GPIOS(n)};                                                      \
 	I2C_DEVICE_DT_INST_DEFINE(n, i2c_xec_v2_init, NULL, &i2c_xec_data_##n,                     \
 				  &i2c_xec_config_##n, POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,      \
 				  &i2c_xec_v2_driver_api);                                         \
