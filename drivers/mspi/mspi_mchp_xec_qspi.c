@@ -28,43 +28,35 @@ LOG_MODULE_REGISTER(mspi_xec_qspi, CONFIG_MSPI_LOG_LEVEL);
  * Constants
  * -------------------------------------------------------------------------- */
 
-#define QSPI_FIFO_DEPTH        8u
-#define QSPI_HIGH_FREQ_HZ     48000000u
-#define QSPI_MAX_DESCR         16u
-#define QSPI_NQUNITS_MAX      32767u   /* 15-bit field, bits[31:17] */
+#define QSPI_FIFO_DEPTH   8u
+#define QSPI_HIGH_FREQ_HZ 48000000u
+#define QSPI_MAX_DESCR    16u
+#define QSPI_NQUNITS_MAX  32767u /* 15-bit field, bits[31:17] */
 
 /* Descriptor indices for standard 4-phase transfer */
-#define DESCR_IDX_CMD          0
-#define DESCR_IDX_ADDR         1
-#define DESCR_IDX_DUMMY        2
-#define DESCR_IDX_DATA         3
+#define DESCR_IDX_CMD   0
+#define DESCR_IDX_ADDR  1
+#define DESCR_IDX_DUMMY 2
+#define DESCR_IDX_DATA  3
 
 /* Aggregate error mask for status register */
-#define QSPI_ERR_MASK                                       \
-	(BIT(XEC_QSPI_SR_TXB_ERR_POS) |                    \
-	 BIT(XEC_QSPI_SR_RXB_ERR_POS) |                    \
-	 BIT(XEC_QSPI_SR_PROG_ERR_POS) |                   \
-	 BIT(XEC_QSPI_SR_LDMA_RX_ERR_POS) |                \
+#define QSPI_ERR_MASK                                                                              \
+	(BIT(XEC_QSPI_SR_TXB_ERR_POS) | BIT(XEC_QSPI_SR_RXB_ERR_POS) |                             \
+	 BIT(XEC_QSPI_SR_PROG_ERR_POS) | BIT(XEC_QSPI_SR_LDMA_RX_ERR_POS) |                        \
 	 BIT(XEC_QSPI_SR_LDMA_TX_ERR_POS))
 
 /* W1C bits to clear before each transfer */
-#define QSPI_CLR_STATUS_MASK                                \
-	(BIT(XEC_QSPI_SR_XFR_DONE_POS) |                   \
-	 BIT(XEC_QSPI_SR_DMA_DONE_POS) |                   \
-	 BIT(XEC_QSPI_SR_TXB_ERR_POS) |                    \
-	 BIT(XEC_QSPI_SR_RXB_ERR_POS) |                    \
-	 BIT(XEC_QSPI_SR_PROG_ERR_POS) |                   \
-	 BIT(XEC_QSPI_SR_TXB_REQ_POS) |                    \
-	 BIT(XEC_QSPI_SR_TXB_STALL_POS) |                  \
-	 BIT(XEC_QSPI_SR_RXB_REQ_POS) |                    \
+#define QSPI_CLR_STATUS_MASK                                                                       \
+	(BIT(XEC_QSPI_SR_XFR_DONE_POS) | BIT(XEC_QSPI_SR_DMA_DONE_POS) |                           \
+	 BIT(XEC_QSPI_SR_TXB_ERR_POS) | BIT(XEC_QSPI_SR_RXB_ERR_POS) |                             \
+	 BIT(XEC_QSPI_SR_PROG_ERR_POS) | BIT(XEC_QSPI_SR_TXB_REQ_POS) |                            \
+	 BIT(XEC_QSPI_SR_TXB_STALL_POS) | BIT(XEC_QSPI_SR_RXB_REQ_POS) |                           \
 	 BIT(XEC_QSPI_SR_RXB_STALL_POS))
 
 /* Interrupt enable bits for error conditions */
-#define QSPI_IER_ERRORS                                     \
-	(BIT(XEC_QSPI_IER_TXB_ERR_POS) |                   \
-	 BIT(XEC_QSPI_IER_RXB_ERR_POS) |                   \
-	 BIT(XEC_QSPI_IER_PROG_ERR_POS) |                  \
-	 BIT(XEC_QSPI_IER_LDMA_RX_ERR_POS) |               \
+#define QSPI_IER_ERRORS                                                                            \
+	(BIT(XEC_QSPI_IER_TXB_ERR_POS) | BIT(XEC_QSPI_IER_RXB_ERR_POS) |                           \
+	 BIT(XEC_QSPI_IER_PROG_ERR_POS) | BIT(XEC_QSPI_IER_LDMA_RX_ERR_POS) |                      \
 	 BIT(XEC_QSPI_IER_LDMA_TX_ERR_POS))
 
 /* --------------------------------------------------------------------------
@@ -76,30 +68,30 @@ struct mspi_xec_config {
 	uint32_t clk_freq;
 	uint32_t pcr;
 	uint32_t girq;
-	uint8_t  chip_select_count;
-	bool     sw_multi_periph;
-	void     (*irq_config_func)(void);
+	uint8_t chip_select_count;
+	bool sw_multi_periph;
+	void (*irq_config_func)(void);
 	const struct pinctrl_dev_config *pcfg;
 	const struct gpio_dt_spec *ce_gpios;
-	uint8_t  num_ce_gpios;
+	uint8_t num_ce_gpios;
 };
 
 struct mspi_xec_data {
-	struct k_sem             bus_lock;
-	struct k_sem             xfer_sync;
+	struct k_sem bus_lock;
+	struct k_sem xfer_sync;
 	const struct mspi_dev_id *active_dev_id;
-	struct mspi_dev_cfg      active_dev_cfg;
-	volatile int             xfer_err;
+	struct mspi_dev_cfg active_dev_cfg;
+	volatile int xfer_err;
 
 	/* PIO interrupt-driven state */
-	const uint8_t            *tx_buf;
-	volatile uint32_t        tx_remaining;
-	uint8_t                  *rx_buf;
-	volatile uint32_t        rx_remaining;
+	const uint8_t *tx_buf;
+	volatile uint32_t tx_remaining;
+	uint8_t *rx_buf;
+	volatile uint32_t rx_remaining;
 
 	/* Callbacks indexed by enum mspi_bus_event */
-	mspi_callback_handler_t         cbs[MSPI_BUS_EVENT_MAX];
-	struct mspi_callback_context    *cb_ctxs[MSPI_BUS_EVENT_MAX];
+	mspi_callback_handler_t cbs[MSPI_BUS_EVENT_MAX];
+	struct mspi_callback_context *cb_ctxs[MSPI_BUS_EVENT_MAX];
 };
 
 /* --------------------------------------------------------------------------
@@ -135,8 +127,7 @@ static inline uint8_t qspi_read8(uint32_t base, uint32_t off)
  *   2..65535 = divide by 2..65535
  * -------------------------------------------------------------------------- */
 
-static uint16_t qspi_calc_clk_div(uint32_t src_clk, uint32_t target_freq,
-				   uint32_t *actual_freq)
+static uint16_t qspi_calc_clk_div(uint32_t src_clk, uint32_t target_freq, uint32_t *actual_freq)
 {
 	uint32_t div;
 
@@ -178,15 +169,13 @@ static uint32_t qspi_cpp_to_mode_bits(enum mspi_cpp_mode cpp, uint32_t actual_fr
 		bits = 0;
 		break;
 	case MSPI_CPP_MODE_1: /* CPOL=0, CPHA_SDI=1, CPHA_SDO=1 */
-		bits = BIT(XEC_QSPI_MODE_CPHA_SDI_FE_POS) |
-		       BIT(XEC_QSPI_MODE_CPHA_SDO_SE_POS);
+		bits = BIT(XEC_QSPI_MODE_CPHA_SDI_FE_POS) | BIT(XEC_QSPI_MODE_CPHA_SDO_SE_POS);
 		break;
 	case MSPI_CPP_MODE_2: /* CPOL=1, CPHA_SDI=0, CPHA_SDO=0 */
 		bits = BIT(XEC_QSPI_MODE_CPOL_HI_POS);
 		break;
 	case MSPI_CPP_MODE_3: /* CPOL=1, CPHA_SDI=1, CPHA_SDO=1 */
-		bits = BIT(XEC_QSPI_MODE_CPOL_HI_POS) |
-		       BIT(XEC_QSPI_MODE_CPHA_SDI_FE_POS) |
+		bits = BIT(XEC_QSPI_MODE_CPOL_HI_POS) | BIT(XEC_QSPI_MODE_CPHA_SDI_FE_POS) |
 		       BIT(XEC_QSPI_MODE_CPHA_SDO_SE_POS);
 		break;
 	default:
@@ -211,43 +200,42 @@ static uint32_t qspi_cpp_to_mode_bits(enum mspi_cpp_mode cpp, uint32_t actual_fr
  *   2 = quad
  * -------------------------------------------------------------------------- */
 
-static int qspi_io_mode_to_ifm(enum mspi_io_mode mode,
-				uint8_t *cmd_ifm, uint8_t *addr_ifm,
-				uint8_t *data_ifm)
+static int qspi_io_mode_to_ifm(enum mspi_io_mode mode, uint8_t *cmd_ifm, uint8_t *addr_ifm,
+			       uint8_t *data_ifm)
 {
 	switch (mode) {
 	case MSPI_IO_MODE_SINGLE:
-		*cmd_ifm  = XEC_QSPI_CR_IFM_FD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_FD;
 		*addr_ifm = XEC_QSPI_CR_IFM_FD;
 		*data_ifm = XEC_QSPI_CR_IFM_FD;
 		break;
 	case MSPI_IO_MODE_DUAL: /* 2-2-2 */
-		*cmd_ifm  = XEC_QSPI_CR_IFM_DUAL;
+		*cmd_ifm = XEC_QSPI_CR_IFM_DUAL;
 		*addr_ifm = XEC_QSPI_CR_IFM_DUAL;
 		*data_ifm = XEC_QSPI_CR_IFM_DUAL;
 		break;
 	case MSPI_IO_MODE_DUAL_1_1_2:
-		*cmd_ifm  = XEC_QSPI_CR_IFM_FD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_FD;
 		*addr_ifm = XEC_QSPI_CR_IFM_FD;
 		*data_ifm = XEC_QSPI_CR_IFM_DUAL;
 		break;
 	case MSPI_IO_MODE_DUAL_1_2_2:
-		*cmd_ifm  = XEC_QSPI_CR_IFM_FD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_FD;
 		*addr_ifm = XEC_QSPI_CR_IFM_DUAL;
 		*data_ifm = XEC_QSPI_CR_IFM_DUAL;
 		break;
 	case MSPI_IO_MODE_QUAD: /* 4-4-4 */
-		*cmd_ifm  = XEC_QSPI_CR_IFM_QUAD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_QUAD;
 		*addr_ifm = XEC_QSPI_CR_IFM_QUAD;
 		*data_ifm = XEC_QSPI_CR_IFM_QUAD;
 		break;
 	case MSPI_IO_MODE_QUAD_1_1_4:
-		*cmd_ifm  = XEC_QSPI_CR_IFM_FD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_FD;
 		*addr_ifm = XEC_QSPI_CR_IFM_FD;
 		*data_ifm = XEC_QSPI_CR_IFM_QUAD;
 		break;
 	case MSPI_IO_MODE_QUAD_1_4_4:
-		*cmd_ifm  = XEC_QSPI_CR_IFM_FD;
+		*cmd_ifm = XEC_QSPI_CR_IFM_FD;
 		*addr_ifm = XEC_QSPI_CR_IFM_QUAD;
 		*data_ifm = XEC_QSPI_CR_IFM_QUAD;
 		break;
@@ -330,9 +318,8 @@ static uint32_t build_dummy_descr(uint16_t dummy_cycles, uint8_t next_idx)
  *
  * Returns the number of data descriptors written.
  */
-static uint8_t build_data_descr_pio(uint32_t *descr, uint8_t first_idx,
-				    uint8_t ifm, enum mspi_xfer_direction dir,
-				    uint32_t num_bytes, bool is_last)
+static uint8_t build_data_descr_pio(uint32_t *descr, uint8_t first_idx, uint8_t ifm,
+				    enum mspi_xfer_direction dir, uint32_t num_bytes, bool is_last)
 {
 	uint32_t remaining = num_bytes;
 	uint8_t count = 0;
@@ -356,13 +343,11 @@ static uint8_t build_data_descr_pio(uint32_t *descr, uint8_t first_idx,
 		/* Pick the largest unit size that divides the remaining
 		 * bytes and fits in the 15-bit NQUNITS field.
 		 */
-		if ((remaining % 16u) == 0u &&
-		    (remaining / 16u) <= QSPI_NQUNITS_MAX) {
+		if ((remaining % 16u) == 0u && (remaining / 16u) <= QSPI_NQUNITS_MAX) {
 			qunit = XEC_QSPI_CR_QUNIT_16B;
 			nunits = remaining / 16u;
 			chunk = remaining;
-		} else if ((remaining % 4u) == 0u &&
-			   (remaining / 4u) <= QSPI_NQUNITS_MAX) {
+		} else if ((remaining % 4u) == 0u && (remaining / 4u) <= QSPI_NQUNITS_MAX) {
 			qunit = XEC_QSPI_CR_QUNIT_4B;
 			nunits = remaining / 4u;
 			chunk = remaining;
@@ -404,8 +389,7 @@ static uint8_t build_data_descr_pio(uint32_t *descr, uint8_t first_idx,
 }
 
 #ifdef CONFIG_MSPI_XEC_QSPI_LDMA
-static uint32_t build_data_descr_ldma(uint8_t ifm, enum mspi_xfer_direction dir,
-				      bool is_last)
+static uint32_t build_data_descr_ldma(uint8_t ifm, enum mspi_xfer_direction dir, bool is_last)
 {
 	uint32_t d = 0;
 
@@ -440,15 +424,13 @@ static uint32_t build_data_descr_ldma(uint8_t ifm, enum mspi_xfer_direction dir,
  * -------------------------------------------------------------------------- */
 
 /* Return true if this device uses a hardware chip select */
-static bool qspi_cs_is_hw(const struct mspi_xec_config *config,
-			   const struct mspi_dev_cfg *cfg)
+static bool qspi_cs_is_hw(const struct mspi_xec_config *config, const struct mspi_dev_cfg *cfg)
 {
 	return cfg->ce_num < config->chip_select_count;
 }
 
-static void qspi_cs_assert(const struct device *dev,
-			    const struct mspi_dev_id *dev_id,
-			    const struct mspi_dev_cfg *cfg)
+static void qspi_cs_assert(const struct device *dev, const struct mspi_dev_id *dev_id,
+			   const struct mspi_dev_cfg *cfg)
 {
 	const struct mspi_xec_config *config = dev->config;
 	uint32_t base = config->base;
@@ -479,9 +461,8 @@ static void qspi_cs_assert(const struct device *dev,
 	}
 }
 
-static void qspi_cs_deassert(const struct device *dev,
-			      const struct mspi_dev_id *dev_id,
-			      const struct mspi_dev_cfg *cfg)
+static void qspi_cs_deassert(const struct device *dev, const struct mspi_dev_id *dev_id,
+			     const struct mspi_dev_cfg *cfg)
 {
 	const struct mspi_xec_config *config = dev->config;
 
@@ -500,7 +481,7 @@ static void qspi_cs_deassert(const struct device *dev,
  * -------------------------------------------------------------------------- */
 
 static uint8_t qspi_prepare_ca_buf(uint8_t *ca_buf, const struct mspi_xfer *xfer,
-				    const struct mspi_xfer_packet *pkt)
+				   const struct mspi_xfer_packet *pkt)
 {
 	uint8_t pos = 0;
 	uint8_t i;
@@ -512,8 +493,7 @@ static uint8_t qspi_prepare_ca_buf(uint8_t *ca_buf, const struct mspi_xfer *xfer
 
 	/* Address bytes, big-endian */
 	for (i = 0; i < xfer->addr_length; i++) {
-		ca_buf[pos++] = (uint8_t)(pkt->address >>
-					  (8u * (xfer->addr_length - 1u - i)));
+		ca_buf[pos++] = (uint8_t)(pkt->address >> (8u * (xfer->addr_length - 1u - i)));
 	}
 
 	return pos;
@@ -550,8 +530,7 @@ static void mspi_xec_qspi_isr(const struct device *dev)
 
 	/* PIO TX FIFO refill: feed more data bytes if TX FIFO needs data */
 	if (data->tx_remaining > 0 &&
-	    (status & (BIT(XEC_QSPI_SR_TXB_EMPTY_POS) |
-		       BIT(XEC_QSPI_SR_TXB_REQ_POS)))) {
+	    (status & (BIT(XEC_QSPI_SR_TXB_EMPTY_POS) | BIT(XEC_QSPI_SR_TXB_REQ_POS)))) {
 		uint32_t bcnt = qspi_read32(base, XEC_QSPI_BCNT_SR_OFS);
 		uint32_t tx_used = XEC_QSPI_BCNT_SR_TXB_GET(bcnt);
 		uint32_t space = QSPI_FIFO_DEPTH - tx_used;
@@ -566,15 +545,13 @@ static void mspi_xec_qspi_isr(const struct device *dev)
 		if (data->tx_remaining == 0) {
 			/* All TX data queued, disable TX FIFO interrupts */
 			ier = qspi_read32(base, XEC_QSPI_IER_OFS);
-			ier &= ~(BIT(XEC_QSPI_IER_TXB_EMPTY_POS) |
-				  BIT(XEC_QSPI_IER_TXB_REQ_POS));
+			ier &= ~(BIT(XEC_QSPI_IER_TXB_EMPTY_POS) | BIT(XEC_QSPI_IER_TXB_REQ_POS));
 			qspi_write32(base, XEC_QSPI_IER_OFS, ier);
 		}
 	}
 
 	/* PIO RX FIFO drain: pull received bytes */
-	if (data->rx_remaining > 0 &&
-	    (status & BIT(XEC_QSPI_SR_RXB_REQ_POS))) {
+	if (data->rx_remaining > 0 && (status & BIT(XEC_QSPI_SR_RXB_REQ_POS))) {
 		uint32_t bcnt = qspi_read32(base, XEC_QSPI_BCNT_SR_OFS);
 		uint32_t rx_avail = XEC_QSPI_BCNT_SR_RXB_GET(bcnt);
 		uint32_t to_read = MIN(data->rx_remaining, rx_avail);
@@ -593,8 +570,7 @@ static void mspi_xec_qspi_isr(const struct device *dev)
 	}
 
 	/* Transfer complete (XFR_DONE or DMA_DONE) */
-	if (status & (BIT(XEC_QSPI_SR_XFR_DONE_POS) |
-		      BIT(XEC_QSPI_SR_DMA_DONE_POS))) {
+	if (status & (BIT(XEC_QSPI_SR_XFR_DONE_POS) | BIT(XEC_QSPI_SR_DMA_DONE_POS))) {
 		/* Disable all interrupts */
 		qspi_write32(base, XEC_QSPI_IER_OFS, 0);
 
@@ -627,7 +603,7 @@ enum qspi_xfer_type {
 };
 
 static int qspi_start_and_wait(const struct device *dev, uint32_t timeout_ms,
-				enum qspi_xfer_type xtype)
+			       enum qspi_xfer_type xtype)
 {
 	const struct mspi_xec_config *config = dev->config;
 	struct mspi_xec_data *data = dev->data;
@@ -651,8 +627,7 @@ static int qspi_start_and_wait(const struct device *dev, uint32_t timeout_ms,
 		ier_val |= BIT(XEC_QSPI_IER_DMA_DONE_POS);
 		break;
 	case QSPI_XFER_PIO_TX:
-		ier_val |= BIT(XEC_QSPI_IER_TXB_EMPTY_POS) |
-			   BIT(XEC_QSPI_IER_TXB_REQ_POS);
+		ier_val |= BIT(XEC_QSPI_IER_TXB_EMPTY_POS) | BIT(XEC_QSPI_IER_TXB_REQ_POS);
 		break;
 	case QSPI_XFER_PIO_RX:
 		ier_val |= BIT(XEC_QSPI_IER_RXB_REQ_POS);
@@ -689,16 +664,15 @@ static int qspi_start_and_wait(const struct device *dev, uint32_t timeout_ms,
  * descriptor-mode execution starting at descriptor 0.
  * -------------------------------------------------------------------------- */
 
-static void qspi_write_descriptors(uint32_t base, const uint32_t *descr,
-				    uint8_t num_descr)
+static void qspi_write_descriptors(uint32_t base, const uint32_t *descr, uint8_t num_descr)
 {
 	for (uint8_t i = 0; i < num_descr; i++) {
 		qspi_write32(base, XEC_QSPI_DESCR_OFS(i), descr[i]);
 	}
 
 	/* Configure Control register: descriptor mode, start at descriptor 0 */
-	uint32_t cr = BIT(XEC_QSPI_CR_DESCR_EN_POS) |
-		      XEC_QSPI_CR_FD_SET(0); /* first descriptor = 0 */
+	uint32_t cr =
+		BIT(XEC_QSPI_CR_DESCR_EN_POS) | XEC_QSPI_CR_FD_SET(0); /* first descriptor = 0 */
 	qspi_write32(base, XEC_QSPI_CR_OFS, cr);
 }
 
@@ -706,11 +680,9 @@ static void qspi_write_descriptors(uint32_t base, const uint32_t *descr,
  * PIO transfer for a single packet
  * -------------------------------------------------------------------------- */
 
-static int qspi_pio_xfer_packet(const struct device *dev,
-				 const struct mspi_xfer *xfer,
-				 const struct mspi_xfer_packet *pkt,
-				 uint8_t cmd_ifm, uint8_t addr_ifm,
-				 uint8_t data_ifm, bool is_last)
+static int qspi_pio_xfer_packet(const struct device *dev, const struct mspi_xfer *xfer,
+				const struct mspi_xfer_packet *pkt, uint8_t cmd_ifm,
+				uint8_t addr_ifm, uint8_t data_ifm, bool is_last)
 {
 	const struct mspi_xec_config *config = dev->config;
 	struct mspi_xec_data *data = dev->data;
@@ -726,8 +698,7 @@ static int qspi_pio_xfer_packet(const struct device *dev,
 	/* Disable LDMA */
 	uint32_t mode = qspi_read32(base, XEC_QSPI_MODE_OFS);
 
-	mode &= ~(BIT(XEC_QSPI_MODE_LD_RX_EN_POS) |
-		   BIT(XEC_QSPI_MODE_LD_TX_EN_POS));
+	mode &= ~(BIT(XEC_QSPI_MODE_LD_RX_EN_POS) | BIT(XEC_QSPI_MODE_LD_TX_EN_POS));
 	qspi_write32(base, XEC_QSPI_MODE_OFS, mode);
 	qspi_write32(base, XEC_QSPI_LDMA_RX_EN_OFS, 0);
 	qspi_write32(base, XEC_QSPI_LDMA_TX_EN_OFS, 0);
@@ -767,10 +738,9 @@ static int qspi_pio_xfer_packet(const struct device *dev,
 	num_descr = 0;
 
 	if (has_cmd) {
-		next_idx = has_addr ? addr_idx : (has_dummy ? dummy_idx :
-			   (has_data ? data_idx : cmd_idx));
-		descr[cmd_idx] = build_cmd_descr(cmd_ifm, xfer->cmd_length,
-						  next_idx);
+		next_idx = has_addr ? addr_idx
+				    : (has_dummy ? dummy_idx : (has_data ? data_idx : cmd_idx));
+		descr[cmd_idx] = build_cmd_descr(cmd_ifm, xfer->cmd_length, next_idx);
 		/* If cmd is the only/last phase */
 		if (!has_addr && !has_dummy && !has_data) {
 			descr[cmd_idx] |= BIT(XEC_QSPI_DR_LD_POS);
@@ -783,8 +753,7 @@ static int qspi_pio_xfer_packet(const struct device *dev,
 
 	if (has_addr) {
 		next_idx = has_dummy ? dummy_idx : (has_data ? data_idx : addr_idx);
-		descr[addr_idx] = build_addr_descr(addr_ifm, xfer->addr_length,
-						    next_idx);
+		descr[addr_idx] = build_addr_descr(addr_ifm, xfer->addr_length, next_idx);
 		if (!has_dummy && !has_data) {
 			descr[addr_idx] |= BIT(XEC_QSPI_DR_LD_POS);
 			if (is_last) {
@@ -807,9 +776,8 @@ static int qspi_pio_xfer_packet(const struct device *dev,
 	}
 
 	if (has_data) {
-		uint8_t data_count = build_data_descr_pio(&descr[data_idx], data_idx,
-							  data_ifm, pkt->dir,
-							  pkt->num_bytes, is_last);
+		uint8_t data_count = build_data_descr_pio(&descr[data_idx], data_idx, data_ifm,
+							  pkt->dir, pkt->num_bytes, is_last);
 		if (data_count == 0) {
 			LOG_ERR("PIO data descriptor build failed (too many descriptors)");
 			k_sem_give(&data->bus_lock);
@@ -871,8 +839,7 @@ static int qspi_pio_xfer_packet(const struct device *dev,
 /* Compute LDMA channel control register value based on buffer alignment */
 static uint32_t qspi_ldma_cr_val(const void *buf, uint32_t len)
 {
-	uint32_t cr = BIT(XEC_QSPI_LDMA_CHX_CR_EN_POS) |
-		      BIT(XEC_QSPI_LDMA_CHX_CR_OVRL_POS) |
+	uint32_t cr = BIT(XEC_QSPI_LDMA_CHX_CR_EN_POS) | BIT(XEC_QSPI_LDMA_CHX_CR_OVRL_POS) |
 		      BIT(XEC_QSPI_LDMA_CHX_CR_INCRA_POS);
 
 	if (((uintptr_t)buf % 4u) == 0u && (len % 4u) == 0u) {
@@ -886,8 +853,7 @@ static uint32_t qspi_ldma_cr_val(const void *buf, uint32_t len)
 	return cr;
 }
 
-static void qspi_ldma_program_channel(uint32_t base, uint8_t hw_ch,
-				       const void *buf, uint32_t len)
+static void qspi_ldma_program_channel(uint32_t base, uint8_t hw_ch, const void *buf, uint32_t len)
 {
 	uint32_t cr = qspi_ldma_cr_val(buf, len);
 
@@ -896,11 +862,9 @@ static void qspi_ldma_program_channel(uint32_t base, uint8_t hw_ch,
 	qspi_write32(base, XEC_QSPI_LDMA_CHX_LR_OFS(hw_ch), len);
 }
 
-static int qspi_ldma_xfer_packet(const struct device *dev,
-				  const struct mspi_xfer *xfer,
-				  const struct mspi_xfer_packet *pkt,
-				  uint8_t cmd_ifm, uint8_t addr_ifm,
-				  uint8_t data_ifm, bool is_last)
+static int qspi_ldma_xfer_packet(const struct device *dev, const struct mspi_xfer *xfer,
+				 const struct mspi_xfer_packet *pkt, uint8_t cmd_ifm,
+				 uint8_t addr_ifm, uint8_t data_ifm, bool is_last)
 {
 	const struct mspi_xec_config *config = dev->config;
 	struct mspi_xec_data *data = dev->data;
@@ -946,10 +910,9 @@ static int qspi_ldma_xfer_packet(const struct device *dev,
 	num_descr = 0;
 
 	if (has_cmd) {
-		next_idx = has_addr ? addr_idx : (has_dummy ? dummy_idx :
-			   (has_data ? data_idx : cmd_idx));
-		descr[cmd_idx] = build_cmd_descr(cmd_ifm, xfer->cmd_length,
-						  next_idx);
+		next_idx = has_addr ? addr_idx
+				    : (has_dummy ? dummy_idx : (has_data ? data_idx : cmd_idx));
+		descr[cmd_idx] = build_cmd_descr(cmd_ifm, xfer->cmd_length, next_idx);
 		/* Assign TX LDMA channel 0 (hw ch 3) for command */
 		descr[cmd_idx] &= ~XEC_QSPI_CR_TXDMA_MSK;
 		descr[cmd_idx] |= XEC_QSPI_CR_TXDMA_SET(XEC_QSPI_CR_TXDMA_TLDCH0);
@@ -966,8 +929,7 @@ static int qspi_ldma_xfer_packet(const struct device *dev,
 
 	if (has_addr) {
 		next_idx = has_dummy ? dummy_idx : (has_data ? data_idx : addr_idx);
-		descr[addr_idx] = build_addr_descr(addr_ifm, xfer->addr_length,
-						    next_idx);
+		descr[addr_idx] = build_addr_descr(addr_ifm, xfer->addr_length, next_idx);
 		/* Assign TX LDMA channel 1 (hw ch 4) for address */
 		descr[addr_idx] &= ~XEC_QSPI_CR_TXDMA_MSK;
 		descr[addr_idx] |= XEC_QSPI_CR_TXDMA_SET(XEC_QSPI_CR_TXDMA_TLDCH1);
@@ -996,8 +958,7 @@ static int qspi_ldma_xfer_packet(const struct device *dev,
 	}
 
 	if (has_data) {
-		descr[data_idx] = build_data_descr_ldma(data_ifm, pkt->dir,
-							 is_last);
+		descr[data_idx] = build_data_descr_ldma(data_ifm, pkt->dir, is_last);
 		if (pkt->dir == MSPI_TX) {
 			ldma_tx_en |= BIT(data_idx);
 		} else {
@@ -1028,27 +989,23 @@ static int qspi_ldma_xfer_packet(const struct device *dev,
 	/* Program LDMA channels */
 	if (has_cmd) {
 		/* TX Ch0 (hw ch 3) = command bytes */
-		qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH0,
-					  &ca_buf[0], xfer->cmd_length);
+		qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH0, &ca_buf[0], xfer->cmd_length);
 	}
 
 	if (has_addr) {
 		/* TX Ch1 (hw ch 4) = address bytes */
-		qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH1,
-					  &ca_buf[xfer->cmd_length],
+		qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH1, &ca_buf[xfer->cmd_length],
 					  xfer->addr_length);
 	}
 
 	if (has_data) {
 		if (pkt->dir == MSPI_TX) {
 			/* TX Ch2 (hw ch 5) = TX data */
-			qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH2,
-						  pkt->data_buf,
+			qspi_ldma_program_channel(base, XEC_QSPI_LDMA_TX_CH2, pkt->data_buf,
 						  pkt->num_bytes);
 		} else {
 			/* RX Ch0 (hw ch 0) = RX data */
-			qspi_ldma_program_channel(base, XEC_QSPI_LDMA_RX_CH0,
-						  pkt->data_buf,
+			qspi_ldma_program_channel(base, XEC_QSPI_LDMA_RX_CH0, pkt->data_buf,
 						  pkt->num_bytes);
 		}
 	}
@@ -1072,9 +1029,8 @@ static int qspi_ldma_xfer_packet(const struct device *dev,
  * -------------------------------------------------------------------------- */
 
 static void call_callback(struct mspi_xec_data *data, const struct device *dev,
-			   enum mspi_bus_event evt_type,
-			   const struct mspi_xfer_packet *pkt,
-			   uint32_t pkt_idx, int status)
+			  enum mspi_bus_event evt_type, const struct mspi_xfer_packet *pkt,
+			  uint32_t pkt_idx, int status)
 {
 	if (data->cbs[evt_type] == NULL || data->cb_ctxs[evt_type] == NULL) {
 		return;
@@ -1153,11 +1109,9 @@ static int mspi_xec_config(const struct mspi_dt_spec *spec)
 	/* Configure CE GPIOs as output inactive */
 	for (uint8_t i = 0; i < config->num_ce_gpios; i++) {
 		if (config->ce_gpios[i].port != NULL) {
-			ret = gpio_pin_configure_dt(&config->ce_gpios[i],
-						    GPIO_OUTPUT_INACTIVE);
+			ret = gpio_pin_configure_dt(&config->ce_gpios[i], GPIO_OUTPUT_INACTIVE);
 			if (ret < 0) {
-				LOG_ERR("Failed to configure CE GPIO %d: %d",
-					i, ret);
+				LOG_ERR("Failed to configure CE GPIO %d: %d", i, ret);
 				return ret;
 			}
 		}
@@ -1173,8 +1127,7 @@ static int mspi_xec_config(const struct mspi_dt_spec *spec)
  * MSPI API: dev_config
  * -------------------------------------------------------------------------- */
 
-static int mspi_xec_dev_config(const struct device *dev,
-			       const struct mspi_dev_id *dev_id,
+static int mspi_xec_dev_config(const struct device *dev, const struct mspi_dev_id *dev_id,
 			       const enum mspi_dev_cfg_mask param_mask,
 			       const struct mspi_dev_cfg *cfg)
 {
@@ -1202,7 +1155,7 @@ static int mspi_xec_dev_config(const struct device *dev,
 		return -ENOTSUP;
 	}
 
-	if (cfg->endian != MSPI_XFER_LITTLE_ENDIAN) {
+	if (cfg->endian != MSPI_XFER_BIG_ENDIAN) {
 		LOG_ERR("Only little-endian supported");
 		k_sem_give(&data->bus_lock);
 		return -ENOTSUP;
@@ -1240,8 +1193,8 @@ static int mspi_xec_dev_config(const struct device *dev,
 
 	k_sem_give(&data->bus_lock);
 
-	LOG_DBG("dev_config: freq=%u (req=%u) io_mode=%d cpp=%d ce=%d",
-		actual_freq, cfg->freq, cfg->io_mode, cfg->cpp, cfg->ce_num);
+	LOG_DBG("dev_config: freq=%u (req=%u) io_mode=%d cpp=%d ce=%d", actual_freq, cfg->freq,
+		cfg->io_mode, cfg->cpp, cfg->ce_num);
 
 	return 0;
 }
@@ -1250,8 +1203,7 @@ static int mspi_xec_dev_config(const struct device *dev,
  * MSPI API: transceive
  * -------------------------------------------------------------------------- */
 
-static int mspi_xec_transceive(const struct device *dev,
-			       const struct mspi_dev_id *dev_id,
+static int mspi_xec_transceive(const struct device *dev, const struct mspi_dev_id *dev_id,
 			       const struct mspi_xfer *xfer)
 {
 	const struct mspi_xec_config *config = dev->config;
@@ -1275,8 +1227,7 @@ static int mspi_xec_transceive(const struct device *dev,
 	}
 
 	/* Resolve IO mode to per-phase IFM values */
-	ret = qspi_io_mode_to_ifm(data->active_dev_cfg.io_mode,
-				   &cmd_ifm, &addr_ifm, &data_ifm);
+	ret = qspi_io_mode_to_ifm(data->active_dev_cfg.io_mode, &cmd_ifm, &addr_ifm, &data_ifm);
 	if (ret < 0) {
 		k_sem_give(&data->bus_lock);
 		return ret;
@@ -1292,33 +1243,27 @@ static int mspi_xec_transceive(const struct device *dev,
 
 #ifdef CONFIG_MSPI_XEC_QSPI_LDMA
 		if (xfer->xfer_mode == MSPI_DMA) {
-			ret = qspi_ldma_xfer_packet(dev, xfer, pkt,
-						    cmd_ifm, addr_ifm,
-						    data_ifm, is_last);
+			ret = qspi_ldma_xfer_packet(dev, xfer, pkt, cmd_ifm, addr_ifm, data_ifm,
+						    is_last);
 		} else {
-			ret = qspi_pio_xfer_packet(dev, xfer, pkt,
-						   cmd_ifm, addr_ifm,
-						   data_ifm, is_last);
+			ret = qspi_pio_xfer_packet(dev, xfer, pkt, cmd_ifm, addr_ifm, data_ifm,
+						   is_last);
 		}
 #else
-		ret = qspi_pio_xfer_packet(dev, xfer, pkt,
-					   cmd_ifm, addr_ifm,
-					   data_ifm, is_last);
+		ret = qspi_pio_xfer_packet(dev, xfer, pkt, cmd_ifm, addr_ifm, data_ifm, is_last);
 #endif
 
 		if (ret < 0) {
 			LOG_ERR("Packet %u failed: %d", i, ret);
 			/* Force stop */
-			qspi_write32(config->base, XEC_QSPI_EXE_OFS,
-				     BIT(XEC_QSPI_EXE_STOP_POS));
+			qspi_write32(config->base, XEC_QSPI_EXE_OFS, BIT(XEC_QSPI_EXE_STOP_POS));
 			call_callback(data, dev, MSPI_BUS_ERROR, pkt, i, ret);
 			break;
 		}
 
 		/* Invoke transfer complete callback if requested */
 		if (pkt->cb_mask & MSPI_BUS_XFER_COMPLETE_CB) {
-			call_callback(data, dev, MSPI_BUS_XFER_COMPLETE,
-				      pkt, i, 0);
+			call_callback(data, dev, MSPI_BUS_XFER_COMPLETE, pkt, i, 0);
 		}
 	}
 
@@ -1354,11 +1299,9 @@ static int mspi_xec_get_channel_status(const struct device *dev, uint8_t ch)
  * MSPI API: register_callback
  * -------------------------------------------------------------------------- */
 
-static int mspi_xec_register_callback(const struct device *dev,
-				       const struct mspi_dev_id *dev_id,
-				       const enum mspi_bus_event evt_type,
-				       mspi_callback_handler_t cb,
-				       struct mspi_callback_context *ctx)
+static int mspi_xec_register_callback(const struct device *dev, const struct mspi_dev_id *dev_id,
+				      const enum mspi_bus_event evt_type,
+				      mspi_callback_handler_t cb, struct mspi_callback_context *ctx)
 {
 	struct mspi_xec_data *data = dev->data;
 
@@ -1381,11 +1324,11 @@ static int mspi_xec_register_callback(const struct device *dev,
  * -------------------------------------------------------------------------- */
 
 static DEVICE_API(mspi, mspi_xec_api) = {
-	.config             = mspi_xec_config,
-	.dev_config         = mspi_xec_dev_config,
+	.config = mspi_xec_config,
+	.dev_config = mspi_xec_dev_config,
 	.get_channel_status = mspi_xec_get_channel_status,
-	.transceive         = mspi_xec_transceive,
-	.register_callback  = mspi_xec_register_callback,
+	.transceive = mspi_xec_transceive,
+	.register_callback = mspi_xec_register_callback,
 };
 
 /* --------------------------------------------------------------------------
@@ -1402,15 +1345,16 @@ static int mspi_xec_init(const struct device *dev)
 
 	const struct mspi_dt_spec spec = {
 		.bus = dev,
-		.config = {
-			.op_mode = MSPI_OP_MODE_CONTROLLER,
-			.duplex = MSPI_HALF_DUPLEX,
-			.dqs_support = false,
-			.sw_multi_periph = config->sw_multi_periph,
-			.num_ce_gpios = config->num_ce_gpios,
-			.ce_group = (struct gpio_dt_spec *)config->ce_gpios,
-			.max_freq = config->clk_freq,
-		},
+		.config =
+			{
+				.op_mode = MSPI_OP_MODE_CONTROLLER,
+				.duplex = MSPI_HALF_DUPLEX,
+				.dqs_support = false,
+				.sw_multi_periph = config->sw_multi_periph,
+				.num_ce_gpios = config->num_ce_gpios,
+				.ce_group = (struct gpio_dt_spec *)config->ce_gpios,
+				.max_freq = config->clk_freq,
+			},
 	};
 
 	return mspi_xec_config(&spec);
@@ -1420,40 +1364,33 @@ static int mspi_xec_init(const struct device *dev)
  * Device instantiation
  * -------------------------------------------------------------------------- */
 
-#define MSPI_XEC_IRQ_CONFIG(inst)                                              \
-	static void mspi_xec_irq_config_##inst(void)                           \
-	{                                                                      \
-		IRQ_CONNECT(DT_INST_IRQN(inst),                                \
-			    DT_INST_IRQ(inst, priority),                        \
-			    mspi_xec_qspi_isr,                                 \
-			    DEVICE_DT_INST_GET(inst), 0);                      \
-		irq_enable(DT_INST_IRQN(inst));                                \
+#define MSPI_XEC_IRQ_CONFIG(inst)                                                                  \
+	static void mspi_xec_irq_config_##inst(void)                                               \
+	{                                                                                          \
+		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), mspi_xec_qspi_isr,    \
+			    DEVICE_DT_INST_GET(inst), 0);                                          \
+		irq_enable(DT_INST_IRQN(inst));                                                    \
 	}
 
-#define MSPI_XEC_INST(inst)                                                    \
-	PINCTRL_DT_INST_DEFINE(inst);                                          \
-	MSPI_XEC_IRQ_CONFIG(inst)                                              \
-	static struct gpio_dt_spec ce_gpios_##inst[] =                         \
-		MSPI_CE_GPIOS_DT_SPEC_INST_GET(inst);                         \
-	static struct mspi_xec_data mspi_xec_data_##inst;                      \
-	static const struct mspi_xec_config mspi_xec_config_##inst = {         \
-		.base = DT_INST_REG_ADDR(inst),                                \
-		.clk_freq = DT_INST_PROP(inst, clock_frequency),               \
-		.pcr = DT_INST_PROP_BY_IDX(inst, pcr, 0),                     \
-		.girq = DT_INST_PROP_BY_IDX(inst, girqs, 0),                  \
-		.chip_select_count =                                           \
-			DT_INST_PROP_OR(inst, chip_select_count, 1),           \
-		.sw_multi_periph =                                             \
-			DT_INST_PROP(inst, software_multiperipheral),          \
-		.irq_config_func = mspi_xec_irq_config_##inst,                \
-		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                 \
-		.ce_gpios = ce_gpios_##inst,                                   \
-		.num_ce_gpios = ARRAY_SIZE(ce_gpios_##inst),                   \
-	};                                                                     \
-	DEVICE_DT_INST_DEFINE(inst, mspi_xec_init, NULL,                       \
-			      &mspi_xec_data_##inst,                           \
-			      &mspi_xec_config_##inst,                         \
-			      POST_KERNEL, CONFIG_MSPI_INIT_PRIORITY,          \
+#define MSPI_XEC_INST(inst)                                                                        \
+	PINCTRL_DT_INST_DEFINE(inst);                                                              \
+	MSPI_XEC_IRQ_CONFIG(inst)                                                                  \
+	static struct gpio_dt_spec ce_gpios_##inst[] = MSPI_CE_GPIOS_DT_SPEC_INST_GET(inst);       \
+	static struct mspi_xec_data mspi_xec_data_##inst;                                          \
+	static const struct mspi_xec_config mspi_xec_config_##inst = {                             \
+		.base = DT_INST_REG_ADDR(inst),                                                    \
+		.clk_freq = DT_INST_PROP(inst, clock_frequency),                                   \
+		.pcr = DT_INST_PROP_BY_IDX(inst, pcr, 0),                                          \
+		.girq = DT_INST_PROP_BY_IDX(inst, girqs, 0),                                       \
+		.chip_select_count = DT_INST_PROP_OR(inst, chip_select_count, 1),                  \
+		.sw_multi_periph = DT_INST_PROP(inst, software_multiperipheral),                   \
+		.irq_config_func = mspi_xec_irq_config_##inst,                                     \
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                      \
+		.ce_gpios = ce_gpios_##inst,                                                       \
+		.num_ce_gpios = ARRAY_SIZE(ce_gpios_##inst),                                       \
+	};                                                                                         \
+	DEVICE_DT_INST_DEFINE(inst, mspi_xec_init, NULL, &mspi_xec_data_##inst,                    \
+			      &mspi_xec_config_##inst, POST_KERNEL, CONFIG_MSPI_INIT_PRIORITY,     \
 			      &mspi_xec_api);
 
 DT_INST_FOREACH_STATUS_OKAY(MSPI_XEC_INST)
