@@ -15,18 +15,9 @@
 	clock-frequency = <100000>;
 	port-sel = <0>;
 
-	/* Pins for all ports connected to this I2C controller must be here
-	 * Port MUX driver does not configure pins.
-	 * TODO - Check xec-i2c-v2 driver uses index into sda-gpios to get correct pin
-	 *        ISSUE: sda-gpios and scl-gpios are only needed for MEC172x
-	 *               MEC174x/5x and chips using I2C HW v3.8 can use BBCR register to
-	 *               get live SCL and SDA pin states.
+	/* MEC175x has v3.8 I2C hardware with live pin view.
+	 * GPIO handles for SDA/SCAL are not required.
 	 */
-	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>,
-		    <MCHP_GPIO_DECODE_141 GPIO_OPEN_DRAIN>;
-	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>,
-		    <MCHP_GPIO_DECODE_142 GPIO_OPEN_DRAIN>;
-
 	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004
 		     &i2c05_sda_gpio141 &i2c05_scl_gpio142>;
 	pinctrl-names = "default";

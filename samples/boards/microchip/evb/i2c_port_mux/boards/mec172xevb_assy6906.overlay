@@ -13,19 +13,21 @@
 	compatible = "microchip,xec-i2c-v2";
 	status = "okay";
 	clock-frequency = <100000>;
-	port-sel = <0>;
+	port-sel = <2>;
 
-	/* Pins for all ports connected to this I2C controller must be here
-	 * Port MUX driver does not configure pins.
-	 * TODO - Check xec-i2c-v2 driver uses index into sda-gpios to get correct pin
-	 *        ISSUE: sda-gpios and scl-gpios are only needed for MEC172x
-	 *               MEC174x/5x and chips using I2C HW v3.8 can use BBCR register to
-	 *               get live SCL and SDA pin states.
+	/* MEC172x has v3.7 I2C controller. It does not support live view of SCL/SDA pin states.
+	 * The driver requires phandles to the GPIO pins for SCL and SDA.
+	 * PINCTRL driver enables input pad when configuring a pin for alternate function.
+	 * I2C driver makes calls to the GPIO driver to read live pin input state.
+	 * NOTE, these two pins should match the controller port-sel value.
+	 * The MUX driver passes its SCL/SDA handles to the I2C driver.
 	 */
-	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>,
-		    <MCHP_GPIO_DECODE_141 GPIO_OPEN_DRAIN>;
-	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>,
-		    <MCHP_GPIO_DECODE_142 GPIO_OPEN_DRAIN>;
+	/*
+	sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>;
+	scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>;
+	*/
+	sda-gpios = <MCHP_GPIO_DECODE_154 GPIO_OPEN_DRAIN>;
+	scl-gpios = <MCHP_GPIO_DECODE_155 GPIO_OPEN_DRAIN>;
 
 	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004
 		     &i2c05_sda_gpio141 &i2c05_scl_gpio142>;
@@ -48,6 +50,8 @@
 			reg = <0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			sda-gpios = <MCHP_GPIO_DECODE_003 GPIO_OPEN_DRAIN>;
+			scl-gpios = <MCHP_GPIO_DECODE_004 GPIO_OPEN_DRAIN>;
 
 			gpmux_evb: gpmux@26 {
 				/* compatible = "nxp,pca9555"; */
@@ -71,6 +75,8 @@
 			reg = <5>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			sda-gpios = <MCHP_GPIO_DECODE_141 GPIO_OPEN_DRAIN>;
+			scl-gpios = <MCHP_GPIO_DECODE_142 GPIO_OPEN_DRAIN>;
 			clock-frequency = <400000>;
 
 			mb85rc256v_fram: mb86rc256v_fram@50 {

@@ -75,7 +75,7 @@ int main(void)
 	tx_buf[4] = 0x13; /* data byte 2 */
 	tx_buf[5] = 0x14; /* data byte 3 */
 
-	ret = i2c_write_dt(&fram, tx_buf, sizeof(tx_buf));
+	ret = i2c_write_dt(&fram, tx_buf, 6);
 	if (ret != 0) {
 		LOG_ERR("FRAM write failed: %d", ret);
 	}
