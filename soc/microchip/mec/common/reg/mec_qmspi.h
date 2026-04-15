@@ -13,6 +13,9 @@
 
 #define XEC_QSPI_MAX_CS 2
 
+#define XEC_QSPI_MAX_FREQ MHZ(96)
+#define XEC_QSPI_MIN_FREQ (XEC_QSPI_MAX_FREQ / ((UINT16_MAX) + 1U))
+
 /* Mode register */
 #define XEC_QSPI_MODE_OFS             0
 #define XEC_QSPI_MODE_ACTV_POS        0
@@ -35,7 +38,9 @@
 #define XEC_QSPI_MODE_CK_DIV_GET(r)   FIELD_GET(XEC_QSPI_MODE_CK_DIV_MSK, (r))
 
 /* CPOL, CPHA_SDI, and CPHA_SDO bit mask */
-#define XEC_QSPI_MODE_CP_MSK 0x700u
+#define XEC_QSPI_MODE_CP_MSK      0x700u
+#define XEC_QSPI_MODE_CP_SET(cpp) FIELD_PREP(XEC_QSPI_MODE_CP_MSK, (cpp))
+#define XEC_QSPI_MODE_CP_GET(r)   FIELD_GET(XEC_QSPI_MODE_CP_MSK, (r))
 
 /* Control register */
 #define XEC_QSPI_CR_OFS            4u
@@ -261,6 +266,11 @@
 #define XEC_QSPI_LDMA_TX_CH1  4u
 #define XEC_QSPI_LDMA_TX_CH2  5u
 #define XEC_QSPI_LDMA_CHX_MAX 6u
+
+/* register offsets within a channel */
+#define XEC_QSPI_LDMA_CH_CR_OFS 0
+#define XEC_QSPI_LDMA_CH_SA_OFS 4U
+#define XEC_QSPI_LDMA_CH_LR_OFS 8U
 
 /* Local DMA channel control register */
 #define XEC_QSPI_LDMA_CHX_CR_OFS(x)    (0x110u + ((uint32_t)(x) * 0x10u))
