@@ -44,11 +44,35 @@ struct mspi_xec_qmspi_drv_cfg {
 	uint8_t girq_pos;
 };
 
+struct mspi_xec_dev_cfg {
+	uint32_t cmd_rd; /* Use cmd_len to determine number of bytes (0-4) */
+	uint32_t cmd_wr; /* Use cmd_len to determine number of bytes (0-4) */
+	uint16_t fdiv; /* HW specific: 0=2^16 divider, 1 to 0xffffU actual divider */
+	uint16_t iom; /* each nibble is IO width for phase: cmd, addr, tsc, data */
+	uint16_t rx_tsc;
+	uint16_t tx_tsc;
+	uint8_t cmd_len; /* 0 - 4 */
+	uint8_t addr_len; /* 0 - 4 */
+	uint8_t ce_num;
+	uint8_t cpp;
+};
+
+struct xec_mspi_context {
+	struct mspi_xfer xfer;
+	uint32_t packets_rem;
+	struct k_sem lock;
+};
+
 struct mspi_xec_qmspi_drv_dat {
 	volatile uint32_t qstatus;
 	struct k_mutex lock;
 	struct k_sem sync;
 	struct xec_mspi_cfg active_xmspicfg;
+	const struct mspi_dev_id *dev_id;
+	struct mspi_xec_dev_cfg xdev_cfg;
+	mspi_callback_handler_t cbs[MSPI_BUS_EVENT_MAX];
+	struct mspi_callback_context *cb_ctxs[MSPI_BUS_EVENT_MAX];
+	struct xec_mspi_context ctx;
 };
 
 static void inline qwr32(mm_reg_t qb, uint32_t ofs, uint32_t val)
@@ -70,22 +94,30 @@ static void qmspi_reset(mm_reg_t qb)
 	}
 }
 
-#define XEC_QMSPI_FREQ_MAX MHZ(96)
-#define XEC_QMSPI_FREQ_MIN ((XEC_QMSPI_FREQ_MAX) / (UINT16_MAX + 1U))
-
-static uint32_t qmspi_calc_freq_div(uint32_t freq_hz)
+static void qmspi_prog_fdiv(mm_reg_t qb, uint32_t fdiv)
 {
-	uint32_t fdiv = 1U;
+	soc_mmcr_mask_set(qb + XEC_QSPI_MODE_OFS, fdiv, XEC_QSPI_MODE_CK_DIV_MSK);
+}
 
-	if (freq_hz >= XEC_QMSPI_FREQ_MAX) {
+static void qmspi_prog_cpp(mm_reg_t qb, uint8_t cpp)
+{
+	uint32_t val = XEC_QSPI_MODE_CP_SET((uint32_t)cpp);
+
+	soc_mmcr_mask_set(qb + XEC_QSPI_MODE_OFS, val, XEC_QSPI_MODE_CP_MSK);
+}
+
+static uint16_t qmspi_calc_freq_div(uint32_t freq_hz)
+{
+	if (freq_hz >= XEC_QSPI_MAX_FREQ) {
 		return 1U; /* clamp to max (divide by 1) */
 	}
 
-	if (freq_hz <= XEC_QMSPI_FREQ_MIN) {
+	if (freq_hz <= XEC_QSPI_MIN_FREQ) {
 		return 0U; /* special HW value (divide by 2^16) */
 	}
 
-	return ((XEC_QMSPI_FREQ_MAX) / freq_hz);
+	/* integer divide truncates */
+	return (uint16_t)((XEC_QSPI_MAX_FREQ) / freq_hz);
 }
 
 static void qmspi_prog_freq(mm_reg_t qb, uint32_t freq_hz)
@@ -96,6 +128,84 @@ static void qmspi_prog_freq(mm_reg_t qb, uint32_t freq_hz)
 	soc_mmcr_mask_set(qb + XEC_QSPI_MODE_OFS, fdiv, XEC_QSPI_MODE_CK_DIV_MSK);
 }
 
+/* Return a byte containing bit 0 = QMSPI CPOL, bit 1 = QMSPI CPHA_SDI, bit 2 = QMSPI CPHA_SDO */
+static uint8_t qmspi_cpp(enum mspi_cpp_mode cpp_mode, uint32_t freq_hz)
+{
+	uint8_t cpp_bm = 0; /* SPI Mode 0 */
+
+	if (cpp_mode == MSPI_CPP_MODE_3) {
+		cpp_bm = 0x7U; /* CPOL=1, CPHA_SDI=1, CPHA_SDO=1 */
+	} else if (cpp_mode == MSPI_CPP_MODE_2) {
+		cpp_bm = 0x1U; /* CPOL=1, CPHA_SDI=0, CPHA_SDO=0 */
+	} else if (cpp_mode == MSPI_CPP_MODE_1) {
+		cpp_bm = 0x3U; /* CPOL=1, CPHA_SDI=1, CPHA_SDO=0 */
+	} else {
+		cpp_bm = 0; /* SPI Mode 0: CPOL=0, CPHA_SDI=0, CPHA_SDO=0 */
+	}
+
+	if (freq_hz >= MHZ(48)) {
+		cpp_bm ^= BIT(2); /* invert CPHA_SDO */
+	}
+
+	return cpp_bm;
+}
+
+static const uint16_t qmspi_iom_bms[] = {
+	0x0000U, /* MSPI_IO_MODE_SINGLE */
+	0x1011U, /* MSPI_IO_MODE_DUAL */
+	0x1000U, /* MSPI_IO_MODE_DUAL_1_1_2 */
+	0x1010U, /* MSPI_IO_MODE_DUAL_1_2_2 */
+	0x2022U, /* MSPI_IO_MODE_QUAD */
+	0x2000U, /* MSPI_IO_MODE_QUAD_1_1_4 */
+	0x2020U, /* MSPI_IO_MODE_QUAD_1_4_4 */
+};
+
+/* MEC172x requires cleanup sequence if controller is not reset */
+static void qmspi_cleanup(mm_reg_t qb, uint32_t mode_val)
+{
+	sys_write32(0, qb + XEC_QSPI_MODE_OFS);
+	sys_write32(0, qb + XEC_QSPI_LDMA_RX_EN_OFS);
+	sys_write32(0, qb + XEC_QSPI_LDMA_RX_EN_OFS);
+	for (uint32_t n = 0; n < XEC_QSPI_LDMA_CHX_MAX; n++) {
+		uint32_t ofs = XEC_QSPI_LDMA_CHX_CR_OFS(n); /* LDMA channel control reg offset */
+
+		sys_write32(0, ofs);
+		sys_write32(0, ofs + XEC_QSPI_LDMA_CH_SA_OFS);
+		sys_write32(0, ofs + XEC_QSPI_LDMA_CH_LR_OFS);
+	}
+
+	sys_write32(mode_val, qb + XEC_QSPI_MODE_OFS);
+}
+
+/* Transfer in progress? */
+static bool mspi_xec_qmspi_inp(const struct device *controller)
+{
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+
+	if (k_sem_count_get(&xdat->ctx.lock) == 0) {
+		return true;
+	}
+
+	return false;
+}
+
+/* Appy settings translated from struct mspi_cfg
+ * If re-init requested we soft-reset the controller forcing the frequency, CPP, and
+ * HW chip enable fields to their default values:
+ *  frequency divider = 0 (divide by 2^16)
+ *  CPOL=CPHA_SDI=CPHA_SDO=0 -> SPI Mode 0
+ *  HW chip enable = 00b -> chip enable 0
+ *
+ * MSPI struct mspi_cfg has max_freq parameter, no CPP and chip enable params
+ * MSPI struct mspi_dev_cfg has ce_num, freq and cpp params
+ * We can use current struct mspi_dev_cfg from driver data to configure freq, CPP, and CE.
+ * During driver init we get struct mspi_dev_cfg values from DT or if not present use
+ * defaults: CPP = SPI Mode 0, CE = HW CS0, and freq = max_freq from struct mspi_cfg or
+ * should we use a "safe" default freq, 24MHz?
+ *
+ * mspi_stm32_qspi.c driver data struct mspi_dev_cfg dev_cfg, set to 0 in driver macros
+ *
+ */
 static int mspi_xec_qmspi_cfg(const struct device *controller)
 {
 	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
@@ -104,17 +214,20 @@ static int mspi_xec_qmspi_cfg(const struct device *controller)
 	mm_reg_t qb = xcfg->regbase;
 
 	if ((acfg->flags & BIT(XEC_MSPI_CFG_FLAG_REINIT_POS)) != 0) {
+		/* reset results in CPOL=CPHA_SDI=CPHA_SDO=0 -> Mode 0
+		 * MSPI CPP param for phase is in struct mspi_dev_cfg.
+		 */
 		qmspi_reset(qb);
+	} else {
+		/* Mode register default value: CPP=Mode 0, CE=0, fdiv=0
+		 * RX/TX local-DMA disabled
+		 */
+		qmspi_cleanup(qb, 0);
 	}
-
-	sys_clear_bit(qb + XEC_QSPI_MODE_OFS, XEC_QSPI_MODE_ACTV_POS);
 
 	qmspi_prog_freq(qb, acfg->max_freq);
 
-	/* TODO
-	 * CPOL, CPHA_SDI, CPHA_SDO
-	 * this is from struct mspi_dev_cfg
-	 */
+	sys_set_bit(qb + XEC_QSPI_MODE_OFS, XEC_QSPI_MODE_ACTV_POS);
 
 	return 0;
 }
@@ -151,14 +264,24 @@ static int validate_mspi_cfg(const struct mspi_cfg *mcfg)
 		return -ENOTSUP;
 	}
 
-	if (mcfg->max_freq > MHZ(96)) {
-		LOG_ERR("MSPI CR cfg: max_freq %u too large", mcfg->max_freq);
+	if ((mcfg->max_freq > XEC_QSPI_MAX_FREQ) || (mcfg->max_freq <= XEC_QSPI_MIN_FREQ)) {
+		LOG_ERR("MSPI CR cfg: max_freq %u out of range", mcfg->max_freq);
 		return -ENOTSUP;
 	}
 
 	return 0;
 }
 
+/* API - Configure MSPI controller based on passed spec containing the controller device
+ *       pointer and a struct mspi_cfg.
+ * MSPI struct mspi_cfg contains:
+ *  maximum frequency in Hz the controller config will support
+ *  optional pointer to a array of struct gpio_dt_spec and num_ce_gpios for GPIOs for use
+ *  as chip enables.
+ *  Number of peripherals is the total number of child nodes under this controller.
+ *  booleans for DQS, software-multiperipheral, and re-init.
+ * We translate mspi_cfg into a smaller structure in the driver.
+ */
 static int api_mspi_xec_qmspi_config(const struct mspi_dt_spec *spec)
 {
 	const struct device *controller = spec->bus;
@@ -187,42 +310,204 @@ static int api_mspi_xec_qmspi_config(const struct mspi_dt_spec *spec)
 		acfg->flags |= BIT(XEC_MSPI_CFG_FLAG_REINIT_POS);
 	}
 
-	return mspi_xec_qmspi_cfg(controller);
+	rc = mspi_xec_qmspi_cfg(controller);
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* Why not use k_sem_reset? */
+	if (k_sem_count_get(&xdat->ctx.lock) == 0) {
+		k_sem_give(&xdat->ctx.lock);
+	}
+
+	return 0;
 }
 
+/* Configure controller and transfer based on param_mask and associated values in devcfg.
+ * We support params:
+ *   MSPI_DEVICE_CONFIG_CE_NUM
+ *   MSPI_DEVICE_CONFIG_FREQUENCY
+ *   MSPI_DEVICE_CONFIG_IO_MODE
+ *   MSPI_DEVICE_CONFIG_CPP
+ *   MSPI_DEVICE_CONFIG_RX_DUMMY
+ *   MSPI_DEVICE_CONFIG_TX_DUMMY
+ *   MSPI_DEVICE_CONFIG_READ_CMD
+ *   MSPI_DEVICE_CONFIG_WRITE_CMD
+ *   MSPI_DEVICE_CONFIG_CMD_LEN (0-4)
+ *   MSPI_DEVICE_CONFIG_ADDR_LEN (0-4)
+ *   MSPI_DEVICE_CONFIG_ALL has all bits set
+ */
+static int mspi_xec_qm_dev_cfg(const struct device *controller,
+			       const enum mspi_dev_cfg_mask param_mask,
+			       const struct mspi_dev_cfg *devcfg)
+{
+	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg;
+	mm_reg_t qb = xcfg->regbase;
+
+	if (devcfg == NULL) {
+		return -EINVAL;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_FREQUENCY) != 0) {
+		xdcfg->fdiv = qmspi_calc_freq_div(devcfg->freq);
+		qmspi_prog_fdiv(qb, (uint32_t)xdcfg->fdiv);
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_IO_MODE) != 0) {
+		if (devcfg->io_mode >= MSPI_IO_MODE_OCTAL) {
+			return -EINVAL;
+		}
+
+		xdcfg->iom = qmspi_iom_bms[devcfg->io_mode];
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_CPP) != 0) {
+		xdcfg->cpp = qmspi_cpp(devcfg->freq, devcfg->freq);
+		qmspi_prog_cpp(qb, xdcfg->cpp);
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_RX_DUMMY) != 0) {
+		if (devcfg->rx_dummy > 0x7fffU) {
+			return -EINVAL;
+		}
+		xdcfg->rx_tsc = devcfg->rx_dummy;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_TX_DUMMY) != 0) {
+		if (devcfg->tx_dummy > 0x7fffU) {
+			return -EINVAL;
+		}
+		xdcfg->tx_tsc = devcfg->tx_dummy;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_READ_CMD) != 0) {
+		xdcfg->cmd_rd = devcfg->read_cmd;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_WRITE_CMD) != 0) {
+		xdcfg->cmd_wr = devcfg->write_cmd;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_CMD_LEN) != 0) {
+		if (devcfg->cmd_length > 4U) {
+			return -EINVAL;
+		}
+		xdcfg->cmd_len = devcfg->cmd_length;
+	}
+
+	if ((param_mask & MSPI_DEVICE_CONFIG_ADDR_LEN) != 0) {
+		if (devcfg->addr_length > 4U) {
+			return -EINVAL;
+		}
+		xdcfg->addr_len = devcfg->addr_length;
+	}
+
+	return 0;
+}
+
+/* API - Controller and transfer parameters specific to a SPI child device
+ * NOTE: controller HW state is not changed. Parameters are translated to
+ * HW specific values and stored in driver data.
+ */
 static int api_mspi_xec_qmspi_dev_config(const struct device *controller,
 					 const struct mspi_dev_id *dev_id,
 					 const enum mspi_dev_cfg_mask param_mask,
 					 const struct mspi_dev_cfg *cfg)
 {
-	/* TODO implement */
-	return 0;
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	int rc = 0;
+
+	if (dev_id == NULL) {
+		LOG_ERR("MSPI Dev Cfg: dev_id is NULL");
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&xdat->lock, K_FOREVER);
+
+	if (param_mask == MSPI_DEVICE_CONFIG_NONE) {
+		xdat->dev_id = dev_id;
+	} else {
+		rc = mspi_xec_qm_dev_cfg(controller, param_mask, cfg);
+	}
+
+	k_mutex_unlock(&xdat->lock);
+
+	return rc;
 }
 
 static int api_mspi_xec_qmspi_get_chan_status(const struct device *controller, uint8_t ch)
 {
-	/* TODO implement */
+	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	mm_reg_t qb = xcfg->regbase;
+
+	if (ch != 0) {
+		return -EINVAL;
+	}
+
+	if (mspi_xec_qmspi_inp(controller) ||
+	    (sys_test_bit(qb + XEC_QSPI_SR_OFS, XEC_QSPI_SR_CS_ASSERTED_POS) != 0)) {
+		return -EBUSY;
+	}
+
+	/* Not busy
+	 * clear pointer to struct mspi_dev_id in driver data
+	 * Inform PM subystem device is not busy
+	 * Make sure mutex is unlocked
+	 */
+	xdat->dev_id = NULL;
+	k_sem_give(&xdat->ctx.lock);
+	k_mutex_unlock(&xdat->lock);
+
 	return 0;
 }
 
-static int api_mspi_xec_qmspi_transceive(const struct device *controller,
-					 const struct mspi_dev_id *dev_id,
-					 const struct mspi_xfer *req)
-{
-	/* TODO implement */
-	return 0;
-}
-
+/* TODO - we are supporting MSPI_BUS_ERROR and MSPI_BUS_XFER_COMPLETE at this time.
+ * We may need to support MSPI_BUS_TIMEOUT.
+ * HW does not automatically do bus resets so we don't support MSPI_BUS_RESET.
+ */
 static int api_mspi_xec_qmspi_register_cb(const struct device *controller,
 					  const struct mspi_dev_id *dev_id,
 					  const enum mspi_bus_event evt_type,
 					  mspi_callback_handler_t cb,
 					  struct mspi_callback_context *ctx)
 {
-	/* TODO implement */
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	int rc = 0;
+
+	if ((evt_type != MSPI_BUS_ERROR) && (evt_type != MSPI_BUS_XFER_COMPLETE)) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&xdat->lock, K_FOREVER);
+
+	if (mspi_xec_qmspi_inp(controller)) {
+		rc = -EBUSY;
+		goto reg_cb_exit;
+	}
+
+	if (dev_id != xdat->dev_id) {
+		rc = -ESTALE;
+		goto reg_cb_exit;
+	}
+
+	xdat->cbs[evt_type] = cb;
+	xdat->cb_ctxs[evt_type] = ctx;
+
+reg_cb_exit:
+	k_mutex_unlock(&xdat->lock);
+
 	return 0;
 }
 
+/* chip select timing
+ * TAPS selection for control and clock signals
+ * TODO need custom header file in zephyr/drivers/mspi/ folder
+ * define param masks for chip select timing and TAPS parameters
+ * define parameter structure for casting timing_cfg.
+ */
 static int api_mspi_xec_timing_config(const struct device *controller,
 				      const struct mspi_dev_id *dev_id, const uint32_t param_mask,
 				      void *timing_cfg)
@@ -231,9 +516,94 @@ static int api_mspi_xec_timing_config(const struct device *controller,
 	return 0;
 }
 
-static void mspi_xec_qmspi_isr(const struct device *controller)
+static int mspi_xec_qmspi_xfr_pio(const struct device *controller, const struct mspi_xfer *req)
 {
 	/* TODO */
+	return 0;
+}
+
+#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+static int mspi_xec_qmspi_xfr_dma(const struct device *controller, const struct mspi_xfer *req)
+{
+	/* TODO */
+	return 0;
+}
+#endif
+
+/* The Monster
+ * MSPI_PIO vs MSPI_DMA modes
+ *   struct mspi_xfer has enum mspi_xfer_mode = {MSPI_PIO, MSPI_DMA}
+ *   MSPI_DMA depends upon CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+ * Synchronous vs Asynchronous
+ *   struct mspi_xfer has bool async
+ * One or more packets
+ *   struct mspi_xfer has pointer, packets to struct mspi_xfer_packet
+ *                        num_packet (uint32_t)
+ *   struct mspi_packet has
+ *     dir = MSPI_RX or MSPI_TX
+ *     cb_mask (enum_mspi_bus_event_cb_mask)
+ *     cmd (uint32_t)
+ *     address (uint32_t)
+ *     num_bytes (uint32_t)
+ *     data_buf (uint8_t *)
+ */
+static int api_mspi_xec_qmspi_transceive(const struct device *controller,
+					 const struct mspi_dev_id *dev_id,
+					 const struct mspi_xfer *req)
+{
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	int rc = 0;
+
+	if ((dev_id == NULL) || (req == NULL)) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&xdat->lock, K_FOREVER);
+
+	if (dev_id != xdat->dev_id) {
+		rc = -ESTALE;
+		goto transcv_exit;
+	}
+
+#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+	if (req->xfer_mode == MSPI_DMA) {
+		rc = mspi_xec_qmspi_xfr_dma(controller, req);
+	} else {
+		rc = mspi_xec_qmspi_xfr_pio(controller, req);
+	}
+#else
+	if (req->xfr_mode == MSPI_DMA) {
+		rc = -EINVAL;
+		goto transcv_exit;
+	}
+
+	rc = mspi_xec_qmspi_xfr_pio(controller, req);
+#endif
+
+transcv_exit:
+	if ((req->async == false) || (rc != 0)) {
+		k_mutex_unlock(&xdat->lock);
+	}
+
+	return rc;
+}
+
+static void mspi_xec_qmspi_isr(const struct device *controller)
+{
+	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	mm_reg_t qb = xcfg->regbase;
+	uint32_t qstatus = qrd32(qb, XEC_QSPI_SR_OFS);
+
+	xdat->qstatus = qstatus;
+
+	qwr32(qb, XEC_QSPI_IER_OFS, 0);
+	qwr32(qb, XEC_QSPI_SR_OFS, qstatus);
+	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
+
+	/* TODO */
+
+	k_sem_give(&xdat->sync);
 }
 
 #ifdef CONFIG_PM_DEVICE
@@ -266,8 +636,18 @@ static int mspi_xec_qmspi_pm_action(const struct device *controller, enum pm_dev
 #ifdef CONFIG_DEVICE_DEINIT_SUPPORT
 static int mspi_xec_qmspi_deinit(const struct device *controller)
 {
-	/* TODO */
-	return 0;
+	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
+	mm_reg_t qb = xcfg->regbase;
+	int rc = 0;
+
+	qmspi_reset(qb);
+
+	rc = pinctrl_apply_state(xcfg->pcfg, PINCTRL_STATE_SLEEP);
+	if (rc == -ENOENT) {
+		rc = 0;
+	}
+
+	return rc;
 }
 #endif
 
@@ -279,6 +659,7 @@ static int mspi_xec_qmspi_init(const struct device *controller)
 
 	k_mutex_init(&xdat->lock);
 	k_sem_init(&xdat->sync, 0, 1);
+	k_sem_init(&xdat->ctx.lock, 0, 1);
 
 	soc_xec_pcr_sleep_en_clear(xcfg->enc_pcr);
 
