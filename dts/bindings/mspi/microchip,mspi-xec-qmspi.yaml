@@ -1,0 +1,31 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: Microchip XEC QMSPI MSPI controller
+
+compatible: "microchip,mspi-xec-qmspi"
+
+include: [mspi-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  software-multiperipheral:
+    required: true
+
+  girqs:
+    type: array
+    required: true
+    description:
+      Array of encoded GIRQ number and bit position.
+
+  pcr:
+    type: int
+    required: true
+    description:
+      Encoded PCR register index and bit position for
+      sleep enable, clock required, and block reset.

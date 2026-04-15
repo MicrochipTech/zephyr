@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+config MSPI_MCHP_XEC_QMSPI
+	bool "Microchip MSPI driver using QMSPI controller"
+	default y
+	depends on DT_HAS_MICROCHIP_MSPI_XEC_QMSPI_ENABLED
+	select PINCTRL
+	imply MSPI_TIMING
+
+if MSPI_MCHP_XEC_QMSPI
+
+config MSPI_MCHP_XEC_QMSPI_LDMA
+	bool "QMSPI Local-DMA"
+	default y
+	help
+	  Microchip XEC QMSPI controller has six local DMA
+	  channels split into three each for transmit and
+	  receive.
+
+endif # MSPI_MCHP_XEC_QMSPI
