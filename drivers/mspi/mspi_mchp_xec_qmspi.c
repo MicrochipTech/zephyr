@@ -150,6 +150,11 @@ static uint8_t qmspi_cpp(enum mspi_cpp_mode cpp_mode, uint32_t freq_hz)
 	return cpp_bm;
 }
 
+#define QMSPI_IOM_CMD_GET(iom) ((iom) & 0x3U)
+#define QMSPI_IOM_ADR_GET(iom) (((iom) & 0x30U) >> 4)
+#define QMSPI_IOM_TSC_GET(iom) (((iom) & 0x300U) >> 8)
+#define QMSPI_IOM_DAT_GET(iom) (((iom) & 0x3000U) >> 12)
+
 static const uint16_t qmspi_iom_bms[] = {
 	0x0000U, /* MSPI_IO_MODE_SINGLE */
 	0x1011U, /* MSPI_IO_MODE_DUAL */
@@ -410,6 +415,7 @@ static int mspi_xec_qm_dev_cfg(const struct device *controller,
 /* API - Controller and transfer parameters specific to a SPI child device
  * NOTE: controller HW state is not changed. Parameters are translated to
  * HW specific values and stored in driver data.
+ * TODO special handling for dev_id and boolean software_multiperipheral?
  */
 static int api_mspi_xec_qmspi_dev_config(const struct device *controller,
 					 const struct mspi_dev_id *dev_id,
@@ -516,6 +522,58 @@ static int api_mspi_xec_timing_config(const struct device *controller,
 	return 0;
 }
 
+/* QMSPI descriptor fields:
+ * ifm - 2 bits
+ * txm - 2 bits
+ * txdma - 2 bits 0=dis, 1-3=TX LDMA chan 0-2
+ * rxen - 1 bit
+ * rxdma - 2 bits 0=dis, 1-3=RX LDMA chan 0-2
+ * close - 1 bit
+ * last - 1 bit
+ * qunits - 2 bits 0=bits, 1=bytes, 2=4 bytes, 3=16 bytes
+ * num_qunits - 14 bits
+ */
+#define QMSPI_DESCR_FLAG_TX_POS    0
+#define QMSPI_DESCR_FLAG_TX_DATA   0x1U
+#define QMSPI_DESCR_FLAG_TX_ZEROS  0x2U
+#define QMSPI_DESCR_FLAG_TX_ONES   0x3U
+#define QMSPI_DESCR_FLAG_TX_MSK    0x3U
+#define QMSPI_DESCR_FLAG_RX_EN     0x8U
+#define QMSPI_DESCR_FLAG_CLOSE     0x10U
+#define QMSPI_DESCR_FLAG_LAST      0x20U
+
+static inline uint32_t build_descr(uint8_t ifm, uint8_t ldma_chan, uint8_t qunits,
+				   uint16_t nqunits, uint8_t next_descr, uint8_t flags)
+{
+	uint32_t descr = XEC_QSPI_CR_IFM_SET((uint32_t)ifm);
+	uint32_t txm = 0;
+
+	descr |= XEC_QSPI_CR_QUNIT_SET((uint32_t)qunits);
+	descr |= XEC_QSPI_CR_NQUNITS_SET((uint32_t)nqunits);
+	descr |= XEC_QSPI_DR_ND_SET((uint32_t)next_descr);
+
+	if ((flags & QMSPI_DESCR_FLAG_TX_MSK) != 0) {
+		txm = (uint32_t)((flags & QMSPI_DESCR_FLAG_TX_MSK) >> QMSPI_DESCR_FLAG_TX_POS);
+		descr |= XEC_QSPI_CR_TXM_SET(txm);
+		descr |= XEC_QSPI_CR_TXDMA_SET((uint32_t)ldma_chan);
+	}
+
+	if ((flags & QMSPI_DESCR_FLAG_RX_EN) != 0) {
+		descr |= BIT(XEC_QSPI_CR_RX_EN_POS);
+		descr |= XEC_QSPI_CR_RXDMA_SET((uint32_t)ldma_chan);
+	}
+
+	if ((flags & QMSPI_DESCR_FLAG_CLOSE) != 0) {
+		descr |= BIT(XEC_QSPI_CR_CLOSE_EN_POS);
+	}
+
+	if ((flags & QMSPI_DESCR_FLAG_LAST) != 0) {
+		descr |= BIT(XEC_QSPI_DR_LD_POS);
+	}
+
+	return descr;
+}
+
 static int mspi_xec_qmspi_xfr_pio(const struct device *controller, const struct mspi_xfer *req)
 {
 	/* TODO */
@@ -523,12 +581,120 @@ static int mspi_xec_qmspi_xfr_pio(const struct device *controller, const struct 
 }
 
 #ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+/* if req->cmd_length != 0
+ *    create descriptor for TX cmd byte(s)
+ *      iom from struct xec_mspi_cfg iom member bits[1:0]
+ *    config TX LDMA channel 0 for tranmsit of command
+ *    set TX LDMA Descr enable bit for descriptor
+ * endif
+ * if req->addr_length != 0
+ *    format address MSBF
+ *    create descriptor for TX address bytes(s)
+ *      iom from struct xec_mspi_cfg iom member bits[5:4]
+ *    config TX LDMA channel 1 for transmit of address
+ *    set TX LDMA enable descript bit map for bit[descr_id]
+ * endif
+ * ntsc = 0
+ * if pkt->dir == MSPI_TX
+ *   ntsc = xfr->tx_dummy
+ * else
+ *   ntsc = xfr->rx_dummy
+ * endif
+ * if ntsc != 0
+ *   create descriptor for tri-state clock
+ *     iom = 0 (single)
+ *     TX & RX disabled
+ *     qunits = bits
+ *     num_qunits = ntsc
+ *   No local-DMA required
+ * endif
+ * if pkt->num_bytes != 0
+ *   create desciptor for TX or RX of data based on pkt->dir
+ *     iom from struct xec_mspi_cfg iom member bits[13:12]
+ *     qunits = bytes
+ *     num_qunits = 0
+ *   config TX or RX LDMA channel 2 for TX or RX of data
+ *   set TX or RX LDMA desciptor index as bit position
+ * endif
+ */
 static int mspi_xec_qmspi_xfr_dma(const struct device *controller, const struct mspi_xfer *req)
 {
-	/* TODO */
+	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg;
+	struct mspi_xfer_packet *pkt = req->packets;
+	mm_reg_t qb = xcfg->regbase;
+	uint32_t descr = 0;
+	uint16_t ntsc = 0;
+	uint8_t didx = 0;
+	uint8_t flags = QMSPI_DESCR_FLAG_TX_DATA;
+	uint8_t cmd_ifm = QMSPI_IOM_CMD_GET(xdcfg->iom);
+	uint8_t adr_ifm = QMSPI_IOM_ADR_GET(xdcfg->iom);
+	uint8_t tsc_ifm = QMSPI_IOM_TSC_GET(xdcfg->iom);
+	uint8_t dat_ifm = QMSPI_IOM_ADR_GET(xdcfg->iom);
+
+	if (req->cmd_length != 0) {
+		descr = build_descr(cmd_ifm, XEC_QSPI_CR_TXDMA_TLDCH0, XEC_QSPI_CR_QUNIT_1B,
+				    (uint16_t)req->cmd_length, (didx + 1U), flags);
+		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+		didx++;
+	}
+
+	if (req->addr_length != 0) {
+		descr = build_descr(adr_ifm, XEC_QSPI_CR_TXDMA_TLDCH1, XEC_QSPI_CR_QUNIT_1B,
+				    (uint16_t)req->cmd_length, (didx + 1U), flags);
+		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+		didx++;
+	}
+
+	if (pkt->dir == MSPI_TX) {
+		ntsc = req->tx_dummy;
+	} else {
+		ntsc = req->rx_dummy;
+	}
+
+	if (ntsc != 0) {
+		descr = build_descr(tsc_ifm, 0, XEC_QSPI_CR_QUNIT_BITS, ntsc, (didx + 1U), 0);
+		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+		didx++;
+	}
+
+	if (pkt->num_bytes != 0) {
+		flags = (pkt->dir == MSPI_TX) ? QMSPI_DESCR_FLAG_TX_DATA : QMSPI_DESCR_FLAG_RX_EN;
+		descr = build_descr(dat_ifm, XEC_QSPI_CR_TXDMA_TLDCH2, XEC_QSPI_CR_QUNIT_1B, 0,
+				    (didx + 1U), flags);
+		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+		didx++;
+	}
+
 	return 0;
 }
 #endif
+
+/* TODO - alernate
+ * don't check each packet, instead during transfer if a packet has
+ * NULL pointer for data length of 0 skip it and move to next packet.
+ */
+static int check_mspi_xfer(const struct mspi_xfer *req)
+{
+	if ((req->cmd_length > 4U) || (req->addr_length > 4U)) {
+		return -EINVAL;
+	}
+
+	if ((req->num_packet == 0) || (req->packets == NULL)) {
+		return -EINVAL;
+	}
+
+	for (uint32_t n = 0; n < req->num_packet; n++) {
+		const struct mspi_xfer_packet *pkt = &req->packets[n];
+
+		if ((pkt->data_buf == NULL) || (pkt->num_bytes == 0)) {
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
 
 /* The Monster
  * MSPI_PIO vs MSPI_DMA modes
@@ -556,6 +722,11 @@ static int api_mspi_xec_qmspi_transceive(const struct device *controller,
 
 	if ((dev_id == NULL) || (req == NULL)) {
 		return -EINVAL;
+	}
+
+	rc = check_mspi_xfer(req);
+	if (rc != 0) {
+		return rc;
 	}
 
 	k_mutex_lock(&xdat->lock, K_FOREVER);
