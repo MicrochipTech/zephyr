@@ -44,22 +44,28 @@ struct mspi_xec_qmspi_drv_cfg {
 	uint8_t girq_pos;
 };
 
+#define QMSPI_IOM_CMD_IDX 0
+#define QMSPI_IOM_ADR_IDX 1U
+#define QMSPI_IOM_TSC_IDX 2U
+#define QMSPI_IOM_DAT_IDX 3U
+
 struct mspi_xec_dev_cfg {
 	uint32_t cmd_rd; /* Use cmd_len to determine number of bytes (0-4) */
 	uint32_t cmd_wr; /* Use cmd_len to determine number of bytes (0-4) */
+	uint8_t iom[4]; /* [0]:cmd phase, [1]:adr phase, [2]:tsc phase, [3]:data phase */
 	uint16_t fdiv; /* HW specific: 0=2^16 divider, 1 to 0xffffU actual divider */
-	uint16_t iom; /* each nibble is IO width for phase: cmd, addr, tsc, data */
 	uint16_t rx_tsc;
 	uint16_t tx_tsc;
-	uint8_t cmd_len; /* 0 - 4 */
-	uint8_t addr_len; /* 0 - 4 */
 	uint8_t ce_num;
 	uint8_t cpp;
+	uint8_t cmd_len; /* 0 - 4 */
+	uint8_t addr_len; /* 0 - 4 */
 };
 
 struct xec_mspi_context {
 	struct mspi_xfer xfer;
-	uint32_t packets_rem;
+	uint32_t packet_idx_max;
+	uint32_t packet_idx;
 	struct k_sem lock;
 };
 
@@ -150,11 +156,14 @@ static uint8_t qmspi_cpp(enum mspi_cpp_mode cpp_mode, uint32_t freq_hz)
 	return cpp_bm;
 }
 
-#define QMSPI_IOM_CMD_GET(iom) ((iom) & 0x3U)
-#define QMSPI_IOM_ADR_GET(iom) (((iom) & 0x30U) >> 4)
-#define QMSPI_IOM_TSC_GET(iom) (((iom) & 0x300U) >> 8)
-#define QMSPI_IOM_DAT_GET(iom) (((iom) & 0x3000U) >> 12)
+#define QMSPI_IOM_CMD_GET(iom_enc) ((iom_enc) & 0x3U)
+#define QMSPI_IOM_ADR_GET(iom_enc) (((iom_enc) & 0x30U) >> 4)
+#define QMSPI_IOM_TSC_GET(iom_enc) (((iom_enc) & 0x300U) >> 8)
+#define QMSPI_IOM_DAT_GET(iom_enc) (((iom_enc) & 0x3000U) >> 12)
 
+/* IO mode encoded to QMSPI control/descriptor IOM field
+ * 0 = single, 1=dual, 2=quad, 3=rsvd
+ */
 static const uint16_t qmspi_iom_bms[] = {
 	0x0000U, /* MSPI_IO_MODE_SINGLE */
 	0x1011U, /* MSPI_IO_MODE_DUAL */
@@ -350,6 +359,7 @@ static int mspi_xec_qm_dev_cfg(const struct device *controller,
 	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
 	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg;
 	mm_reg_t qb = xcfg->regbase;
+	uint16_t temp = 0;
 
 	if (devcfg == NULL) {
 		return -EINVAL;
@@ -365,7 +375,11 @@ static int mspi_xec_qm_dev_cfg(const struct device *controller,
 			return -EINVAL;
 		}
 
-		xdcfg->iom = qmspi_iom_bms[devcfg->io_mode];
+		temp = qmspi_iom_bms[devcfg->io_mode];
+		xdcfg->iom[QMSPI_IOM_CMD_IDX] = QMSPI_IOM_CMD_GET(temp);
+		xdcfg->iom[QMSPI_IOM_ADR_IDX] = QMSPI_IOM_ADR_GET(temp);
+		xdcfg->iom[QMSPI_IOM_TSC_IDX] = QMSPI_IOM_TSC_GET(temp);
+		xdcfg->iom[QMSPI_IOM_DAT_IDX] = QMSPI_IOM_DAT_GET(temp);
 	}
 
 	if ((param_mask & MSPI_DEVICE_CONFIG_CPP) != 0) {
@@ -574,12 +588,6 @@ static inline uint32_t build_descr(uint8_t ifm, uint8_t ldma_chan, uint8_t qunit
 	return descr;
 }
 
-static int mspi_xec_qmspi_xfr_pio(const struct device *controller, const struct mspi_xfer *req)
-{
-	/* TODO */
-	return 0;
-}
-
 #ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
 /* if req->cmd_length != 0
  *    create descriptor for TX cmd byte(s)
@@ -617,33 +625,106 @@ static int mspi_xec_qmspi_xfr_pio(const struct device *controller, const struct 
  *   set TX or RX LDMA desciptor index as bit position
  * endif
  */
-static int mspi_xec_qmspi_xfr_dma(const struct device *controller, const struct mspi_xfer *req)
+
+#endif
+
+/* Local-DMA clearing sequence required by MEC172x */
+static void qmspi_prep(mm_reg_t qb)
+{
+	sys_clear_bits(qb + XEC_QSPI_MODE_OFS, (BIT(XEC_QSPI_MODE_LD_RX_EN_POS) |
+	                                        BIT(XEC_QSPI_MODE_LD_TX_EN_POS)));
+	sys_write32(0, qb + XEC_QSPI_LDMA_RX_EN_OFS);
+	sys_write32(0, qb + XEC_QSPI_LDMA_TX_EN_OFS);
+#if 0 /* TODO */
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(0));
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(1));
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(2));
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(3));
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(4));
+	sys_write32(0, qb + XEC_QSPI_LDMA_CHX_CR_OFS(5));
+#endif
+	sys_write32(BIT(XEC_QSPI_CR_DESCR_EN_POS), qb + XEC_QSPI_CR_OFS);
+	sys_write32(XEC_QSPI_EXE_CLR_FIFOS_POS, qb + XEC_QSPI_EXE_OFS);
+	sys_write32(UINT32_MAX, qb + XEC_QSPI_SR_OFS);
+}
+
+static void qmspi_ldma_cfg(mm_reg_t qb, uint8_t ldma_chan, void *mbuf, uint32_t mbuf_len)
+{
+	uint32_t ofs = XEC_QSPI_LDMA_CHX_CR_OFS((uint32_t)ldma_chan);
+	uint32_t msa = (uint32_t)mbuf;
+	uint32_t cr = 0;
+
+	if (IS_ALIGNED((msa | mbuf_len), 4)) {
+		cr |= XEC_QSPI_LDMA_CHX_CR_SZ_SET(XEC_QSPI_LDMA_CHX_CR_SZ_4B);
+	} else if (IS_ALIGNED((msa | mbuf_len), 2)) {
+		cr |= XEC_QSPI_LDMA_CHX_CR_SZ_SET(XEC_QSPI_LDMA_CHX_CR_SZ_2B);
+	} else {
+		cr |= XEC_QSPI_LDMA_CHX_CR_SZ_SET(XEC_QSPI_LDMA_CHX_CR_SZ_1B);
+	}
+
+	cr |= (BIT(XEC_QSPI_LDMA_CHX_CR_EN_POS) | BIT(XEC_QSPI_LDMA_CHX_CR_OVRL_POS) |
+	       BIT(XEC_QSPI_LDMA_CHX_CR_INCRA_POS));
+
+	ofs = XEC_QSPI_LDMA_CHX_CR_OFS((uint32_t)ldma_chan);
+
+	sys_write32(msa, qb + ofs + XEC_QSPI_LDMA_CH_SA_OFS);
+	sys_write32((uint32_t)mbuf_len, qb + ofs + XEC_QSPI_LDMA_CH_LR_OFS);
+	sys_write32(cr, qb + ofs);
+}
+
+static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi_xfer *req)
 {
 	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
 	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
 	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg;
-	struct mspi_xfer_packet *pkt = req->packets;
+	const struct mspi_xfer_packet *pkt = req->packets;
 	mm_reg_t qb = xcfg->regbase;
 	uint32_t descr = 0;
 	uint16_t ntsc = 0;
-	uint8_t didx = 0;
+	uint8_t didx = 0, ifm = 0, ldma = 0;
 	uint8_t flags = QMSPI_DESCR_FLAG_TX_DATA;
-	uint8_t cmd_ifm = QMSPI_IOM_CMD_GET(xdcfg->iom);
-	uint8_t adr_ifm = QMSPI_IOM_ADR_GET(xdcfg->iom);
-	uint8_t tsc_ifm = QMSPI_IOM_TSC_GET(xdcfg->iom);
-	uint8_t dat_ifm = QMSPI_IOM_ADR_GET(xdcfg->iom);
+	bool is_dma = false;
+
+	qmspi_prep(qb);
+
+	if (IS_ENABLED(CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA) && (req->xfer_mode == MSPI_DMA)) {
+		is_dma = true;
+	}
 
 	if (req->cmd_length != 0) {
-		descr = build_descr(cmd_ifm, XEC_QSPI_CR_TXDMA_TLDCH0, XEC_QSPI_CR_QUNIT_1B,
-				    (uint16_t)req->cmd_length, (didx + 1U), flags);
+		ifm = xdcfg->iom[QMSPI_IOM_CMD_IDX];
+		if (is_dma) {
+			ldma = XEC_QSPI_CR_TXDMA_TLDCH0;
+		}
+
+		descr = build_descr(ifm, ldma, XEC_QSPI_CR_QUNIT_1B, (uint16_t)req->cmd_length,
+		                    (didx + 1U), flags);
 		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+
+		if (is_dma) {
+			qmspi_ldma_cfg(qb, ldma, (void *)pkt->cmd, req->cmd_length);
+			sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
+		}
+
 		didx++;
 	}
 
 	if (req->addr_length != 0) {
-		descr = build_descr(adr_ifm, XEC_QSPI_CR_TXDMA_TLDCH1, XEC_QSPI_CR_QUNIT_1B,
-				    (uint16_t)req->cmd_length, (didx + 1U), flags);
+		ifm = xdcfg->iom[QMSPI_IOM_ADR_IDX];
+		ldma = 0;
+		if (is_dma) {
+			ldma = XEC_QSPI_CR_TXDMA_TLDCH1;
+		}
+
+		descr = build_descr(ifm, ldma, XEC_QSPI_CR_QUNIT_1B, (uint16_t)req->addr_length,
+		                    (didx + 1U), flags);
 		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+
+		if (is_dma) {
+			qmspi_ldma_cfg(qb, ldma, (void *)pkt->address, req->addr_length);
+			sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
+		}
+
 		didx++;
 	}
 
@@ -654,22 +735,40 @@ static int mspi_xec_qmspi_xfr_dma(const struct device *controller, const struct 
 	}
 
 	if (ntsc != 0) {
-		descr = build_descr(tsc_ifm, 0, XEC_QSPI_CR_QUNIT_BITS, ntsc, (didx + 1U), 0);
+		ifm = xdcfg->iom[QMSPI_IOM_TSC_IDX];
+		ldma = 0;
+		descr = build_descr(ifm, ldma, XEC_QSPI_CR_QUNIT_BITS, ntsc, (didx + 1U), 0);
 		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
 		didx++;
 	}
 
 	if (pkt->num_bytes != 0) {
 		flags = (pkt->dir == MSPI_TX) ? QMSPI_DESCR_FLAG_TX_DATA : QMSPI_DESCR_FLAG_RX_EN;
-		descr = build_descr(dat_ifm, XEC_QSPI_CR_TXDMA_TLDCH2, XEC_QSPI_CR_QUNIT_1B, 0,
-				    (didx + 1U), flags);
-		sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
-		didx++;
+		ifm = xdcfg->iom[QMSPI_IOM_DAT_IDX];
+		ldma = 0;
+		if (is_dma) {
+			ldma = XEC_QSPI_CR_TXDMA_TLDCH2;
+			descr = build_descr(ifm, ldma, XEC_QSPI_CR_QUNIT_1B, 0, (didx + 1U),
+			                    flags);
+			sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+			qmspi_ldma_cfg(qb, ldma, (void *)pkt->address, req->addr_length);
+			if (pkt->dir == MSPI_TX) {
+				sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
+			} else {
+				sys_set_bit(qb + XEC_QSPI_LDMA_RX_EN_OFS, didx);
+			}
+			didx++;
+		} else { /* PIO */
+			/* TODO - Allocate multiple descriptors due to 15-bit num qunits
+			 * field limit
+			 */
+		}
 	}
+
+	/* TODO - Debug dump QMSPI registers */
 
 	return 0;
 }
-#endif
 
 /* TODO - alernate
  * don't check each packet, instead during transfer if a packet has
@@ -736,20 +835,21 @@ static int api_mspi_xec_qmspi_transceive(const struct device *controller,
 		goto transcv_exit;
 	}
 
-#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
-	if (req->xfer_mode == MSPI_DMA) {
-		rc = mspi_xec_qmspi_xfr_dma(controller, req);
-	} else {
-		rc = mspi_xec_qmspi_xfr_pio(controller, req);
-	}
-#else
-	if (req->xfr_mode == MSPI_DMA) {
-		rc = -EINVAL;
+	xdat->ctx.packet_idx_max = req->num_packet;
+	xdat->ctx.packet_idx = 0;
+
+	if (req->async) {
+		rc = mspi_xec_qmspi_xfr(controller, req);
 		goto transcv_exit;
 	}
 
-	rc = mspi_xec_qmspi_xfr_pio(controller, req);
-#endif
+	while (xdat->ctx.packet_idx < xdat->ctx.packet_idx_max) {
+		rc = mspi_xec_qmspi_xfr(controller, req);
+		if (rc != 0) {
+			break;
+		}
+		xdat->ctx.packet_idx++;
+	}
 
 transcv_exit:
 	if ((req->async == false) || (rc != 0)) {
