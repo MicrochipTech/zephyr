@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <stdio.h>
 #include <string.h>
 #include <soc.h>
 #include <zephyr/kernel.h>
@@ -189,12 +188,15 @@ int main(void)
 		goto app_end;
 	}
 
+#if 0  /* all MSPI drivers are clearing dev_id if get channel status indicates not busy
+	* Therefore mspi_dev_config and mspi_transceive must be called back to back*/
 	LOG_INF("Query channel 0 status");
 	rc = mspi_get_channel_status(mspi0_dt_spec.bus, 0);
 	LOG_INF("MSPI API get chan status returned (%d)", rc);
 	if (rc != 0) {
 		goto app_end;
 	}
+#endif
 
 	LOG_INF("Read from MSPI device using DT parameters");
 
@@ -211,9 +213,9 @@ int main(void)
 		.async = false,
 		.xfer_mode = MSPI_PIO,
 		.tx_dummy = 0,
-		.rx_dummy = 8U,
-		.cmd_length = 8U, /* bits */
-		.addr_length = 24U, /* bits */
+		.rx_dummy = 8U, /* cycles */
+		.cmd_length = 1U, /* bytes */
+		.addr_length = 3U, /* bytes */
 		.hold_ce = false,
 		.ce_sw_ctrl = {
 			.gpio = {NULL, 0, 0},
@@ -232,6 +234,15 @@ int main(void)
 	}
 
 	LOG_HEXDUMP_INF(tb1.b, 32U, "RX buffer contents");
+
+	 /* all MSPI drivers are clearing dev_id if get channel status indicates not busy
+	  * Therefore mspi_dev_config and mspi_transceive must be called back to back*/
+	LOG_INF("Query channel 0 status");
+	rc = mspi_get_channel_status(mspi0_dt_spec.bus, 0);
+	LOG_INF("MSPI API get chan status returned (%d)", rc);
+	if (rc != 0) {
+		goto app_end;
+	}
 
 app_end:
 	LOG_INF("Program End");

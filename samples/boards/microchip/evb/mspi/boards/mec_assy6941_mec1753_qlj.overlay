@@ -30,7 +30,9 @@
 	ce-gpios = <MCHP_GPIO_DECODE_020 GPIO_ACTIVE_LOW>;
 */
 
-
+	/* W25Q128JV 3.3V flash JEDEC-ID = 0xef, 0x40, 0x18
+	 * W25Q128FW 1.8V flash JEDEC-ID = 0xef, 0x60, 0x18
+	 */
 	spiflash0: qspi-nor-flash@0 {
 		compatible = "jedec,mspi-nor";
 		reg = <0>;
@@ -46,7 +48,7 @@
 		address-length = "ADDR_3_BYTE";
 		tx-dummy = <0>;
 		rx-dummy = <8>;
-		jedec-id = [ef 60 18];
+		jedec-id = [ef 40 18];
 	};
 
 	spiflash1: qspi-nor-flash@1 {
@@ -64,7 +66,7 @@
 		address-length = "ADDR_3_BYTE";
 		tx-dummy = <0>;
 		rx-dummy = <6>;
-		jedec-id = [ef 60 18];
+		jedec-id = [ef 40 18];
 	};
 
 	spiflash2: qspi-nor-flash@2 {
@@ -81,7 +83,7 @@
 		address-length = "ADDR_3_BYTE";
 		tx-dummy = <0>;
 		rx-dummy = <6>;
-		jedec-id = [ef 60 18];
+		jedec-id = [ef 40 18];
 	};
 
 	spiflash3: qspi-nor-flash@3 {
@@ -98,7 +100,7 @@
 		address-length = "ADDR_3_BYTE";
 		tx-dummy = <0>;
 		rx-dummy = <6>;
-		jedec-id = [ef 60 18];
+		jedec-id = [ef 40 18];
 	};
 
 /*
