@@ -16,6 +16,9 @@
 #define XEC_QSPI_MAX_FREQ MHZ(96)
 #define XEC_QSPI_MIN_FREQ (XEC_QSPI_MAX_FREQ / ((UINT16_MAX) + 1U))
 
+#define XEC_QSPI_TX_FIFO_DEPTH 8
+#define XEC_QSPI_RX_FIFO_DEPTH 8
+
 /* Mode register */
 #define XEC_QSPI_MODE_OFS             0
 #define XEC_QSPI_MODE_ACTV_POS        0

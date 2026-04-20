@@ -272,6 +272,16 @@ config SOC_MEC_PROC_CLK_DIV
 	  HCLK = MCK / PROC_CLK_DIV
 	  Allowed divider values: 1, 3, 4, 16, and 48.
 
+# QMSPI variants with Local-DMA channels
+config HAS_MCHP_MEC_QMSPI_LOCAL_DMA
+	bool "MEC QMSPI controller includes local-DMA channels"
+	default n
+	help
+	  Some Microchip MEC QMSPI controllers include local-DMA
+	  channels as a performance enhancement. Those without
+	  must use the central DMA controller via Zephyr DMA driver
+	  if they need DMA services.
+
 # Select SoC Part No. and configuration options
 rsource "*/Kconfig"
 
