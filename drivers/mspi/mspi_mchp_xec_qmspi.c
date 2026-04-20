@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-
 #define DT_DRV_COMPAT microchip_mspi_xec_qmspi
 
 #include <soc.h>
@@ -20,6 +19,9 @@
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(mspi_xec_qmspi, CONFIG_MSPI_LOG_LEVEL);
+
+#define XEC_MSPI_QMSPI_DEBUG 1
+#define XEC_MSPI_QMSPI_DEBUG_REG_CAP_BUF_MAX 8
 
 #define XEC_MSPI_CFG_FLAG_SWMP_POS   0
 #define XEC_MSPI_CFG_FLAG_REINIT_POS 1
@@ -66,11 +68,17 @@ struct xec_mspi_context {
 	struct mspi_xfer xfer;
 	uint32_t packet_idx_max;
 	uint32_t packet_idx;
+	uint8_t *data_ptr;
+	uint32_t data_len;
 	struct k_sem lock;
 };
 
 struct mspi_xec_qmspi_drv_dat {
+#ifdef XEC_MSPI_QMSPI_DEBUG
+	volatile uint32_t isr_count;
+#endif
 	volatile uint32_t qstatus;
+	volatile uint32_t qien;
 	struct k_mutex lock;
 	struct k_sem sync;
 	struct xec_mspi_cfg active_xmspicfg;
@@ -79,7 +87,71 @@ struct mspi_xec_qmspi_drv_dat {
 	mspi_callback_handler_t cbs[MSPI_BUS_EVENT_MAX];
 	struct mspi_callback_context *cb_ctxs[MSPI_BUS_EVENT_MAX];
 	struct xec_mspi_context ctx;
+#ifdef XEC_MSPI_QMSPI_DEBUG
+	volatile uint32_t qcap_idx;
+	volatile uint32_t qsr[XEC_MSPI_QMSPI_DEBUG_REG_CAP_BUF_MAX];
+	volatile uint32_t qier[XEC_MSPI_QMSPI_DEBUG_REG_CAP_BUF_MAX];
+#endif
 };
+
+#ifdef XEC_MSPI_QMSPI_DEBUG
+static void dbg_init_qmspi(const struct device *controller)
+{
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+
+	xdat->isr_count = 0;
+	xdat->qcap_idx = 0;
+
+	for (uint32_t i = 0; i < XEC_MSPI_QMSPI_DEBUG_REG_CAP_BUF_MAX; i++) {
+		xdat->qsr[i] = 0;
+		xdat->qier[i] = 0;
+	}
+}
+
+static void dbg_qmspi_update(const struct device *controller, uint32_t qsr, uint32_t qien)
+{
+	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	uint32_t idx = xdat->qcap_idx;
+
+	if (idx < XEC_MSPI_QMSPI_DEBUG_REG_CAP_BUF_MAX) {
+		xdat->qsr[idx] = qsr;
+		xdat->qier[idx] = qien;
+		xdat->qcap_idx++;
+	}
+}
+
+static void dbg_pr_qmspi_regs(mm_reg_t qb)
+{
+	uint32_t n = 0;
+
+	LOG_INF("QMSPI @ 0x%0x", (uint32_t)qb);
+	LOG_INF("  Mode = 0x%0x", sys_read32(qb + XEC_QSPI_MODE_OFS));
+	LOG_INF("  CR = 0x%0x", sys_read32(qb + XEC_QSPI_CR_OFS));
+	LOG_INF("  IFCR = 0x%0x", sys_read32(qb + XEC_QSPI_IFCR_OFS));
+	LOG_INF("  SR = 0x%0x", sys_read32(qb + XEC_QSPI_SR_OFS));
+	LOG_INF("  BCNT_CR = 0x%0x", sys_read32(qb + XEC_QSPI_BCNT_SR_OFS));
+	LOG_INF("  IER = 0x%0x", sys_read32(qb + XEC_QSPI_IER_OFS));
+	LOG_INF("  BCNT_TR = 0x%0x", sys_read32(qb + XEC_QSPI_BCNT_TR_OFS));
+	LOG_INF("  CSTM = 0x%0x", sys_read32(qb + XEC_QSPI_CSTM_OFS));
+	for (n = 0; n < XEC_QSPI_MAX_DESCR_IDX; n++) {
+		LOG_INF("  Descr[%u] = 0x%0x", n, sys_read32(qb + XEC_QSPI_DESCR_OFS(n)));
+	}
+	LOG_INF("  Descr LDMA RX BM = 0x%0x", sys_read32(qb + XEC_QSPI_LDMA_RX_EN_OFS));
+	LOG_INF("  Descr LDMA TX BM = 0x%0x", sys_read32(qb + XEC_QSPI_LDMA_TX_EN_OFS));
+	for (n = 0; n < XEC_QSPI_LDMA_CHX_MAX; n++) {
+		uint32_t ofs = XEC_QSPI_LDMA_CHX_CR_OFS(n);
+
+		if (n < XEC_QSPI_LDMA_TX_CH0) {
+			LOG_INF("  RX LDMA Chan %u", n);
+		} else {
+			LOG_INF("  TX LDMA Chan %u", (n - XEC_QSPI_LDMA_TX_CH0));
+		}
+		LOG_INF("    CR = 0x%0x", sys_read32(qb + ofs));
+		LOG_INF("    SA = 0x%0x", sys_read32(qb + ofs + XEC_QSPI_LDMA_CH_SA_OFS));
+		LOG_INF("    LR = 0x%0x", sys_read32(qb + ofs + XEC_QSPI_LDMA_CH_LR_OFS));
+	}
+}
+#endif
 
 static void inline qwr32(mm_reg_t qb, uint32_t ofs, uint32_t val)
 {
@@ -102,7 +174,9 @@ static void qmspi_reset(mm_reg_t qb)
 
 static void qmspi_prog_fdiv(mm_reg_t qb, uint32_t fdiv)
 {
-	soc_mmcr_mask_set(qb + XEC_QSPI_MODE_OFS, fdiv, XEC_QSPI_MODE_CK_DIV_MSK);
+	uint32_t fd = XEC_QSPI_MODE_CK_DIV_SET(fdiv);
+
+	soc_mmcr_mask_set(qb + XEC_QSPI_MODE_OFS, fd, XEC_QSPI_MODE_CK_DIV_MSK);
 }
 
 static void qmspi_prog_cpp(mm_reg_t qb, uint8_t cpp)
@@ -383,7 +457,7 @@ static int mspi_xec_qm_dev_cfg(const struct device *controller,
 	}
 
 	if ((param_mask & MSPI_DEVICE_CONFIG_CPP) != 0) {
-		xdcfg->cpp = qmspi_cpp(devcfg->freq, devcfg->freq);
+		xdcfg->cpp = qmspi_cpp(devcfg->cpp, devcfg->freq);
 		qmspi_prog_cpp(qb, xdcfg->cpp);
 	}
 
@@ -450,6 +524,9 @@ static int api_mspi_xec_qmspi_dev_config(const struct device *controller,
 		xdat->dev_id = dev_id;
 	} else {
 		rc = mspi_xec_qm_dev_cfg(controller, param_mask, cfg);
+		if (rc == 0) {
+			xdat->dev_id = dev_id;
+		}
 	}
 
 	k_mutex_unlock(&xdat->lock);
@@ -672,18 +749,203 @@ static void qmspi_ldma_cfg(mm_reg_t qb, uint8_t ldma_chan, void *mbuf, uint32_t 
 	sys_write32(cr, qb + ofs);
 }
 
-static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi_xfer *req)
+#if 0 /* unused */
+static uint8_t qmspi_pio_unit_size(uint32_t num_bytes)
+{
+	if ((num_bytes & 0xFU) == 0) {
+		return XEC_QSPI_CR_QUNIT_16B;
+	} else if ((num_bytes & 0x3U) == 0) {
+		return XEC_QSPI_CR_QUNIT_4B;
+	} else {
+		return XEC_QSPI_CR_QUNIT_1B;
+	}
+}
+#endif
+
+static uint32_t qmspi_calc_descr_nunits(uint32_t num_bytes, uint32_t *rem_bytes, uint8_t *qusz)
+{
+	uint32_t nqu = 0, rem = 0;
+	uint8_t unit_size = XEC_QSPI_CR_QUNIT_1B;
+
+	if (num_bytes <= 0x7FFFU) {
+		nqu = num_bytes;
+	} else {
+		unit_size = XEC_QSPI_CR_QUNIT_16B;
+		nqu = num_bytes / 16U;
+		rem = (num_bytes - (nqu * 16U));
+	}
+
+	if (rem_bytes != NULL) {
+		*rem_bytes = rem;
+	}
+
+	if (qusz != NULL) {
+		*qusz = unit_size;
+	}
+
+	return nqu;
+}
+
+static bool qmspi_txb_is_empty(mm_reg_t qb)
+{
+	return (sys_test_bit(qb + XEC_QSPI_SR_OFS, XEC_QSPI_SR_TXB_EMPTY_POS) != 0);
+}
+
+#if 0 /* Unused */
+static uint8_t qmspi_txb_wr(mm_reg_t qb, uint8_t *pd, uint8_t nbytes)
+{
+	uint16_t txb_len = 0;
+	uint8_t nrem = 0, nwr = 0;
+
+	txb_len = (uint16_t)XEC_QSPI_BCNT_SR_TXB_GET(sys_read32(qb + XEC_QSPI_BCNT_SR_OFS));
+
+	nwr = (uint8_t)(8U - txb_len);
+	nrem = nbytes - nwr;
+
+	while (nwr--) {
+		sys_write8(*pd, qb + XEC_QSPI_TXB_OFS);
+		pd++;
+	}
+
+	return nrem;
+}
+#endif
+
+static uint32_t qmspi_tx_fifo_fill(mm_reg_t qb, const uint8_t *src, uint32_t len)
+{
+	mm_reg_t qtxb = qb + XEC_QSPI_TXB_OFS;
+	uintptr_t addr = (uintptr_t)src;
+	uint32_t tx_count = 0, avail = 0, n = 0, total = 0;
+
+	tx_count = XEC_QSPI_BCNT_SR_TXB_GET(sys_read32(qb + XEC_QSPI_BCNT_SR_OFS));
+
+	if (tx_count >= XEC_QSPI_TX_FIFO_DEPTH) {
+		return 0;
+	}
+
+	avail = XEC_QSPI_TX_FIFO_DEPTH - tx_count;
+	n = (len < avail) ? len : avail;
+
+	if (n == 0) {
+		return 0;
+	}
+
+	total = n;
+
+	if ((addr & 1U) && (n >= 1U)) {
+		sys_write8(*(const uint8_t *)addr, qtxb);
+		addr += 1U;
+		n -= 1U;
+	}
+
+	if ((addr & 2U) && (n >= 2U)) {
+		sys_write16(*(const uint16_t *)addr, qtxb);
+		addr += 2U;
+		n -= 2U;
+	}
+
+	while (n >= 4U) {
+		sys_write32(*(const uint32_t *)addr, qtxb);
+		addr += 4U;
+		n -= 4U;
+	}
+
+	if (n >= 2U) {
+		sys_write16(*(const uint16_t *)addr, qtxb);
+		addr += 2U;
+		n -= 2U;
+	}
+
+	if (n >= 1U) {
+		sys_write8(*(const uint8_t *)addr, qtxb);
+	}
+
+	return total;
+}
+
+static uint32_t qmspi_rx_fifo_drain(mm_reg_t qb, uint8_t *dst, uint32_t len)
+{
+	mm_reg_t qrxb = qb + XEC_QSPI_RXB_OFS;
+	uintptr_t addr = (uintptr_t)dst;
+	uint32_t rx_count = 0, n = 0, total = 0;
+
+	rx_count = XEC_QSPI_BCNT_SR_RXB_GET(sys_read32(qb + XEC_QSPI_BCNT_SR_OFS));
+	n = (len < rx_count) ? len : rx_count;
+
+	if (n == 0) {
+		return 0;
+	}
+
+	total = n;
+
+	if ((addr & 1U) && (n >= 1U)) {
+		*(uint8_t *)addr = sys_read8(qrxb);
+		addr += 1U;
+		n -= 1U;
+	}
+
+	if ((addr & 2U) && (n >= 2U)) {
+		*(uint16_t *)addr = sys_read16(qrxb);
+		addr += 2U;
+		n -= 2U;
+	}
+
+	while (n >= 4U) {
+		*(uint32_t *)addr = sys_read32(qrxb);
+		addr += 4U;
+		n -= 4U;
+	}
+
+	if (n >= 2U) {
+		*(uint16_t *)addr = sys_read16(qrxb);
+		addr += 2U;
+		n -= 2U;
+	};
+
+	if (n >= 1U) {
+		*(uint8_t *)addr = sys_read8(qrxb);
+	}
+
+	return total;
+}
+
+static void qmspi_rx_fifo_discard(mm_reg_t qb)
+{
+	mm_reg_t rxb = qb + XEC_QSPI_RXB_OFS;
+	uint32_t nb = XEC_QSPI_BCNT_SR_RXB_GET(sys_read32(qb + XEC_QSPI_BCNT_SR_OFS));
+
+	for (uint32_t n = 0; n < nb; n++) {
+		sys_read8(rxb);
+	}
+}
+
+#define QMSPI_XFR_IER_MSK (BIT(XEC_QSPI_IER_XFR_DONE_POS) | BIT(XEC_QSPI_IER_TXB_ERR_POS) | \
+		 	   BIT(XEC_QSPI_IER_RXB_ERR_POS) | BIT(XEC_QSPI_IER_PROG_ERR_POS) |\
+		 	   BIT(XEC_QSPI_IER_LDMA_RX_ERR_POS) | BIT(XEC_QSPI_IER_LDMA_TX_ERR_POS))
+
+#define QMSPI_XFR_ERR_MSK (BIT(XEC_QSPI_SR_TXB_ERR_POS) | BIT(XEC_QSPI_SR_RXB_ERR_POS) |\
+			   BIT(XEC_QSPI_SR_PROG_ERR_POS) | BIT(XEC_QSPI_SR_LDMA_RX_ERR_POS) |\
+			   BIT(XEC_QSPI_SR_LDMA_TX_ERR_POS))
+
+static int mspi_xec_qmspi_xfr(const struct device *controller)
 {
 	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
 	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
 	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg;
+	const struct mspi_xfer *req = &xdat->ctx.xfer;
+	/* TODO handle num_packet > 1 */
 	const struct mspi_xfer_packet *pkt = req->packets;
 	mm_reg_t qb = xcfg->regbase;
-	uint32_t descr = 0;
-	uint16_t ntsc = 0;
+	int rc = 0;
+	uint32_t descr = 0, nb = 0, nu = 0, rem = 0;
+	uint16_t ntsc = 0, ien = 0;
 	uint8_t didx = 0, ifm = 0, ldma = 0;
+	uint8_t qusz = 0;
 	uint8_t flags = QMSPI_DESCR_FLAG_TX_DATA;
 	bool is_dma = false;
+
+	xdat->ctx.data_ptr = NULL;
+	xdat->ctx.data_len = 0;
 
 	qmspi_prep(qb);
 
@@ -704,6 +966,8 @@ static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi
 		if (is_dma) {
 			qmspi_ldma_cfg(qb, ldma, (void *)pkt->cmd, req->cmd_length);
 			sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
+		} else {
+			qmspi_tx_fifo_fill(qb, (const uint8_t *)&pkt->cmd, req->cmd_length);
 		}
 
 		didx++;
@@ -723,6 +987,8 @@ static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi
 		if (is_dma) {
 			qmspi_ldma_cfg(qb, ldma, (void *)pkt->address, req->addr_length);
 			sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
+		} else {
+			qmspi_tx_fifo_fill(qb, (const uint8_t *)&pkt->address, req->addr_length);
 		}
 
 		didx++;
@@ -746,12 +1012,15 @@ static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi
 		flags = (pkt->dir == MSPI_TX) ? QMSPI_DESCR_FLAG_TX_DATA : QMSPI_DESCR_FLAG_RX_EN;
 		ifm = xdcfg->iom[QMSPI_IOM_DAT_IDX];
 		ldma = 0;
+
 		if (is_dma) {
 			ldma = XEC_QSPI_CR_TXDMA_TLDCH2;
 			descr = build_descr(ifm, ldma, XEC_QSPI_CR_QUNIT_1B, 0, (didx + 1U),
 			                    flags);
 			sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+
 			qmspi_ldma_cfg(qb, ldma, (void *)pkt->address, req->addr_length);
+
 			if (pkt->dir == MSPI_TX) {
 				sys_set_bit(qb + XEC_QSPI_LDMA_TX_EN_OFS, didx);
 			} else {
@@ -759,21 +1028,109 @@ static int mspi_xec_qmspi_xfr(const struct device *controller, const struct mspi
 			}
 			didx++;
 		} else { /* PIO */
-			/* TODO - Allocate multiple descriptors due to 15-bit num qunits
-			 * field limit
+			xdat->ctx.data_ptr = pkt->data_buf;
+
+			/* Allocate multiple descriptors due to 15-bit num qunits field limit
+			 * QMSPI does not have enought descriptors to handle 2^32 bytes.
+			 * Until our SoC's have multi-megabytes of memory will we need to
+			 * handle exceeding the HW limits.
 			 */
+			nb = pkt->num_bytes;
+			while (didx < XEC_QSPI_MAX_DESCR_IDX) {
+				rem = 0;
+				qusz = 0;
+				nu = qmspi_calc_descr_nunits(nb, &rem, &qusz);
+
+				descr = build_descr(ifm, ldma, qusz, nu, (didx + 1U), flags);
+				sys_write32(descr, qb + XEC_QSPI_DESCR_OFS(didx));
+
+				didx++;
+
+				if (rem == 0) {
+					break;
+				}
+
+				nb = rem;
+			}
+
+			if (rem == 0) {
+				if (pkt->dir == MSPI_TX) {
+					if (qmspi_txb_is_empty(qb)) {
+						nb = qmspi_tx_fifo_fill(qb,
+							(const uint8_t *)&pkt->data_buf,
+							pkt->num_bytes);
+						xdat->ctx.data_ptr += nb;
+						xdat->ctx.data_len += nb;
+					}
+					ien |= BIT(XEC_QSPI_IER_TXB_EMPTY_POS);
+				} else {
+					ien |= BIT(XEC_QSPI_IER_RXB_FULL_POS);
+				}
+			}
 		}
 	}
 
-	/* TODO - Debug dump QMSPI registers */
+	LOG_INF("MSPI XEC xfr: Used %u descriptors", didx);
 
-	return 0;
+	if (rem != 0) {
+		LOG_ERR("MSPI XEC xfr: num_bytes = %u", pkt->num_bytes);
+		return -E2BIG;
+	}
+
+	/* TODO Logic to set last and close flags! */
+	if (didx == 0) {
+		LOG_ERR("MSPI XEC xfr: Do nothing!");
+		return -ENODATA;
+	}
+
+	descr = BIT(XEC_QSPI_DR_LD_POS);
+
+	if (req->hold_ce == false) {
+		descr |= BIT(XEC_QSPI_CR_CLOSE_EN_POS);
+	}
+
+	--didx; /* index of last descriptor */
+	sys_set_bits(qb + XEC_QSPI_DESCR_OFS(didx), descr);
+
+	/* interrupt enable and start */
+	if (is_dma) {
+		descr = BIT(XEC_QSPI_MODE_LD_RX_EN_POS) | BIT(XEC_QSPI_MODE_LD_TX_EN_POS);
+	}
+
+	ien |= (BIT(XEC_QSPI_IER_XFR_DONE_POS) | BIT(XEC_QSPI_IER_TXB_ERR_POS) |
+		BIT(XEC_QSPI_IER_RXB_ERR_POS) | BIT(XEC_QSPI_IER_PROG_ERR_POS) |
+		BIT(XEC_QSPI_IER_LDMA_RX_ERR_POS) | BIT(XEC_QSPI_IER_LDMA_TX_ERR_POS));
+
+	sys_write32(ien, qb + XEC_QSPI_IER_OFS);
+
+#ifdef XEC_MSPI_QMSPI_DEBUG
+	LOG_INF("packet_idx = %u", xdat->ctx.packet_idx);
+	LOG_INF("packet_max = %u", xdat->ctx.packet_idx_max);
+	LOG_INF("data_ptr = %p", xdat->ctx.data_ptr);
+	LOG_INF("data_len = %u", xdat->ctx.data_len);
+	dbg_pr_qmspi_regs(qb);
+#endif
+	xdat->qstatus = BIT(31); /* DEBUG bit not implemented */
+	sys_write32(BIT(XEC_QSPI_EXE_START_POS), qb + XEC_QSPI_EXE_OFS);
+
+	k_sem_take(&xdat->sync, K_FOREVER);
+
+	LOG_INF("MSPI XEC xfr: Interrupt gave semaphore!");
+	LOG_INF("  qstatus = 0x%0x", xdat->qstatus);
+
+	if ((xdat->qstatus & QMSPI_XFR_ERR_MSK) != 0) {
+		rc = -EIO;
+	}
+
+	return rc;
 }
 
 /* TODO - alernate
  * don't check each packet, instead during transfer if a packet has
  * NULL pointer for data length of 0 skip it and move to next packet.
  */
+#define MAX_PIO_SIZE (13U * 0x7FFFU)
+
 static int check_mspi_xfer(const struct mspi_xfer *req)
 {
 	if ((req->cmd_length > 4U) || (req->addr_length > 4U)) {
@@ -835,16 +1192,20 @@ static int api_mspi_xec_qmspi_transceive(const struct device *controller,
 		goto transcv_exit;
 	}
 
+	xdat->ctx.xfer = *req;
 	xdat->ctx.packet_idx_max = req->num_packet;
 	xdat->ctx.packet_idx = 0;
 
+#ifdef XEC_MSPI_QMSPI_DEBUG
+	dbg_init_qmspi(controller);
+#endif
 	if (req->async) {
-		rc = mspi_xec_qmspi_xfr(controller, req);
+		rc = mspi_xec_qmspi_xfr(controller);
 		goto transcv_exit;
 	}
 
 	while (xdat->ctx.packet_idx < xdat->ctx.packet_idx_max) {
-		rc = mspi_xec_qmspi_xfr(controller, req);
+		rc = mspi_xec_qmspi_xfr(controller);
 		if (rc != 0) {
 			break;
 		}
@@ -859,22 +1220,97 @@ transcv_exit:
 	return rc;
 }
 
+/* QMSPI interrupt handler - Events
+ * Errors
+ * XfrDone
+ *   MSPI_DMA - if next pkt config & start else give sync sem (all done)
+ *   MSPI_PIO -
+ *     if MSPI_TX then TX FIFO should be empty then if next pkt config & start else give sync sem
+ *     if MSPI_RX if RX FIFO not empty copy data to pkt buffer, update length, give sync sem
+ * TX FIFO Empty - MSPI_PIO only
+ *   if more data, fill TX FIFO and exit ISR
+ * RX FIFO Full - MSPI_PIO only
+ *   drain RX FIFO storing data in pkt buffer and exit ISR
+ *
+ * Read JEDEC-ID
+ * One interrupt expected (XfrDone)
+ * TX cmd = 1 byte fits in TX FIFO. Xfr should not enable TX FIFO empty
+ * RX data = 3 bytes fits in RX FIFO. Xfr should not enable RX FIFO full.
+ * Status order checks in ISR issue:
+ *  XfrDone checked first and exist leaving data in RX FIFO!
+ */
 static void mspi_xec_qmspi_isr(const struct device *controller)
 {
 	const struct mspi_xec_qmspi_drv_cfg *xcfg = controller->config;
 	struct mspi_xec_qmspi_drv_dat *const xdat = controller->data;
+	/*	struct mspi_xec_dev_cfg *xdcfg = &xdat->xdev_cfg; */
+	struct xec_mspi_context *ctx = &xdat->ctx;
+	const struct mspi_xfer *req = &ctx->xfer;
+	/* TODO handle num_packet > 1 */
+	const struct mspi_xfer_packet *pkt = &req->packets[ctx->packet_idx];
 	mm_reg_t qb = xcfg->regbase;
 	uint32_t qstatus = qrd32(qb, XEC_QSPI_SR_OFS);
+	uint32_t qien = qrd32(qb, XEC_QSPI_IER_OFS);
+	uint32_t nb = 0;
 
+#ifdef XEC_MSPI_QMSPI_DEBUG
+	xdat->isr_count++;
+	dbg_qmspi_update(controller, qstatus, qien);
+#endif
 	xdat->qstatus = qstatus;
+	xdat->qien = qien;
 
-	qwr32(qb, XEC_QSPI_IER_OFS, 0);
+	/* qwr32(qb, XEC_QSPI_IER_OFS, 0); */
 	qwr32(qb, XEC_QSPI_SR_OFS, qstatus);
 	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
 
-	/* TODO */
+	if ((qstatus & QMSPI_XFR_ERR_MSK) != 0) {
+		sys_write32(BIT(XEC_QSPI_EXE_STOP_POS), qb + XEC_QSPI_EXE_OFS);
+		qwr32(qb, XEC_QSPI_IER_OFS, 0);
+		k_sem_give(&xdat->sync);
+		return;
+	}
 
-	k_sem_give(&xdat->sync);
+	if (req->xfer_mode == MSPI_DMA) {
+		/* TODO check for another packet */
+		ctx->packet_idx++;
+		if (ctx->packet_idx < ctx->packet_idx_max) {
+			/* TODO configure next packet and start */
+			LOG_INF("MSPI XEC ISR: TODO LDMA next packet");
+		}
+	} else { /* MSPI_PIO */
+		/* TX data phase */
+		if (((qstatus & qien) & BIT(XEC_QSPI_SR_TXB_EMPTY_POS)) != 0) {
+			/* TX FIFO is empty and interrupt enabled */
+			if (ctx->data_len < pkt->num_bytes) {
+				nb = qmspi_tx_fifo_fill(qb, (const uint8_t *)ctx->data_ptr,
+							(pkt->num_bytes - ctx->data_len));
+				ctx->data_ptr += nb;
+				ctx->data_len += nb;
+			}
+		}
+
+		/* RX FIFO not empty? */
+		if ((qstatus & BIT(XEC_QSPI_SR_RXB_EMPTY_POS)) == 0) {
+			if (pkt->dir == MSPI_RX) {
+				if (ctx->data_len < pkt->num_bytes) {
+					nb = qmspi_rx_fifo_drain(qb, ctx->data_ptr,
+								 (pkt->num_bytes - ctx->data_len));
+					ctx->data_ptr += nb;
+					ctx->data_len += nb;
+				}
+			} else {
+				qmspi_rx_fifo_discard(qb);
+			}
+		}
+	} /* end MSPI_PIO */
+
+	/* set on finish descriptor with Last = 1 or Error */
+	if (qstatus & BIT(XEC_QSPI_SR_XFR_DONE_POS)) {
+		/* TODO if next pkt then reconfig, start, and exit without giving sync */
+		qwr32(qb, XEC_QSPI_IER_OFS, 0);
+		k_sem_give(&xdat->sync);
+	}
 }
 
 #ifdef CONFIG_PM_DEVICE

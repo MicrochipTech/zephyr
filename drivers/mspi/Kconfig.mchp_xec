@@ -11,11 +11,13 @@ config MSPI_MCHP_XEC_QMSPI
 if MSPI_MCHP_XEC_QMSPI
 
 config MSPI_MCHP_XEC_QMSPI_LDMA
-	bool "QMSPI Local-DMA"
+	bool "QMSPI controller has local-DMA"
 	default y
+	depends on HAS_MCHP_MEC_QMSPI_LOCAL_DMA
+	select MSPI_DMA if HAS_MCHP_MEC_QMSPI_LOCAL_DMA
 	help
-	  Microchip XEC QMSPI controller has six local DMA
-	  channels split into three each for transmit and
-	  receive.
+	  This variant of Microchip XEC QMSPI controller
+	  include local-DMA channels. It does not require
+	  the Zephyr DMA driver.
 
-endif # MSPI_MCHP_XEC_QMSPI
+endif #MSPI_MCHP_XEC_QMSPI

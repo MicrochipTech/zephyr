@@ -57,10 +57,11 @@ config MSPI_TIMING
 
 config MSPI_DMA
 	bool "DMA support"
-	select DMA
+	select DMA if !MSPI_MCHP_XEC_QMSPI_LDMA
 	help
 	  Enables DMA capabilities, depending on the driver and hardware it
-	  runs on.
+	  runs on. Some controllers have internal DMA and do not require the
+	  Zephyr DMA driver.
 
 module = MSPI
 module-str = mspi
