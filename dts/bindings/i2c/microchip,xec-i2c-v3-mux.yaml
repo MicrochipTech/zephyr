@@ -1,0 +1,37 @@
+# Copyright (c) 2025 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C V3 port MUX.
+
+  Each instance of this node represents one physical I2C bus reached
+  through a specific port of a shared microchip,xec-i2c-v3 controller.
+  The MUX driver owns the pinctrl state for its SCL/SDA pins and, on
+  each transfer, asks the controller to switch to its port and bitrate
+  before forwarding the operation. The controller serializes concurrent
+  MUX access with its own mutex.
+
+  Child nodes of the MUX are the I2C devices on that physical bus.
+
+compatible: "microchip,xec-i2c-v3-mux"
+
+include:
+  - "i2c-controller.yaml"
+  - "pinctrl-device.yaml"
+
+properties:
+  controller:
+    type: phandle
+    required: true
+    description: Phandle to the microchip,xec-i2c-v3 controller node.
+
+  port-sel:
+    type: int
+    required: true
+    description: Port (0..15) to select on the controller for this bus.
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true

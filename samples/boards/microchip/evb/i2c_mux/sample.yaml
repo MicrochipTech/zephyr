@@ -1,0 +1,8 @@
+sample:
+  name: Microchip EVB I2C Mux sample
+tests:
+  sample.drivers.i2c
+    tags: i2c_mux
+    platform_allow:
+      - mec_assy6941/mec1653b_nsz
+      - mec_assy6941/mec1753_qlj

@@ -1,0 +1,37 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	port-sel = <0>;
+	pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	/* Port 0 */
+	i2c_mux0: i2c_mux@0 {
+		compatible = "microchip,xec-i2c-v3-mux";
+		reg = <0>;
+		controller = <&i2c_smb_0>;
+		port-sel = <0>;
+		pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
