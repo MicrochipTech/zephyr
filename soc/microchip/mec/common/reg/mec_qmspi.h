@@ -13,6 +13,9 @@
 
 #define XEC_QSPI_MAX_CS 2
 
+#define XEC_QSPI_FREQ_MAX MHZ(96)
+#define XEC_QSPI_FREQ_MIN ((XEC_QSPI_FREQ_MAX) / 0x10000U)
+
 /* Mode register */
 #define XEC_QSPI_MODE_OFS             0
 #define XEC_QSPI_MODE_ACTV_POS        0
@@ -248,10 +251,16 @@
 #define XEC_QSPI_TAPS_CR2_OFS 0xd8u
 
 /* Local DMA RX enable descriptor bit map register */
-#define XEC_QSPI_LDMA_RX_EN_OFS 0x100u
+#define XEC_QSPI_LDMA_RX_EN_OFS 0x100U
+
+/* alternate name */
+#define XEC_QSPI_LDMA_RX_DBM_OFS 0x100U
 
 /* Local DMA TX enable descriptor bit map register */
-#define XEC_QSPI_LDMA_TX_EN_OFS 0x104u
+#define XEC_QSPI_LDMA_TX_EN_OFS 0x104U
+
+/* alternate name */
+#define XEC_QSPI_LDMA_TX_DBM_OFS 0x104U
 
 /* Local DMA channels: first 3 are HW dedicated to RX, second 3 are HW dedicated to TX */
 #define XEC_QSPI_LDMA_RX_CH0  0
