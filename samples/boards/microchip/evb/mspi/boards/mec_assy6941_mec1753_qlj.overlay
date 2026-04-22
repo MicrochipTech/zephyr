@@ -1,0 +1,148 @@
+/*
+ * Copyright (c) 2022 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {};
+
+&qspi0 {
+	compatible = "microchip,xec-qmspi-controller";
+	status = "okay";
+
+	pinctrl-0 = <&qspi_shd_cs0_n_gpio055 &qspi_shd_cs1_n_gpio002
+		     &qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224
+		     &qspi_shd_io2_gpio227 &qspi_shd_io3_gpio016>;
+	pinctrl-names = "default";
+
+	clock-frequency = <DT_FREQ_M(96)>; /* Maximum frequency the controller can support */
+	op-mode = "MSPI_OP_MODE_CONTROLLER";
+	duplex = "MSPI_HALF_DUPLEX";
+	software-multiperipheral; /* REQUIRED */
+
+	/* HW CS0 dummy entry, HW CS1 dummy entry, GPIO-CE, GPIO-CE */
+/*
+	ce-gpios = <MCHP_GPIO_DECODE_276 0>,
+		   <MCHP_GPIO_DECODE_276 0>,
+		   <MCHP_GPIO_DECODE_020 GPIO_ACTIVE_LOW>,
+		   <MCHP_GPIO_DECODE_044 GPIO_ACTIVE_LOW>;
+*/
+/*
+	ce-gpios = <MCHP_GPIO_DECODE_020 GPIO_ACTIVE_LOW>;
+*/
+
+	/* W25Q128JV 3.3V flash JEDEC-ID = 0xef, 0x40, 0x18
+	 * supports:
+	 *   1-1-1 Page program 0x02
+	 *   1-1-4 Page program 0x32
+	 *   1-1-1 Read 0x03 <= 20 MHz, no dummy clocks
+	 *   1-1-1 Fast Read  0x0B plus 8 dummy clocks
+	 *   1-1-2 Fast Read Dual Output 0x3B plus 8 dummy clocks
+	 *   1-1-4 Fast Read Quad Output 0x6B plus 8 dummy clocks
+	 *   1-2-2 Fast Read Dual 0xBB plus mode byte
+	 *   1-4-4 Fast Read Quad 0xEB, plus mode byte
+	 *
+	 * W25Q128FW 1.8V flash JEDEC-ID = 0xef, 0x60, 0x18
+	 * Same opcodes as above
+	 *
+	 * Requires mspi-endian = "MSPI_BIG_ENDIAN";
+	 * because QSPI operates most-significant-bit-first and the MSPI flash driver
+	 * defaults to MSPI_LITTLE_ENDIAN if mspi-endian property is not present!
+	 */
+	spiflash0: qspi-nor-flash@0 {
+		compatible = "jedec,mspi-nor";
+		reg = <0>;
+
+		mspi-hardware-ce-num = <0>;
+		mspi-max-frequency = <DT_FREQ_M(4)>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0x6b>;
+		write-command = <0x32>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <8>;
+		size = <DT_SIZE_M(128)>;
+		jedec-id = [ef 40 18];
+		sfdp-bfp = [00];
+	};
+
+	spiflash1: qspi-nor-flash@1 {
+		compatible = "jedec,mspi-nor";
+		reg = <1>;
+
+		mspi-hardware-ce-num = <1>;
+		mspi-max-frequency = <DT_FREQ_M(4)>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0x6b>;
+		write-command = <0x32>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <8>;
+		size = <DT_SIZE_M(128)>;
+		jedec-id = [ef 40 18];
+		sfdp-bfp = [00];
+	};
+/*
+	spiflash2: qspi-nor-flash@2 {
+		compatible = "jedec,mspi-nor";
+		reg = <2>;
+
+		size = <DT_SIZE_M(128)>;
+		mspi-max-frequency = <8000000>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_4_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0xeb>;
+		write-command = <0x38>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <6>;
+		jedec-id = [ef 40 18];
+	};
+
+	spiflash3: qspi-nor-flash@3 {
+		compatible = "jedec,mspi-nor";
+		reg = <3>;
+
+		size = <DT_SIZE_M(128)>;
+		mspi-max-frequency = <8000000>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_4_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0xeb>;
+		write-command = <0x38>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <6>;
+		jedec-id = [ef 40 18];
+	};
+*/
+/*
+	spiflash0: qspi-nor-flash@0 {
+		compatible = "jedec,mspi-nor";
+		reg = <0>;
+
+		size = <DT_SIZE_M(128)>;
+		mspi-max-frequency = <8000000>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_4_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0xeb>;
+		write-command = <0x38>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <6>;
+		jedec-id = [18 40 ef];
+	};
+*/
+};
