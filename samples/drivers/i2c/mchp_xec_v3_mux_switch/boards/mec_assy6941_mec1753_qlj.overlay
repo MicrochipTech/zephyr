@@ -1,0 +1,67 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Overlay enabling the MEC5 I2C Network-Layer controller on i2c_smb_0
+ * with two MUX child ports on distinct SCL/SDA pin pairs and distinct
+ * clock frequencies, so the MUX has something to switch between.
+ *
+ * The DMA trigger-source numbers below (the second cell of each `dmas`
+ * entry) are SoC-specific. Confirm against the MEC1753 reference manual
+ * before wiring to real hardware; the values here follow the typical
+ * MEC5 convention where the four I2C_SMB0 endpoints occupy the first
+ * contiguous run of DMA device IDs.
+ */
+
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
+&dmac {
+	status = "okay";
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3-nl";
+	status = "okay";
+	port-sel = <0>;
+	buffer-size = <64>;
+	pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
+	pinctrl-names = "default";
+
+	/* <&dmac CHANNEL TRIGSRC>, order must be host-tx, host-rx,
+	 * target-tx, target-rx (matches dma-names below).
+	 */
+	dmas = <&dmac 0 0>,
+	       <&dmac 1 1>,
+	       <&dmac 2 2>,
+	       <&dmac 3 3>;
+	dma-names = "host-tx", "host-rx", "target-tx", "target-rx";
+
+	i2c_mux0: mec5-mux {
+		compatible = "microchip,xec-i2c-v3-mux";
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		controller = <&i2c_smb_0>;
+
+		i2c_port0: port@0 {
+			reg = <0>;
+			status = "okay";
+			clock-frequency = <I2C_BITRATE_STANDARD>;
+			pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
+			pinctrl-names = "default";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		i2c_port3: port@3 {
+			reg = <3>;
+			status = "okay";
+			clock-frequency = <I2C_BITRATE_FAST>;
+			pinctrl-0 = <&i2c03_scl_gpio010 &i2c03_sda_gpio007>;
+			pinctrl-names = "default";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+	};
+};
