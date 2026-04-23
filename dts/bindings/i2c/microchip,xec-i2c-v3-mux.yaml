@@ -1,0 +1,49 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC per-port I2C MUX.
+
+  Layered on top of a microchip,mec5-i2c-nl controller to provide
+  multiple virtual I2C buses, one per SCL/SDA pin-pair (port).
+  Switching ports requires a controller reset and PINCTRL reapply,
+  which this MUX serializes behind a mutex. Each child port carries
+  its own pinctrl-0 and clock-frequency; the MUX reprograms the
+  underlying controller on port or frequency change.
+
+compatible: "microchip,xec-i2c-v3-mux"
+
+properties:
+  "#address-cells":
+    required: true
+    const: 1
+  "#size-cells":
+    required: true
+    const: 0
+  controller:
+    type: phandle
+    required: true
+    description: |
+      Phandle to the underlying microchip,mec5-i2c-nl controller node.
+
+child-binding:
+  description: |
+    A single I2C port (SCL/SDA pin pair) exposed as its own bus.
+  include:
+    - "i2c-controller.yaml"
+    - "pinctrl-device.yaml"
+  properties:
+    reg:
+      type: array
+      required: true
+      description: Port number, 0..15, matching CONFIG[3:0].
+    clock-frequency:
+      type: int
+      required: true
+      description: |
+        Per-port SCL frequency in Hz. The MUX reprograms the
+        controller's bus clock and data-timing registers on switch.
+    pinctrl-0:
+      required: true
+    pinctrl-names:
+      required: true

@@ -92,6 +92,8 @@ zephyr_library_sources_ifdef(CONFIG_I2C_TELINK_B91 i2c_b91.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_WCH i2c_wch.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_XEC i2c_mchp_xec.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_XEC_V2 i2c_mchp_xec_v2.c)
+zephyr_library_sources_ifdef(CONFIG_I2C_MCHP_XEC_V3_MUX i2c_mchp_mec5_mux.c)
+zephyr_library_sources_ifdef(CONFIG_I2C_MCHP_XEC_V3_NL i2c_mchp_mec5_nl.c)
 zephyr_library_sources_ifdef(CONFIG_I2C_XILINX_AXI i2c_xilinx_axi.c)
 # zephyr-keep-sorted-stop
 

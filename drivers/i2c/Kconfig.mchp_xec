@@ -18,3 +18,50 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_V3_NL
+	bool "Microchip XEC V3 I2C Network-Layer DMA driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_V3_I2C_NL_ENABLED
+	select PINCTRL
+	select DMA
+	help
+	  Enable the Microchip XEC V3 I2C/SMB controller driver that drives
+	  transfers end-to-end through the Network-Layer engine and DMA
+	  (no Command-register interrupts). Supports controller and target
+	  modes, a driver-owned DMA buffer sized by devicetree, Write /
+	  Read / Write-Read protocols with PAUSE-state handling, and
+	  controller-TX chunking for messages larger than the buffer.
+
+config I2C_MCHP_XEC_V3_MUX
+	bool "Microchip MEC5 per-port I2C MUX"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_MUX_ENABLED
+	depends on I2C_MCHP_XEC_V3_NL
+	select PINCTRL
+	help
+	  Enable the Microchip MEC5 per-port I2C MUX driver. Layered on
+	  top of a microchip,mec5-i2c-nl controller to expose each
+	  SCL/SDA pin pair (port, CONFIG[3:0]) as its own I2C bus with
+	  per-port pinctrl and clock-frequency. Serializes controller
+	  reconfiguration (stop+reset, pinctrl reapply, port/timing
+	  program) behind a mutex.
+
+if I2C_MCHP_XEC_V3_MUX
+
+config I2C_MCHP_XEC_V3_MUX_ROOT_INIT_PRIORITY
+	int "XEC V3 I2C MUX root init priority"
+	default I2C_INIT_PRIORITY
+	help
+	  Init priority for the XEC V3 I2C MUX root device. Must be lower
+	  than I2C_MCHP_XEC_V3_MUX_PORT_INIT_PRIORITY so the root is ready
+	  before its port children initialize.
+
+config I2C_MCHP_XEC_V3_MUX_PORT_INIT_PRIORITY
+	int "XEC V3 I2C MUX port (child) init priority"
+	default 51
+	help
+	  Init priority for XEC V3 I2C MUX port (child) devices. Must be
+	  higher than I2C_MCHP_XEC_V3_MUX_ROOT_INIT_PRIORITY.
+
+endif # I2C_MCHP_XEC_V3_MUX

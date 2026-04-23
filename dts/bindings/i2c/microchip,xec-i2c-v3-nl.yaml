@@ -1,0 +1,73 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip MEC5 I2C/SMB controller in Network-Layer mode.
+
+  Transfers are driven end-to-end by DMA using the controller's
+  Network-Layer engine; the Command-register interrupts are not used.
+  The driver owns a single DMA buffer (size from buffer-size) that is
+  shared across controller transmit, target transmit, and target
+  receive paths.
+
+compatible: "microchip,xec-i2c-v3-nl"
+
+include:
+  - "i2c-controller.yaml"
+  - "pinctrl-device.yaml"
+  - "microchip,dmec-ecia-girq.yaml"
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  port-sel:
+    type: int
+    required: true
+    description: |
+      Default pin-pair port (CONFIG[3:0], range 0..15) selected at
+      driver init before the controller is enabled. If a MUX driver
+      is layered on top, this is the port the controller boots with;
+      the MUX reconfigures it on the first per-child transfer.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR index + bit position for peripheral sleep enable
+      and reset. Uses MCHP_XEC_SCR_ENCODE().
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  dmas:
+    required: true
+    description: |
+      DMA channels for the four endpoints, in this order:
+      host-tx, host-rx, target-tx, target-rx.
+      Each entry uses the XEC DMA controller's two-cell form:
+      <&dmac CHANNEL SLOT>.
+
+  dma-names:
+    required: true
+    description: |
+      Must be the four strings "host-tx", "host-rx",
+      "target-tx", "target-rx" in that order to match dmas.
+
+  buffer-size:
+    type: int
+    default: 64
+    description: |
+      Size in bytes of the driver-owned DMA buffer. Shared across
+      controller-TX, target-TX, and target-RX. Controller-TX messages
+      larger than this are chunked across multiple DMA reloads from
+      the DMA-channel callback; the Network-Layer engine runs the
+      I2C side through the full length with no gap.
+      Must be large enough to hold the target-RX worst case
+      (address byte + expected max data + hardware trailing-zero).
