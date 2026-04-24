@@ -2,20 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 description: |
-  Microchip MEC5 I2C/SMB controller in Network-Layer mode.
+  Microchip XEC I2C/SMB controller v3 (MEC174x, MEC175x, MEC165xB, and newer).
+  using the hardware network layer plus DMA.
 
-  Transfers are driven end-to-end by DMA using the controller's
-  Network-Layer engine; the Command-register interrupts are not used.
-  The driver owns a single DMA buffer (size from buffer-size) that is
-  shared across controller transmit, target transmit, and target
-  receive paths.
+  This node represents the physical I2C controller hardware. Zephyr applications
+  do not bind here; they bind to child port nodes (microchip,xec-i2c-v3-port),
+  which select which pin pair the controller drives.
+
+  Live SCL/SDA state is read from the controller's Bit Bang Control register on
+  v3.8+ hardware, so no sda-gpios/scl-gpios are required.
 
 compatible: "microchip,xec-i2c-v3-nl"
 
-include:
-  - "i2c-controller.yaml"
-  - "pinctrl-device.yaml"
-  - "microchip,dmec-ecia-girq.yaml"
+include: "microchip,dmec-ecia-girq.yaml"
 
 properties:
   reg:
@@ -24,27 +23,15 @@ properties:
   interrupts:
     required: true
 
-  port-sel:
-    type: int
+  girqs:
     required: true
-    description: |
-      Default pin-pair port (CONFIG[3:0], range 0..15) selected at
-      driver init before the controller is enabled. If a MUX driver
-      is layered on top, this is the port the controller boots with;
-      the MUX reconfigures it on the first per-child transfer.
 
   pcr-scr:
     type: int
     required: true
     description: |
-      Encoded PCR index + bit position for peripheral sleep enable
-      and reset. Uses MCHP_XEC_SCR_ENCODE().
-
-  pinctrl-0:
-    required: true
-
-  pinctrl-names:
-    required: true
+      Encoded PCR index and bit position used for peripheral sleep enable and
+      reset. Build with MCHP_XEC_SCR_ENCODE(slp_idx, bitpos).
 
   dmas:
     required: true
@@ -71,3 +58,9 @@ properties:
       I2C side through the full length with no gap.
       Must be large enough to hold the target-RX worst case
       (address byte + expected max data + hardware trailing-zero).
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
