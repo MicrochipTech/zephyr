@@ -36,8 +36,12 @@
  *	pin 5 = VTR1
  *	pin 6 = GND
  */
+
+/* original V2 driver */
+/*
 &i2c_smb_0 {
 	compatible = "microchip,xec-i2c-v2";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
 	port-sel = <0>;
 	pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
 	pinctrl-names = "default";
@@ -55,6 +59,7 @@
 
 &i2c_smb_1 {
 	compatible = "microchip,xec-i2c-v2";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
 	port-sel = <4>;
 	pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
 	pinctrl-names = "default";
@@ -68,6 +73,69 @@
 		address-width = <16>;
 		size = <1024>;
 	};
+};
+*/
+
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
+
+/* V3 driver includes port switching requiring a different DT
+ * V3 driver only supports version 3.8 I2C_SMB controller in
+ * MEC174x/5x/165xB and onwards.
+ */
+
+/ {
+	i2c0_p0: i2c-port0 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		eeprom0: eeprom@54 {
+			compatible = "zephyr,i2c-target-eeprom";
+			reg = <0x54>;
+			address-width = <16>;
+			size = <1024>;
+		};
+	};
+
+	i2c0_p4: i2c-port4 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(1, 4)>;
+		controller = <&i2c_smb_1>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		eeprom1: eeprom@56 {
+			compatible = "zephyr,i2c-target-eeprom";
+			reg = <0x56>;
+			address-width = <16>;
+			size = <1024>;
+		};
+	};
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
 };
 
 &i2c00_sda_gpio003 {
