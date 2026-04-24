@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Exercises the Microchip XEC I2C v3 driver on the MEC1753 evaluation board.
+ *
+ * Topology under test:
+ *
+ *   i2c_smb_0 (controller)
+ *     ├── i2c0_p0  port 0, 400 kHz, GPIO003/GPIO004  (alias: i2c-0)
+ *     └── i2c0_p4  port 4, 100 kHz, GPIO143/GPIO144
+ *
+ *   i2c_smb_1 (controller)
+ *     └── i2c1_p1  port 1, 1 MHz,  GPIO130/GPIO131
+ *
+ * The two ports on i2c_smb_0 exercise port switching + per-port frequency:
+ * every time traffic alternates between i2c0_p0 and i2c0_p4 the driver must
+ * PCR-reset the controller, reprogram timing, and wait the ~15 ms pin-state
+ * resync. Consecutive transfers on the same port skip that penalty.
+ *
+ * Board jumper reference (from mec_assy6941 schematics):
+ *   JP15  7-8 / 4-5    = I2C00_SCL (GPIO004) / I2C00_SDA (GPIO003)
+ *   JP20  1-2 / 4-5    = I2C04_SCL (GPIO144) / I2C04_SDA (GPIO143)
+ *   JP70 19-20/21-22   = 7.5K pull-ups to VTR1 on I2C00 lines
+ */
+
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
+
+/ {
+	aliases {
+		i2c-0 = &i2c0_p0;
+	};
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	i2c0_p0: i2c-port@0 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_FAST>;
+		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+
+	i2c0_p4: i2c-port@4 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <4>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 4)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	i2c1_p1: i2c-port@1 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <1>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(1, 1)>;
+		controller = <&i2c_smb_1>;
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>;
+		pinctrl-0 = <&i2c01_sda_gpio130 &i2c01_scl_gpio131>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+/* The pinctrl descriptor nodes need open-drain forced on I2C pads — this is
+ * a property override on the pinctrl fragment, independent of sda-gpios /
+ * scl-gpios (which the v3 binding does not accept; the driver reads live
+ * pin state from the BBCR register instead).
+ */
+&i2c00_sda_gpio003 { drive-open-drain; };
+&i2c00_scl_gpio004 { drive-open-drain; };
+&i2c04_sda_gpio143 { drive-open-drain; };
+&i2c04_scl_gpio144 { drive-open-drain; };
+&i2c01_sda_gpio130 { drive-open-drain; };
+&i2c01_scl_gpio131 { drive-open-drain; };
