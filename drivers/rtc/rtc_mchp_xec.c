@@ -494,5 +494,5 @@ static const struct rtc_xec_config rtc_xec_config_0 = {
 
 static struct rtc_xec_data rtc_xec_dev_data;
 
-DEVICE_DT_INST_DEFINE(0, rtc_xec_init, NULL, &rtc_xec_dev_data, &rtc_xec_config_0, PRE_KERNEL_1,
-		      CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &rtc_xec_api);
+DEVICE_DT_INST_DEFINE(0, rtc_xec_init, NULL, &rtc_xec_dev_data, &rtc_xec_config_0, POST_KERNEL,
+		      CONFIG_RTC_INIT_PRIORITY, &rtc_xec_api);
