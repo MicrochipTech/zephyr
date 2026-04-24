@@ -18,3 +18,37 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_V3
+	bool "Microchip XEC I2C v3 driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_ENABLED
+	depends on SOC_SERIES_MEC174X || SOC_SERIES_MEC175X || SOC_SERIES_MEC165XB
+	select PINCTRL
+	help
+	  Microchip XEC I2C v3 controller driver. Supports MEC174x, MEC175x,
+	  MEC165xB, and newer SoCs (all v3.8+ I2C_SMB hardware). Does not
+	  support MEC15xx or MEC172x. Uses interrupt-driven byte-mode transfers
+	  for both controller and target modes, supports two target addresses,
+	  and supports port switching with per-port frequency via a companion
+	  port driver bound to compatible "microchip,xec-i2c-v3-port".
+
+config I2C_MCHP_XEC_V3_PORT_INIT_PRIORITY
+	int "Microchip XEC I2C v3 port init priority"
+	default 51
+	depends on I2C_MCHP_XEC_V3
+	help
+	  Initialization priority for the I2C v3 port driver. Must be greater
+	  than CONFIG_I2C_INIT_PRIORITY so that the controller device exists
+	  when the port driver dereferences its "controller" phandle during
+	  init. The port driver applies pinctrl before enabling the controller,
+	  which the Microchip hardware requires.
+
+config I2C_MCHP_XEC_V3_TGT_BUF_SIZE
+	int "Microchip XEC I2C v3 target-mode receive buffer size (bytes)"
+	default 256
+	depends on I2C_MCHP_XEC_V3 && I2C_TARGET_BUFFER_MODE
+	help
+	  Size of the per-controller buffer used to accumulate bytes received
+	  in I2C target mode before invoking the buf_write_received callback.
+	  Only used when CONFIG_I2C_TARGET_BUFFER_MODE is enabled.
