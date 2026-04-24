@@ -14,54 +14,57 @@
  * contiguous run of DMA device IDs.
  */
 
+#include <zephyr/dt-bindings/dma/mchp_xec_cdma.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 
-&dmac {
+&cdma {
 	status = "okay";
 };
 
 &i2c_smb_0 {
 	compatible = "microchip,xec-i2c-v3-nl";
 	status = "okay";
-	port-sel = <0>;
+	#address-cells = <1>;
+	#size-cells = <0>;
 	buffer-size = <64>;
-	pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
-	pinctrl-names = "default";
 
-	/* <&dmac CHANNEL TRIGSRC>, order must be host-tx, host-rx,
-	 * target-tx, target-rx (matches dma-names below).
+	/* <&dmac CHANNEL TRIGSRC>, order must be host-tx-rx,
+	 * target-tx-rx, (matches dma-names below).
 	 */
-	dmas = <&dmac 0 0>,
-	       <&dmac 1 1>,
-	       <&dmac 2 2>,
-	       <&dmac 3 3>;
-	dma-names = "host-tx", "host-rx", "target-tx", "target-rx";
+	dmas = <&cdma 0  MCHP_XEC_DMA_I2C0_HOST>,
+	       <&cdma 1  MCHP_XEC_DMA_I2C0_TARG>;
+	dma-names = "host-tx-rx", "target-tx-rx";
 
-	i2c_mux0: mec5-mux {
-		compatible = "microchip,xec-i2c-v3-mux";
-		status = "okay";
-		#address-cells = <1>;
-		#size-cells = <0>;
+	i2c_p0: i2c-port@0 {
+		compatible = "microchip,xec-i2c-v3-port";
+		reg = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
 		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
 
-		i2c_port0: port@0 {
-			reg = <0>;
-			status = "okay";
-			clock-frequency = <I2C_BITRATE_STANDARD>;
-			pinctrl-0 = <&i2c00_scl_gpio004 &i2c00_sda_gpio003>;
-			pinctrl-names = "default";
-			#address-cells = <1>;
-			#size-cells = <0>;
-		};
+	i2c_p4: i2c-port@4 {
+		compatible = "microchip,xec-i2c-v3-port;
+		reg = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 4)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
 
-		i2c_port3: port@3 {
-			reg = <3>;
-			status = "okay";
-			clock-frequency = <I2C_BITRATE_FAST>;
-			pinctrl-0 = <&i2c03_scl_gpio010 &i2c03_sda_gpio007>;
-			pinctrl-names = "default";
-			#address-cells = <1>;
-			#size-cells = <0>;
-		};
+	i2c_p5: i2c-port@5 {
+		compatible = "microchip,xec-i2c-v3-port;
+		reg = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 5)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c05_sda_gpio141 &i2c05_scl_gpio142>;
+		pinctrl-names = "default";
+		status = "okay";
 	};
 };
