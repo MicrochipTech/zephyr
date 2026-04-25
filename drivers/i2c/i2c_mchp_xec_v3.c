@@ -288,7 +288,14 @@ static int xec_v3_reconfigure(const struct device *ctrl, uint8_t port, uint32_t 
 	if (xec_v3_port_has_targets(data, port)) {
 		/* Arm target-mode interrupts and enable AAT interrupt too. */
 		xec_cr_wr(rb, XEC_V3_CR_BASE | BIT(XEC_I2C_CR_PIN_POS));
+		/* DO NOT ENABLE AAT interrupt
+		 * AAT fires on HW match of the 7-bit address on clock 7, we don't want this.
+		 * Let PIN fire on clock 9 after HW has ACK'd the address.
+		 * NOTE: writing any OWN address field to non-zero enabled target match logic
+		 */
+#if 0
 		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+#endif
 	}
 #endif
 
@@ -1092,10 +1099,17 @@ int mchp_xec_i2c_ctrl_target_register(const struct device *ctrl, uint8_t port,
 
 	if (data->active_port == port && data->hw_enabled) {
 		xec_v3_apply_target_oa(ctrl);
+#if 0
+		/* NOT REQUIRED
+		 * Writing a non-zero target address to Own Address register enables
+		 * target detection hardware and will generate a PIN interrupt on target
+		 * match after HW has ACK'd the address.
+		 */
 		/* Enable AAT IRQ now that a target exists on the active port. */
 		sys_set_bit(((const struct i2c_mchp_xec_v3_cfg *)ctrl->config)->base_addr +
 				    XEC_I2C_CFG_OFS,
 			    XEC_I2C_CFG_AAT_IEN_POS);
+#endif
 	}
 	return 0;
 }
@@ -1115,6 +1129,7 @@ int mchp_xec_i2c_ctrl_target_unregister(const struct device *ctrl, uint8_t port,
 			data->targets[port][i].cfg = NULL;
 			if (data->active_port == port && data->hw_enabled) {
 				xec_v3_apply_target_oa(ctrl);
+#if 0 /* NOT REQUIRED. We do not need the AAT interrupt at clock 7 */
 				if (!xec_v3_port_has_targets(data, port)) {
 					sys_clear_bit(((const struct i2c_mchp_xec_v3_cfg *)
 							       ctrl->config)
@@ -1122,6 +1137,7 @@ int mchp_xec_i2c_ctrl_target_unregister(const struct device *ctrl, uint8_t port,
 							      XEC_I2C_CFG_OFS,
 						      XEC_I2C_CFG_AAT_IEN_POS);
 				}
+#endif
 			}
 			return 0;
 		}
