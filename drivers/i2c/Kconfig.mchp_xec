@@ -19,7 +19,7 @@ config I2C_XEC_V2
 	help
 	  Enable the Microchip XEC I2C V2 driver.
 
-config I2C_XEC_V3
+config I2C_MCHP_XEC_V3
 	bool "XEC Microchip I2C version 3 driver"
 	default y
 	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_ENABLED
@@ -27,3 +27,15 @@ config I2C_XEC_V3
 	help
 	  Enable the Microchip XEC I2C V3 byte mode driver for
 	  v3.8 I2C controller in MEC174x/5x/165xB chips.
+
+config I2C_MCHP_XEC_V3_PORT_INIT_PRIORITY
+	int "Microchip XEC I2C v3 port init priority"
+	default 51
+	depends on I2C_MCHP_XEC_V3
+	help
+	  Initialization priority for the I2C v3 port driver. Must be greater
+	  than CONFIG_I2C_INIT_PRIORITY so that the controller device exists
+	  when the port driver dereferences its "controller" phandle during
+	  init. The port driver applies pinctrl before enabling the controller,
+	  which the Microchip hardware requires.
+

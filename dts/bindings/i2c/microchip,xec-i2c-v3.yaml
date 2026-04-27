@@ -5,7 +5,7 @@ description: Microchip XEC I2C-SMB V3 controller byte mode driver
 
 compatible: "microchip,xec-i2c-v3"
 
-include: [i2c-controller.yaml, pinctrl-device.yaml]
+include: [base.yaml]
 
 properties:
   reg:
@@ -13,16 +13,6 @@ properties:
 
   interrupts:
     required: true
-
-  port-sel:
-    type: int
-    required: true
-    description: |
-      XEC I2C controller has a hardware MUX to select among
-      multiple I2C ports. I2C pins must be set to their I2C
-      mode using PINCTRL. The driver can then select the pins
-      by programming the port select register field in the
-      controller's configuration register.
 
   girqs:
     type: array
@@ -36,12 +26,6 @@ properties:
       I2C controller PCR register index and bit position encoded
       in an integer.
 
-  pinctrl-0:
-    required: true
-
-  pinctrl-names:
-    required: true
-
   target-buf-write-req-buffer-size:
     type: int
     default: 8
@@ -50,3 +34,9 @@ properties:
       a unique target buffer write request buffer size in bytes.
       This property is only used if the driver is built with
       I2C target buffer mode enabled.
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0

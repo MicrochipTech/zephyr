@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C/SMB v3 port.
+
+  A port represents one SCL/SDA pin pair that a microchip,xec-i2c-v3 controller
+  can drive. Zephyr I2C applications bind to port nodes, not to the controller.
+  Multiple ports may reference the same controller via the "controller" phandle;
+  only one port is active at a time, and switching ports triggers a controller
+  reset + pin-state resync.
+
+  Each port carries its own clock-frequency and pinctrl state, so two ports on
+  the same controller may run at different speeds.
+
+compatible: "microchip,xec-i2c-v3-port"
+
+include: ["i2c-controller.yaml", "pinctrl-device.yaml"]
+
+properties:
+  controller:
+    type: phandle
+    required: true
+    description: Phandle to the microchip,xec-i2c-v3 controller this port drives.
+
+  port:
+    type: int
+    required: true
+    description: |
+      Encoded controller/port selector. Bits [7:4] are the controller index and
+      bits [3:0] are the port index for that controller. Build the value with
+      MCHP_XEC_I2C_CTRL_PORT(ctrl, port) from
+      <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>.
+
+  clock-frequency:
+    required: true
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true

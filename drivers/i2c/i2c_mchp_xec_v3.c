@@ -210,11 +210,11 @@ struct i2c_xec_v3_data {
 	struct k_mutex lock_mut;
 	struct k_sem sync_sem;
 	uint32_t i2c_config;
-	uint32_t clock_freq;
+	uint32_t active_freq;
 	uint32_t i2c_compl;
 	uint8_t i2c_cr_shadow;
 	uint8_t i2c_sr;
-	uint8_t port_sel;
+	uint8_t active_port;
 	uint8_t wraddr;
 	uint8_t state;
 	uint8_t cm_dir;
@@ -398,16 +398,42 @@ static void prog_target_addresses(const struct device *dev)
 }
 #endif /* CONFIG_I2C_TARGET */
 
+static int get_freq_from_i2c_config(uint32_t i2c_config, uint32_t *freq_hz)
+{
+	uint32_t freq_cfg = I2C_SPEED_GET(i2c_config);
+
+	if (freq_hz == NULL) {
+		return -EINVAL;
+	}
+
+	switch (freq_cfg) {
+	case I2C_BITRATE_STANDARD:
+		*freq_hz =  KHZ(100);
+		break;
+	case I2C_BITRATE_FAST:
+		*freq_hz = KHZ(400);
+		break;
+	case I2C_BITRATE_FAST_PLUS:
+		*freq_hz = KHZ(1000);
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
 static int i2c_xec_reset_config(const struct device *dev, uint32_t config, uint8_t port)
 {
 	const struct i2c_xec_v3_config *devcfg = dev->config;
 	struct i2c_xec_v3_data *const data = dev->data;
 	mem_addr_t rb = devcfg->base;
+	int rc = 0;
 	uint32_t val = 0;
 	uint8_t crval = 0;
 
 	data->i2c_config = config;
-	data->port_sel = port;
+	data->active_port = port;
 	data->i2c_cr_shadow = 0;
 
 	data->state = XEC_I2C_STATE_CLOSED;
@@ -415,7 +441,11 @@ static int i2c_xec_reset_config(const struct device *dev, uint32_t config, uint8
 	data->i2c_sr = 0;
 	data->i2c_compl = 0;
 	data->mdone = 0;
-	data->port_sel = port;
+
+	rc = get_freq_from_i2c_config(config, &data->active_freq);
+	if (rc != 0) {
+		return rc;
+	}
 
 	soc_xec_pcr_sleep_en_clear(devcfg->enc_pcr);
 	/* reset I2C controller using PCR reset feature */
@@ -433,7 +463,7 @@ static int i2c_xec_reset_config(const struct device *dev, uint32_t config, uint8
 #endif
 
 	/* timing registers */
-	xec_i2c_prog_standard_timing(dev, data->clock_freq);
+	xec_i2c_prog_standard_timing(dev, data->active_freq);
 
 	/* enable output driver and ACK logic */
 	crval = XEC_I2C_CR_PIN_ESO_ENI_ACK;
@@ -464,7 +494,7 @@ static int i2c_xec_bb_recover(const struct device *dev)
 	uint8_t bbcr = 0;
 	uint8_t lines = 0u;
 
-	i2c_xec_reset_config(dev, data->i2c_config, data->port_sel);
+	i2c_xec_reset_config(dev, data->i2c_config, data->active_port);
 
 	lines = get_lines(dev);
 	if ((lines & XEC_I2C_LINES_MSK) == XEC_I2C_LINES_MSK) {
@@ -1847,6 +1877,105 @@ static int i2c_xec_pm_action(const struct device *dev, enum pm_device_action act
 }
 #endif
 
+/* ------------------------------------------------------------------ */
+/* Public API (port driver → controller driver)                       */
+/* ------------------------------------------------------------------ */
+
+void mchp_xec_i2c_ctrl_mutex_lock(const struct device *ctrl)
+{
+	struct i2c_xec_v3_data *data = ctrl->data;
+
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
+}
+
+void mchp_xec_i2c_ctrl_mutex_unlock(const struct device *ctrl)
+{
+	struct i2c_xec_v3_data *data = ctrl->data;
+
+	k_mutex_unlock(&data->lock_mut);
+}
+
+/* Port driver configure locks does its stuff,
+ * call mchp_xec_i2c_ctrl_mutex_lock
+ * call this routine
+ * call mchp_xec_i2c_ctrl_mutex_unlock
+ */
+int mchp_xec_i2c_ctrl_configure(const struct device *ctrl, uint8_t port, uint32_t freq_hz)
+{
+	if (port >= XEC_I2C_MAX_PORTS) {
+		return -EINVAL;
+	}
+#if 0
+	return xec_v3_select(ctrl, port, freq_hz);
+#else
+	return -ENOTSUP;
+#endif
+}
+
+int mchp_xec_i2c_ctrl_get_speed(const struct device *ctrl, uint8_t port, uint32_t *speed)
+{
+	struct i2c_xec_v3_data *data = ctrl->data;
+
+	ARG_UNUSED(port);
+	if (speed == NULL) {
+		return -EINVAL;
+	}
+#if 0
+	if (!data->hw_enabled) { /* TODO */
+		return -EIO;
+	}
+#endif
+#if 0
+	switch (data->active_freq) { /* TODO */
+	case KHZ(100):
+		*speed = I2C_SPEED_STANDARD << I2C_SPEED_SHIFT;
+		break;
+	case KHZ(400):
+		*speed = I2C_SPEED_FAST << I2C_SPEED_SHIFT;
+		break;
+	case MHZ(1):
+		*speed = I2C_SPEED_FAST_PLUS << I2C_SPEED_SHIFT;
+		break;
+	default:
+		return -ERANGE;
+	}
+#else
+	*speed = I2C_SPEED_GET(data->i2c_config);
+#endif
+
+	return 0;
+}
+
+int mchp_xec_i2c_ctrl_transfer(const struct device *ctrl, uint8_t port,
+			       uint32_t freq_hz, struct i2c_msg *msgs,
+			       uint8_t num_msgs, uint16_t addr)
+{
+	return -ENOTSUP; /* TODO implement */
+}
+
+int mchp_xec_i2c_ctrl_recover_bus(const struct device *ctrl, uint8_t port,
+				  uint32_t freq_hz,
+				  const struct pinctrl_dev_config *pcfg)
+{
+	return -ENOTSUP; /* TODO implement */
+}
+
+#ifdef CONFIG_I2C_TARGET
+int mchp_xec_i2c_ctrl_target_register(const struct device *ctrl, uint8_t port,
+				      struct i2c_target_config *cfg)
+{
+	return -ENOTSUP; /* TODO Implement */
+}
+
+int mchp_xec_i2c_ctrl_target_unregister(const struct device *ctrl, uint8_t port,
+					struct i2c_target_config *cfg)
+{
+	return -ENOTSUP; /* TODO implement */
+}
+#endif
+
+/* -------------------------------------------------------------------------- */
+
 static int i2c_xec_init(const struct device *dev)
 {
 	const struct i2c_xec_v3_config *cfg = dev->config;
@@ -1922,17 +2051,17 @@ static DEVICE_API(i2c, i2c_xec_driver_api) = {
 			    DEVICE_DT_INST_GET(i), 0);                                             \
 		irq_enable(DT_INST_IRQN(i));                                                       \
 	}                                                                                          \
-	static struct i2c_xec_v3_data i2c_xec_v3_data_##i = {.port_sel =                           \
-								     DT_INST_PROP(i, port_sel)};   \
+	static struct i2c_xec_v3_data i2c_xec_v3_data_##i = { \
+		.active_freq = 0, \
+		.active_port = 0xffU, \
+	}; \
 	static const struct i2c_xec_v3_config i2c_xec_v3_cfg_##i = {                               \
 		.base = (mem_addr_t)DT_INST_REG_ADDR(i),                                           \
-		.clock_freq = DT_INST_PROP(i, clock_frequency),                                    \
 		.irq_config_func = i2c_xec_irq_config_func_##i,                                    \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),                                         \
 		.girq = (uint8_t)XEC_I2C_GIRQ_DT(i),                                               \
 		.girq_pos = (uint8_t)XEC_I2C_GIRQ_POS_DT(i),                                       \
 		.enc_pcr = (uint8_t)DT_INST_PROP(i, pcr_scr),                                      \
-		.port = (uint8_t)DT_INST_PROP(i, port_sel),                                        \
 		IF_ENABLED(CONFIG_I2C_TARGET,                                                      \
 			(.wakeup_source = DT_INST_PROP_OR(i, wakeup_source, 0))) };                \
 	PM_DEVICE_DT_INST_DEFINE(i, i2c_xec_pm_action);                                            \
