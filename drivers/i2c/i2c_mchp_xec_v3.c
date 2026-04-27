@@ -25,8 +25,6 @@ LOG_MODULE_REGISTER(i2c_xec_v3, CONFIG_I2C_LOG_LEVEL);
 #include "i2c-priv.h"
 #include "i2c_mchp_xec_regs.h"
 
-/* #define XEC_I2C_V3_USE_KWORKQ */
-
 /* Microchip MEC I2C controller using byte mode.
  * This driver is for HW version 3.8 and above.
  */
@@ -203,13 +201,10 @@ struct i2c_xec_target {
 };
 
 struct i2c_xec_v3_data {
-#ifdef XEC_I2C_V3_USE_KWORKQ
-	struct k_work kworkq;
-#endif
 	const struct device *dev;
 	struct k_mutex lock_mut;
 	struct k_sem sync_sem;
-	uint32_t i2c_config;
+/*	uint32_t i2c_config; */
 	uint32_t active_freq;
 	uint32_t i2c_compl;
 	uint8_t i2c_cr_shadow;
@@ -266,6 +261,30 @@ static void xec_i2c_cr_write(const struct device *dev, uint8_t ctrl_val)
 
 	data->i2c_cr_shadow = ctrl_val;
 	sys_write8(ctrl_val, devcfg->base + XEC_I2C_CR_OFS);
+}
+
+static bool xec_i2c_is_enabled(const struct device *dev)
+{
+	const struct i2c_xec_v3_config *devcfg = dev->config;
+	mm_reg_t rb = devcfg->base;
+
+	if (sys_test_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS) != 0) {
+		return true;
+	}
+
+	return false;
+}
+
+/* The controller can support non-standard frequecies up to 1MHz but this driver does not
+ * support other frequencies at this time.
+ */
+static bool is_freq_valid(uint32_t freq_hz)
+{
+	if ((freq_hz == KHZ(100)) || (freq_hz == KHZ(400)) || (freq_hz == MHZ(1))) {
+		return true;
+	}
+
+	return false;
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -423,17 +442,14 @@ static int get_freq_from_i2c_config(uint32_t i2c_config, uint32_t *freq_hz)
 	return 0;
 }
 
-static int i2c_xec_reset_config(const struct device *dev, uint32_t config, uint8_t port)
+static int i2c_xec_reset_config(const struct device *dev, uint32_t freq_hz, uint8_t port)
 {
 	const struct i2c_xec_v3_config *devcfg = dev->config;
 	struct i2c_xec_v3_data *const data = dev->data;
 	mem_addr_t rb = devcfg->base;
-	int rc = 0;
 	uint32_t val = 0;
 	uint8_t crval = 0;
 
-	data->i2c_config = config;
-	data->active_port = port;
 	data->i2c_cr_shadow = 0;
 
 	data->state = XEC_I2C_STATE_CLOSED;
@@ -442,10 +458,12 @@ static int i2c_xec_reset_config(const struct device *dev, uint32_t config, uint8
 	data->i2c_compl = 0;
 	data->mdone = 0;
 
-	rc = get_freq_from_i2c_config(config, &data->active_freq);
-	if (rc != 0) {
-		return rc;
+	if (is_freq_valid(freq_hz) == false) {
+		return -EINVAL;
 	}
+
+	data->active_freq = freq_hz;
+	data->active_port = port;
 
 	soc_xec_pcr_sleep_en_clear(devcfg->enc_pcr);
 	/* reset I2C controller using PCR reset feature */
@@ -494,7 +512,7 @@ static int i2c_xec_bb_recover(const struct device *dev)
 	uint8_t bbcr = 0;
 	uint8_t lines = 0u;
 
-	i2c_xec_reset_config(dev, data->i2c_config, data->active_port);
+	i2c_xec_reset_config(dev, data->active_freq, data->active_port);
 
 	lines = get_lines(dev);
 	if ((lines & XEC_I2C_LINES_MSK) == XEC_I2C_LINES_MSK) {
@@ -591,7 +609,7 @@ static int i2c_xec_recover_bus(const struct device *dev)
 	LOG_ERR("I2C attempt bus recovery\n");
 
 	/* Try controller reset first */
-	ret = i2c_xec_reset_config(dev, data->i2c_config, data->port_sel);
+	ret = i2c_xec_reset_config(dev, data->active_freq, data->active_port);
 	if (ret == 0) {
 		return 0; /* controller reset cleared the error */
 	}
@@ -609,6 +627,7 @@ static int i2c_xec_recover_bus(const struct device *dev)
 static int i2c_xec_cfg(const struct device *dev, uint32_t dev_config_raw, uint8_t port)
 {
 	struct i2c_xec_v3_data *const data = dev->data;
+	uint32_t freq_hz = 0;
 
 	if (port >= XEC_I2C_MAX_PORTS) {
 		return -EINVAL;
@@ -616,19 +635,35 @@ static int i2c_xec_cfg(const struct device *dev, uint32_t dev_config_raw, uint8_
 
 	switch (I2C_SPEED_GET(dev_config_raw)) {
 	case I2C_SPEED_STANDARD:
-		data->clock_freq = KHZ(100);
+		freq_hz = KHZ(100);
 		break;
 	case I2C_SPEED_FAST:
-		data->clock_freq = KHZ(400);
+		freq_hz = KHZ(400);
 		break;
 	case I2C_SPEED_FAST_PLUS:
-		data->clock_freq = MHZ(1);
+		freq_hz = MHZ(1);
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	return i2c_xec_reset_config(dev, dev_config_raw, port);
+	return i2c_xec_reset_config(dev, freq_hz, port);
+}
+
+static int xec_v3_select(const struct device *dev, uint8_t port, uint32_t freq_hz)
+{
+	struct i2c_xec_v3_data *const data = dev->data;
+
+	if (xec_i2c_is_enabled(dev) && (data->active_port == port) &&
+	    (data->active_freq == freq_hz)) {
+		return 0;
+	}
+
+	if (is_freq_valid(freq_hz) == false) {
+		return -EINVAL;
+	}
+
+	return i2c_xec_reset_config(dev, freq_hz, port);
 }
 
 /* i2c_configure API */
@@ -646,7 +681,7 @@ static int i2c_xec_configure(const struct device *dev, uint32_t dev_config_raw)
 		return rc;
 	}
 
-	rc = i2c_xec_cfg(dev, dev_config_raw, data->port_sel);
+	rc = i2c_xec_cfg(dev, dev_config_raw, data->active_port);
 
 	k_mutex_unlock(&data->lock_mut);
 
@@ -700,7 +735,15 @@ static int i2c_xec_get_config(const struct device *dev, uint32_t *dev_config)
 		return -EINVAL;
 	}
 
-	dcfg = data->i2c_config;
+	if (data->active_freq == KHZ(100)) {
+		dcfg = I2C_SPEED_SET(I2C_BITRATE_STANDARD);
+	} else if (data->active_freq == KHZ(400)) {
+		dcfg = I2C_SPEED_SET(I2C_BITRATE_FAST);
+	} else if (data->active_freq == MHZ(1)) {
+		dcfg = I2C_SPEED_SET(I2C_BITRATE_FAST_PLUS);
+	} else {
+		return -ERANGE;
+	}
 
 #ifdef CONFIG_I2C_TARGET
 	if (data->tg.targ_bitmap == 0) {
@@ -1134,19 +1177,23 @@ static void i2c_xec_target_arm_wake(const struct device *dev, bool arm_wake)
  * 3. Check if address is one of the fixed address if yes turn on the fixed address
  * 4. Check if one of the two programmable addresses is available (0), if yes configure it
  *    else return no address available (-ENOSPC).
+ * Enabling AAT interrupt is NOT necessary
+ * OA addresses != 0 enables address match logic which generates the PIN 1->0 (service) interrupt
+ * after the I2C hardware ACK's the matching address. This is what we want.
+ * The AAT interrupt in I2C.Config register generates an interrupt at the end of the 7th I2C clock
+ * if the addresses match. This is NOT what we want because if the ISR is entered before I2C has
+ * shifted in the nR/W (8th) bit, the value in I2C.DATA or I2C.ShadAddr is invalid.
+ *
  * PM notes:
  * PM and PM_DEVICE are mutually exclusive. If PM is enabled we must configure wake
  * when registering a target because the kernel does inform drivers of PM state entry/exit.
  * If PM_DEVICE is enabled we enable/disable wake in the PM callback registered with the kernel.
  */
-static int i2c_xec_target_register(const struct device *dev, struct i2c_target_config *cfg)
+static int i2c_xec_reg_targ(const struct device *dev, struct i2c_target_config *cfg, uint8_t port)
 {
 	const struct i2c_xec_v3_config *drvcfg = dev->config;
 	struct i2c_xec_v3_data *data = dev->data;
 	struct i2c_xec_target *ptg = &data->tg;
-#if 0
-	mm_reg_t rb = drvcfg->base;
-#endif
 	int rc = 0;
 
 	rc = check_targ_config(cfg);
@@ -1154,47 +1201,40 @@ static int i2c_xec_target_register(const struct device *dev, struct i2c_target_c
 		return rc;
 	}
 
-	rc = k_mutex_lock(&data->lock_mut, K_MSEC(XEC_I2C_TM_REGISTER_WAIT_MS));
+	rc = -EINVAL;
+	if (port == data->active_port) {
+		rc = config_target_address(dev, cfg, 1u);
+
+		if (ptg->targ_bitmap != 0) {
+			soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, XEC_I2C_GIRQ_EN);
+		}
+	}
+
+	return rc;
+}
+
+static int i2c_xec_target_register(const struct device *dev, struct i2c_target_config *cfg)
+{
+	struct i2c_xec_v3_data *data = dev->data;
+	int rc = k_mutex_lock(&data->lock_mut, K_MSEC(XEC_I2C_TM_REGISTER_WAIT_MS));
+
 	if (rc != 0) {
 		return -EBUSY;
 	}
 
-	rc = config_target_address(dev, cfg, 1u);
 
-	if (ptg->targ_bitmap != 0) {
-/* !!!! Enabling AAT interrupt is NOT necessary !!!!
- * OA addresses != 0 enables address match logic which generates the PIN 1->0 (service) interrupt
- * after the I2C hardware ACK's the matching address. This is what we want.
- * The AAT interrupt in I2C.Config register generates an interrupt at the end of the 7th I2C clock
- * if the addresses match. This is NOT what we want because if the ISR is entered before I2C has
- * shifted in the nR/W (8th) bit, the value in I2C.DATA or I2C.ShadAddr is invalid.
- */
-#if 0
-		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
-#endif
-		soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, XEC_I2C_GIRQ_EN);
-	} else {
-#if 0
-		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
-#endif
-		soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, XEC_I2C_GIRQ_DIS);
-	}
+	rc = i2c_xec_reg_targ(dev, cfg, data->active_port);
 
 	k_mutex_unlock(&data->lock_mut);
 
 	return rc;
 }
 
-static int i2c_xec_target_unregister(const struct device *dev, struct i2c_target_config *cfg)
+static int i2c_xec_unreg_target(const struct device *dev, struct i2c_target_config *cfg,
+				uint8_t port)
 {
-#if 0
-	const struct i2c_xec_v3_config *drvcfg = dev->config;
+
 	struct i2c_xec_v3_data *data = dev->data;
-	struct i2c_xec_target *ptg = &data->tg;
-	mm_reg_t rb = drvcfg->base;
-#else
-	struct i2c_xec_v3_data *data = dev->data;
-#endif
 	int rc = 0;
 
 	rc = check_targ_config(cfg);
@@ -1202,24 +1242,27 @@ static int i2c_xec_target_unregister(const struct device *dev, struct i2c_target
 		return rc;
 	}
 
-	rc = k_mutex_lock(&data->lock_mut, K_MSEC(XEC_I2C_TM_REGISTER_WAIT_MS));
+	rc = -EINVAL;
+	if (port == data->active_port) {
+		/* if all targets unregistered, this I2C controller will not respond to
+		 * I2C addresses on the bus.
+		 */
+		rc = config_target_address(dev, cfg, 0);
+	}
+
+	return rc;
+}
+
+static int i2c_xec_target_unregister(const struct device *dev, struct i2c_target_config *cfg)
+{
+	struct i2c_xec_v3_data *data = dev->data;
+	int rc = k_mutex_lock(&data->lock_mut, K_MSEC(XEC_I2C_TM_REGISTER_WAIT_MS));
+
 	if (rc != 0) {
 		return -EBUSY;
 	}
 
-	/* if all targets unregistered, this I2C controller will not respond to
-	 * I2C addresses on the bus.
-	 */
-	rc = config_target_address(dev, cfg, 0);
-
-#if 0 /* don't disable interrupt on unregister */
-	if (ptg->targ_bitmap == 0) {
-#if 0
-		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
-#endif
-		soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, XEC_I2C_GIRQ_DIS);
-	}
-#endif
+	rc = i2c_xec_unreg_target(dev, cfg, data->active_port);
 
 	k_mutex_unlock(&data->lock_mut);
 
@@ -1776,24 +1819,6 @@ static void i2c_xec_v3_handler(const struct device *dev)
 	}
 }
 
-#ifdef XEC_I2C_V3_USE_KWORKQ
-/* SonarQube does not like GNU extensions required for CONTAINER_OF macro.
- * We work around this by placing struct k_work as the first member of struct i2c_xec_v3_data.
- * Therefore the pointer to struct k_work passed to xec_i2c_kwork_thread is also the address
- * of this instance's struct i2c_xec_v3_data.
- */
-BUILD_ASSERT(offsetof(struct i2c_xec_v3_data, kworkq) == 0,
-	     "Member kworkq must be located as the first memory of struct i2c_xec_v3_data");
-
-static void xec_i2c_kwork_thread(struct k_work *work)
-{
-	struct i2c_xec_v3_data *data = (struct i2c_xec_v3_data *)work;
-	const struct device *dev = data->dev;
-
-	i2c_xec_v3_handler(dev);
-}
-#endif /* XEC_I2C_V3_USE_KWORKQ */
-
 /* Controller Mode ISR
  * We need to disable interrupt before exiting ISR.
  */
@@ -1806,14 +1831,8 @@ static void i2c_xec_isr(const struct device *dev)
 	 */
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_DIS);
 
-#ifdef XEC_I2C_V3_USE_KWORKQ
-	struct i2c_xec_v3_data *data = dev->data;
-
-	k_work_submit(&data->kworkq);
-#else
 	i2c_xec_v3_handler(dev);
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_EN);
-#endif
 }
 
 #ifdef CONFIG_PM_DEVICE
@@ -1895,21 +1914,22 @@ void mchp_xec_i2c_ctrl_mutex_unlock(const struct device *ctrl)
 	k_mutex_unlock(&data->lock_mut);
 }
 
-/* Port driver configure locks does its stuff,
+/* !!!! TODO !!!!
+ * Port driver calls mchp_xec_i2c_ctrl_mutex_lock BEFORE calling the following internal
+ * APIs. We must implement internal code that does not take the lock.
+ * Port driver configure locks does its stuff,
  * call mchp_xec_i2c_ctrl_mutex_lock
  * call this routine
  * call mchp_xec_i2c_ctrl_mutex_unlock
  */
+
 int mchp_xec_i2c_ctrl_configure(const struct device *ctrl, uint8_t port, uint32_t freq_hz)
 {
 	if (port >= XEC_I2C_MAX_PORTS) {
 		return -EINVAL;
 	}
-#if 0
+
 	return xec_v3_select(ctrl, port, freq_hz);
-#else
-	return -ENOTSUP;
-#endif
 }
 
 int mchp_xec_i2c_ctrl_get_speed(const struct device *ctrl, uint8_t port, uint32_t *speed)
@@ -1920,28 +1940,24 @@ int mchp_xec_i2c_ctrl_get_speed(const struct device *ctrl, uint8_t port, uint32_
 	if (speed == NULL) {
 		return -EINVAL;
 	}
-#if 0
-	if (!data->hw_enabled) { /* TODO */
+
+	if (xec_i2c_is_enabled(ctrl) == false) {
 		return -EIO;
 	}
-#endif
-#if 0
-	switch (data->active_freq) { /* TODO */
+
+	switch (data->active_freq) {
 	case KHZ(100):
-		*speed = I2C_SPEED_STANDARD << I2C_SPEED_SHIFT;
+		*speed = I2C_SPEED_SET(I2C_SPEED_STANDARD);
 		break;
 	case KHZ(400):
-		*speed = I2C_SPEED_FAST << I2C_SPEED_SHIFT;
+		*speed = I2C_SPEED_SET(I2C_SPEED_FAST);
 		break;
 	case MHZ(1):
-		*speed = I2C_SPEED_FAST_PLUS << I2C_SPEED_SHIFT;
+		*speed = I2C_SPEED_SET(I2C_SPEED_FAST_PLUS);
 		break;
 	default:
 		return -ERANGE;
 	}
-#else
-	*speed = I2C_SPEED_GET(data->i2c_config);
-#endif
 
 	return 0;
 }
@@ -1950,27 +1966,80 @@ int mchp_xec_i2c_ctrl_transfer(const struct device *ctrl, uint8_t port,
 			       uint32_t freq_hz, struct i2c_msg *msgs,
 			       uint8_t num_msgs, uint16_t addr)
 {
-	return -ENOTSUP; /* TODO implement */
+	struct i2c_xec_v3_data *data = ctrl->data;
+	int rc = 0;
+
+	if ((num_msgs == 0) || (msgs == NULL)) {
+		return -EINVAL;
+	}
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->tg.targ_bitmap != 0) {
+		return -EBUSY;
+	}
+#endif
+
+	/* TODO Caller took lock. Call an internal transfer API that doesn't
+	 * grab the lock.
+	 */
+
+	return -ENOTSUP;
 }
 
 int mchp_xec_i2c_ctrl_recover_bus(const struct device *ctrl, uint8_t port,
 				  uint32_t freq_hz,
 				  const struct pinctrl_dev_config *pcfg)
 {
-	return -ENOTSUP; /* TODO implement */
+	uint32_t i2c_device_cfg = 0;
+	int rc = 0;
+
+	if (pcfg != NULL) {
+		/* Make sure the port's pins are enabled */
+		rc = pinctrl_apply_state(pcfg, PINCTRL_STATE_DEFAULT);
+		if (rc != 0) {
+			return rc;
+		}
+	}
+
+	rc = mchp_xec_i2c_ctrl_get_speed(ctrl, port, &i2c_device_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+
+	i2c_device_cfg |= I2C_MODE_CONTROLLER;
+
+	rc = i2c_xec_cfg(ctrl, i2c_device_cfg, port);
+	if (rc == 0) {
+		return 0; /* reset cleared issue */
+	}
+
+	rc = i2c_xec_bb_recover(ctrl);
+	if (rc != 0) {
+		return rc;
+	}
+
+	return i2c_xec_cfg(ctrl, i2c_device_cfg, port);
 }
 
 #ifdef CONFIG_I2C_TARGET
 int mchp_xec_i2c_ctrl_target_register(const struct device *ctrl, uint8_t port,
 				      struct i2c_target_config *cfg)
 {
-	return -ENOTSUP; /* TODO Implement */
+	if (port >= XEC_I2C_MAX_PORTS) {
+		return -EINVAL;
+	}
+
+	return i2c_xec_reg_targ(ctrl, cfg, port);
 }
 
 int mchp_xec_i2c_ctrl_target_unregister(const struct device *ctrl, uint8_t port,
 					struct i2c_target_config *cfg)
 {
-	return -ENOTSUP; /* TODO implement */
+	if (port >= XEC_I2C_MAX_PORTS) {
+		return -EINVAL;
+	}
+
+	return i2c_xec_unreg_target(ctrl, cfg, port);
 }
 #endif
 
@@ -1989,7 +2058,6 @@ static int i2c_xec_init(const struct device *dev)
 	data->i2c_cr_shadow = 0;
 	data->i2c_sr = 0;
 	data->mdone = 0;
-	data->port_sel = cfg->port;
 
 	rc = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
 	if (rc != 0) {
@@ -2010,9 +2078,6 @@ static int i2c_xec_init(const struct device *dev)
 		return rc;
 	}
 
-#ifdef XEC_I2C_V3_USE_KWORKQ
-	k_work_init(&data->kworkq, &xec_i2c_kwork_thread);
-#endif
 	k_mutex_init(&data->lock_mut);
 	k_sem_init(&data->sync_sem, 0, 1);
 
@@ -2051,10 +2116,10 @@ static DEVICE_API(i2c, i2c_xec_driver_api) = {
 			    DEVICE_DT_INST_GET(i), 0);                                             \
 		irq_enable(DT_INST_IRQN(i));                                                       \
 	}                                                                                          \
-	static struct i2c_xec_v3_data i2c_xec_v3_data_##i = { \
-		.active_freq = 0, \
-		.active_port = 0xffU, \
-	}; \
+	static struct i2c_xec_v3_data i2c_xec_v3_data_##i = {                                      \
+		.active_freq = 0,                                                                  \
+		.active_port = XEC_I2C_CFG_MAX_PORT,                                               \
+	};                                                                                         \
 	static const struct i2c_xec_v3_config i2c_xec_v3_cfg_##i = {                               \
 		.base = (mem_addr_t)DT_INST_REG_ADDR(i),                                           \
 		.irq_config_func = i2c_xec_irq_config_func_##i,                                    \
