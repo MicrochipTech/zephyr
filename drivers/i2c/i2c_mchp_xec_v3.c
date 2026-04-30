@@ -417,6 +417,7 @@ static void prog_target_addresses(const struct device *dev)
 }
 #endif /* CONFIG_I2C_TARGET */
 
+#if 0 /* UNUSED */
 static int get_freq_from_i2c_config(uint32_t i2c_config, uint32_t *freq_hz)
 {
 	uint32_t freq_cfg = I2C_SPEED_GET(i2c_config);
@@ -441,6 +442,7 @@ static int get_freq_from_i2c_config(uint32_t i2c_config, uint32_t *freq_hz)
 
 	return 0;
 }
+#endif /* 0 */
 
 static int i2c_xec_reset_config(const struct device *dev, uint32_t freq_hz, uint8_t port)
 {
@@ -626,7 +628,6 @@ static int i2c_xec_recover_bus(const struct device *dev)
 /* Configure I2C controller for speed and hardware port if parameters are support */
 static int i2c_xec_cfg(const struct device *dev, uint32_t dev_config_raw, uint8_t port)
 {
-	struct i2c_xec_v3_data *const data = dev->data;
 	uint32_t freq_hz = 0;
 
 	if (port >= XEC_I2C_MAX_PORTS) {
@@ -901,6 +902,66 @@ static int i2c_xec_xfr_begin(const struct device *dev, uint16_t addr)
 	return 0;
 }
 
+static int i2c_xec_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+                       uint16_t addr)
+{
+	const struct i2c_xec_v3_config *devcfg = dev->config;
+	struct i2c_xec_v3_data *const data = dev->data;
+	mem_addr_t rb = devcfg->base;
+	int rc = 0;
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->tg.targ_bitmap != 0) {
+		return -EBUSY;
+	}
+#endif
+	pm_device_busy_set(dev);
+	k_sem_reset(&data->sync_sem);
+
+	memset(&data->cm_xfr, 0, sizeof(struct i2c_xec_cm_xfr));
+
+	rc = check_msgs(msgs, num_msgs);
+	if (rc != 0) {
+		goto xfr_unlock;
+	}
+
+	if (data->state != XEC_I2C_STATE_OPEN) {
+		rc = check_lines(dev);
+		data->i2c_sr = sys_read8(rb + XEC_I2C_SR_OFS);
+		data->i2c_compl = sys_read32(rb + XEC_I2C_CMPL_OFS);
+
+		if (rc || (data->i2c_sr & BIT(XEC_I2C_SR_BER_POS))) {
+			rc = i2c_xec_recover_bus(dev);
+		}
+	}
+
+	if (rc != 0) {
+		data->state = XEC_I2C_STATE_CLOSED;
+		goto xfr_unlock;
+	}
+
+	data->state = XEC_I2C_STATE_OPEN;
+
+	data->msg_idx = 0;
+	data->num_msgs = num_msgs;
+	data->msgs = msgs;
+
+	rc = i2c_xec_xfr_begin(dev, addr);
+	if (rc) { /* if error issue STOP if bus is still owned by controller */
+		i2c_xec_stop(dev, 0);
+	}
+
+xfr_unlock:
+	if (soc_test_bit8(rb + XEC_I2C_SR_OFS, XEC_I2C_SR_NBB_POS) != 0) {
+		data->cm_dir = XEC_I2C_DIR_NONE;
+		data->state = XEC_I2C_STATE_CLOSED;
+	}
+
+	pm_device_busy_clear(dev);
+
+	return rc;
+}
+
 /* i2c_transfer API - Synchronous using interrupts
  * The call wrapper in i2c.h returns if num_msgs is 0.
  * It does not check for msgs being a NULL pointer and accesses msgs.
@@ -916,61 +977,13 @@ static int i2c_xec_xfr_begin(const struct device *dev, uint16_t addr)
 static int i2c_xec_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
 			    uint16_t addr)
 {
-	const struct i2c_xec_v3_config *devcfg = dev->config;
 	struct i2c_xec_v3_data *const data = dev->data;
-	mem_addr_t rb = devcfg->base;
 	int rc = 0;
 
 	k_mutex_lock(&data->lock_mut, K_FOREVER);
-#ifdef CONFIG_I2C_TARGET
-	if (data->tg.targ_bitmap != 0) {
-		k_mutex_unlock(&data->lock_mut);
-		return -EBUSY;
-	}
-#endif
-	pm_device_busy_set(dev);
-	k_sem_reset(&data->sync_sem);
 
-	memset(&data->cm_xfr, 0, sizeof(struct i2c_xec_cm_xfr));
+	rc = i2c_xec_xfr(dev, msgs, num_msgs, addr);
 
-	rc = check_msgs(msgs, num_msgs);
-	if (rc != 0) {
-		goto xec_unlock;
-	}
-
-	if (data->state != XEC_I2C_STATE_OPEN) {
-		rc = check_lines(dev);
-		data->i2c_sr = sys_read8(rb + XEC_I2C_SR_OFS);
-		data->i2c_compl = sys_read32(rb + XEC_I2C_CMPL_OFS);
-
-		if (rc || (data->i2c_sr & BIT(XEC_I2C_SR_BER_POS))) {
-			rc = i2c_xec_recover_bus(dev);
-		}
-	}
-
-	if (rc) {
-		data->state = XEC_I2C_STATE_CLOSED;
-		goto xec_unlock;
-	}
-
-	data->state = XEC_I2C_STATE_OPEN;
-
-	data->msg_idx = 0;
-	data->num_msgs = num_msgs;
-	data->msgs = msgs;
-
-	rc = i2c_xec_xfr_begin(dev, addr);
-	if (rc) { /* if error issue STOP if bus is still owned by controller */
-		i2c_xec_stop(dev, 0);
-	}
-
-xec_unlock:
-	if ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_NBB_POS)) == 0) {
-		data->cm_dir = XEC_I2C_DIR_NONE;
-		data->state = XEC_I2C_STATE_CLOSED;
-	}
-
-	pm_device_busy_clear(dev);
 	k_mutex_unlock(&data->lock_mut);
 
 	return rc;
@@ -1201,7 +1214,7 @@ static int i2c_xec_reg_targ(const struct device *dev, struct i2c_target_config *
 		return rc;
 	}
 
-	rc = -EINVAL;
+	rc = -EBUSY;
 	if (port == data->active_port) {
 		rc = config_target_address(dev, cfg, 1u);
 
@@ -1242,7 +1255,7 @@ static int i2c_xec_unreg_target(const struct device *dev, struct i2c_target_conf
 		return rc;
 	}
 
-	rc = -EINVAL;
+	rc = -EBUSY;
 	if (port == data->active_port) {
 		/* if all targets unregistered, this I2C controller will not respond to
 		 * I2C addresses on the bus.
@@ -1966,24 +1979,18 @@ int mchp_xec_i2c_ctrl_transfer(const struct device *ctrl, uint8_t port,
 			       uint32_t freq_hz, struct i2c_msg *msgs,
 			       uint8_t num_msgs, uint16_t addr)
 {
-	struct i2c_xec_v3_data *data = ctrl->data;
 	int rc = 0;
 
 	if ((num_msgs == 0) || (msgs == NULL)) {
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_I2C_TARGET
-	if (data->tg.targ_bitmap != 0) {
-		return -EBUSY;
+	rc = xec_v3_select(ctrl, port, freq_hz);
+	if (rc != 0) {
+		return rc;
 	}
-#endif
 
-	/* TODO Caller took lock. Call an internal transfer API that doesn't
-	 * grab the lock.
-	 */
-
-	return -ENOTSUP;
+	return i2c_xec_xfr(ctrl, msgs, num_msgs, addr);
 }
 
 int mchp_xec_i2c_ctrl_recover_bus(const struct device *ctrl, uint8_t port,
@@ -2049,16 +2056,17 @@ static int i2c_xec_init(const struct device *dev)
 {
 	const struct i2c_xec_v3_config *cfg = dev->config;
 	struct i2c_xec_v3_data *data = dev->data;
+#if 0
 	int rc = 0;
 	uint32_t i2c_config = 0;
-
+#endif
 	data->dev = dev;
 	data->state = XEC_I2C_STATE_CLOSED;
 	data->i2c_compl = 0;
 	data->i2c_cr_shadow = 0;
 	data->i2c_sr = 0;
 	data->mdone = 0;
-
+#if 0
 	rc = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
 	if (rc != 0) {
 		LOG_ERR("pinctrl setup failed (%d)", rc);
@@ -2077,10 +2085,11 @@ static int i2c_xec_init(const struct device *dev)
 	if (rc != 0) {
 		return rc;
 	}
-
+#endif
 	k_mutex_init(&data->lock_mut);
 	k_sem_init(&data->sync_sem, 0, 1);
 
+	/* Need this */
 	if (cfg->irq_config_func) {
 		cfg->irq_config_func();
 	}
