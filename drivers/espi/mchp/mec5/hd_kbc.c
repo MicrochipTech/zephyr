@@ -85,7 +85,7 @@ static int mec5_kbc_lpc_request(const struct device *dev,
 			pos = MEC_KBC_STS_OBF_POS;
 		} else if (op == E8042_IBF_HAS_CHAR) {
 			msk = BIT(MEC_KBC_STS_IBF_POS);
-			pos = MEC_KBC_STS_OBF_POS;
+			pos = MEC_KBC_STS_IBF_POS;
 		}
 		kbc_hw_sts = mec_hal_kbc_status(regs);
 		*data = (kbc_hw_sts & msk) >> pos;
