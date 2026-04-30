@@ -39,3 +39,19 @@ config I2C_MCHP_XEC_V3_PORT_INIT_PRIORITY
 	  init. The port driver applies pinctrl before enabling the controller,
 	  which the Microchip hardware requires.
 
+if I2C_MCHP_XEC_V3
+
+config I2C_MCHP_XEC_V3_INSTRUMENT_ISR
+	bool "Microchip XEC I2C v3 driver instrumentation"
+	help
+	  Add instrumentation to the driver
+
+config I2C_MCHP_XEC_V3_INSTRUMENT_ISR_ENTRIES
+	int "Microchip XEC I2C v3 driver instrumentation number of entries"
+	default 256
+	depends on I2C_MCHP_XEC_V3_INSTRUMENT_ISR
+	help
+	  The number of entries in instrumentation array.
+
+endif #I2C_MCHP_XEC_V3
+
