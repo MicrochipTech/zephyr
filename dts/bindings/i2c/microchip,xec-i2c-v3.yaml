@@ -1,0 +1,51 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C/SMB controller v3 (MEC174x, MEC175x, MEC165xB, and newer).
+
+  This node represents the physical I2C controller hardware. Zephyr applications
+  do not bind here; they bind to child port nodes (microchip,xec-i2c-v3-port),
+  which select which pin pair the controller drives.
+
+  Live SCL/SDA state is read from the controller's Bit Bang Control register on
+  v3.8+ hardware, so no sda-gpios/scl-gpios are required.
+
+compatible: "microchip,xec-i2c-v3"
+
+include: "microchip,dmec-ecia-girq.yaml"
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  girqs:
+    required: true
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR index and bit position used for peripheral sleep enable and
+      reset. Build with MCHP_XEC_SCR_ENCODE(slp_idx, bitpos).
+
+  target-buffer-size:
+    type: int
+    default: 32
+    description: |
+      Size in bytes of the target-mode receive buffer used when the driver
+      is built with CONFIG_I2C_TARGET and CONFIG_I2C_TARGET_BUFFER_MODE. The
+      driver accumulates bytes received in target-write phases into this
+      buffer and delivers them to the application via buf_write_received on
+      STOP or Repeated-START. Set per controller so each instance can be
+      tuned for the expected target-write payload. Ignored when target
+      buffer mode is not built in.
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
