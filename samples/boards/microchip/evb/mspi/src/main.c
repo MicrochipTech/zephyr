@@ -122,7 +122,7 @@ static uint8_t buf1[SPI_TEST_BUF1_SIZE];
 #define SPI_TEST_ADDR1 0xc10000u
 
 #define SPI_FILL_VAL         0x69u
-#define SPI_TEST_BUFFER_SIZE (4U * 1024U)
+#define SPI_TEST_BUFFER_SIZE (8U * 1024U)
 
 struct test_buf {
 	union {
@@ -179,6 +179,96 @@ static int spi_flash_format_addr(uint32_t spi_addr, size_t addrsz, uint8_t *buf,
 
 	for (size_t i = 0; i < addrsz; i++) {
 		buf[i] = spi_addr >> ((addrsz - i - 1u) * 8);
+	}
+
+	return 0;
+}
+#endif
+
+#if 0
+/* Max erase size is flash sector
+ * if region crosses flash sector return an error
+ */
+static int program_flash_region(const struct device *flash_dev, off_t region_offset,
+				size_t region_size, uint8_t *buf)
+{
+	uint32_t rsz = 0, sector_ofs = 0, sector_sz = 0, ofs_in_sector = 0;
+	int rc = 0;
+
+	LOG_INF("Flash %u bytes at 0x%0x", region_size, (uint32_t)region_offset);
+
+	sector_sz = SPI_FLASH_SECTOR_SIZE;
+	sector_ofs = region_offset & ~(SPI_FLASH_SECTOR_SIZE - 1U);
+	rsz = region_size;
+	if ((region_offset + region_size) >= (sector_ofs + sector_sz)) {
+		LOG_ERR("Requested program size exceeds flash sector size");
+		return -EINVAL;
+	}
+
+	memset(tb1.b, 0, sector_sz);
+	memset(tb2.b, 0, sector_sz);
+
+	/* read sector */
+	rc = flash_read(flash_dev, sector_ofs, tb1.b, sector_sz);
+	if (rc != 0) {
+		LOG_ERR("Flash read error (%d)", rc);
+		return rc;
+	}
+
+	/* Does sector contain our region data? */
+	ofs_in_sector = region_offset - sector_ofs;
+	rc = memcmp(buf, &tb1.b[ofs_in_sector], rsz);
+	if (rc == 0) {
+		LOG_INF("Sector at 0x%0x contains data to be written. No programming necessary",
+			sector_ofs);
+		return 0;
+	}
+
+	LOG_INF("Erase the sector at 0x%0x", sector_ofs);
+	rc = flash_erase(flash_dev, sector_ofs, SPI_FLASH_SECTOR_SIZE);
+	if (rc != 0) {
+		LOG_ERR("Flash sector erase error (%d)", rc);
+		return rc;
+	}
+
+	LOG_INF("Read back sector to verify it is erased");
+
+	rc = flash_read(flash_dev, sector_ofs, tb2.b, sector_sz);
+	if (rc != 0) {
+		LOG_ERR("Flash read error (%d)", rc);
+		return rc;
+	}
+
+	if (!is_data_buf_filled_with(t2b.b, sector_sz, 0xffU)) {
+		LOG_ERR("Sector did not erase (not filled with 0xFF");
+		return -EIO;
+	}
+
+	LOG_INF("Update original sector with new data");
+	memcpy(t1b.b[ofs_in_sector], buf, rsz);
+
+	LOG_INF("Program sector");
+	rc = flash_write(flash_dev, sector_ofs, (const void *)tb1.b, sector_sz);
+	if (rc != 0) {
+		LOG_ERR("Flash write error (%d)", rc);
+		return rc;
+	}
+
+	LOG_INF("Read back sector and verify contents");
+	memcpy(t2b.b, 0, sector_sz);
+
+	rc = flash_read(flash_dev, sector_ofs, t2b.b, sector_sz);
+	if (rc != 0) {
+		LOG_ERR("Flash read error (%d)", rc);
+		return rc;
+	}
+
+	rc = memcmp(t1b.b, t2b.b, sector_sz);
+	if (rc == 0) {
+		LOG_INF("Sector updated: PASS");
+	} else {
+		LOG_ERR("Sector contents mismatch: FAIL");
+		rc = -EIO;
 	}
 
 	return 0;
@@ -293,8 +383,9 @@ int main(void)
 	/* SPI_FLASH_TEST_ADDR */
 	memset(&tb1.w, 0x55, SPI_FLASH_SECTOR_SIZE);
 
-	flash_offset = SPI_FLASH_TEST_ADDR;
-	flash_len = SPI_FLASH_PAGE_SIZE;
+	/* flash_offset = SPI_FLASH_TEST_ADDR; */
+	flash_len = SPI_FLASH_SECTOR_SIZE;
+	flash_offset = sys_rand32_get() & 0xfff000U;
 
 	LOG_INF("Flash read %u bytes at 0x%0x", flash_len, (uint32_t)flash_offset);
 
@@ -335,6 +426,7 @@ int main(void)
 	}
 
 	fill_buffer(tb2.b, flash_len, BUF_FILL_RAND_VAL);
+	LOG_HEXDUMP_INF(tb2.b, 16U, "First 16-bytes of new data");
 
 	LOG_INF("Write to flash");
 
@@ -350,12 +442,15 @@ int main(void)
 		LOG_ERR("Flash read back error (%d)", rc);
 	}
 
+	LOG_HEXDUMP_INF(tb1.b, 16U, "First 16-bytes of sector");
+
 	rc = memcmp(tb1.b, tb2.b, flash_len);
 	if (rc == 0) {
 		LOG_INF("Flash read back matches data written: PASS");
 	} else {
 		LOG_INF("Flash read back does NOT match data written: FAIL");
 	}
+
 app_end:
 	LOG_INF("Program End");
 
