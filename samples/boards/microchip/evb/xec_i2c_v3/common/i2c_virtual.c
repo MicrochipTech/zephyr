@@ -24,8 +24,8 @@ int i2c_virtual_runtime_configure(const struct device *dev, uint32_t config)
 	return 0;
 }
 
-static struct i2c_target_config *find_address(struct i2c_virtual_data *data,
-					     uint16_t address, bool is_10bit)
+static struct i2c_target_config *find_address(struct i2c_virtual_data *data, uint16_t address,
+					      bool is_10bit)
 {
 	struct i2c_target_config *cfg = NULL;
 	sys_snode_t *node;
@@ -45,8 +45,7 @@ static struct i2c_target_config *find_address(struct i2c_virtual_data *data,
 }
 
 /* Attach I2C targets */
-int i2c_virtual_target_register(const struct device *dev,
-			       struct i2c_target_config *config)
+int i2c_virtual_target_register(const struct device *dev, struct i2c_target_config *config)
 {
 	struct i2c_virtual_data *data = dev->data;
 
@@ -55,8 +54,7 @@ int i2c_virtual_target_register(const struct device *dev,
 	}
 
 	/* Check the address is unique */
-	if (find_address(data, config->address,
-			 (config->flags & I2C_TARGET_FLAGS_ADDR_10_BITS))) {
+	if (find_address(data, config->address, (config->flags & I2C_TARGET_FLAGS_ADDR_10_BITS))) {
 		return -EINVAL;
 	}
 
@@ -65,9 +63,7 @@ int i2c_virtual_target_register(const struct device *dev,
 	return 0;
 }
 
-
-int i2c_virtual_target_unregister(const struct device *dev,
-				 struct i2c_target_config *config)
+int i2c_virtual_target_unregister(const struct device *dev, struct i2c_target_config *config)
 {
 	struct i2c_virtual_data *data = dev->data;
 
@@ -82,10 +78,8 @@ int i2c_virtual_target_unregister(const struct device *dev,
 	return 0;
 }
 
-static int i2c_virtual_msg_write(const struct device *dev,
-				 struct i2c_msg *msg,
-				 struct i2c_target_config *config,
-				 bool prev_write)
+static int i2c_virtual_msg_write(const struct device *dev, struct i2c_msg *msg,
+				 struct i2c_target_config *config, bool prev_write)
 {
 	unsigned int len = 0U;
 	uint8_t *buf = msg->buf;
@@ -144,10 +138,10 @@ static int i2c_virtual_msg_read(const struct device *dev, struct i2c_msg *msg,
 	return 0;
 }
 
-#define OPERATION(msg) (((struct i2c_msg *) msg)->flags & I2C_MSG_RW_MASK)
+#define OPERATION(msg) (((struct i2c_msg *)msg)->flags & I2C_MSG_RW_MASK)
 
-static int i2c_virtual_transfer(const struct device *dev, struct i2c_msg *msg,
-				uint8_t num_msgs, uint16_t target)
+static int i2c_virtual_transfer(const struct device *dev, struct i2c_msg *msg, uint8_t num_msgs,
+				uint16_t target)
 {
 	struct i2c_virtual_data *data = dev->data;
 	struct i2c_msg *current, *next;
@@ -185,8 +179,7 @@ static int i2c_virtual_transfer(const struct device *dev, struct i2c_msg *msg,
 		}
 
 		if ((current->flags & I2C_MSG_RW_MASK) == I2C_MSG_WRITE) {
-			ret = i2c_virtual_msg_write(dev, current,
-						    cfg, is_write);
+			ret = i2c_virtual_msg_write(dev, current, cfg, is_write);
 			is_write = true;
 		} else {
 			ret = i2c_virtual_msg_read(dev, current, cfg);
@@ -222,7 +215,6 @@ static int i2c_virtual_init(const struct device *dev)
 
 static struct i2c_virtual_data i2c_virtual_dev_data_0;
 
-DEVICE_DEFINE(i2c_virtual_0, CONFIG_I2C_VIRTUAL_NAME, &i2c_virtual_init,
-		NULL, &i2c_virtual_dev_data_0, NULL,
-		POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		&api_funcs);
+DEVICE_DEFINE(i2c_virtual_0, CONFIG_I2C_VIRTUAL_NAME, &i2c_virtual_init, NULL,
+	      &i2c_virtual_dev_data_0, NULL, POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+	      &api_funcs);
