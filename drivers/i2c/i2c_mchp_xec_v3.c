@@ -215,9 +215,14 @@ struct i2c_xec_v3_data {
 	uint8_t cm_dir;
 	uint8_t msg_idx;
 	uint8_t num_msgs;
+	bool async;
 	struct i2c_msg *msgs;
 	struct i2c_xec_cm_xfr cm_xfr;
 	volatile uint8_t mdone;
+#ifdef CONFIG_I2C_CALLBACK
+	i2c_callback_t cb;
+	void *cb_ud;
+#endif
 #ifdef CONFIG_I2C_TARGET
 	struct i2c_xec_target tg;
 #endif
@@ -891,6 +896,10 @@ static int i2c_xec_xfr_begin(const struct device *dev, uint16_t addr)
 
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_EN);
 
+	if (data->async == true) {
+		return 0;
+	}
+
 	if (k_sem_take(&data->sync_sem, K_MSEC(XEC_I2C_XFR_TIMEOUT_MS)) != 0) {
 		return -ETIMEDOUT;
 	}
@@ -947,8 +956,10 @@ static int i2c_xec_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t n
 	data->msgs = msgs;
 
 	rc = i2c_xec_xfr_begin(dev, addr);
-	if (rc) { /* if error issue STOP if bus is still owned by controller */
+	if (rc != 0) { /* if error issue STOP if bus is still owned by controller */
 		i2c_xec_stop(dev, 0);
+	} else if (data->async == true) {
+		return rc;
 	}
 
 xfr_unlock:
@@ -982,12 +993,38 @@ static int i2c_xec_transfer(const struct device *dev, struct i2c_msg *msgs, uint
 
 	k_mutex_lock(&data->lock_mut, K_FOREVER);
 
+	data->async = false;
+
 	rc = i2c_xec_xfr(dev, msgs, num_msgs, addr);
 
 	k_mutex_unlock(&data->lock_mut);
 
 	return rc;
 }
+
+#ifdef CONFIG_I2C_CALLBACK
+/* Async transfer API */
+static int i2c_xec_transfer_cba(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+				uint16_t addr, i2c_callback_t cb, void *userdata)
+{
+	struct i2c_xec_v3_data *const data = dev->data;
+	int rc = 0;
+
+	k_mutex_lock(&data->lock_mut, K_FOREVER);
+
+	data->cb = cb;
+	data->cb_ud = userdata;
+	data->async = true;
+
+	rc = i2c_xec_xfr(dev, msgs, num_msgs, addr);
+
+	if (rc != 0) {
+		k_mutex_unlock(&data->lock_mut);
+	}
+
+	return rc;
+}
+#endif
 
 #ifdef CONFIG_I2C_TARGET
 static struct i2c_target_config *find_target(struct i2c_xec_v3_data *data, uint16_t i2c_addr)
@@ -1710,6 +1747,8 @@ static void tm_cleanup(struct i2c_xec_v3_data *data)
 
 /* ISR has disabled controller's GIRQ allowing interrupt signal to NVIC to de-assert.
  * We must clear GIRQ status when appropriate and re-enable the GIRQ.
+ * TODO - implement CONFIG_I2C_CALLBACK
+ * typedef void (*i2c_callback_t)(const struct device *dev, int result, void *data);
  */
 static void i2c_xec_v3_handler(const struct device *dev)
 {
@@ -1721,6 +1760,7 @@ static void i2c_xec_v3_handler(const struct device *dev)
 	bool run_sm = true;
 	int state = I2C_XEC_ISR_STATE_CHK_ACK;
 	int next_state = I2C_XEC_ISR_STATE_MAX;
+	int result = 0;
 
 	i2c_cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
 	data->i2c_compl = sys_read32(rb + XEC_I2C_CMPL_OFS);
@@ -1744,6 +1784,7 @@ static void i2c_xec_v3_handler(const struct device *dev)
 
 	/* Lost Arbitration or Bus Error? */
 	if (i2c_xec_is_ber_lab(data)) {
+		result = -EIO;
 		run_sm = false;
 #ifdef CONFIG_I2C_TARGET
 		tm_cleanup(data);
@@ -1828,7 +1869,14 @@ static void i2c_xec_v3_handler(const struct device *dev)
 	if (data->mdone == 0) {
 		soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_EN);
 	} else {
-		k_sem_give(&data->sync_sem);
+		if (data->async == true) {
+			data->async = false;
+			if (data->cb != NULL) {
+				data->cb(dev, result, data->cb_ud);
+			}
+		} else {
+			k_sem_give(&data->sync_sem);
+		}
 	}
 }
 
@@ -1845,6 +1893,7 @@ static void i2c_xec_isr(const struct device *dev)
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_DIS);
 
 	i2c_xec_v3_handler(dev);
+
 	soc_ecia_girq_ctrl(devcfg->girq, devcfg->girq_pos, XEC_I2C_GIRQ_EN);
 }
 
@@ -1927,8 +1976,7 @@ void mchp_xec_i2c_ctrl_mutex_unlock(const struct device *ctrl)
 	k_mutex_unlock(&data->lock_mut);
 }
 
-/* !!!! TODO !!!!
- * Port driver calls mchp_xec_i2c_ctrl_mutex_lock BEFORE calling the following internal
+/* Port driver calls mchp_xec_i2c_ctrl_mutex_lock BEFORE calling the following internal
  * APIs. We must implement internal code that does not take the lock.
  * Port driver configure locks does its stuff,
  * call mchp_xec_i2c_ctrl_mutex_lock
@@ -1989,6 +2037,29 @@ int mchp_xec_i2c_ctrl_transfer(const struct device *ctrl, uint8_t port,
 	if (rc != 0) {
 		return rc;
 	}
+
+	return i2c_xec_xfr(ctrl, msgs, num_msgs, addr);
+}
+
+int mchp_xec_i2c_ctrl_transfer_cb(const struct device *ctrl, uint8_t port, uint32_t freq_hz,
+				  struct i2c_msg *msgs, uint8_t num_msgs, uint16_t addr,
+				  i2c_callback_t cb, void *userdata)
+{
+	struct i2c_xec_v3_data *data = ctrl->data;
+	int rc = 0;
+
+	if ((num_msgs == 0) || (msgs == NULL)) {
+		return -EINVAL;
+	}
+
+	rc = xec_v3_select(ctrl, port, freq_hz);
+	if (rc != 0) {
+		return rc;
+	}
+
+	data->cb = cb;
+	data->cb_ud = userdata;
+	data->async = true;
 
 	return i2c_xec_xfr(ctrl, msgs, num_msgs, addr);
 }
@@ -2101,12 +2172,12 @@ static DEVICE_API(i2c, i2c_xec_driver_api) = {
 	.configure = i2c_xec_configure,
 	.get_config = i2c_xec_get_config,
 	.transfer = i2c_xec_transfer,
+#ifdef CONFIG_I2C_CALLBACK
+	.transfer_cb = i2c_xec_transfer_cba,
+#endif
 #ifdef CONFIG_I2C_TARGET
 	.target_register = i2c_xec_target_register,
 	.target_unregister = i2c_xec_target_unregister,
-#else
-	.target_register = NULL,
-	.target_unregister = NULL,
 #endif
 #ifdef CONFIG_I2C_RTIO
 	.iodev_submit = i2c_iodev_submit_fallback,
