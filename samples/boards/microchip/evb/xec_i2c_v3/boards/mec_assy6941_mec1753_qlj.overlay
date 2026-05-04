@@ -37,6 +37,7 @@
  *	pin 6 = GND
  */
 
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
@@ -86,6 +87,10 @@
 };
 
 / {
+	zephyr,user {
+		i2c-p0-test-gpios = <MCHP_GPIO_DECODE_115 GPIO_ACTIVE_HIGH>;
+	};
+
 	i2c0_p0: i2c-port0 {
 		compatible = "microchip,xec-i2c-v3-port";
 		#address-cells = <1>;
