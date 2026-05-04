@@ -1096,10 +1096,10 @@ static void xec_v3_isr(const struct device *ctrl)
 
 static int xec_v3_bb_recover(mm_reg_t rb)
 {
-	uint8_t bb;
 	int rc = -EBUSY;
+	uint8_t bb = (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_SCL_POS) |
+		      BIT(XEC_I2C_BBCR_SDA_POS));
 
-	bb = BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_SCL_POS) | BIT(XEC_I2C_BBCR_SDA_POS);
 	sys_write8(bb, rb + XEC_I2C_BBCR_OFS);
 
 	/* If SCL is stuck low, bail. */
@@ -1381,11 +1381,16 @@ int mchp_xec_i2c_ctrl_recover_bus(const struct device *ctrl, uint8_t port, uint3
 		return ret;
 	}
 
+	/* make sure interrupt is disabled for recovery */
+	soc_ecia_girq_ctrl(cfg->girq, cfg->girq_pos, 0);
+	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+
 	ret = xec_v3_bb_recover(cfg->base_addr);
 
 	/* Recovery always trashes controller state; force reconfigure next call. */
 	data->active_port = XEC_V3_PORT_NONE;
 	data->hw_enabled = false;
+
 	return ret;
 }
 
