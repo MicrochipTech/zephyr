@@ -1,0 +1,45 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C V3 controller (byte-by-byte, 7-bit addressing)
+
+  This node represents the physical I2C controller hardware. Zephyr
+  applications do not bind here; the bind to I2C port nodes
+  (microchip,xec-i2c-v3-port), which select the pin pair the controller
+  drivers.
+
+compatible: "microchip,xec-i2c-v3"
+
+include:
+  - name: microchip,dmec-ecia-girq.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  girqs:
+    required: true
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR sleep enable, clock required, reset enable register index
+      and bit position.
+
+  general-call:
+    type: boolean
+    description: |
+      If present, respond to the I2C general-call address (address 0).
+      Defaults to disabled (Configuration.GC_DIS = 1).
+
+  target-buf-size:
+    type: int
+    default: 32
+    description: |
+      Per instance target mode driver buffer for storing I2C writes
+      from an external controller to this target.
