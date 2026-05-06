@@ -1,0 +1,40 @@
+mainmenu "I3C Loopback Test Application"
+
+source "Kconfig.zephyr"
+
+config I3C_TEST_CASE
+	int "Test group to run: 0=data_transfer 1=ccc_commands 2=ibi 3=advanced"
+	default 0
+	range 0 3
+
+config I3C_TEST_CRC_CHECK
+	bool "Enable CRC-8 loopback data verification"
+	default y
+
+config I3C_TARGET_ECHO_MODE
+	bool "Run target as a simple echo server (enabled for loopback)"
+	default y
+
+config I3C_HOST_TARGET_PID_HI
+	hex "Target PID high 16 bits (bits 47:32)"
+	default 0xB012
+
+config I3C_HOST_TARGET_PID_LO
+	hex "Target PID low 32 bits (bits 31:0)"
+	default 0x3456789A
+
+config I3C_HOST_TARGET_STATIC_ADDR
+	hex "Target static address used for SETDASA in DT"
+	default 0x08
+
+config I3C_FAKE_TARGET_INIT_PRIORITY
+	int "Init priority for the fake target stub driver"
+	default 90
+
+config I3C_TEST_HOST_LOG_LEVEL
+	int "Host module log level (0=off 1=ERR 2=WRN 3=INF 4=DBG)"
+	default 3
+
+config I3C_TEST_TARGET_LOG_LEVEL
+	int "Target module log level (0=off 1=ERR 2=WRN 3=INF 4=DBG)"
+	default 3
