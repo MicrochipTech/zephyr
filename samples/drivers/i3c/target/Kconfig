@@ -1,0 +1,16 @@
+mainmenu "I3C Target Test Application"
+
+source "Kconfig.zephyr"
+
+config I3C_TEST_CASE
+	int "Test group to run: 0=data_echo 1=ibi 2=hot_join"
+	default 0
+	range 0 2
+
+config I3C_TARGET_ECHO_MODE
+	bool "Run target as a simple echo server (used by loopback app)"
+	default n
+
+config I3C_TEST_TARGET_LOG_LEVEL
+	int "Target module log level (0=off 1=ERR 2=WRN 3=INF 4=DBG)"
+	default 3

@@ -1,0 +1,9 @@
+# Copyright (c) 2024 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Driver for a fake I3C target on bus
+
+compatible: "microchip,i3c-fake-target"
+
+include: ["i3c-device.yaml"]
