@@ -1,0 +1,17 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* i3c0 is not used in the standalone target application */
+&i3c0 {
+	status = "disabled";
+};
+
+/* i3c1: secondary controller acting as I3C target */
+&i3c1 {
+	pinctrl-0 = <&i3c00_target_sda_gpio132 &i3c00_target_scl_gpio140>;
+	pinctrl-names = "default";
+	port-sel = <0>;
+	status = "okay";
+};
