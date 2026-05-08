@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# mainmenu "I2C Target API Test"
+
+source "samples/boards/microchip/evb/xec_i2c_v3/target_buffer/common/Kconfig"
+
+source "Kconfig.zephyr"
