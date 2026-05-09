@@ -1,0 +1,86 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6941 EVB
+ *
+ * JP20 3x4 Pin Mux
+ * ----------------
+ * JP20 7-8   GPIO141 as I2C05_SDA
+ * JP20 10-11 GPIO142 as I2C05_SCL
+ *
+ * JP21 3x16 Pin Mux
+ * -----------------
+ * JP21 31-32 GPIO142 as I2C05_SCL
+ * JP21 37-38 GPIO141 as I2C05_SDA
+ *
+ * JP27 3x12 Pin Mux
+ * -----------------
+ * JP27  8-9  GPIO141 as I2C05_SDA
+ * JP27 10-11 GPIO142 as I2C05_SCL
+ *
+ * JP71 2x17 Pull-Up Selects
+ * Required if external I2C FRAM board does have pull-ups on I2C SCL and SDA
+ * -------------------------------------------------------------------------
+ * JP71 21-22 ON enable 7.5K pull-up to VTR1
+ * JP71 23-24 ON enable 7.5K pull-up to VTR1
+ *
+ * I2C Port 5 on J35 1x6
+ * ---------------------
+ *	pin 1 = I2C05_SCL/GPIO142 connect to external I2C FRAM SCL
+ *	pin 2 = GND               connect to external I2C FRAM GND
+ *	pin 3 = I2C05_SDA/GPIO141 connect to external I2C FRAM SDA
+ *	pin 4 = GND
+ *	pin 5 = VTR1              connect to external I2C FRAM +3.3V
+ *	pin 6 = GND
+ */
+
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
+
+/ {
+	aliases {
+		i2c-ram = &i2c0_p5;
+	};
+};
+
+/* I2C Controller 0 */
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+};
+
+/* Port 5 pins */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	drive-strength = <3>;
+};
+
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	drive-strength = <3>;
+};
+
+/ {
+	/* Port 5 (default port) on I2C controller 0 */
+	i2c0_p5: i2c-port5 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(1, 5)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_FAST>;
+		pinctrl-0 = <&i2c05_sda_gpio141 &i2c05_scl_gpio142>;
+		pinctrl-names = "default";
+		default-port;
+		status = "okay";
+
+		fram: mb85rc256v_fram@50 {
+			reg = <0x50>;
+		};
+	};
+};
