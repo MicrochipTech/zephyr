@@ -116,6 +116,13 @@ static int mec5_kbc_lpc_request(const struct device *dev,
 					 | MEC_KBC_STS_AUXOBF));
 		mec_hal_kbc_status_clear(regs, msk);
 		break;
+	case E8042_READ_CTRL:
+		/* Implement stardard method but not via HAL API */
+		*data = regs->KECR;
+		break;
+	case E8042_WRITE_CTRL:
+		regs->KECR = *data;
+		break;
 	default:
 		ret = -ENOTSUP;
 	}

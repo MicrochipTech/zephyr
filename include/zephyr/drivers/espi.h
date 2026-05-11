@@ -299,6 +299,9 @@ enum lpc_peripheral_opcode {
 	E8042_READ_KB_STS,
 	E8042_SET_FLAG,
 	E8042_CLEAR_FLAG,
+	/* Control transaction */
+	E8042_READ_CTRL,
+	E8042_WRITE_CTRL,
 	/* ACPI read transactions */
 	EACPI_OBF_HAS_CHAR = EACPI_START_OPCODE,
 	EACPI_IBF_HAS_CHAR,
