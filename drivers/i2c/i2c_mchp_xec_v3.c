@@ -1885,10 +1885,10 @@ static void handle_target_stop(struct i2c_mec5_data *ctx)
 }
 
 /* --- Dispatcher (called from main ISR when controller is idle) ------- */
-
 static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action act,
 				  uint8_t status)
 {
+#if KERNEL_VERSION_NUMBER >= 0x40400
 	struct i2c_target_config *tcfg = NULL;
 	enum i2c_error_reason err_reason = I2C_ERROR_GENERIC;
 
@@ -1918,7 +1918,7 @@ static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action
 			}
 		}
 	}
-
+#endif /* KERNEL_VERSION_NUMBER >= 0x40400 */
 	ctx->tgt_state = TGT_IDLE;
 
 	i2c_mec5_dbg_state_update(ctx, 0xBAU);
