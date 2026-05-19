@@ -40,7 +40,8 @@ LOG_MODULE_REGISTER(mspi_mchp_xec, CONFIG_MSPI_LOG_LEVEL);
 #define MSPI_MCHP_XEC_DEBUG_ISR 1
 #define MSPI_MCHP_XEC_DEBUG_NO_TIMEOUT 1
 
-#define PINCTRL_STATE_ALTERNATE PINCTRL_STATE_PRIV_START
+#define PINCTRL_STATE_HW_CE_EN PINCTRL_STATE_PRIV_START
+#define PINCTRL_STATE_HW_CE_TS (PINCTRL_STATE_PRIV_START + 1)
 
 /* Register helpers ---------------------------------------------------------- */
 
@@ -308,15 +309,6 @@ static int qmspi_hw_reset_and_init(const struct device *dev)
 	QW32(cfg, XEC_QSPI_LDMA_RX_EN_OFS, 0);
 	QW32(cfg, XEC_QSPI_LDMA_TX_EN_OFS, 0);
 
-	if (cfg->pcfg != NULL) {
-		int rc = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
-
-		if (rc < 0) {
-			LOG_ERR("pinctrl_apply_state: %d", rc);
-			return rc;
-		}
-	}
-
 	/* GIRQ routing for this source */
 	(void)soc_ecia_girq_status_clear(MCHP_XEC_ECIA_GIRQ(cfg->girq_enc),
 					 MCHP_XEC_ECIA_GIRQ_POS(cfg->girq_enc));
@@ -336,8 +328,9 @@ static int qmspi_hw_reset_and_init(const struct device *dev)
 static int mspi_mchp_xec_qm_config_api(const struct mspi_dt_spec *spec)
 {
 	const struct device *dev = spec->bus;
+	const struct mspi_mchp_xec_config *cfg = dev->config;
 	struct mspi_mchp_xec_data *data = dev->data;
-	int rc;
+	int rc = 0;
 
 	if (spec->config.op_mode != MSPI_OP_MODE_CONTROLLER) {
 		return -ENOTSUP;
@@ -347,6 +340,15 @@ static int mspi_mchp_xec_qm_config_api(const struct mspi_dt_spec *spec)
 	}
 	if (spec->config.dqs_support) {
 		return -ENOTSUP;
+	}
+
+	if (cfg->pcfg != NULL) {
+		/* Configures clock, data, and HW CE pins */
+		rc = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
+		if (rc < 0) {
+			LOG_ERR("pinctrl_apply_state: %d", rc);
+			return rc;
+		}
 	}
 
 	rc = qmspi_hw_reset_and_init(dev);
@@ -367,11 +369,12 @@ static int mspi_mchp_xec_qm_config_api(const struct mspi_dt_spec *spec)
  * Hardware and driver do not support MSPI_DEVICE_CONFIG_MEM_BOUND since the hardware
  * can DMA into any memory address. We silently ignore it.
  * Driver does not support MSPI_DEVICE_CONFIG_BREAK_TIME so we silently ignore it.
+ * CE number is from mspi-hardware-ce-num DT property. GPIO CE's should not have this
+ * property. The CE number for GPIO CE's is 0.
  */
 static int validate_dev_cfg(enum mspi_dev_cfg_mask mask, const struct mspi_dev_cfg *cfg)
 {
 	if ((mask & MSPI_DEVICE_CONFIG_CE_NUM) != 0) {
-		/* TODO must handle HW CE vs GPIO CE */
 		if (cfg->ce_num >= XEC_QSPI_MAX_CS) {
 			return -ENOTSUP;
 		}
@@ -401,6 +404,7 @@ static int validate_dev_cfg(enum mspi_dev_cfg_mask mask, const struct mspi_dev_c
 		}
 	}
 
+	/* applies to HW CE's only. GPIO CE's use GPIO_ACTIVE_HIGH/LOW in ce-gpios */
 	if ((mask & MSPI_DEVICE_CONFIG_CE_POL) != 0) {
 		/* TODO: We could support active high two ways:
 		 * HW CE: we need to modify CE pin GPIO Control reg and turn on function invert
@@ -479,9 +483,6 @@ static int apply_dev_cfg(const struct device *dev, const struct mspi_dev_cfg *cf
 
 	QW32(hw, XEC_QSPI_MODE_OFS, mode);
 
-	data->dev_cfg = *cfg;
-	data->dev_cfg_valid = true;
-
 	return 0;
 }
 
@@ -499,12 +500,13 @@ static int qmspi_apply_ce_pinctrl(const struct device *dev,
 {
 	const struct mspi_mchp_xec_config *hw = dev->config;
 	gpio_flags_t gp_flags = GPIO_OUTPUT_HIGH | GPIO_INPUT;
-	uint8_t state_id = PINCTRL_STATE_DEFAULT;
+	int rc = 0;
+	uint32_t qmode = 0;
+	uint8_t state_id = PINCTRL_STATE_HW_CE_EN;
 
 	if ((dev_id != NULL) && (dev_id->ce.port != NULL)) {
 		/* configure GPIO CE for use */
-		int rc = gpio_pin_configure_dt(&dev_id->ce, gp_flags);
-
+		rc = gpio_pin_configure_dt(&dev_id->ce, gp_flags);
 		if (rc != 0) {
 			LOG_ERR("CE GPIO config error (%d)", rc);
 			return rc;
@@ -513,13 +515,14 @@ static int qmspi_apply_ce_pinctrl(const struct device *dev,
 		/* This functions sets HW CE0 to alternate pinctrl state.
 		 * We need to configure QMSPI.MODE HW CS_SEL field to CE0.
 		 */
-		uint32_t qmode = QR32(hw, XEC_QSPI_MODE_OFS);
+		qmode = QR32(hw, XEC_QSPI_MODE_OFS);
 
 		qmode &= (uint32_t)~(XEC_QSPI_MODE_CS_SEL_MSK);
 		qmode |= XEC_QSPI_MODE_CS_SEL_SET(XEC_QSPI_MODE_CS_SEL_0);
+
 		QW32(hw, XEC_QSPI_MODE_OFS, qmode);
 
-		state_id = PINCTRL_STATE_ALTERNATE;
+		state_id = PINCTRL_STATE_HW_CE_TS;
 	}
 
 	return pinctrl_apply_state(hw->pcfg, state_id);
@@ -633,22 +636,21 @@ static int mspi_mchp_xec_qm_dev_config_api(const struct device *dev,
 		if (rc != 0) {
 			goto dev_cfg_exit;
 		}
-	}
-
-	if (data->active_dev != dev_id) {
-		data->active_dev = dev_id;
 
 		rc = qmspi_apply_ce_pinctrl(dev, dev_id);
 		if (rc != 0) {
-			LOG_ERR("pinctrl_apply_state: %d", rc);
 			goto dev_cfg_exit;
 		}
+
+		data->dev_cfg = *cfg;
+		data->dev_cfg_valid = true;
 	}
 
 dev_cfg_exit:
 	/* If an error occurred clear the active dev_id and release the lock */
 	if (rc != 0) {
 		data->active_dev = NULL;
+		data->dev_cfg_valid = false;
 #ifdef CONFIG_MULTITHREADING
 		k_mutex_unlock(&data->lock);
 #else
@@ -883,35 +885,41 @@ static void prime_interrupts(const struct mspi_mchp_xec_config *hw, bool pio, bo
  *   gpio (struct gpio_dt_spec) and delay (uint32_t microseconds)
  * flash_mspi_nor driver will fill in struct mspi_dev_id ce from DT but
  * it zeros out struct mspi_xfer.ce_sw_ctrl.
+ * This routine sets the pin to its logical active or inactivate state based
+ * on the GPIO pin's flag: GPIO_ACTIVE_HIGH or GPIO_ACTIVE_LOW.
  */
 static int mspi_gpio_ce_ctrl(const struct device *dev, const struct mspi_xfer *xfer, bool assert)
 {
 	struct mspi_mchp_xec_data *data = dev->data;
-	int rc = 0;
+	const struct gpio_dt_spec *spec = NULL;
+	int rc = 0, pin_logical_state = 0;
+	uint32_t delay_us = 0;
+
+	if (assert) {
+		pin_logical_state = 1;
+	}
 
 	if (xfer->ce_sw_ctrl.gpio.port != NULL) {
-		if (assert) {
-			rc = gpio_pin_set_dt(&xfer->ce_sw_ctrl.gpio, 0);
-			k_busy_wait(xfer->ce_sw_ctrl.delay);
-		} else {
-			k_busy_wait(xfer->ce_sw_ctrl.delay);
-			rc = gpio_pin_set_dt(&xfer->ce_sw_ctrl.gpio, 1);
-		}
-
+		spec = &xfer->ce_sw_ctrl.gpio;
+		delay_us = xfer->ce_sw_ctrl.delay;
 		data->st.is_gpio_ce = true;
 
 	} else if (data->active_dev->ce.port != NULL) {
-		if (assert) {
-			rc = gpio_pin_set_dt(&data->active_dev->ce, 1);
-			k_busy_wait(1U);
-		} else {
-			k_busy_wait(1U);
-			rc = gpio_pin_set_dt(&data->active_dev->ce, 1);
-		}
-
+		spec = &data->active_dev->ce;
+		delay_us = 1U;
 		data->st.is_gpio_ce = true;
 	} else {
 		data->st.is_gpio_ce = false;
+	}
+
+	if (spec != NULL) {
+		if (!assert) {
+			k_busy_wait(delay_us);
+		}
+		rc = gpio_pin_set_dt(spec, pin_logical_state);
+		if (assert) {
+			k_busy_wait(delay_us);
+		}
 	}
 
 	return rc;
@@ -1526,7 +1534,12 @@ static int mspi_mchp_xec_init(const struct device *dev)
 		cfg->irq_cfg_func();
 	}
 
-	return 0;
+	const struct mspi_dt_spec spec = {
+		.bus = dev,
+		.config = {0}, /* TODO */
+	};
+
+	return mspi_mchp_xec_qm_config_api(&spec);
 }
 
 static DEVICE_API(mspi, mspi_mchp_xec_api) = {

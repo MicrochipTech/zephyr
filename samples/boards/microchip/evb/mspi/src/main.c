@@ -105,11 +105,11 @@ static const struct mspi_dt_spec mspi0_dt_spec = {
 	},
 };
 
-static struct mspi_dev_id dev_id[] = {
+static const struct mspi_dev_id dev_ids[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY_SEP(MSPI0_NODE, MSPI_DEVICE_ID_DT, (,))
 };
 
-static struct mspi_dev_cfg device_cfg[] = {
+static const struct mspi_dev_cfg device_cfgs[] = {
 	DT_FOREACH_CHILD_STATUS_OKAY_SEP(MSPI0_NODE, MSPI_DEVICE_CONFIG_DT, (,))
 };
 
@@ -168,6 +168,57 @@ static int fill_buffer(uint8_t *buf, size_t bufsz, uint8_t fill_type)
 	}
 
 	return 0;
+}
+
+static void pr_mspi_dev_ids(const struct mspi_dev_id *dev_id_tbl, size_t num_dev_ids)
+{
+	if ((dev_id_tbl == NULL) || (num_dev_ids == 0)) {
+		LOG_INF("MPSI device id table is empty");
+		return;
+	}
+
+	for (size_t n = 0; n < num_dev_ids; n++) {
+		const struct mspi_dev_id *did = &dev_id_tbl[n];
+
+		LOG_INF("MSPI Device ID table entry %u", n);
+		LOG_INF("  DevIdx = %u", did->dev_idx);
+		LOG_INF("  ce.port = %p", did->ce.port);
+		if (did->ce.port != NULL) {
+			LOG_INF("    Port = %s", did->ce.port->name);
+		}
+		LOG_INF("  ce.pin = 0x%0x", did->ce.pin);
+		LOG_INF("  cp.dt_flags = 0x%0x", did->ce.dt_flags);
+	}
+}
+
+static void pr_mspi_dev_cfgs(const struct mspi_dev_cfg *dev_cfg_tbl, size_t num_dev_cfgs)
+{
+	if ((dev_cfg_tbl == NULL) || (num_dev_cfgs == 0)) {
+		LOG_INF("MSPI device config table is empty");
+		return;
+	}
+
+	for (size_t n = 0; n < num_dev_cfgs; n++) {
+		const struct mspi_dev_cfg *dcfg = &dev_cfg_tbl[n];
+
+		LOG_INF("MSPI Device Config table entry %u", n);
+		LOG_INF("  CE Num = %u", dcfg->ce_num);
+		LOG_INF("  Freq = %u", dcfg->freq);
+		LOG_INF("  IO mode = %u", dcfg->io_mode);
+		LOG_INF("  Data rate = %u", dcfg->data_rate);
+		LOG_INF("  CPP = %u", dcfg->cpp);
+		LOG_INF("  Endian = %u", dcfg->endian);
+		LOG_INF("  CE polarity = %u", dcfg->ce_polarity);
+		LOG_INF("  DQS Enable = %u", dcfg->dqs_enable);
+		LOG_INF("  RX dummy = %u", dcfg->rx_dummy);
+		LOG_INF("  TX dummy = %u", dcfg->tx_dummy);
+		LOG_INF("  Read Cmd = 0x%0x", dcfg->read_cmd);
+		LOG_INF("  Write Cmd = 0x%0x", dcfg->write_cmd);
+		LOG_INF("  Cmd Length = %u", dcfg->cmd_length);
+		LOG_INF("  Addr Length = %u", dcfg->addr_length);
+		LOG_INF("  Mem Boundary = 0x%0x", dcfg->mem_boundary);
+		LOG_INF("  Time to Break = %u", dcfg->time_to_break);
+	}
 }
 
 #if 0
@@ -289,6 +340,9 @@ int main(void)
 	memset(buf1, 0, sizeof(buf1));
 	memset((void *)&tb1, 0x55, sizeof(tb1));
 
+	pr_mspi_dev_ids(dev_ids, ARRAY_SIZE(dev_ids));
+	pr_mspi_dev_cfgs(device_cfgs, ARRAY_SIZE(device_cfgs));
+
 	LOG_INF("Check if MSPI device is ready");
 	if (!device_is_ready(mspi0_dev)) {
 		LOG_ERR("MSPI driver not ready!\n");
@@ -318,7 +372,7 @@ int main(void)
 
 	const enum mspi_dev_cfg_mask param_msk = MSPI_DEVICE_CONFIG_ALL;
 
-	rc = mspi_dev_config(mspi0_dt_spec.bus, &dev_id[0], param_msk, &device_cfg[0]);
+	rc = mspi_dev_config(mspi0_dt_spec.bus, &dev_ids[0], param_msk, &device_cfgs[0]);
 	LOG_INF("MSPI API device config returned (%d)", rc);
 	if (rc != 0) {
 		goto app_end;
@@ -363,7 +417,7 @@ int main(void)
 		.timeout = 0,
 	};
 
-	rc = mspi_transceive(mspi0_dt_spec.bus, &dev_id[0], &mxfr);
+	rc = mspi_transceive(mspi0_dt_spec.bus, &dev_ids[0], &mxfr);
 	LOG_INF("MSPI API transceive returned (%d)", rc);
 	if (rc != 0) {
 		goto app_end;

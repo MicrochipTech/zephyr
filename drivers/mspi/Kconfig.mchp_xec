@@ -8,6 +8,7 @@ config MSPI_MCHP_XEC_QMSPI
 	default y
 	depends on DT_HAS_MICROCHIP_XEC_QMSPI_CONTROLLER_ENABLED
 	select PINCTRL
+	select PINCTRL_KEEP_SLEEP_STATE
 	help
 	  Enable MSPI driver for Microchip MEC174x/MEC175x/MEC165xB QMSPI controller.
 	  Supports PIO transfers using descriptors and the 8-byte TX/RX FIFOs.
