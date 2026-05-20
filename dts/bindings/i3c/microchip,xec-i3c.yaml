@@ -1,0 +1,43 @@
+# Copyright (C) 2020 Samsung Electronics Co., Ltd.
+# Copyright (C) 2023 Meta Platforms
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: >
+    Microchip XEC Synopsys DesignWare I3C controller
+
+compatible: "microchip,xec-i3c"
+
+include:
+  - name: i3c-controller.yaml
+  - name: pinctrl-device.yaml
+  - name: microchip,dmec-ecia-girq.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  input-clock-frequency:
+    type: int
+    required: true
+    description: |
+      I3C controller input clock frequency in Hz. Used to compute SCL timing
+      register values since the XEC SoC does not expose a clock-control node
+      for the I3C peripheral clock.
+
+  port-sel:
+    type: int
+    required: true
+    description: |
+      I3C port selection written to HOST_CFG register bits [2:0].
+      Selects the SoC pin-mux routing for the I3C bus.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded Power/Clock/Reset (PCR) index used to ungate the I3C peripheral
+      clock via soc_xec_pcr_sleep_en_clear(). The encoding is SoC-specific.
