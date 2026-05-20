@@ -1217,41 +1217,51 @@ static int i3c_dw_endis_ibi(const struct device *dev, struct i3c_device_desc *ta
 {
 	struct dw_i3c_data *data = dev->data;
 	const struct dw_i3c_config *config = dev->config;
+	struct i3c_config_controller *ctrl_config = &data->common.ctrl_config;
 	uint32_t bitpos, sir_con;
 	struct i3c_ccc_events i3c_events;
 	int ret;
 	int pos;
 
-	pos = get_i3c_addr_pos(dev, target->dynamic_addr, false);
-	if (pos < 0) {
-		LOG_ERR("%s: Invalid Slave address", dev->name);
-		return pos;
-	}
+	if (!ctrl_config->is_secondary)	{
 
-	uint32_t reg = sys_read32(config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
+		/* For i3c controller enable/disable SIR through DAT entry */
 
-	if (i3c_ibi_has_payload(target)) {
-		reg |= DEV_ADDR_TABLE_IBI_WITH_DATA;
+		pos = get_i3c_addr_pos(dev, target->dynamic_addr, false);
+		if (pos < 0) {
+			LOG_ERR("%s: Invalid Slave address", dev->name);
+			return pos;
+		}
+
+		uint32_t reg = sys_read32(config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
+
+		if (i3c_ibi_has_payload(target)) {
+			reg |= DEV_ADDR_TABLE_IBI_WITH_DATA;
+		} else {
+			reg &= ~DEV_ADDR_TABLE_IBI_WITH_DATA;
+		}
+		if (en) {
+			reg &= ~DEV_ADDR_TABLE_SIR_REJECT;
+		} else {
+			reg |= DEV_ADDR_TABLE_SIR_REJECT;
+		}
+		sys_write32(reg, config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
+
 	} else {
-		reg &= ~DEV_ADDR_TABLE_IBI_WITH_DATA;
-	}
-	if (en) {
-		reg &= ~DEV_ADDR_TABLE_SIR_REJECT;
-	} else {
-		reg |= DEV_ADDR_TABLE_SIR_REJECT;
-	}
-	sys_write32(reg, config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
 
-	sir_con = sys_read32(config->regs + IBI_SIR_REQ_REJECT);
-	/* TODO: what is this macro doing?? */
-	bitpos = IBI_SIR_REQ_ID(target->dynamic_addr);
+		/* For i3c secondary controller enable/disable SIR through IBI_SIR_REQ_REJECT reg */
 
-	if (en) {
-		sir_con &= ~BIT(bitpos);
-	} else {
-		sir_con |= BIT(bitpos);
+		sir_con = sys_read32(config->regs + IBI_SIR_REQ_REJECT);
+		/* TODO: what is this macro doing?? */
+		bitpos = IBI_SIR_REQ_ID(target->dynamic_addr);
+
+		if (en) {
+			sir_con &= ~BIT(bitpos);
+		} else {
+			sir_con |= BIT(bitpos);
+		}
+		sys_write32(sir_con, config->regs + IBI_SIR_REQ_REJECT);
 	}
-	sys_write32(sir_con, config->regs + IBI_SIR_REQ_REJECT);
 
 	/* Tell target to enable IBI */
 	i3c_events.events = I3C_CCC_EVT_INTR;
@@ -1763,15 +1773,17 @@ static int dw_i3c_init_scl_timing(const struct device *dev, struct i3c_config_co
 	}
 #endif /* CONFIG_I3C_CONTROLLER */
 #ifdef CONFIG_I3C_TARGET
-	/* I3C Bus Available Time */
-	scl_timing = DIV_ROUND_UP(I3C_BUS_AVAILABLE_TIME_NS * (uint64_t)core_rate,
-					I3C_PERIOD_NS);
-	sys_write32(BUS_I3C_AVAIL_TIME(scl_timing), config->regs + BUS_FREE_TIMING);
+	if (ctrl_cfg->is_secondary) {
+		/* I3C Bus Available Time */
+		scl_timing = DIV_ROUND_UP(I3C_BUS_AVAILABLE_TIME_NS * (uint64_t)core_rate,
+						I3C_PERIOD_NS);
+		sys_write32(BUS_I3C_AVAIL_TIME(scl_timing), config->regs + BUS_FREE_TIMING);
 
-	/* I3C Bus Idle Time */
-	scl_timing =
-		DIV_ROUND_UP(I3C_BUS_IDLE_TIME_NS * (uint64_t)core_rate, I3C_PERIOD_NS);
-	sys_write32(BUS_I3C_IDLE_TIME(scl_timing), config->regs + BUS_IDLE_TIMING);
+		/* I3C Bus Idle Time */
+		scl_timing =
+			DIV_ROUND_UP(I3C_BUS_IDLE_TIME_NS * (uint64_t)core_rate, I3C_PERIOD_NS);
+		sys_write32(BUS_I3C_IDLE_TIME(scl_timing), config->regs + BUS_IDLE_TIMING);
+	}
 #endif /* CONFIG_I3C_TARGET */
 
 	return 0;
@@ -2774,8 +2786,10 @@ static int dw_i3c_init(const struct device *dev)
 			(IS_ENABLED(CONFIG_I3C_CONTROLLER) && !ctrl_config->is_secondary));
 
 	/* disable ibi */
-	sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_SIR_REQ_REJECT);
-	sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_MR_REQ_REJECT);
+	if (ctrl_config->is_secondary) {
+		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_SIR_REQ_REJECT);
+		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_MR_REQ_REJECT);
+	}
 
 	/* disable hot-join */
 	sys_write32(sys_read32(config->regs + DEVICE_CTRL) | (DEV_CTRL_HOT_JOIN_NACK),
