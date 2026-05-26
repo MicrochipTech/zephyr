@@ -93,6 +93,7 @@ struct xec_i2c_timing {
  */
 enum i2c_xec_pm_policy_state_flag {
 	I2C_XEC_PM_POLICY_STATE_XFER_FLAG,
+	I2C_XEC_PM_POLICY_STATE_TARGET_FLAG,
 	I2C_XEC_PM_POLICY_STATE_FLAG_COUNT,
 };
 
@@ -1087,6 +1088,9 @@ static void i2c_xec_v2_isr(const struct device *dev)
 				tcbs->stop(data->target_cfg);
 			}
 			restart_target(dev);
+#ifdef CONFIG_PM_DEVICE
+			i2c_xec_pm_policy_state_lock_put(data, I2C_XEC_PM_POLICY_STATE_TARGET_FLAG);
+#endif
 			goto clear_iag;
 		}
 	}
@@ -1105,12 +1109,18 @@ static void i2c_xec_v2_isr(const struct device *dev)
 		}
 
 		restart_target(dev);
+#ifdef CONFIG_PM_DEVICE
+		i2c_xec_pm_policy_state_lock_put(data, I2C_XEC_PM_POLICY_STATE_TARGET_FLAG);
+#endif
 		goto clear_iag;
 	}
 
 	/* Address byte handling. AAT status is only valid if PIN status bit == 0 */
 	if ((status & (BIT(XEC_I2C_SR_AAT_POS) | BIT(XEC_I2C_SR_PIN_POS))) ==
 	    BIT(XEC_I2C_SR_AAT_POS)) {
+#ifdef CONFIG_PM_DEVICE
+		i2c_xec_pm_policy_state_lock_get(data, I2C_XEC_PM_POLICY_STATE_TARGET_FLAG);
+#endif
 		target_addr_handler(dev, tcbs);
 		goto clear_iag;
 	}
@@ -1182,6 +1192,14 @@ static int i2c_xec_v2_target_unregister(const struct device *dev, struct i2c_tar
 
 	soc_ecia_girq_ctrl(drvcfg->girq, drvcfg->girq_pos, 0);
 	soc_ecia_girq_status_clear(drvcfg->girq, drvcfg->girq_pos);
+
+#ifdef CONFIG_PM_DEVICE
+	/* Release any pending lock if a target transaction was in flight when
+	 * unregister was called. atomic_test_and_clear makes this a no-op when
+	 * the bus was already idle.
+	 */
+	i2c_xec_pm_policy_state_lock_put(data, I2C_XEC_PM_POLICY_STATE_TARGET_FLAG);
+#endif
 
 	return 0;
 }
