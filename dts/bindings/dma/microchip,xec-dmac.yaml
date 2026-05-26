@@ -1,4 +1,4 @@
-description: Microchip XEC DMA controller
+description: Microchip XEC Central DMA controller
 
 compatible: "microchip,xec-dmac"
 
@@ -9,6 +9,9 @@ properties:
     required: true
 
   interrupts:
+    required: true
+
+  interrupt-names:
     required: true
 
   pcr-scr:
@@ -28,10 +31,6 @@ properties:
       provide the handle to the GIRQ.
 
   "#dma-cells":
-    const: 2
-
-  "girq-cells":
-    type: int
     const: 2
 
 # #dma-cells : Must be <2>.
@@ -57,7 +56,3 @@ properties:
 dma-cells:
   - channel
   - trigsrc
-
-girq-cells:
-  - girqno
-  - girqpos
