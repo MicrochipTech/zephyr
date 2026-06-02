@@ -1,0 +1,176 @@
+/*
+ * Copyright (c) 2026 Nordic Semiconductor ASA
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
+
+/ {
+	aliases {
+		flash0 = &gp1_spiflash;
+	};
+};
+
+&dmac {
+	status = "okay";
+};
+
+&pinctrl {
+	qspi_shd_cs0_n_gpio055_gpio_in: qspi_shd_cs0_n_gpio055_gpio_in {
+		pinmux = <MCHP_XEC_PINMUX(055, MCHP_AF0)>;
+		output-disable;
+	};
+
+	qspi_shd_cs0_n_gpio055_gpio_in_pu: qspi_shd_cs0_n_gpio055_gpio_in_pu {
+		pinmux = <MCHP_XEC_PINMUX(055, MCHP_AF0)>;
+		bias-pull-up;
+		output-disable;
+	};
+
+	qspi_shd_cs1_n_gpio002_gpio_in: qspi_shd_cs1_n_gpio002_gpio_in {
+		pinmux = <MCHP_XEC_PINMUX(02, MCHP_AF0)>;
+		output-disable;
+	};
+
+	qspi_shd_cs1_n_gpio002_gpio_in_pu: qspi_shd_cs1_n_gpio002_gpio_in_pu {
+		pinmux = <MCHP_XEC_PINMUX(02, MCHP_AF0)>;
+		bias-pull-up;
+		output-disable;
+	};
+
+	spi0_cs0_n_gpio003_lp: spi0_cs0_n_gpio003_lp {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_sdo_gpio004_lp: spi0_sdo_gpio004_lp {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_clk_gpio034_lp: spi0_clk_gpio034_lp {
+		pinmux = <MCHP_XEC_PINMUX(0034, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_sdi_gpio036_lp: spi0_sdi_gpio036_lp {
+		pinmux = <MCHP_XEC_PINMUX(0036, MCHP_AF3)>;
+		low-power-enable;
+	};
+
+	spi1_clk_gpio141_lp: spi1_clk_gpio141_lp {
+		pinmux = <MCHP_XEC_PINMUX(0141, MCHP_AF3)>;
+		low-power-enable;
+	};
+
+	spi1_sdo_gpio142_lp: spi1_sdo_gpio142_lp {
+		pinmux = <MCHP_XEC_PINMUX(0142, MCHP_AF3)>;
+		low-power-enable;
+	};
+
+	spi1_sdi_gpio143_lp: spi1_sdi_gpio143_lp {
+		pinmux = <MCHP_XEC_PINMUX(0143, MCHP_AF3)>;
+		low-power-enable;
+	};
+
+	spi1_cs_n_gpio144_lp: spi1_cs_n_gpio144_lp {
+		pinmux = <MCHP_XEC_PINMUX(0144, MCHP_AF3)>;
+		low-power-enable;
+	};
+};
+
+&gpspi0 {
+	compatible = "microchip,xec-gpspi-v2-mspi-controller";
+	status = "okay";
+
+	dmas = <&dmac 12 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_TX>,
+	       <&dmac 13 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_RX>;
+	dma-names = "tx", "rx";
+
+	pinctrl-0 = <&spi0_cs0_n_gpio003 &spi0_sdo_gpio004
+		     &spi0_clk_gpio034 &spi0_sdi_gpio036>;
+	pinctrl-1 = <&spi0_cs0_n_gpio003_lp &spi0_sdo_gpio004_lp
+		     &spi0_clk_gpio034_lp &spi0_sdi_gpio036_lp>;
+	pinctrl-names = "default", "sleep";
+
+	clock-frequency = <DT_FREQ_M(24)>; /* Maximum frequency we allow. HW limit is 48MHz*/
+	op-mode = "MSPI_OP_MODE_CONTROLLER";
+	duplex = "MSPI_HALF_DUPLEX";
+	software-multiperipheral; /* REQUIRED */
+
+	/* 25Q128JVSM +3.3V */
+	gp0_spiflash: gpspi0-nor-flash@0 {
+		compatible = "jedec,mspi-nor";
+		reg = <0>;
+
+		mspi-hardware-ce-num = <0>;
+		mspi-max-frequency = <DT_FREQ_M(12)>;
+		mspi-io-mode = "MSPI_IO_MODE_DUAL_1_1_2";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0x3B>;
+		write-command = <0x02>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <8>;
+		size = <DT_SIZE_M(128)>;
+		jedec-id = [ef 70 18];
+		sfdp-bfp = [00];
+		status = "okay";
+	};
+
+};
+
+&gpspi1 {
+	compatible = "microchip,xec-gpspi-v2-mspi-controller";
+	status = "okay";
+
+	dmas = <&dmac 14 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_TX>,
+	       <&dmac 15 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_RX>;
+	dma-names = "tx", "rx";
+
+	pinctrl-0 = <&spi1_clk_gpio141 &spi1_sdo_gpio142
+		     &spi1_sdi_gpio143 &spi1_cs_n_gpio144>;
+	pinctrl-1 = <&spi1_clk_gpio141_lp &spi1_sdo_gpio142_lp
+		     &spi1_sdi_gpio143_lp &spi1_cs_n_gpio144_lp>;
+	pinctrl-names = "default", "sleep";
+
+	clock-frequency = <DT_FREQ_M(24)>; /* Maximum frequency we allow. HW can do 48MHz */
+	op-mode = "MSPI_OP_MODE_CONTROLLER";
+	duplex = "MSPI_HALF_DUPLEX";
+	software-multiperipheral; /* REQUIRED */
+
+	/* 25Q128JVSM +3.3V
+	 * This SPI flash implements single, dual, and quad reads.
+	 * For page program it only implements single and quad.
+	 * GP-SPI only supports single and dual. Therefore we must
+	 * specify single mode here because the MSPI device YAML
+	 * binding only has one mspi-io-mode property for all commands.
+	 * At the application level we can instantiate separate struct mspi_dev_cfg
+	 * for page program 0x02 (1-1-1) and for dual read 0x3B (1-1-2).
+	 */
+	gp1_spiflash: gpspi1-nor-flash@0 {
+		compatible = "jedec,mspi-nor";
+		reg = <0>;
+
+		mspi-hardware-ce-num = <0>;
+		mspi-max-frequency = <DT_FREQ_M(12)>;
+		mspi-io-mode = "MSPI_IO_MODE_SINGLE";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		read-command = <0x0B>;
+		write-command = <0x02>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		tx-dummy = <0>;
+		rx-dummy = <8>;
+		size = <DT_SIZE_M(128)>;
+		jedec-id = [ef 70 18];
+		sfdp-bfp = [00];
+		status = "okay";
+	};
+
+};
