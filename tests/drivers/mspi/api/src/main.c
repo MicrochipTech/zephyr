@@ -39,6 +39,7 @@ struct mspi_cfg hardware_cfg = {
 	.op_mode                  = DT_ENUM_IDX_OR(MSPI_BUS_NODE, op_mode, MSPI_OP_MODE_CONTROLLER),
 	.duplex                   = DT_ENUM_IDX_OR(MSPI_BUS_NODE, duplex, MSPI_HALF_DUPLEX),
 	.dqs_support              = DT_PROP_OR(MSPI_BUS_NODE, dqs_support, false),
+	.sw_multi_periph          = DT_PROP_OR(MSPI_BUS_NODE, software_multiperipheral, false),
 	.ce_group                 = ce_gpios,
 	.num_ce_gpios             = ARRAY_SIZE(ce_gpios),
 	.num_periph               = DT_CHILD_NUM(MSPI_BUS_NODE),

@@ -1,0 +1,102 @@
+/*
+ * Copyright (c) 2026 Nordic Semiconductor ASA
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		dev0 = &mspi_dummy;
+	};
+};
+
+&dmac {
+	status = "okay";
+};
+
+&pinctrl {
+	qspi_shd_cs0_n_gpio055_gpio_in: qspi_shd_cs0_n_gpio055_gpio_in {
+		pinmux = <MCHP_XEC_PINMUX(055, MCHP_AF0)>;
+		output-disable;
+	};
+
+	qspi_shd_cs0_n_gpio055_gpio_in_pu: qspi_shd_cs0_n_gpio055_gpio_in_pu {
+		pinmux = <MCHP_XEC_PINMUX(055, MCHP_AF0)>;
+		bias-pull-up;
+		output-disable;
+	};
+
+	qspi_shd_cs1_n_gpio002_gpio_in: qspi_shd_cs1_n_gpio002_gpio_in {
+		pinmux = <MCHP_XEC_PINMUX(02, MCHP_AF0)>;
+		output-disable;
+	};
+
+	qspi_shd_cs1_n_gpio002_gpio_in_pu: qspi_shd_cs1_n_gpio002_gpio_in_pu {
+		pinmux = <MCHP_XEC_PINMUX(02, MCHP_AF0)>;
+		bias-pull-up;
+		output-disable;
+	};
+
+	spi0_cs0_n_gpio003_lp: spi0_cs0_n_gpio003_lp {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_clk_gpio034_lp: spi0_clk_gpio034_lp {
+		pinmux = <MCHP_XEC_PINMUX(0034, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_sdo_gpio004_lp: spi0_sdo_gpio004_lp {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_AF4)>;
+		low-power-enable;
+	};
+
+	spi0_sdi_gpio036_lp: spi0_sdi_gpio036_lp {
+		pinmux = <MCHP_XEC_PINMUX(0036, MCHP_AF3)>;
+		low-power-enable;
+	};
+};
+
+&qspi0 {
+	compatible = "microchip,xec-qmspi-mspi-controller";
+	status = "okay";
+	op-mode = "MSPI_OP_MODE_CONTROLLER";
+	duplex = "MSPI_HALF_DUPLEX";
+	software-multiperipheral; /* REQUIRED */
+	num-hw-ce = <2>; /* Shared SPI supports two HW chip enables */
+	clock-frequency = <DT_FREQ_M(96)>;
+
+	pinctrl-0 = <&qspi_shd_cs0_n_gpio055 &qspi_shd_cs1_n_gpio002
+		     &qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224
+		     &qspi_shd_io2_gpio227 &qspi_shd_io3_gpio016>;
+	pinctrl-1 = <&qspi_shd_io3_gpio016_lp &qspi_shd_io2_gpio227_lp
+		     &qspi_shd_io1_gpio224_lp &qspi_shd_io0_gpio223_lp
+		     &qspi_shd_clk_gpio056_lp &qspi_shd_cs0_n_gpio055_fp>;
+	pinctrl-2 = <&qspi_shd_cs0_n_gpio055 &qspi_shd_cs1_n_gpio002>;
+	pinctrl-3 = <&qspi_shd_cs0_n_gpio055_gpio_in &qspi_shd_cs1_n_gpio002_gpio_in>;
+	pinctrl-names = "default", "sleep", "hw-ce-en", "hw-ce-ts";
+
+	/* Real flash device so the controller has a defined target (dev_idx 0) */
+	mspi_dummy: mspi_dummy@0 {
+		compatible = "microchip,xec-qmspi-mspi-device";
+		reg = <0>;
+		mspi-max-frequency = <DT_FREQ_M(48)>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-cpp-mode = "MSPI_CPP_MODE_0";
+		mspi-endian = "MSPI_BIG_ENDIAN";
+		mspi-ce-polarity = "MSPI_CE_ACTIVE_LOW";
+		mspi-hardware-ce-num = <0>;
+		command-length = "INSTR_1_BYTE";
+		address-length = "ADDR_3_BYTE";
+		read-command = <0x6B>;
+		write-command = <0x32>;
+		rx-dummy = <8>;
+		tx-dummy = <0>;
+		microchip,timing-config-mask = <0>;
+		microchip,timing-config = <0 0 0 0 0 0 0 0>;
+	};
+};
