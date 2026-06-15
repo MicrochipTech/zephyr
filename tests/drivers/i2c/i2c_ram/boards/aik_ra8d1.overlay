@@ -12,4 +12,7 @@
 
 &pmod6_i2c {
 	status = "okay";
+	fram: fram@51 {
+		reg = <0x51>;
+	};
 };

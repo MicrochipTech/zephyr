@@ -8,3 +8,9 @@
 		i2c-ram = &arduino_i2c;
 	};
 };
+
+&arduino_i2c {
+	fram: fram@51 {
+		reg = <0x51>;
+	};
+};

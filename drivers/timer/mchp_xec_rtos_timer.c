@@ -418,7 +418,7 @@ static int sys_clock_driver_init(void)
 
 	sys_write32(BIT(BTMR_CR_SOFT_RST_POS), BTMR_BASE + BTMR_CR_OFS);
 	sys_write32(btmr_ctrl, BTMR_BASE + BTMR_CR_OFS);
-	sys_write32(UINT32_MAX, BTMR_BASE + BTMR_PRLD_OFS);
+	sys_write32(0, BTMR_BASE + BTMR_PRLD_OFS);
 	sys_set_bit(BTMR_BASE + BTMR_CR_OFS, BTMR_CR_START_POS);
 
 	timer_restart(cached_icr);

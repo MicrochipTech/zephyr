@@ -18,7 +18,8 @@
 #include <zephyr/ztest.h>
 #include <zephyr/tc_util.h>
 
-#define RAM_ADDR (0b10100010 >> 1)
+/* Address of I2C FRAM device from DT */
+#define RAM_ADDR DT_REG_ADDR(DT_NODELABEL(fram))
 
 #if DT_NODE_HAS_STATUS_OKAY(DT_ALIAS(i2c_ram))
 #define I2C_DEV_NODE	DT_ALIAS(i2c_ram)

@@ -54,15 +54,22 @@
  *	pin 5 = VTR1
  *	pin 6 = GND
  *
- * Connect wires:
+ * Connect Port 4 (target) to I2C Port 0 (controller)
  * J12 Pin 1 to J17 Pin 1 (SCL)
  * J12 Pin 3 to J17 Pin 3 (SDA)
  */
 
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
 / {
+	aliases {
+		i2c-controller = &i2c0_p0;
+		i2c-controller-target = &i2c1_p4;
+	};
+
+	/* Port 0 (default port) on I2C Controller 0 */
 	i2c0_p0: i2c-port0 {
 		compatible = "microchip,xec-i2c-v3-port";
 		#address-cells = <1>;
@@ -75,6 +82,9 @@
 		default-port;
 		status = "okay";
 
+		/* Virtual EEPROM device connected to I2C Port 4
+		 * using I2C Controller 1
+		 */
 		eeprom0: eeprom@54 {
 			compatible = "zephyr,i2c-target-eeprom";
 			reg = <0x54>;
@@ -83,7 +93,8 @@
 		};
 	};
 
-	i2c0_p4: i2c-port4 {
+	/* Port 4 (default port) on I2C Controller 1 */
+	i2c1_p4: i2c-port4 {
 		compatible = "microchip,xec-i2c-v3-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -92,8 +103,12 @@
 		clock-frequency = <I2C_BITRATE_STANDARD>;
 		pinctrl-0 = <&i2c04_sda_gpio143 &i2c04_scl_gpio144>;
 		pinctrl-names = "default";
+		default-port;
 		status = "okay";
 
+		/* Virtual EEPROM device connected to I2C Port 4
+		 * using I2C Controller 1
+		 */
 		eeprom1: eeprom@56 {
 			compatible = "zephyr,i2c-target-eeprom";
 			reg = <0x56>;
@@ -103,6 +118,7 @@
 	};
 };
 
+/* I2C Controller 0 */
 &i2c_smb_0 {
 	compatible = "microchip,xec-i2c-v3";
 	status = "okay";
@@ -110,6 +126,7 @@
 	#size-cells = <0>;
 };
 
+/* I2C Controller 1 */
 &i2c_smb_1 {
 	compatible = "microchip,xec-i2c-v3";
 	status = "okay";
@@ -117,6 +134,7 @@
 	#size-cells = <0>;
 };
 
+/* Port 0 pins */
 &i2c00_sda_gpio003 {
 	drive-open-drain;
 };
@@ -125,6 +143,7 @@
 	drive-open-drain;
 };
 
+/* Port 4 pins */
 &i2c04_sda_gpio143 {
 	drive-open-drain;
 };
