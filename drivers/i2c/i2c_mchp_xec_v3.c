@@ -27,7 +27,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 #include "i2c_mchp_xec_v3.h"
 
 /* MCHP DEBUG */
-/* #define I2C_MEC5_STATE_DEBUG */
+#define I2C_MEC5_STATE_DEBUG
 #define I2C_MEC5_STATE_DEBUG_MAX 256U
 
 /* --- Register offsets -------------------------------------------------- */
@@ -122,7 +122,10 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 #define I2C_MEC5_ADDR_BYTE(addr7, read) \
 	((uint8_t)((((addr7) & 0x7FU) << 1) | ((read) ? 0x01U : 0x00U)))
 
-/* ---- Tranfer timeout ------------------------------------------------- */
+/* ---- Post reset pin sample wait --------------------------------------- */
+#define I2C_MEC5_POST_RESET_PIN_WAIT_US 50U
+
+/* ---- Transfer timeout ------------------------------------------------- */
 #define I2C_MEC5_XFR_TIMEOUT_MS (CONFIG_I2C_MCHP_XEC_V3_TRANSFER_TIMEOUT_MS)
 
 /* --- Controller + target state enums ---------------------------------- */
@@ -216,6 +219,10 @@ struct i2c_mec5_data {
 			       * its own pointer (may differ from tgt_buf).
 			       */
 #endif
+#endif
+#ifdef CONFIG_I2C_MCHP_XEC_V3_ENABLE_RECOV_COUNTERS
+	uint64_t recov_attempts;
+	uint64_t recov_fails;
 #endif
 #ifdef I2C_MEC5_STATE_DEBUG
 	uint32_t dbg_state_idx;
@@ -715,6 +722,17 @@ static uint8_t pio_pull_byte(struct i2c_mec5_data *ctx)
 
 static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 {
+	const struct i2c_mec5_config *cfg = ctx->dev->config;
+	uint8_t i2c_sr = 0;
+
+	if (ctx->state == CTRL_ERROR) {
+		i2c_sr = i2c_mec5_status_r(cfg);
+		if ((i2c_sr & I2C_MEC5_STATUS_NOSVC) == 0) {
+			i2c_mec5_data_r(cfg);
+			i2c_mec5_ctrl_w(cfg, 0xC3U); /* gen STOP */
+		}
+	}
+
 	ctx->result = result;
 	k_sem_give(&ctx->xfer_done);
 
@@ -821,6 +839,17 @@ static int mec5_port_apply(const struct device *dev, uint8_t port)
 }
 
 #ifdef CONFIG_I2C_TARGET
+static bool i2c_mec5_target_enabled(const struct device *dev)
+{
+	const struct i2c_mec5_config *xcfg = dev->config;
+
+	if (i2c_mec5_own_addr_r(xcfg) != 0) {
+		return true;
+	}
+
+	return false;
+}
+
 /* After I2C controller reset we re-configure target Own Addresses.
  * Refer to Section 6, table 6-4.
  */
@@ -897,19 +926,29 @@ static int config_hw(const struct device *dev, uint32_t freq_hz, uint8_t port, b
 
 	/* Enable live SCL/SDA pin states in BB-Control. HW V3.8 and above */
 	i2c_mec5_bbcr_w(xcfg, I2C_MEC5_BBCR_LIVECM_EN);
-
+#if 0
 	for (i = 0; i < 16U; i++) {
 		regv = i2c_mec5_completion_r(xcfg);
 	}
+#else
+	k_busy_wait(I2C_MEC5_POST_RESET_PIN_WAIT_US);
+#endif
 
 	/* clear I2C.COMPLETION R/W1C status */
-	regv |= I2C_MEC5_COMP_RW1C_MASK;
+	regv = i2c_mec5_completion_r(xcfg) | I2C_MEC5_COMP_RW1C_MASK;
 	i2c_mec5_completion_w(xcfg, regv);
 
 	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
 	if (ien == true) {
 		soc_ecia_girq_ctrl(xcfg->girq, xcfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
 	}
+
+#if 0
+	regv = i2c_mec5_status_r(xcfg);
+	if (regv != I2C_MEC5_STATUS_IDLE_EXPECTED) {
+		return -EIO;
+	}
+#endif
 
 	return 0;
 }
@@ -1008,12 +1047,20 @@ static uint32_t get_bus_clock_from_hw(const struct device *dev)
 
 static int i2c_mec5_get_i2c_cfg(const struct device *dev, uint32_t *dev_config)
 {
-	uint32_t freq = 0;
+	uint32_t freq = 0, i2c_config = 0;
 	int ret = 0;
 
 	if (dev_config != NULL) {
 		freq = get_bus_clock_from_hw(dev);
-		*dev_config = I2C_MODE_CONTROLLER | I2C_SPEED_SET(mec5_bitrate_to_speed(freq));
+		i2c_config = I2C_SPEED_SET(mec5_bitrate_to_speed(freq));
+#ifdef CONFIG_I2C_TARGET
+		if (!i2c_mec5_target_enabled(dev)) {
+			i2c_config |= I2C_MODE_CONTROLLER;
+		}
+#else
+		i2c_config |= I2C_MODE_CONTROLLER;
+#endif
+		*dev_config = i2c_config;
 	} else {
 		ret = -EINVAL;
 	}
@@ -1095,177 +1142,6 @@ int mchp_i2c_xec_v3_get_config(const struct device *dev, uint32_t *dev_config, u
 
 	return ret;
 }
-
-/* --- Zephyr API: transfer (sync) -------------------------------------- */
-
-/* Prerequitie: caller must have acquired the lock */
-static int i2c_mec5_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
-			uint16_t addr)
-{
-	struct i2c_mec5_data *ctx = dev->data;
-	int ret = 0;
-
-	i2c_mec5_dbg_state_init(ctx);
-
-#ifdef CONFIG_I2C_CALLBACK
-	ctx->cb = NULL;
-	ctx->userdata = NULL;
-#endif
-	i2c_mec5_dbg_state_update(ctx, 1U);
-
-	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
-	if (ret == 0) {
-		if (k_sem_take(&ctx->xfer_done, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS)) != 0) {
-			LOG_ERR("transfer timed out");
-			ret = -ETIMEDOUT;
-			ctx->state = CTRL_IDLE;
-		} else {
-			ret = ctx->result;
-		}
-	}
-
-	ctx->state = CTRL_IDLE;
-
-	i2c_mec5_dbg_state_update(ctx, 2U);
-
-	return ret;
-}
-
-static int i2c_mec5_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
-			     uint16_t addr)
-{
-	struct i2c_mec5_data *ctx = dev->data;
-	int ret = 0;
-
-	if (num_msgs == 0U) {
-		return 0;
-	} else if (msgs == NULL) {
-		return -EINVAL;
-	}
-
-	k_mutex_lock(&ctx->bus_lock, K_FOREVER);
-	k_sem_reset(&ctx->xfer_done);
-
-	i2c_mec5_dbg_state_update(ctx, 1U);
-
-	ret = i2c_mec5_xfr(dev, msgs, num_msgs, addr);
-
-	k_mutex_unlock(&ctx->bus_lock);
-
-	return ret;
-}
-
-/* Port to Controller API. Port sequence:
- * Call Port to Controller to acquire lock
- * Call Port to Controller API to switch port
- * if port switch successful call this transfer API
- * Call Port to Controller API to release lock
- */
-int mchp_i2c_xec_v3_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
-			     uint16_t addr)
-{
-	struct i2c_mec5_data *const ctx = dev->data;
-
-	if (num_msgs == 0U) {
-		return 0;
-	} else if (msgs == NULL) {
-		return -EINVAL;
-	}
-
-	k_sem_reset(&ctx->xfer_done);
-
-	return i2c_mec5_xfr(dev, msgs, num_msgs, addr);
-}
-
-/* --- Zephyr API: transfer_cb (async) --------------------------------- */
-
-#ifdef CONFIG_I2C_CALLBACK
-
-static void i2c_mec5_cb_work_handler(struct k_work *work)
-{
-	struct i2c_mec5_data *ctx = CONTAINER_OF(work, struct i2c_mec5_data, cb_work);
-	i2c_callback_t cb = ctx->cb;
-	void *userdata = ctx->userdata;
-	int result = ctx->result;
-
-	ctx->cb = NULL;
-	ctx->userdata = NULL;
-	ctx->state = CTRL_IDLE;
-	k_mutex_unlock(&ctx->bus_lock);
-
-	if (cb != NULL) {
-		cb(ctx->dev, result, userdata);
-	}
-}
-
-/* Caller must acquire lock */
-static int i2c_mec5_xfr_cb(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
-			   uint16_t addr, i2c_callback_t cb, void *userdata)
-{
-	struct i2c_mec5_data *ctx = dev->data;
-	int ret = 0;
-
-	ctx->cb = cb;
-	ctx->userdata = userdata;
-
-	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
-	if (ret != 0) {
-		ctx->cb = NULL;
-		ctx->userdata = NULL;
-	}
-
-	return ret;
-}
-
-static int i2c_mec5_transfer_cb(const struct device *dev,
-				struct i2c_msg *msgs,
-				uint8_t num_msgs,
-				uint16_t addr,
-				i2c_callback_t cb,
-				void *userdata)
-{
-	struct i2c_mec5_data *ctx = dev->data;
-	int ret;
-
-	if (num_msgs == 0U) {
-		if (cb != NULL) {
-			cb(dev, 0, userdata);
-		}
-		return 0;
-	}
-
-	if (msgs == NULL) {
-		if (cb != NULL) {
-			cb(dev, -EINVAL, userdata);
-		}
-		return -EINVAL;
-	}
-
-	/* Async path: lock the mutex until the callback runs.
-	 * The cb_work handler releases it
-	 */
-	k_mutex_lock(&ctx->bus_lock, K_FOREVER);
-
-	ret = i2c_mec5_xfr_cb(dev, msgs, num_msgs, addr, cb, userdata);
-	if (ret != 0) {
-		k_mutex_unlock(&ctx->bus_lock);
-	}
-
-	return ret;
-}
-
-/* Port to Controller asynchronous transfer API.
- * Requires driver to:
- * Call Controller lock acquire API
- * Call this API
- * If error call Controller lock release API
- */
-int mchp_i2c_v3_transfer_cb(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
-			    uint16_t addr, i2c_callback_t cb, void *userdata)
-{
-	return i2c_mec5_xfr_cb(dev, msgs, num_msgs, addr, cb, userdata);
-}
-#endif /* CONFIG_I2C_CALLBACK */
 
 /* --- Zephyr API: recover_bus ----------------------------------------- */
 
@@ -1389,7 +1265,7 @@ static int i2c_mec5_bb_recover(const struct device *ctrl, uint32_t freq, uint8_t
 
 	ret = i2c_mec5_bb_check_scl(ctrl, 100U);
 	if (ret != 0) {
-		LOG_ERR("I2C recovery: SCL stuck low");
+		LOG_ERR("I2C recov: SCL stuck low");
 		return ret;
 	}
 
@@ -1405,7 +1281,7 @@ static int i2c_mec5_bb_recover(const struct device *ctrl, uint32_t freq, uint8_t
 		/* Generate an I2C STOP */
 		ret = i2c_mec5_bb_gen_stop(ctrl);
 		if (ret) {
-			LOG_ERR("I2C recovery: cannot generate a STOP");
+			LOG_ERR("I2C recov: cannot gen STOP");
 			return ret;
 		}
 
@@ -1424,11 +1300,10 @@ static int i2c_mec5_bb_recover(const struct device *ctrl, uint32_t freq, uint8_t
 	k_busy_wait(10U);
 
 	ret = config_hw(ctrl, freq, port, false);
-	k_busy_wait(10U);
 
 	bbcr = i2c_mec5_bbcr_r(cfg);
 	if ((bbcr & both_hi_msk) != both_hi_msk) {
-		LOG_INF("I2C recovery failed");
+		LOG_INF("I2C recov failed");
 		return -EIO;
 	}
 
@@ -1452,6 +1327,226 @@ int mchp_xec_i2c_v3_ctrl_recover_bus(const struct device *ctrl,
 
 	return i2c_mec5_bb_recover(ctrl, ctx->active_freq, ctx->active_port);
 }
+
+/* --- Zephyr API: transfer (sync) -------------------------------------- */
+
+static int check_ctrl(const struct device *dev)
+{
+	const struct i2c_mec5_config *drvcfg = dev->config;
+	struct i2c_mec5_data *ctx = dev->data;
+	int ret = 0;
+	uint8_t i2c_sr = i2c_mec5_status_r(drvcfg);
+
+	if (i2c_sr != I2C_MEC5_STATUS_IDLE_EXPECTED) {
+#ifdef CONFIG_I2C_MCHP_XEC_V3_ENABLE_RECOV_COUNTERS
+		ctx->recov_attempts++;
+#endif
+		ret = i2c_mec5_bb_recover(dev, ctx->active_freq, ctx->active_port);
+		if (ret != 0) {
+#ifdef CONFIG_I2C_MCHP_XEC_V3_ENABLE_RECOV_COUNTERS
+			ctx->recov_fails++;
+#endif
+		}
+	}
+
+	return ret;
+}
+
+/* Prerequitie: caller must have acquired the lock */
+static int i2c_mec5_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			uint16_t addr)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	int ret = 0;
+
+	i2c_mec5_dbg_state_init(ctx);
+
+#ifdef CONFIG_I2C_CALLBACK
+	ctx->cb = NULL;
+	ctx->userdata = NULL;
+#endif
+	i2c_mec5_dbg_state_update(ctx, 1U);
+
+#ifdef CONFIG_I2C_TARGET
+	if (i2c_mec5_target_enabled(dev)) {
+		i2c_mec5_dbg_state_update(ctx, 2U);
+		return -EBUSY;
+	}
+#endif
+
+	ret = check_ctrl(dev);
+	if (ret != 0) {
+		i2c_mec5_dbg_state_update(ctx, 3U);
+		return ret;
+	}
+
+	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
+	if (ret == 0) {
+		if (k_sem_take(&ctx->xfer_done, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS)) != 0) {
+			i2c_mec5_dbg_state_update(ctx, 4U); /* !!! TODO interrupt keeps firing !!! */
+			config_hw(dev, ctx->active_freq, ctx->active_port, true);
+			LOG_ERR("transfer timed out");
+			ret = -ETIMEDOUT;
+			ctx->state = CTRL_IDLE;
+		} else {
+			i2c_mec5_dbg_state_update(ctx, 5U);
+			ret = ctx->result;
+		}
+	}
+
+	ctx->state = CTRL_IDLE;
+
+	i2c_mec5_dbg_state_update(ctx, 6U);
+
+	return ret;
+}
+
+static int i2c_mec5_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			     uint16_t addr)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	int ret = 0;
+
+	if (num_msgs == 0U) {
+		return 0;
+	} else if (msgs == NULL) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&ctx->bus_lock, K_FOREVER);
+	k_sem_reset(&ctx->xfer_done);
+
+	i2c_mec5_dbg_state_update(ctx, 1U);
+
+	ret = i2c_mec5_xfr(dev, msgs, num_msgs, addr);
+
+	k_mutex_unlock(&ctx->bus_lock);
+
+	return ret;
+}
+
+/* Port to Controller API. Port sequence:
+ * Call Port to Controller to acquire lock
+ * Call Port to Controller API to switch port
+ * if port switch successful call this transfer API
+ * Call Port to Controller API to release lock
+ */
+int mchp_i2c_xec_v3_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			     uint16_t addr)
+{
+	struct i2c_mec5_data *const ctx = dev->data;
+
+	if (num_msgs == 0U) {
+		return 0;
+	} else if (msgs == NULL) {
+		return -EINVAL;
+	}
+
+	k_sem_reset(&ctx->xfer_done);
+
+	return i2c_mec5_xfr(dev, msgs, num_msgs, addr);
+}
+
+/* --- Zephyr API: transfer_cb (async) --------------------------------- */
+
+#ifdef CONFIG_I2C_CALLBACK
+
+static void i2c_mec5_cb_work_handler(struct k_work *work)
+{
+	struct i2c_mec5_data *ctx = CONTAINER_OF(work, struct i2c_mec5_data, cb_work);
+	i2c_callback_t cb = ctx->cb;
+	void *userdata = ctx->userdata;
+	int result = ctx->result;
+
+	ctx->cb = NULL;
+	ctx->userdata = NULL;
+	ctx->state = CTRL_IDLE;
+	k_mutex_unlock(&ctx->bus_lock);
+
+	if (cb != NULL) {
+		cb(ctx->dev, result, userdata);
+	}
+}
+
+/* Caller must acquire lock */
+static int i2c_mec5_xfr_cb(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			   uint16_t addr, i2c_callback_t cb, void *userdata)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	int ret = 0;
+
+#ifdef CONFIG_I2C_TARGET
+	if (i2c_mec5_target_enabled(dev)) {
+		return -EBUSY;
+	}
+#endif
+
+	ret = check_ctrl(dev);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ctx->cb = cb;
+	ctx->userdata = userdata;
+
+	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
+	if (ret != 0) {
+		ctx->cb = NULL;
+		ctx->userdata = NULL;
+	}
+
+	return ret;
+}
+
+static int i2c_mec5_transfer_cb(const struct device *dev,
+				struct i2c_msg *msgs,
+				uint8_t num_msgs,
+				uint16_t addr,
+				i2c_callback_t cb,
+				void *userdata)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	int ret = 0;
+
+	if (num_msgs == 0U) {
+		if (cb != NULL) {
+			cb(dev, 0, userdata);
+		}
+		return 0;
+	}
+
+	if (msgs == NULL) {
+		if (cb != NULL) {
+			cb(dev, -EINVAL, userdata);
+		}
+		return -EINVAL;
+	}
+
+	/* Async path: lock the mutex until the callback runs.
+	 * The cb_work handler releases it
+	 */
+	k_mutex_lock(&ctx->bus_lock, K_FOREVER);
+
+	ret = i2c_mec5_xfr_cb(dev, msgs, num_msgs, addr, cb, userdata);
+	if (ret != 0) {
+		k_mutex_unlock(&ctx->bus_lock);
+	}
+
+	return ret;
+}
+
+/* Port to Controller asynchronous transfer API.
+ * Requires driver to:
+ * Call Controller lock acquire API
+ * Call this API
+ * If error call Controller lock release API
+ */
+int mchp_i2c_v3_transfer_cb(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+			    uint16_t addr, i2c_callback_t cb, void *userdata)
+{
+	return i2c_mec5_xfr_cb(dev, msgs, num_msgs, addr, cb, userdata);
+}
+#endif /* CONFIG_I2C_CALLBACK */
 
 #ifdef CONFIG_I2C_TARGET
 
@@ -1885,10 +1980,10 @@ static void handle_target_stop(struct i2c_mec5_data *ctx)
 }
 
 /* --- Dispatcher (called from main ISR when controller is idle) ------- */
+
 static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action act,
 				  uint8_t status)
 {
-#if KERNEL_VERSION_NUMBER >= 0x40400
 	struct i2c_target_config *tcfg = NULL;
 	enum i2c_error_reason err_reason = I2C_ERROR_GENERIC;
 
@@ -1918,7 +2013,7 @@ static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action
 			}
 		}
 	}
-#endif /* KERNEL_VERSION_NUMBER >= 0x40400 */
+
 	ctx->tgt_state = TGT_IDLE;
 
 	i2c_mec5_dbg_state_update(ctx, 0xBAU);
