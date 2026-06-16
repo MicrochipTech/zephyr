@@ -1,0 +1,69 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2C V3 controller 7-bit addressing,
+  network layer HW FSM plus DMA.
+
+  This node represents the physical I2C controller hardware. Zephyr
+  applications do not bind here; the bind to I2C port nodes
+  (microchip,xec-i2c-v3-port), which select the pin pair the controller
+  drivers.
+
+compatible: "microchip,xec-i2c-v3-nl"
+
+include:
+  - name: microchip,dmec-ecia-girq.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  girqs:
+    required: true
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR sleep enable, clock required, reset enable register index
+      and bit position.
+
+  port:
+    type: int
+    required: true
+    description: |
+      Microchip XEC I2C controller includes a port MUX allowing one of 16 ports
+      to be connected at one time. The port property specifies the port the
+      MUX will be configured for at driver initialization. Range is 0 through 15.
+
+  bounce-buffer-size:
+    type: int
+    description: |
+      I2C-NL network layer requires the START and RPT-START addresses
+      to be prepended and post-pended to the TX data buffer moved by
+      DMA from memory to the I2C-NL TX buffer register. For transfers
+      less than or equal to (bounce-buffer-size - 2), the driver can
+      build the packet in this buffer and use one TX DMA transfer.
+      For larger I2C write messages the driver uses this buffer for
+      the START and RPT-START addresses. Up to three TX DMA transfers
+      may be required: DMA transfers START address from this buffer to
+      I2C, DMA transfers message data directly from message buffer to
+      I2C, and if a RPT-START is required, a third DMA transfer of the
+      RPT-START address from this buffer to I2C.
+
+  general-call:
+    type: boolean
+    description: |
+      If present, respond to the I2C general-call address (address 0).
+      Defaults to disabled (Configuration.GC_DIS = 1).
+
+  target-buf-size:
+    type: int
+    default: 32
+    description: |
+      Per instance target mode driver buffer for storing I2C writes
+      from an external controller to this target.

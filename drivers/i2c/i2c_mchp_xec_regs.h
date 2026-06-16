@@ -13,6 +13,8 @@
 extern "C" {
 #endif
 
+#define XEC_I2C_SMB_BAUD_CLK MHZ(16)
+
 #define XEC_I2C_SMB0_ID    0
 #define XEC_I2C_SMB1_ID    1
 #define XEC_I2C_SMB2_ID    2
