@@ -756,14 +756,19 @@ static uint8_t pio_pull_byte(struct i2c_mec5_data *ctx)
 static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 {
 	const struct i2c_mec5_config *cfg = ctx->dev->config;
-	uint8_t i2c_sr = 0;
 
 	if (ctx->state == CTRL_ERROR) {
-		i2c_sr = i2c_mec5_status_r(cfg);
-		if ((i2c_sr & I2C_MEC5_STATUS_NOSVC) == 0) {
-			i2c_mec5_data_r(cfg);
-			i2c_mec5_ctrl_w(cfg, 0xC3U); /* gen STOP */
-		}
+		/*
+		 * Issue STOP unconditionally on BER/LAB. Gating on NOSVC=0
+		 * was incorrect: after a bus error the controller often
+		 * reports NOSVC=1 ("nothing to service") even though SCL/SDA
+		 * are still held — the bus state is independent of the
+		 * service-request latch. The thread waiter (or workqueue
+		 * handler in async mode) verifies BBCR after this and runs
+		 * full bit-bang recovery if either line is still low.
+		 */
+		i2c_mec5_data_r(cfg);
+		i2c_mec5_ctrl_w(cfg, 0xC3U); /* PCLR|ESO|STO|ACK */
 	}
 
 	ctx->result = result;
@@ -1361,6 +1366,32 @@ int mchp_xec_i2c_v3_ctrl_recover_bus(const struct device *ctrl,
 	return i2c_mec5_bb_recover(ctrl, ctx->active_freq, ctx->active_port);
 }
 
+/*
+ * Verify the bus released after an abnormal transfer completion.
+ *
+ * BBCR is left in monitor-only mode (LIVECM_EN=1, BBM_EN=0) by config_hw(),
+ * so a read alone is safe — never write BBCR here, since BBM_EN=1 would
+ * disconnect SCL/SDA from the I2C controller. If either line is held low,
+ * delegate to i2c_mec5_bb_recover(), the only legitimate writer of
+ * BBM_EN. Recovery failures are logged but do not override the original
+ * transfer error code returned to the caller.
+ */
+static void i2c_mec5_post_xfer_recover(const struct device *dev)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	const struct i2c_mec5_config *cfg = dev->config;
+	uint8_t bbcr = i2c_mec5_bbcr_r(cfg);
+	uint8_t both_hi = I2C_MEC5_BBCR_CLKI_HI | I2C_MEC5_BBCR_DATI_HI;
+
+	if ((bbcr & both_hi) == both_hi) {
+		return;
+	}
+
+	if (i2c_mec5_bb_recover(dev, ctx->active_freq, ctx->active_port) != 0) {
+		LOG_ERR("post-xfer bus recovery failed");
+	}
+}
+
 /* --- Zephyr API: transfer (sync) -------------------------------------- */
 
 static int check_ctrl(const struct device *dev)
@@ -1416,14 +1447,24 @@ static int i2c_mec5_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t 
 	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
 	if (ret == 0) {
 		if (k_sem_take(&ctx->xfer_done, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS)) != 0) {
-			i2c_mec5_dbg_state_update(ctx, 4U); /* !!! TODO interrupt keeps firing !!! */
-			config_hw(dev, ctx->active_freq, ctx->active_port, true);
+			i2c_mec5_dbg_state_update(ctx, 4U);
 			LOG_ERR("transfer timed out");
 			ret = -ETIMEDOUT;
-			ctx->state = CTRL_IDLE;
 		} else {
 			i2c_mec5_dbg_state_update(ctx, 5U);
 			ret = ctx->result;
+		}
+
+		/*
+		 * Any abnormal completion (timeout, BER, LAB, NACK) gets a
+		 * read-only BBCR check; bb_recover() takes over only if a
+		 * line is held low. On a healthy bus this is a few register
+		 * reads. config_hw() is not called separately here — the
+		 * recovery helper performs its own controller reset when it
+		 * runs.
+		 */
+		if (ret != 0) {
+			i2c_mec5_post_xfer_recover(dev);
 		}
 	}
 
@@ -1494,6 +1535,15 @@ static void i2c_mec5_cb_work_handler(struct k_work *work)
 	ctx->cb = NULL;
 	ctx->userdata = NULL;
 	ctx->state = CTRL_IDLE;
+
+	/* Verify SCL/SDA released before releasing the bus lock so the next
+	 * transfer's check_ctrl() sees a recovered bus. Read-only BBCR check
+	 * fast-paths a healthy bus; bb_recover() runs only if a line is low.
+	 */
+	if (result != 0) {
+		i2c_mec5_post_xfer_recover(ctx->dev);
+	}
+
 	k_mutex_unlock(&ctx->bus_lock);
 
 	if (cb != NULL) {
