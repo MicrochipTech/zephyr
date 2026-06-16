@@ -200,7 +200,7 @@ struct i2c_mec5_data {
 #ifdef CONFIG_I2C_CALLBACK
 	i2c_callback_t cb;
 	void          *userdata;
-	struct k_work  cb_work;
+	struct k_work_delayable cb_work;
 #endif
 
 #ifdef CONFIG_I2C_TARGET
@@ -776,7 +776,13 @@ static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 
 #ifdef CONFIG_I2C_CALLBACK
 	if (ctx->cb != NULL) {
-		k_work_submit(&ctx->cb_work);
+		/*
+		 * Atomically cancel the kickoff watchdog (if still pending)
+		 * and run the handler now. If the handler is already running
+		 * because the watchdog just fired, the reschedule queues a
+		 * second pass which the handler's cb-NULL guard early-outs.
+		 */
+		k_work_reschedule(&ctx->cb_work, K_NO_WAIT);
 	}
 #endif
 }
@@ -1527,14 +1533,53 @@ int mchp_i2c_xec_v3_transfer(const struct device *dev, struct i2c_msg *msgs, uin
 
 static void i2c_mec5_cb_work_handler(struct k_work *work)
 {
-	struct i2c_mec5_data *ctx = CONTAINER_OF(work, struct i2c_mec5_data, cb_work);
-	i2c_callback_t cb = ctx->cb;
-	void *userdata = ctx->userdata;
-	int result = ctx->result;
+	struct k_work_delayable *dw = k_work_delayable_from_work(work);
+	struct i2c_mec5_data *ctx = CONTAINER_OF(dw, struct i2c_mec5_data, cb_work);
+	i2c_callback_t cb;
+	void *userdata;
+	int result;
+	unsigned int key;
+	bool timed_out;
 
+	/*
+	 * Two ways the handler can run:
+	 *   1. pio_on_complete called k_work_reschedule(K_NO_WAIT) — IRQ
+	 *      drove the SM to CTRL_DONE / CTRL_ERROR, ctx->result is set.
+	 *   2. The kickoff-armed delay expired with no IRQ — ctx->state is
+	 *      still mid-transfer (CTRL_START_SENT / TX_DATA / RX_*).
+	 *
+	 * irq_lock is held only across the inspect-and-claim block so the
+	 * ISR cannot mutate state while we decide which case we're in or
+	 * race us for ownership of cb / userdata. Recovery and the user
+	 * callback run unlocked.
+	 */
+	key = irq_lock();
+	if (ctx->cb == NULL) {
+		/* A second pass queued by a near-simultaneous IRQ + watchdog
+		 * fire. The first pass already published the result.
+		 */
+		irq_unlock(key);
+		return;
+	}
+	timed_out = (ctx->state != CTRL_DONE) && (ctx->state != CTRL_ERROR);
+	if (timed_out) {
+		/* No IRQ ever completed the transfer. Park the SM in
+		 * CTRL_ERROR so any stray service IRQ falls through
+		 * sm_step's default arm and does nothing.
+		 */
+		ctx->state = CTRL_ERROR;
+		ctx->result = -ETIMEDOUT;
+	}
+	cb = ctx->cb;
+	userdata = ctx->userdata;
+	result = ctx->result;
 	ctx->cb = NULL;
 	ctx->userdata = NULL;
-	ctx->state = CTRL_IDLE;
+	irq_unlock(key);
+
+	if (timed_out) {
+		LOG_ERR("async transfer timed out");
+	}
 
 	/* Verify SCL/SDA released before releasing the bus lock so the next
 	 * transfer's check_ctrl() sees a recovered bus. Read-only BBCR check
@@ -1544,6 +1589,7 @@ static void i2c_mec5_cb_work_handler(struct k_work *work)
 		i2c_mec5_post_xfer_recover(ctx->dev);
 	}
 
+	ctx->state = CTRL_IDLE;
 	k_mutex_unlock(&ctx->bus_lock);
 
 	if (cb != NULL) {
@@ -1576,6 +1622,16 @@ static int i2c_mec5_xfr_cb(const struct device *dev, struct i2c_msg *msgs, uint8
 	if (ret != 0) {
 		ctx->cb = NULL;
 		ctx->userdata = NULL;
+	} else {
+		/*
+		 * Arm the watchdog. If pio_on_complete fires first the IRQ
+		 * path uses k_work_reschedule(K_NO_WAIT) to atomically cancel
+		 * this delayed fire and run the handler immediately. If no
+		 * IRQ ever arrives (slave permanently stretches SCL, etc.)
+		 * the work fires at the timeout, the handler detects the
+		 * still-mid-transfer state and forces -ETIMEDOUT + recovery.
+		 */
+		k_work_schedule(&ctx->cb_work, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS));
 	}
 
 	return ret;
@@ -2225,7 +2281,7 @@ static int i2c_mec5_init(const struct device *dev)
 	k_sem_init(&ctx->xfer_done, 0, 1);
 
 #ifdef CONFIG_I2C_CALLBACK
-	k_work_init(&ctx->cb_work, i2c_mec5_cb_work_handler);
+	k_work_init_delayable(&ctx->cb_work, i2c_mec5_cb_work_handler);
 #endif
 
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
