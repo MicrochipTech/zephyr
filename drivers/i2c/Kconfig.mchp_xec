@@ -61,11 +61,10 @@ config I2C_MCHP_XEC_V3_NL
 	  on one of 16 ports at a time. The driver includes custom functions to get/set
 	  the I2C port the controller is connected to.
 
-config I2C_MCHP_XEC_V3_NL
-	bool "Microchip XEC I2Cv3 network layer port switch"
+config I2C_MCHP_XEC_V3_NL_PORT_SWITCH
+	bool "Microchip XEC I2Cv3 network layer port switch support"
 	default y
-	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_NL_PORT
-	select I2C_MCHP_XEC_V3_NL
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_NL
 	help
 	  Support hardware I2C port MUX in I2Cv3 hardware for the I2Cv3 NL driver.
 
