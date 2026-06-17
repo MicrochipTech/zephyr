@@ -67,3 +67,26 @@ properties:
     description: |
       Per instance target mode driver buffer for storing I2C writes
       from an external controller to this target.
+
+  dmas:
+    description: |
+      Optional DMA channel specifier, required for DMA transactions.
+      For example dmas = <phandle-to-central-dma chan-number dma-slot-num>
+      The dma-slot-number is Device Number from the DMA Host Device Selection
+      table in the chip data sheet. GP-SPI controller uses two DMA channel one
+      for transmit and the second for receive. For example in MEC175x GP-SPI
+      controller 0 DMA Device Number 12 is transmit and Device Number 13 is
+      receive. We choose DMA channel 5 for TX and channel 6 for RX:
+         dmas = <&dmac 5 12>, <&dmac 6 13>;
+
+  dma-names:
+    description: |
+      DMA channel name. If DMA should be used, expected value is "cm" or "tm".
+      Where cm is the DMA channel used for controller mode and tm is the DMA
+      channel used for target mode.
+
+      For example
+         dma-names = "cm", "tm";
+    enum:
+      - "cm"
+      - "tm"
