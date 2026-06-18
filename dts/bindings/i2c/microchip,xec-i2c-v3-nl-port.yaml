@@ -2,47 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 description: |
-  Microchip XEC I2Cv3-NL port.
-
-  A port represents one SCL/SDA pin pair that a microchip,xec-i2c-v3
-  controller can driver. Zephyr applications bind to port nodes, not
-  to the controller. Multiple ports my reference the same controller
-  via the "controller" phandle; only one port is active at a time,
-  and switching ports triggers a controller reset and resynchronization
-  to the new ports pins.
+  Microchip XEC I2Cv3-NL virtual I2C Port routing mapping
+  onto a physical multi-port hardware controller.
 
 compatible: "microchip,xec-i2c-v3-nl-port"
 
-include: ["i2c-controller.yaml", "pinctrl-device.yaml"]
+# This property forces Zephyr to treat this virtual port node as an I2C master bus
+include: i2c-controller.yaml
 
 properties:
   controller:
     type: phandle
     required: true
-    description: |
-      Phandle to the microchip,xec-v3 controller this port drives.
+    description: Phandle pointing to the underlying hardware I2C controller block.
 
   port:
     type: int
     required: true
-    description:
-      Encoded controller/port selector. Bits [7:4] are the controller
-      index and bits [3:0] are the port index for that controller.
-      Build the value with MCHP_XEC_I2C_CTRL_PORT(ctrl, port) from
-      <zephyr/dt-bindings/i2c/mchp-xec-i2c.>.
-
-  clock-frequency:
-    required: true
-
-  pinctrl-0:
-    required: true
-
-  pinctrl-names:
-    required: true
+    description: The physical channel/port index (e.g., 0 through 15) on the controller.
 
   default-port:
     type: boolean
-    description: |
-      If more than one port is connected to a controller this property
-      selects which port the controller will be connected to at
-      controller driver initialization time.
+    description: Optional flag signifying this is the boot/default physical channel routing.
