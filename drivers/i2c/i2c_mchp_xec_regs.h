@@ -236,6 +236,8 @@ extern "C" {
 #define XEC_I2C_BCLK_HIP_SET(n) FIELD_PREP(XEC_I2C_BCLK_HIP_MSK, (n))
 #define XEC_I2C_BCLK_HIP_GET(r) FIELD_GET(XEC_I2C_BCLK_HIP_MSK, (r))
 
+#define XEC_I2C_BCLK_BAUD16M_100K 0x4F4FU
+
 #define XEC_I2C_BLKID_OFS 0x30U /* RO HW block ID */
 #define XEC_I2C_REV_OFS   0x34U /* RO HW revision */
 
