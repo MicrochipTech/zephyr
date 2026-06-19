@@ -361,6 +361,7 @@ static inline void ctrl_write(const struct i2c_mec5_config *cfg, uint8_t extra)
 /* --- Forward decls for static helpers --------------------------------- */
 
 static void begin_msg(struct i2c_mec5_data *ctx);
+static void begin_or_continue(struct i2c_mec5_data *ctx);
 static void advance_or_stop(struct i2c_mec5_data *ctx, int result);
 static void schedule_stop(struct i2c_mec5_data *ctx, int result);
 
@@ -426,6 +427,38 @@ static void begin_msg(struct i2c_mec5_data *ctx)
 	i2c_mec5_dbg_state_update(ctx, 0x21U);
 }
 
+/*
+ * Advance to the next message, emitting a Repeated-START only when the I2C
+ * spec actually requires it: on a direction change, or when the message has
+ * I2C_MSG_RESTART set. Same-direction writes (TX -> TX) without RESTART just
+ * continue clocking bytes from the new buffer; the bus is held SCL-low after
+ * the previous byte's ACK and is waiting for the next data byte. RX paths do
+ * not reach here — handle_rx_last forces STOP and the resume comes through
+ * handle_idle_wait, which always issues a fresh START.
+ */
+static void begin_or_continue(struct i2c_mec5_data *ctx)
+{
+	struct i2c_msg *prev = &ctx->msgs[ctx->cur_msg - 1U];
+	struct i2c_msg *next = &ctx->msgs[ctx->cur_msg];
+	bool prev_read = (prev->flags & I2C_MSG_READ) == I2C_MSG_READ;
+	bool next_read = (next->flags & I2C_MSG_READ) == I2C_MSG_READ;
+	bool restart = (next->flags & I2C_MSG_RESTART) == I2C_MSG_RESTART;
+
+	if (!restart && !prev_read && !next_read) {
+		ctx->buf_idx = 0U;
+		if (next->len == 0U) {
+			advance_or_stop(ctx, 0);
+			return;
+		}
+		ctx->ops->push_byte(ctx, next->buf[0]);
+		ctx->buf_idx = 1U;
+		ctx->state = CTRL_TX_DATA;
+		return;
+	}
+
+	begin_msg(ctx);
+}
+
 /* --- Message termination --------------------------------------------- */
 
 static void advance_or_stop(struct i2c_mec5_data *ctx, int result)
@@ -442,7 +475,7 @@ static void advance_or_stop(struct i2c_mec5_data *ctx, int result)
 	} else {
 		i2c_mec5_dbg_state_update(ctx, 0x32);
 		ctx->cur_msg++;
-		begin_msg(ctx);
+		begin_or_continue(ctx);
 	}
 
 	i2c_mec5_dbg_state_update(ctx, 0x33);
