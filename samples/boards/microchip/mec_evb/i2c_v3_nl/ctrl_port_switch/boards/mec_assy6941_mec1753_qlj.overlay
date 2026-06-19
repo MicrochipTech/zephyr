@@ -64,9 +64,13 @@
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
-/* I2C Controller 0 — pulled into the V3-NL driver. The driver requires a
- * DMA channel and the host (controller) trigger source for SMB0; pick any
- * unused DMAC channel.
+/* I2C Controller 0 - pulled into the V3-NL driver. Two DMA channels:
+ * "host" for controller-mode transfers, "target" for target-mode
+ * transfers when the application registers an I2C target. Both use the
+ * same DMAC instance but different channels and different trigger
+ * sources. Target slot is wired even though the sample is
+ * controller-only today, so target-mode applications can layer on
+ * without an overlay edit.
  */
 &dmac {
 	status = "okay";
@@ -77,7 +81,9 @@
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
-	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_CTRL>;
+	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_CTRL>,
+	       <&dmac 1 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_TARG>;
+	dma-names = "host", "target";
 	/* Holds [wr-addr | wr-data... | rd-addr] for the TX phase, and on
 	 * multi-read transfers also the RX scatter staging area, so the
 	 * larger of (1 + sum(wr) + 1) and sum(rd) must fit. 256 lets the
@@ -85,6 +91,11 @@
 	 * it for clients that need more.
 	 */
 	bounce-buffer-size = <256>;
+	/* Target-mode RX staging: largest write the external host will
+	 * issue plus one byte (matched target address). The driver strips
+	 * the address before invoking buf_write_received.
+	 */
+	target-buffer-size = <256>;
 };
 
 /* Port 0 pins */
