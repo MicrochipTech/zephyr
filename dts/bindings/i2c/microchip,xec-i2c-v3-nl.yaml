@@ -1,0 +1,47 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2Cv3-NL I2C driver using network layer I2C protcol
+  FSM plus DMA.
+
+compatible: "microchip,xec-i2c-v3-nl"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+    description: MMIO Base address register mapping.
+
+  interrupts:
+    required: true
+    description: Hardware interrupt vector assignment.
+
+  girqs:
+    type: int
+    required: true
+    description: |
+      Hardware GIRQ encoded interrupt routing. Each peripheral
+      interrupt line is routed to a GIRQ bit in the XEC ECIA.
+      The GIRQ result bits which are bitwise AND of GIRQ enable
+      and status are routed to the peripheral's NVIC input.
+      The value is the encoded GIRQ number and bit position
+      for this peripheral instance.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Each peripheral instance has sleep enable, clock required, and
+      reset bits in the PCR block. The value is the encoded PCR register
+      index and bit position for the peripheral instance.
+
+  dmas:
+    required: true
+    description: Phandle and channel specs mapping this block to a DMA engine.
+
+  bounce-buffer-size:
+    type: int
+    required: true
+    description: Per-instance sizing configuration for the hardware bounce buffer.

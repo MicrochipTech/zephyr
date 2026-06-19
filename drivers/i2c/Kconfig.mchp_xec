@@ -18,3 +18,42 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_V3_NL
+	bool "Microchip XEC I2Cv3 network layer driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_NL_ENABLED && SOC_MCHP_MEC_I2C_SMB_V38
+	select PINCTRL
+	select DMA
+	help
+	  Enable the Microchip I2Cv3 network layer I2C driver. Network layer is
+	  a hardware FSM for the I2C/SMBus protocol. The FSM requires DMA to move
+	  both target addresses and data to/from the memory and the I2C controller.
+	  Network layer hardware expects the transmit buffer to laid out as
+	  target-write-address | tx-data | target-read-address. The driver implements
+	  a TX buffer whose size in bytes is a per-instance drive tree property. If the
+	  transmit data plus target addresses fit the buffer then one TX DMA operation
+	  is used. For TX data larger that the buffer size the driver will use multiple
+	  DMA operations. Receive data is stored directly into the application message
+	  buffer(s) by DMA.
+	  The I2C hardware includes a 16-port MUX allowing the controller to be used
+	  on one of 16 ports at a time. The driver includes custom functions to get/set
+	  the I2C port the controller is connected to.
+
+config I2C_MCHP_XEC_V3_NL_PORT_SWITCH
+	bool "Microchip XEC I2Cv3 network layer port switch support"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_NL_ENABLED
+	help
+	  Support hardware I2C port MUX in I2Cv3 hardware for the I2Cv3 NL driver.
+
+config I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY
+	int "Microchip XEC I2C v3-NL port init priority"
+	default 51
+	depends on I2C_MCHP_XEC_V3_NL
+	help
+	  Initialization priority for the I2C v3-NL virtual port devices. Must
+	  be greater than CONFIG_I2C_INIT_PRIORITY so that the controller
+	  device referenced by the port's "controller" phandle is ready before
+	  the port's init function runs.
+
