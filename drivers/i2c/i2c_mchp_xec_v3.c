@@ -200,7 +200,7 @@ struct i2c_mec5_data {
 #ifdef CONFIG_I2C_CALLBACK
 	i2c_callback_t cb;
 	void          *userdata;
-	struct k_work  cb_work;
+	struct k_work_delayable cb_work;
 #endif
 
 #ifdef CONFIG_I2C_TARGET
@@ -756,14 +756,19 @@ static uint8_t pio_pull_byte(struct i2c_mec5_data *ctx)
 static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 {
 	const struct i2c_mec5_config *cfg = ctx->dev->config;
-	uint8_t i2c_sr = 0;
 
 	if (ctx->state == CTRL_ERROR) {
-		i2c_sr = i2c_mec5_status_r(cfg);
-		if ((i2c_sr & I2C_MEC5_STATUS_NOSVC) == 0) {
-			i2c_mec5_data_r(cfg);
-			i2c_mec5_ctrl_w(cfg, 0xC3U); /* gen STOP */
-		}
+		/*
+		 * Issue STOP unconditionally on BER/LAB. Gating on NOSVC=0
+		 * was incorrect: after a bus error the controller often
+		 * reports NOSVC=1 ("nothing to service") even though SCL/SDA
+		 * are still held — the bus state is independent of the
+		 * service-request latch. The thread waiter (or workqueue
+		 * handler in async mode) verifies BBCR after this and runs
+		 * full bit-bang recovery if either line is still low.
+		 */
+		i2c_mec5_data_r(cfg);
+		i2c_mec5_ctrl_w(cfg, 0xC3U); /* PCLR|ESO|STO|ACK */
 	}
 
 	ctx->result = result;
@@ -771,7 +776,13 @@ static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 
 #ifdef CONFIG_I2C_CALLBACK
 	if (ctx->cb != NULL) {
-		k_work_submit(&ctx->cb_work);
+		/*
+		 * Atomically cancel the kickoff watchdog (if still pending)
+		 * and run the handler now. If the handler is already running
+		 * because the watchdog just fired, the reschedule queues a
+		 * second pass which the handler's cb-NULL guard early-outs.
+		 */
+		k_work_reschedule(&ctx->cb_work, K_NO_WAIT);
 	}
 #endif
 }
@@ -1361,6 +1372,32 @@ int mchp_xec_i2c_v3_ctrl_recover_bus(const struct device *ctrl,
 	return i2c_mec5_bb_recover(ctrl, ctx->active_freq, ctx->active_port);
 }
 
+/*
+ * Verify the bus released after an abnormal transfer completion.
+ *
+ * BBCR is left in monitor-only mode (LIVECM_EN=1, BBM_EN=0) by config_hw(),
+ * so a read alone is safe — never write BBCR here, since BBM_EN=1 would
+ * disconnect SCL/SDA from the I2C controller. If either line is held low,
+ * delegate to i2c_mec5_bb_recover(), the only legitimate writer of
+ * BBM_EN. Recovery failures are logged but do not override the original
+ * transfer error code returned to the caller.
+ */
+static void i2c_mec5_post_xfer_recover(const struct device *dev)
+{
+	struct i2c_mec5_data *ctx = dev->data;
+	const struct i2c_mec5_config *cfg = dev->config;
+	uint8_t bbcr = i2c_mec5_bbcr_r(cfg);
+	uint8_t both_hi = I2C_MEC5_BBCR_CLKI_HI | I2C_MEC5_BBCR_DATI_HI;
+
+	if ((bbcr & both_hi) == both_hi) {
+		return;
+	}
+
+	if (i2c_mec5_bb_recover(dev, ctx->active_freq, ctx->active_port) != 0) {
+		LOG_ERR("post-xfer bus recovery failed");
+	}
+}
+
 /* --- Zephyr API: transfer (sync) -------------------------------------- */
 
 static int check_ctrl(const struct device *dev)
@@ -1416,14 +1453,24 @@ static int i2c_mec5_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t 
 	ret = i2c_mec5_sm_kickoff(ctx, msgs, num_msgs, addr);
 	if (ret == 0) {
 		if (k_sem_take(&ctx->xfer_done, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS)) != 0) {
-			i2c_mec5_dbg_state_update(ctx, 4U); /* !!! TODO interrupt keeps firing !!! */
-			config_hw(dev, ctx->active_freq, ctx->active_port, true);
+			i2c_mec5_dbg_state_update(ctx, 4U);
 			LOG_ERR("transfer timed out");
 			ret = -ETIMEDOUT;
-			ctx->state = CTRL_IDLE;
 		} else {
 			i2c_mec5_dbg_state_update(ctx, 5U);
 			ret = ctx->result;
+		}
+
+		/*
+		 * Any abnormal completion (timeout, BER, LAB, NACK) gets a
+		 * read-only BBCR check; bb_recover() takes over only if a
+		 * line is held low. On a healthy bus this is a few register
+		 * reads. config_hw() is not called separately here — the
+		 * recovery helper performs its own controller reset when it
+		 * runs.
+		 */
+		if (ret != 0) {
+			i2c_mec5_post_xfer_recover(dev);
 		}
 	}
 
@@ -1486,13 +1533,62 @@ int mchp_i2c_xec_v3_transfer(const struct device *dev, struct i2c_msg *msgs, uin
 
 static void i2c_mec5_cb_work_handler(struct k_work *work)
 {
-	struct i2c_mec5_data *ctx = CONTAINER_OF(work, struct i2c_mec5_data, cb_work);
-	i2c_callback_t cb = ctx->cb;
-	void *userdata = ctx->userdata;
-	int result = ctx->result;
+	struct k_work_delayable *dw = k_work_delayable_from_work(work);
+	struct i2c_mec5_data *ctx = CONTAINER_OF(dw, struct i2c_mec5_data, cb_work);
+	i2c_callback_t cb;
+	void *userdata;
+	int result;
+	unsigned int key;
+	bool timed_out;
 
+	/*
+	 * Two ways the handler can run:
+	 *   1. pio_on_complete called k_work_reschedule(K_NO_WAIT) — IRQ
+	 *      drove the SM to CTRL_DONE / CTRL_ERROR, ctx->result is set.
+	 *   2. The kickoff-armed delay expired with no IRQ — ctx->state is
+	 *      still mid-transfer (CTRL_START_SENT / TX_DATA / RX_*).
+	 *
+	 * irq_lock is held only across the inspect-and-claim block so the
+	 * ISR cannot mutate state while we decide which case we're in or
+	 * race us for ownership of cb / userdata. Recovery and the user
+	 * callback run unlocked.
+	 */
+	key = irq_lock();
+	if (ctx->cb == NULL) {
+		/* A second pass queued by a near-simultaneous IRQ + watchdog
+		 * fire. The first pass already published the result.
+		 */
+		irq_unlock(key);
+		return;
+	}
+	timed_out = (ctx->state != CTRL_DONE) && (ctx->state != CTRL_ERROR);
+	if (timed_out) {
+		/* No IRQ ever completed the transfer. Park the SM in
+		 * CTRL_ERROR so any stray service IRQ falls through
+		 * sm_step's default arm and does nothing.
+		 */
+		ctx->state = CTRL_ERROR;
+		ctx->result = -ETIMEDOUT;
+	}
+	cb = ctx->cb;
+	userdata = ctx->userdata;
+	result = ctx->result;
 	ctx->cb = NULL;
 	ctx->userdata = NULL;
+	irq_unlock(key);
+
+	if (timed_out) {
+		LOG_ERR("async transfer timed out");
+	}
+
+	/* Verify SCL/SDA released before releasing the bus lock so the next
+	 * transfer's check_ctrl() sees a recovered bus. Read-only BBCR check
+	 * fast-paths a healthy bus; bb_recover() runs only if a line is low.
+	 */
+	if (result != 0) {
+		i2c_mec5_post_xfer_recover(ctx->dev);
+	}
+
 	ctx->state = CTRL_IDLE;
 	k_mutex_unlock(&ctx->bus_lock);
 
@@ -1526,6 +1622,16 @@ static int i2c_mec5_xfr_cb(const struct device *dev, struct i2c_msg *msgs, uint8
 	if (ret != 0) {
 		ctx->cb = NULL;
 		ctx->userdata = NULL;
+	} else {
+		/*
+		 * Arm the watchdog. If pio_on_complete fires first the IRQ
+		 * path uses k_work_reschedule(K_NO_WAIT) to atomically cancel
+		 * this delayed fire and run the handler immediately. If no
+		 * IRQ ever arrives (slave permanently stretches SCL, etc.)
+		 * the work fires at the timeout, the handler detects the
+		 * still-mid-transfer state and forces -ETIMEDOUT + recovery.
+		 */
+		k_work_schedule(&ctx->cb_work, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS));
 	}
 
 	return ret;
@@ -2174,7 +2280,7 @@ static int i2c_mec5_init(const struct device *dev)
 	k_sem_init(&ctx->xfer_done, 0, 1);
 
 #ifdef CONFIG_I2C_CALLBACK
-	k_work_init(&ctx->cb_work, i2c_mec5_cb_work_handler);
+	k_work_init_delayable(&ctx->cb_work, i2c_mec5_cb_work_handler);
 #endif
 
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
