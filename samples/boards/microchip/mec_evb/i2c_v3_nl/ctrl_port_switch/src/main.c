@@ -48,11 +48,11 @@ const struct i2c_dt_spec ltc2489_spec = I2C_DT_SPEC_GET(NODE_LTC2489);
 const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 
 static const struct device *i2c_smb_ctrls[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)};
 
 /* Ports on the controllers */
 static const struct device *i2c_smb_ports[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_port, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)};
 
 #define I2C_MAX_MSGS    8
 #define I2C_TX_BUF_SIZE 256
@@ -136,37 +136,21 @@ int main(void)
 		rc = pca9555_test1(&pca9555_spec, PCA9555_CMD_PORT0_IN, NULL);
 		if (rc != 0) {
 			pca9555_errors++;
-#if 0
-			LOG_ERR("PCA9555 test error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = fram_test1(&mb_fram_spec);
 		if (rc != 0) {
 			fram_errors++;
-#if 0
-			LOG_ERR("FRAM test1 error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = pca9555_test1(&pca9555_spec, PCA9555_CMD_PORT1_IN, NULL);
 		if (rc != 0) {
 			pca9555_errors++;
-#if 0
-			LOG_ERR("PCA9555 test error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = fram_test2(&mb_fram_spec);
 		if (rc != 0) {
 			fram_errors++;
-#if 0
-			LOG_ERR("FRAM test2 error (%d)", rc);
-			break;
-#endif
 		}
 
 #ifdef APP_TEST_LTC2489
@@ -176,6 +160,13 @@ int main(void)
 			break;
 		}
 #endif
+		if ((pca9555_errors != 0) && ((pca9555_errors % 10) == 0)) {
+			LOG_ERR("PCA9555 test error count %llu", pca9555_errors);
+		}
+
+		if ((fram_errors != 0) && ((fram_errors % 10) == 0)) {
+			LOG_ERR("FRAM test1 error count %llu", fram_errors);
+		}
 	};
 
 	LOG_INF("Test loop exit: loops = %llu", test_loops);
