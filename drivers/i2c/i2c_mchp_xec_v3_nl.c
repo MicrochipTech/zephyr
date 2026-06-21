@@ -940,21 +940,22 @@ static int xec_i2c_nl_target_register(const struct device *port_dev, struct i2c_
 	if (tcfg == NULL || tcfg->callbacks == NULL) {
 		return -EINVAL;
 	}
-	if ((tcfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0U) {
+	if (((tcfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0U) ||
+	    ((tcfg->address & ~0x7FU) != 0U)) {
+		LOG_ERR("HW supports 7-bit I2C addresses only");
 		return -ENOTSUP;
-	}
-	if ((tcfg->address & ~0x7FU) != 0U) {
-		return -EINVAL;
 	}
 	if (tcfg->callbacks->buf_write_received == NULL ||
 	    tcfg->callbacks->buf_read_requested == NULL) {
 		/* This driver supports buffer-mode callbacks only. */
+		LOG_ERR("Driver supports buffer-mode callbacks only");
 		return -ENOSYS;
 	}
 	if (cfg->tgt_rx_buf == NULL || cfg->tgt_rx_buf_size == 0U) {
 		/* DT didn't supply target-buffer-size and a "target" entry
 		 * in dmas; this controller instance is controller-only.
 		 */
+		LOG_ERR("Ctrl DT did not specify target buf size or DMA");
 		return -ENOSYS;
 	}
 
