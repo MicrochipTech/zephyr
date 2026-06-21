@@ -49,6 +49,9 @@ struct app_i2c_target {
 	enum i2c_error_reason err;
 };
 
+static struct k_sem app_targ1_sem;
+static struct k_sem app_targ2_sem;
+
 static struct i2c_msg msgs[I2C_MAX_MSGS];
 static uint8_t i2c_tx_buf[I2C_TX_BUF_SIZE];
 static uint8_t i2c_rx_buf[I2C_RX_BUF_SIZE];
@@ -68,6 +71,8 @@ static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len);
 static int targ2_stop_cb(struct i2c_target_config *config);
 static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code);
+
+int test_targ1(const struct device *host_ctrl, const struct i2c_dt_spec *targ_dts);
 
 const struct i2c_target_callbacks targ1_callbacks = {
 	.buf_write_received = targ1_buf_wr_recv_cb,
@@ -100,6 +105,9 @@ int main(void)
 	memset((void *)msgs, 0, sizeof(msgs));
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
+
+	k_sem_init(&app_targ1_sem, 0, 1);
+	k_sem_init(&app_targ2_sem, 0, 1);
 
 	if (!device_is_ready(mb_fram_spec.bus)) {
 		LOG_ERR("FRAM I2C port driver not ready!");
@@ -166,6 +174,8 @@ int main(void)
 		LOG_ERR("FAIL");
 	}
 
+	LOG_INF("Write to target 1");
+	test_targ1(mb_fram_spec.bus, &targ1_spec);
 
 app_done:
 	LOG_INF("Program End");
@@ -269,6 +279,22 @@ static int app_i2c_target_init(struct app_i2c_target *apptrg, uint8_t *buf, size
 	return 0;
 }
 
+static int app_i2c_target_print(struct app_i2c_target *apptrg)
+{
+	if (apptrg == NULL) {
+		return -EINVAL;
+	}
+
+	LOG_INF("App I2C target structure");
+	LOG_INF("buf = %p  bufsz = %u", apptrg->buf, apptrg->bufsz);
+	LOG_INF("idx = %u, wr_recv_cnt = %u, rd_req_cnt = %u", apptrg->idx, apptrg->wr_recv_cnt,
+		apptrg->rd_req_cnt);
+	LOG_INF("stop_cnt = %u  error_cnt = %u  err_reason = %u", apptrg->stop_cnt,
+		apptrg->error_cnt, apptrg->err);
+
+	return 0;
+}
+
 static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len)
 {
 	uint32_t max_idx = targ1_app_data.idx + len;
@@ -304,6 +330,8 @@ static int targ1_stop_cb(struct i2c_target_config *config)
 	targ1_app_data.stop_cnt++;
 	targ1_app_data.idx = 0;
 
+	k_sem_give(&app_targ1_sem);
+
 	return 0;
 }
 
@@ -338,6 +366,8 @@ static int targ2_stop_cb(struct i2c_target_config *config)
 	targ2_app_data.stop_cnt++;
 	targ2_app_data.idx = 0;
 
+	k_sem_give(&app_targ2_sem);
+
 	return 0;
 }
 
@@ -345,4 +375,26 @@ static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reas
 {
 	targ2_app_data.error_cnt++;
 	targ2_app_data.err = error_code;
+}
+
+int test_targ1(const struct device *host_ctrl, const struct i2c_dt_spec *targ_dts)
+{
+	int rc = 0;
+	uint8_t buf[4] = {1U, 2U, 3U, 4U};
+
+	k_sem_reset(&app_targ1_sem);
+
+	rc = i2c_write(host_ctrl, buf, 4U, targ_dts->addr);
+	if (rc != 0) {
+		LOG_ERR("I2C write error (%d)", rc);
+		return rc;
+	}
+
+	(void)k_sem_take(&app_targ1_sem, K_FOREVER);
+
+	LOG_INF("Target 1 STOP received (app_targ1_sem)");
+
+	app_i2c_target_print(&targ1_app_data);
+
+	return 0;
 }
