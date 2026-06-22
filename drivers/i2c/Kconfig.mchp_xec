@@ -57,3 +57,18 @@ config I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY
 	  device referenced by the port's "controller" phandle is ready before
 	  the port's init function runs.
 
+if I2C_MCHP_XEC_V3_NL
+
+config I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
+       bool "Microchip XEC I2Cv3 network layer state capture feature"
+       help
+         Record driver flow in a per-instance byte array.
+
+config I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE
+       int "Microchip XEC I2Cv3-NL state capture buffer size in bytes"
+       default 256
+       depends on I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
+       help
+         Size of the state capture buffer in bytes. Default is 256.
+
+endif #I2C_MCHP_XEC_V3_NL

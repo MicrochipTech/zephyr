@@ -293,7 +293,15 @@ struct xec_i2c_nl_config {
 	uint8_t tgt_dma_slot; /* target-mode trigsrc */
 };
 
+struct xec_i2c_nl_ir_data {
+	volatile uint32_t hcmd;
+	volatile uint32_t tcmd;
+	volatile uint32_t cmpl;
+	volatile uint32_t cfg;
+};
+
 struct xec_i2c_nl_data {
+	const struct device *ctrl;
 	struct k_sem lock;
 	struct k_sem pause_sem;
 	struct k_sem done_sem;
@@ -310,6 +318,12 @@ struct xec_i2c_nl_data {
 	uint8_t tgt_count; /* number of populated slots */
 	enum xec_i2c_nl_target_phase tgt_phase;
 	struct i2c_target_config *tgt_active; /* slot picked by current xact */
+#endif
+#ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
+	volatile uint32_t capidx;
+	volatile uint8_t capture[CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE];
+	volatile uint32_t iridx;
+	struct xec_i2c_nl_ir_data ir_data[256];
 #endif
 };
 
@@ -336,6 +350,141 @@ struct xec_i2c_nl_xfer {
 			     * memcpy'd into the user buffers afterward.
 			     */
 };
+
+#ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
+static void xec_i2c_nl_cap_init(struct xec_i2c_nl_data *xdat)
+{
+	xdat->capidx = 0;
+	memset((void *)xdat->capture, 0, CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE);
+
+	xdat->iridx = 0;
+	memset((void *)xdat->ir_data, 0, 256U * sizeof(struct xec_i2c_nl_ir_data));
+}
+
+static void xec_i2c_nl_cap_update(struct xec_i2c_nl_data *xdat, uint8_t capval)
+{
+	if (xdat->capidx >= CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE) {
+		return;
+	}
+
+	xdat->capture[xdat->capidx++] = capval;
+}
+
+static void xec_i2c_nl_ir_update(struct xec_i2c_nl_data *xdat)
+{
+	if (xdat->iridx >= 256U) {
+		return;
+	}
+
+	const struct device *ctrl = xdat->ctrl;
+	const struct xec_i2c_nl_config *xcfg = ctrl->config;
+	mm_reg_t rb = xcfg->base;
+	uint32_t idx = xdat->iridx;
+
+	xdat->iridx++;
+
+	xdat->ir_data[idx].hcmd = sys_read32(rb + XEC_I2C_HCMD_OFS);
+	xdat->ir_data[idx].tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
+	xdat->ir_data[idx].cmpl = ((sys_read32(rb + XEC_I2C_CMPL_OFS) & 0xffffff00U) |
+				   sys_read8(rb + XEC_I2C_SR_OFS));
+	xdat->ir_data[idx].cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
+}
+
+int mchp_xec_i2c_nl_clear_capture(const struct device *i2c_nl_dev)
+{
+	if (i2c_nl_dev == NULL) {
+		return -EINVAL;
+	}
+
+	struct xec_i2c_nl_data *const xdat = i2c_nl_dev->data;
+
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->mode == XEC_I2C_NL_MODE_TARGET) {
+		if (xdat->tgt_phase != XEC_I2C_NL_TGT_IDLE) {
+			return -EBUSY;
+		}
+	} else {
+		if (xdat->state != XEC_I2C_NL_IDLE) {
+			return -EBUSY;
+		}
+	}
+#else
+	if (xdat->state != XEC_I2C_NL_IDLE) {
+		return -EBUSY;
+	}
+#endif
+	k_sem_take(&xdat->lock, K_FOREVER);
+	xec_i2c_nl_cap_init(xdat);
+	k_sem_give(&xdat->lock);
+
+	return 0;
+}
+
+int mchp_xec_i2c_nl_copy_capture(const struct device *i2c_nl_dev, uint8_t *capdest,
+				 size_t capdest_size)
+{
+	if ((i2c_nl_dev == NULL) || (capdest == NULL)) {
+		return -EINVAL;
+	}
+
+	if (capdest_size == 0) {
+		return 0;
+	}
+
+	struct xec_i2c_nl_data *const xdat = i2c_nl_dev->data;
+
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->mode == XEC_I2C_NL_MODE_TARGET) {
+		if (xdat->tgt_phase != XEC_I2C_NL_TGT_IDLE) {
+			return -EBUSY;
+		}
+	} else {
+		if (xdat->state != XEC_I2C_NL_IDLE) {
+			return -EBUSY;
+		}
+	}
+#else
+	if (xdat->state != XEC_I2C_NL_IDLE) {
+		return -EBUSY;
+	}
+#endif
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+
+	size_t n = (capdest_size < CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE)
+			   ? capdest_size
+			   : CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE;
+
+	memcpy(capdest, (const void *)xdat->capture, n);
+
+	k_sem_give(&xdat->lock);
+
+	return 0;
+}
+#else
+static void xec_i2c_nl_cap_init(struct xec_i2c_nl_data *xdat)
+{
+}
+
+static void xec_i2c_nl_cap_update(struct xec_i2c_nl_data *xdat, uint8_t capval)
+{
+}
+
+static void xec_i2c_nl_ir_update(struct xec_i2c_nl_data *xdat)
+{
+}
+
+int mchp_xec_i2c_nl_clear_capture(const struct device *i2c_nl_dev)
+{
+	return -ENOSYS;
+}
+
+int mchp_xec_i2c_nl_copy_capture(const struct device *i2c_nl_dev, uint8_t *capdest,
+				 size_t capdest_size)
+{
+	return -ENOSYS;
+}
+#endif
 
 /* -------------------------------------------------------------------------
  * Controller helpers
@@ -722,17 +871,22 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
+	uint32_t rval = 0;
 	int rc;
+
+	xec_i2c_nl_cap_update(data, 0xD0U);
 
 	dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 
 	rc = xec_i2c_nl_setup_tgt_rx_dma(ctrl);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xD1U);
 		LOG_ERR("tgt rx dma_config: %d", rc);
 		return rc;
 	}
 	rc = dma_start(cfg->dma_dev, cfg->tgt_dma_chan);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xD2U);
 		LOG_ERR("tgt rx dma_start: %d", rc);
 		return rc;
 	}
@@ -746,16 +900,22 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	 * bytes including the address. WCL stays 0 — set later by the
 	 * read-pause handler. ELEN.TRD carries the upper byte of RCL.
 	 */
+	xec_i2c_nl_cap_update(data, 0xD3U);
 	uint16_t rcl = (uint16_t)cfg->tgt_rx_buf_size;
 
-	sys_write32(XEC_I2C_ELEN_TRD_SET((uint32_t)rcl >> 8) | XEC_I2C_ELEN_TWR_SET(0),
-		    base + XEC_I2C_ELEN_OFS);
-	sys_write32(XEC_I2C_TCMD_RCL_SET((uint32_t)rcl & 0xFFU) | XEC_I2C_TCMD_WCL_SET(0) |
-			    TCMD_RUN | TCMD_PROCEED,
-		    base + XEC_I2C_TCMD_OFS);
+	rval = sys_read32(base + XEC_I2C_ELEN_OFS);
+	rval &= (uint32_t)~(XEC_I2C_ELEN_TRD_MSK | XEC_I2C_ELEN_TWR_MSK);
+	rval |= XEC_I2C_ELEN_TRD_SET((uint32_t)rcl >> 8);
+	sys_write32(rval, base + XEC_I2C_ELEN_OFS);
+
+	rval = (XEC_I2C_TCMD_RCL_SET((uint32_t)rcl & 0xFFU) | XEC_I2C_TCMD_WCL_SET(0) |
+		TCMD_RUN | TCMD_PROCEED);
+	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
 	data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
 	data->tgt_active = NULL;
+
+	xec_i2c_nl_cap_update(data, 0xD4U);
 
 	return 0;
 }
@@ -776,15 +936,19 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	uint8_t addr_byte = cfg->tgt_rx_buf[0];
 	struct i2c_target_config *tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
 	uint8_t *buf = NULL;
-	uint32_t len = 0;
+	uint32_t len = 0, rval = 0;
 	static const uint8_t zero_byte;
 	int rc = -ENOENT;
 
+	xec_i2c_nl_cap_update(data, 0xA0U);
+
 	if (tcfg != NULL && tcfg->callbacks->buf_read_requested != NULL) {
+		xec_i2c_nl_cap_update(data, 0xA1U);
 		rc = tcfg->callbacks->buf_read_requested(tcfg, &buf, &len);
 	}
 
 	if (rc != 0 || buf == NULL || len == 0U) {
+		xec_i2c_nl_cap_update(data, 0xA2U);
 		/* Fall back to a single zero byte clocked out repeatedly.
 		 * The DMA's source-increment is enabled, so we'd run off
 		 * the end after one byte; instead use a length of 1 and
@@ -800,6 +964,7 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 
 	rc = xec_i2c_nl_setup_tgt_tx_dma(ctrl, buf, len);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xA3U);
 		LOG_ERR("tgt tx dma_config: %d", rc);
 		/* Leave PROCEED unset; the bus will time out on the host
 		 * side and we'll re-arm on the next event.
@@ -808,6 +973,7 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	}
 	rc = dma_start(cfg->dma_dev, cfg->tgt_dma_chan);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xA4U);
 		LOG_ERR("tgt tx dma_start: %d", rc);
 		return;
 	}
@@ -816,15 +982,24 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	 * RCL is left as-is (it's only meaningful for the inbound side
 	 * which we've already finished).
 	 */
-	sys_write32((sys_read32(base + XEC_I2C_ELEN_OFS) & ~XEC_I2C_ELEN_TWR_MSK) |
-			    XEC_I2C_ELEN_TWR_SET((uint32_t)len >> 8),
-		    base + XEC_I2C_ELEN_OFS);
-	soc_mmcr_mask_set(base + XEC_I2C_TCMD_OFS, XEC_I2C_TCMD_WCL_SET((uint32_t)len & 0xFFU),
-			  XEC_I2C_TCMD_WCL_MSK);
-	sys_set_bit(base + XEC_I2C_TCMD_OFS, XEC_I2C_TCMD_PROC_POS);
+	xec_i2c_nl_cap_update(data, 0xA5U);
+
+	rval = sys_read32(base + XEC_I2C_ELEN_OFS);
+	rval &= (uint32_t)~XEC_I2C_ELEN_TWR_MSK;
+	rval |= XEC_I2C_ELEN_TWR_SET((uint32_t)len >> 8);
+	sys_write32(rval, base + XEC_I2C_ELEN_OFS);
+
+	rval = sys_read32(base + XEC_I2C_TCMD_OFS);
+	rval &= (uint32_t)~XEC_I2C_TCMD_WCL_MSK;
+	rval |= XEC_I2C_TCMD_WCL_SET((uint32_t)len & 0xffU);
+	rval |= BIT(XEC_I2C_TCMD_PROC_POS);
+
+	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
 	data->tgt_active = tcfg;
 	data->tgt_phase = XEC_I2C_NL_TGT_TX;
+
+	xec_i2c_nl_cap_update(data, 0xA6U);
 }
 
 /* End-of-transaction. Identify the slot from the (already-buffered)
@@ -837,8 +1012,11 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	struct dma_status st = {0};
 	struct i2c_target_config *tcfg;
+	size_t consumed = 0;
 	uint8_t addr_byte;
 	bool was_write;
+
+	xec_i2c_nl_cap_update(data, 0xE0);
 
 	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
 
@@ -848,23 +1026,28 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	was_write = (data->tgt_phase != XEC_I2C_NL_TGT_TX);
 
 	if (tcfg != NULL && was_write && tcfg->callbacks->buf_write_received != NULL) {
-		size_t consumed = (cfg->tgt_rx_buf_size > st.pending_length)
-					  ? (cfg->tgt_rx_buf_size - st.pending_length)
-					  : 0U;
+		xec_i2c_nl_cap_update(data, 0xE1);
+
+		consumed = (cfg->tgt_rx_buf_size > st.pending_length)
+			? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
 		/* The first byte of the bounce buffer is the matched
 		 * target address; data starts at offset 1.
 		 */
 		if (consumed > 1U) {
+			xec_i2c_nl_cap_update(data, 0xE2U);
 			tcfg->callbacks->buf_write_received(tcfg, &cfg->tgt_rx_buf[1],
 							    (uint32_t)(consumed - 1U));
 		}
 	}
 
 	if (tcfg != NULL && tcfg->callbacks->stop != NULL) {
+		xec_i2c_nl_cap_update(data, 0xE3U);
 		(void)tcfg->callbacks->stop(tcfg);
 	}
 
 	(void)xec_i2c_nl_target_arm(ctrl);
+
+	xec_i2c_nl_cap_update(data, 0xE4U);
 }
 
 static void xec_i2c_nl_target_handle_error(const struct device *ctrl)
@@ -872,10 +1055,16 @@ static void xec_i2c_nl_target_handle_error(const struct device *ctrl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	struct i2c_target_config *tcfg = data->tgt_active;
 
+	xec_i2c_nl_cap_update(data, 0xE8U);
+
 	if (tcfg != NULL && tcfg->callbacks->error != NULL) {
+		xec_i2c_nl_cap_update(data, 0xE9U);
 		tcfg->callbacks->error(tcfg, I2C_ERROR_GENERIC);
 	}
+
 	(void)xec_i2c_nl_target_arm(ctrl);
+
+	xec_i2c_nl_cap_update(data, 0xEAU);
 }
 
 /* Target-side of the main ISR. Called from xec_i2c_nl_isr when the
@@ -889,7 +1078,10 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
 
+	xec_i2c_nl_cap_update(data, 0x90U);
+
 	if ((cmpl & CMPL_ERR) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x91U);
 		sys_write32(CMPL_ERR | CMPL_TDONE | CMPL_STDET, base + XEC_I2C_CMPL_OFS);
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		xec_i2c_nl_target_handle_error(ctrl);
@@ -897,6 +1089,7 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 	}
 
 	if ((cmpl & CMPL_TDONE) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x92U);
 		sys_write32(CMPL_TDONE, base + XEC_I2C_CMPL_OFS);
 
 		uint32_t tcmd = sys_read32(base + XEC_I2C_TCMD_OFS);
@@ -906,6 +1099,7 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			 * set) is sitting in tgt_rx_buf[0] and the FSM is
 			 * waiting for SW to provide a TX buffer.
 			 */
+			xec_i2c_nl_cap_update(data, 0x93U);
 			xec_i2c_nl_target_handle_read_pause(ctrl);
 		} else {
 			/* Inbound buffer fill: TCMD.RCL hit 0 and the HW
@@ -914,14 +1108,18 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			 * the stop callback fire from the STD branch
 			 * below.
 			 */
+			xec_i2c_nl_cap_update(data, 0x94U);
 			data->tgt_phase = XEC_I2C_NL_TGT_RX;
 		}
 	}
 
 	if ((cmpl & CMPL_STDET) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x95U);
 		sys_write32(CMPL_STDET, base + XEC_I2C_CMPL_OFS);
 		xec_i2c_nl_target_handle_stop(ctrl);
 	}
+
+	xec_i2c_nl_cap_update(data, 0x9FU);
 }
 
 /* Switch the controller into target mode (from the application's
@@ -1131,13 +1329,16 @@ static void xec_i2c_nl_rx_dma_cb(const struct device *dma_dev, void *user_data, 
 /* -------------------------------------------------------------------------
  * I2C controller ISR
  * -------------------------------------------------------------------------*/
-
 static void xec_i2c_nl_isr(const struct device *ctrl)
 {
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
 	uint32_t cmpl = sys_read32(base + XEC_I2C_CMPL_OFS);
+	uint32_t cfgr = 0, hcmd = 0;
+
+	xec_i2c_nl_cap_update(data, 0x80U);
+	xec_i2c_nl_ir_update(data);
 
 #ifdef CONFIG_I2C_TARGET
 	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
@@ -1147,11 +1348,15 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 #endif
 
 	if ((cmpl & CMPL_ERR) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x81U);
 		if ((cmpl & CMPL_HNAK) != 0U) {
+			xec_i2c_nl_cap_update(data, 0x82U);
 			data->xfer_err = -ENXIO;
 		} else if ((cmpl & CMPL_LAB) != 0U) {
+			xec_i2c_nl_cap_update(data, 0x83U);
 			data->xfer_err = -EAGAIN;
 		} else {
+			xec_i2c_nl_cap_update(data, 0x84U);
 			data->xfer_err = -EIO;
 		}
 
@@ -1182,16 +1387,20 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 	 * branch below then signals done_sem.
 	 */
 	if ((cmpl & CMPL_HDONE) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x85U);
 		sys_write32(CMPL_HDONE, base + XEC_I2C_CMPL_OFS);
 
 		if (data->state == XEC_I2C_NL_TX || data->state == XEC_I2C_NL_RX) {
-			uint32_t hcmd = sys_read32(base + XEC_I2C_HCMD_OFS);
+			xec_i2c_nl_cap_update(data, 0x86U);
+
+			hcmd = sys_read32(base + XEC_I2C_HCMD_OFS);
 
 			if ((hcmd & HCMD_RUN) != 0U && (hcmd & HCMD_PROCEED) == 0U) {
 				/* PAUSE — driver thread will reprogram DMA
 				 * for the read phase and resume by setting
 				 * HCMD.PROCEED.
 				 */
+				xec_i2c_nl_cap_update(data, 0x87U);
 				k_sem_give(&data->pause_sem);
 			} else if ((hcmd & HCMD_RUN) == 0U && (hcmd & HCMD_PROCEED) == 0U) {
 				/* NL-finished. Enable the IDLE interrupt to
@@ -1202,6 +1411,7 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 				 * ISR), the AND-with-IEN check below will
 				 * pick it up in this same ISR invocation.
 				 */
+				xec_i2c_nl_cap_update(data, 0x88U);
 				sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 			}
 		}
@@ -1216,7 +1426,9 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 	 * spuriously release the next caller.
 	 */
 	if ((cmpl & CMPL_IDLE) != 0U) {
-		uint32_t cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
+		xec_i2c_nl_cap_update(data, 0x89U);
+
+		cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
 
 		if ((cfgr & CFG_IDLE_IEN) != 0U) {
 			/* Disable IDLE_IEN now so the next transfer starts
@@ -1224,10 +1436,12 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 			 * documented workaround for the v3.8 bug that fires
 			 * IDLE immediately if IEN is asserted while NBB==1.
 			 */
+			xec_i2c_nl_cap_update(data, 0x8AU);
 			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 			sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
 
 			if (data->state != XEC_I2C_NL_IDLE) {
+				xec_i2c_nl_cap_update(data, 0x8BU);
 				k_sem_give(&data->done_sem);
 			}
 		}
@@ -1240,6 +1454,8 @@ out:
 	 * re-entry on transient or spurious edges.
 	 */
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+
+	xec_i2c_nl_cap_update(data, 0x8FU);
 }
 
 /* -------------------------------------------------------------------------
@@ -1458,6 +1674,8 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 	uint16_t total_write = 1U + xfer->total_wr_len + (xfer->has_read ? 1U : 0U);
 	int rc;
 
+	xec_i2c_nl_cap_update(data, 0x20U);
+
 	xec_i2c_nl_fill_tx_bounce(cfg, addr, xfer);
 
 	data->xfer_err = 0;
@@ -1467,6 +1685,7 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 
 	rc = xec_i2c_nl_setup_tx_dma(ctrl, total_write);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0x21U);
 		LOG_ERR("tx dma_config: %d", rc);
 		data->state = XEC_I2C_NL_IDLE;
 		return rc;
@@ -1474,6 +1693,7 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 
 	rc = dma_start(cfg->dma_dev, cfg->dma_chan);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0x22U);
 		LOG_ERR("tx dma_start: %d", rc);
 		data->state = XEC_I2C_NL_IDLE;
 		return rc;
@@ -1491,19 +1711,25 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 			HCMD_PROCEED | HCMD_START0 | HCMD_STOP;
 
 	if (xfer->has_read) {
+		xec_i2c_nl_cap_update(data, 0x23U);
 		hcmd |= HCMD_STARTN;
 	}
+
+	xec_i2c_nl_cap_update(data, 0x24U);
 	sys_write32(hcmd, base + XEC_I2C_HCMD_OFS);
 
 	if (xfer->has_read) {
+		xec_i2c_nl_cap_update(data, 0x25U);
 		rc = k_sem_take(&data->pause_sem, XEC_I2C_NL_TIMEOUT);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 0x26U);
 			LOG_ERR("pause wait: %d", rc);
 			xec_i2c_nl_abort(ctrl);
 			data->state = XEC_I2C_NL_IDLE;
 			return -ETIMEDOUT;
 		}
 		if (data->xfer_err != 0) {
+			xec_i2c_nl_cap_update(data, 0x27U);
 			xec_i2c_nl_abort(ctrl);
 			data->state = XEC_I2C_NL_IDLE;
 			return data->xfer_err;
@@ -1522,6 +1748,7 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 
 		rc = xec_i2c_nl_setup_rx_dma(ctrl, rx_dst, xfer->total_rd_len);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 0x28U);
 			LOG_ERR("rx dma_config: %d", rc);
 			xec_i2c_nl_abort(ctrl);
 			data->state = XEC_I2C_NL_IDLE;
@@ -1532,16 +1759,21 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 
 		rc = dma_start(cfg->dma_dev, cfg->dma_chan);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 0x29U);
 			LOG_ERR("rx dma_start: %d", rc);
 			xec_i2c_nl_abort(ctrl);
 			data->state = XEC_I2C_NL_IDLE;
 			return rc;
 		}
+
+		xec_i2c_nl_cap_update(data, 0x2AU);
 		sys_set_bit(base + XEC_I2C_HCMD_OFS, XEC_I2C_HCMD_PROC_POS);
 	}
 
+	xec_i2c_nl_cap_update(data, 0x2BU);
 	rc = k_sem_take(&data->done_sem, XEC_I2C_NL_TIMEOUT);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0x2CU);
 		LOG_ERR("done wait: %d", rc);
 		xec_i2c_nl_abort(ctrl);
 		data->state = XEC_I2C_NL_IDLE;
@@ -1553,16 +1785,21 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 		 * error path bypasses that, so make sure the controller and
 		 * DMA channel are both quiesced before returning.
 		 */
+		xec_i2c_nl_cap_update(data, 0x2DU);
 		xec_i2c_nl_abort(ctrl);
 		data->state = XEC_I2C_NL_IDLE;
 		return data->xfer_err;
 	}
 
 	if (xfer->rx_via_bounce) {
+		xec_i2c_nl_cap_update(data, 0x2EU);
 		xec_i2c_nl_scatter_rx(cfg, xfer);
 	}
 
 	data->state = XEC_I2C_NL_IDLE;
+
+	xec_i2c_nl_cap_update(data, 0x2FU);
+
 	return 0;
 }
 
@@ -1578,6 +1815,8 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
 	int rc = 0;
+	uint32_t freq = 0;
+	uint8_t group_start = 0, group_end = 0, group_len = 0;
 
 	if (num_msgs == 0U || msgs == NULL) {
 		return -EINVAL;
@@ -1599,8 +1838,13 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 
 	k_sem_take(&data->lock, K_FOREVER);
 
+	xec_i2c_nl_cap_init(data);
+
+	xec_i2c_nl_cap_update(data, 1U);
+
 	rc = xec_i2c_nl_apply_port(port_dev);
 	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 2U);
 		k_sem_give(&data->lock);
 		return rc;
 	}
@@ -1613,10 +1857,12 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 	 * bit-bang recovery sequence and bail if it can't restore SR_IDLE.
 	 */
 	if (sys_read8(cfg->base + XEC_I2C_SR_OFS) != SR_IDLE) {
-		uint32_t freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+		freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
 
+		xec_i2c_nl_cap_update(data, 3U);
 		rc = xec_i2c_nl_bus_recover(ctrl, freq, pc->port_id);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 4U);
 			k_sem_give(&data->lock);
 			return rc;
 		}
@@ -1642,10 +1888,11 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 	 * last group does not need to carry I2C_MSG_STOP — the driver
 	 * always asserts STOP in HCMD anyway.
 	 */
-	uint8_t group_start = 0;
+	xec_i2c_nl_cap_update(data, 5U);
 
+	group_start = 0;
 	while (group_start < num_msgs) {
-		uint8_t group_end = group_start;
+		group_end = group_start;
 
 		while (group_end < (uint8_t)(num_msgs - 1U) &&
 		       (msgs[group_end].flags & I2C_MSG_STOP) == 0U) {
@@ -1653,22 +1900,28 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 		}
 
 		struct xec_i2c_nl_xfer xfer;
-		uint8_t group_len = (uint8_t)((group_end - group_start) + 1U);
+
+		group_len = (uint8_t)((group_end - group_start) + 1U);
 
 		rc = xec_i2c_nl_parse(cfg, &msgs[group_start], group_len, &xfer);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 6U);
 			break;
 		}
 
 		rc = xec_i2c_nl_run(ctrl, addr, &xfer);
 		if (rc != 0) {
+			xec_i2c_nl_cap_update(data, 7U);
 			break;
 		}
 
 		group_start = (uint8_t)(group_end + 1U);
 	}
 
+	xec_i2c_nl_cap_update(data, 8U);
+
 	k_sem_give(&data->lock);
+
 	return rc;
 }
 
@@ -1850,18 +2103,19 @@ static int xec_i2c_nl_ctrl_init(const struct device *ctrl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	int rc;
 
-	if (!device_is_ready(cfg->dma_dev)) {
-		LOG_ERR("dma %s not ready", cfg->dma_dev->name);
-		return -ENODEV;
-	}
+	data->ctrl = ctrl;
+	data->state = XEC_I2C_NL_IDLE;
+	data->active_port = XEC_I2C_NL_INVALID_PORT;
+	data->active_freq = 0;
 
 	k_sem_init(&data->lock, 1, 1);
 	k_sem_init(&data->pause_sem, 0, 1);
 	k_sem_init(&data->done_sem, 0, 1);
 
-	data->state = XEC_I2C_NL_IDLE;
-	data->active_port = XEC_I2C_NL_INVALID_PORT;
-	data->active_freq = 0;
+	if (!device_is_ready(cfg->dma_dev)) {
+		LOG_ERR("dma %s not ready", cfg->dma_dev->name);
+		return -ENODEV;
+	}
 
 	rc = xec_i2c_nl_program_ctrl(ctrl, cfg->dflt_freq, 0);
 	if (rc != 0) {
