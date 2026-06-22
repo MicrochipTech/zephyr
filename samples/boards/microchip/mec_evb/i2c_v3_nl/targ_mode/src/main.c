@@ -11,7 +11,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
-#include <zephyr/drivers/i2c/target/eeprom.h>
+#include <zephyr/drivers/i2c/mchp_xec_i2c.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
@@ -27,12 +27,16 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define NODE_I2C_TARG1 DT_NODELABEL(i2c_targ1)
 #define NODE_I2C_TARG2 DT_NODELABEL(i2c_targ2)
 
-/* Controller node */
+/* FRAM target node */
 #define NODE_FRAM    DT_NODELABEL(mb85rc256v_fram)
 
+/* i2c_dt_spec.bus is the port controller node */
+const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 const struct i2c_dt_spec targ1_spec = I2C_DT_SPEC_GET(NODE_I2C_TARG1);
 const struct i2c_dt_spec targ2_spec = I2C_DT_SPEC_GET(NODE_I2C_TARG2);
-const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
+
+const struct device *i2c_smb0_dev = DEVICE_DT_GET(DT_NODELABEL(i2c_smb_0));
+const struct device *i2c_smb1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c_smb_1));
 
 #define I2C_MAX_MSGS    8
 #define I2C_TX_BUF_SIZE 256
@@ -72,7 +76,8 @@ static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, 
 static int targ2_stop_cb(struct i2c_target_config *config);
 static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code);
 
-int test_targ1(const struct device *host_ctrl, const struct i2c_dt_spec *targ_dts);
+int test_targ1_write(const struct device *host_port_ctrl, const struct i2c_dt_spec *targ_port_dts);
+int test_targ2_read(const struct device *host_port_ctrl, const struct i2c_dt_spec *targ_port_dts);
 
 const struct i2c_target_callbacks targ1_callbacks = {
 	.buf_write_received = targ1_buf_wr_recv_cb,
@@ -138,6 +143,9 @@ int main(void)
 		goto app_done;
 	}
 
+	memset(targ1_buf, 0x55U, APP_TARG1_BUF_SIZE);
+	memset(targ2_buf, 0xAAU, APP_TARG2_BUF_SIZE);
+
 	rc = app_i2c_target_init(&targ1_app_data, targ1_buf, APP_TARG1_BUF_SIZE);
 	if (rc != 0) {
 		LOG_ERR("Init target 1 app structure error (%d)", rc);
@@ -158,7 +166,7 @@ int main(void)
 	targ2_cfg.address = targ2_spec.addr;
 	targ2_cfg.callbacks = &targ2_callbacks;
 
-	LOG_INF("Register target 1");
+	LOG_INF("Register target 1 on %s", targ1_spec.bus->name);
 	rc = i2c_target_register(targ1_spec.bus, &targ1_cfg);
 	if (rc == 0) {
 		LOG_INF("PASS");
@@ -166,7 +174,7 @@ int main(void)
 		LOG_ERR("FAIL");
 	}
 
-	LOG_INF("Register target 2");
+	LOG_INF("Register target 2 on %s", targ2_spec.bus->name);
 	rc = i2c_target_register(targ2_spec.bus, &targ2_cfg);
 	if (rc == 0) {
 		LOG_INF("PASS");
@@ -174,8 +182,11 @@ int main(void)
 		LOG_ERR("FAIL");
 	}
 
-	LOG_INF("Write to target 1");
-	test_targ1(mb_fram_spec.bus, &targ1_spec);
+	LOG_INF("Write from %s to addr 0x%02x on %s", mb_fram_spec.bus->name,
+		targ1_spec.addr, targ1_spec.bus->name);
+
+/*	test_targ1_write(mb_fram_spec.bus, &targ1_spec); */
+	test_targ2_read(mb_fram_spec.bus, &targ2_spec);
 
 app_done:
 	LOG_INF("Program End");
@@ -377,14 +388,26 @@ static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reas
 	targ2_app_data.err = error_code;
 }
 
-int test_targ1(const struct device *host_ctrl, const struct i2c_dt_spec *targ_dts)
+int test_targ1_write(const struct device *host_port_ctrl, const struct i2c_dt_spec *targ_port_dts)
 {
 	int rc = 0;
 	uint8_t buf[4] = {1U, 2U, 3U, 4U};
 
+	rc = mchp_xec_i2c_nl_clear_capture(i2c_smb0_dev);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL clear capture buffer for %s returned (%d)", i2c_smb0_dev->name, rc);
+		return rc;
+	}
+
+	rc = mchp_xec_i2c_nl_clear_capture(i2c_smb1_dev);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL clear capture buffer for %s returned (%d)", i2c_smb1_dev->name, rc);
+		return rc;
+	}
+
 	k_sem_reset(&app_targ1_sem);
 
-	rc = i2c_write(host_ctrl, buf, 4U, targ_dts->addr);
+	rc = i2c_write(host_port_ctrl, buf, 4U, targ_port_dts->addr);
 	if (rc != 0) {
 		LOG_ERR("I2C write error (%d)", rc);
 		return rc;
@@ -395,6 +418,40 @@ int test_targ1(const struct device *host_ctrl, const struct i2c_dt_spec *targ_dt
 	LOG_INF("Target 1 STOP received (app_targ1_sem)");
 
 	app_i2c_target_print(&targ1_app_data);
+
+	return 0;
+}
+
+int test_targ2_read(const struct device *host_port_ctrl, const struct i2c_dt_spec *targ_port_dts)
+{
+	int rc = 0;
+	uint8_t buf[4] = {1U, 2U, 3U, 4U};
+
+	rc = mchp_xec_i2c_nl_clear_capture(i2c_smb0_dev);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL clear capture buffer for %s returned (%d)", i2c_smb0_dev->name, rc);
+		return rc;
+	}
+
+	rc = mchp_xec_i2c_nl_clear_capture(i2c_smb1_dev);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL clear capture buffer for %s returned (%d)", i2c_smb1_dev->name, rc);
+		return rc;
+	}
+
+	k_sem_reset(&app_targ2_sem);
+
+	rc = i2c_read(host_port_ctrl, buf, 4U, targ_port_dts->addr);
+	if (rc != 0) {
+		LOG_ERR("I2C read error (%d)", rc);
+		return rc;
+	}
+
+	(void)k_sem_take(&app_targ2_sem, K_FOREVER);
+
+	LOG_INF("Target 2 STOP received (app_targ2_sem)");
+
+	app_i2c_target_print(&targ2_app_data);
 
 	return 0;
 }
