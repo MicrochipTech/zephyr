@@ -1050,6 +1050,20 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 		len = 1U;
 	}
 
+	/* The HW transmit-byte counter is split across TCMD.WCL (low 8
+	 * bits) and ELEN.TWR (high 8 bits), giving a 16-bit field. The
+	 * Zephyr buf_read_requested API hands back a uint32_t length, so
+	 * clamp anything bigger than XEC_I2C_NL_LEN_MAX -- otherwise both
+	 * register writes silently mask down to their 8-bit fields and
+	 * the HW would clock out only `len & 0xFFFF` bytes while the
+	 * application believes the full buffer was delivered.
+	 */
+	if (len > XEC_I2C_NL_LEN_MAX) {
+		LOG_WRN("tgt read: app requested %u bytes; clamping to %u (HW max)",
+			len, XEC_I2C_NL_LEN_MAX);
+		len = XEC_I2C_NL_LEN_MAX;
+	}
+
 	dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 
 	rc = xec_i2c_nl_setup_tgt_tx_dma(ctrl, buf, len);
@@ -2344,9 +2358,18 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 	UTIL_AND(DT_INST_NODE_HAS_PROP(inst, target_buffer_size),                                  \
 		 DT_INST_DMAS_HAS_NAME(inst, target))
 
+/* The HW target receive-byte counter is the same 16-bit field as the
+ * transmit counter (TCMD.RCL low + ELEN.TRD high), so target-buffer-size
+ * is bounded at build time. The runtime path in xec_i2c_nl_target_arm
+ * casts cfg->tgt_rx_buf_size to uint16_t for RCL; without this assert
+ * a future DT instance with a too-large value would silently wrap.
+ */
 #define XEC_I2C_NL_TGT_BUF_DEF(inst)                                                               \
 	COND_CODE_1(XEC_I2C_NL_HAS_TARGET(inst),					\
-		(static uint8_t xec_i2c_nl_tgt_buf_##inst				\
+		(BUILD_ASSERT(DT_INST_PROP(inst, target_buffer_size) <=			\
+			      XEC_I2C_NL_LEN_MAX,					\
+			      "target-buffer-size exceeds 16-bit HW count");		\
+		 static uint8_t xec_i2c_nl_tgt_buf_##inst				\
 			[DT_INST_PROP(inst, target_buffer_size)];), ())
 
 #define XEC_I2C_NL_TGT_FIELDS(inst)                                                                \

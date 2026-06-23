@@ -74,4 +74,6 @@ properties:
       external host will issue plus one byte for the matched target
       address (which the driver strips before passing data to the
       callback). If absent, the driver does not allocate a target
-      buffer and i2c_target_register returns -ENOSYS.
+      buffer and i2c_target_register returns -ENOSYS. The hardware
+      receive-byte counter is 16 bits, so this value must be
+      <= 65535 (0xFFFF); a build assertion enforces the cap.
