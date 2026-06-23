@@ -496,12 +496,94 @@ static int test_symmetric_targ2_write_targ1_read(void)
 			     sizeof(read_payload));
 }
 
+/* Multi-message transfer: classic SMBus register-read shape.
+ * One i2c_transfer call with two msgs -- a 2-byte write followed by
+ * a 4-byte read carrying I2C_MSG_RESTART | I2C_MSG_STOP. The host
+ * issues a single START-to-STOP transaction with an Sr between the
+ * write and the read:
+ *
+ *   S addr+W d0 d1 Sr addr+R r0 r1 r2 r3 P
+ *
+ * Target-side expectations:
+ *   - buf_write_received fires once carrying the 2 write bytes,
+ *   - buf_read_requested fires once and supplies bytes for the read,
+ *   - stop fires once after the host's STOP,
+ *   - the bytes the host receives back are whatever the application
+ *     buffer held at the moment of the read callback (= the write
+ *     bytes the app just stored, followed by the 0x55 initial fill).
+ *
+ * Exercises the multi-msg parse/run path and the in-transaction
+ * direction-reversal (RX -> TX on Sr+R) the single-msg tests do not
+ * cover.
+ */
+static int test_host_write_then_read_targ1(void)
+{
+	const uint8_t write_payload[] = {0x11U, 0x22U};
+	uint8_t read_payload[4] = {0U};
+	uint8_t expect_read[4];
+	struct i2c_msg xfer[2];
+	const struct targ_expect expect = {
+		.wr_recv_cnt = 1U, .rd_req_cnt = 1U, .stop_cnt = 1U, .error_cnt = 0U,
+	};
+	int rc;
+
+	reset_all_targets();
+
+	/* Restore deterministic initial content for the read-back
+	 * portion -- reset_all_targets clears the app counters but
+	 * targ1_buf still carries values from prior tests (test 3's
+	 * buffer-fill in particular reaches through offset 239).
+	 */
+	memset(targ1_buf, 0x55U, APP_TARG1_BUF_SIZE);
+
+	xfer[0].buf = (uint8_t *)write_payload;
+	xfer[0].len = sizeof(write_payload);
+	xfer[0].flags = I2C_MSG_WRITE;
+
+	xfer[1].buf = read_payload;
+	xfer[1].len = sizeof(read_payload);
+	xfer[1].flags = I2C_MSG_READ | I2C_MSG_RESTART | I2C_MSG_STOP;
+
+	rc = i2c_transfer(mb_fram_spec.bus, xfer, ARRAY_SIZE(xfer), targ1_spec.addr);
+	if (rc != 0) {
+		LOG_ERR("i2c_transfer returned %d", rc);
+		return rc;
+	}
+	rc = wait_for_stop(&app_targ1_sem, "targ1");
+	if (rc != 0) {
+		return rc;
+	}
+	rc = verify_counters("targ1", &targ1_app_data, &expect);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = verify_buf_eq("targ1 write half", targ1_buf, write_payload,
+			   sizeof(write_payload));
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* The read callback returns &targ1_buf[idx] with idx==0 (write_cb
+	 * does not advance idx), so the bytes the host receives are the
+	 * first sizeof(read_payload) entries of targ1_buf as they stood
+	 * when the read callback fired: the two write bytes the app
+	 * just stored, then the 0x55 initial fill.
+	 */
+	expect_read[0] = write_payload[0];
+	expect_read[1] = write_payload[1];
+	expect_read[2] = 0x55U;
+	expect_read[3] = 0x55U;
+	return verify_buf_eq("targ1 read half", read_payload, expect_read,
+			     sizeof(expect_read));
+}
+
 static const struct test_case target_tests[] = {
 	{"host write 4B to targ1",          test_host_write_short_to_targ1},
 	{"host read 4B from targ2",         test_host_read_short_from_targ2},
 	{"buffer fill targ1",               test_host_write_buffer_fill_targ1},
 	{"host read targ1: no wr_recv_cb",  test_host_read_does_not_fire_write_cb},
 	{"symmetric: write targ2, read targ1", test_symmetric_targ2_write_targ1_read},
+	{"write 2B + read 4B targ1 (Sr)",   test_host_write_then_read_targ1},
 };
 
 /* -------------------------------------------------------------------------
