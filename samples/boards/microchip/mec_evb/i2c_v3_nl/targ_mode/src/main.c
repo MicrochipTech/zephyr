@@ -185,7 +185,7 @@ int main(void)
 	LOG_INF("Write from %s to addr 0x%02x on %s", mb_fram_spec.bus->name,
 		targ1_spec.addr, targ1_spec.bus->name);
 
-/*	test_targ1_write(mb_fram_spec.bus, &targ1_spec); */
+	test_targ1_write(mb_fram_spec.bus, &targ1_spec);
 	test_targ2_read(mb_fram_spec.bus, &targ2_spec);
 
 app_done:
@@ -297,7 +297,7 @@ static int app_i2c_target_print(struct app_i2c_target *apptrg)
 	}
 
 	LOG_INF("App I2C target structure");
-	LOG_INF("buf = %p  bufsz = %u", apptrg->buf, apptrg->bufsz);
+	LOG_INF("buf = %p  bufsz = %u", (void *)apptrg->buf, apptrg->bufsz);
 	LOG_INF("idx = %u, wr_recv_cnt = %u, rd_req_cnt = %u", apptrg->idx, apptrg->wr_recv_cnt,
 		apptrg->rd_req_cnt);
 	LOG_INF("stop_cnt = %u  error_cnt = %u  err_reason = %u", apptrg->stop_cnt,
@@ -311,6 +311,8 @@ static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 	uint32_t max_idx = targ1_app_data.idx + len;
 	uint8_t *p = ptr;
 
+	targ1_app_data.wr_recv_cnt++;
+
 	if (p == NULL) {
 		return;
 	}
@@ -323,6 +325,8 @@ static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 
 static int targ1_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len)
 {
+	targ1_app_data.rd_req_cnt++;
+
 	if ((ptr == NULL) || (len == NULL)) {
 		return -EINVAL;
 	}
@@ -357,6 +361,8 @@ static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 	uint32_t max_idx = targ2_app_data.idx + len;
 	uint8_t *p = ptr;
 
+	targ2_app_data.wr_recv_cnt++;
+
 	if (p == NULL) {
 		return;
 	}
@@ -368,7 +374,18 @@ static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 
 static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len)
 {
-	/* TODO */
+	targ2_app_data.rd_req_cnt++;
+
+	if ((ptr == NULL) || (len == NULL)) {
+		return -EINVAL;
+	}
+
+	/* TODO do we need to maintain write index and read index?
+	 * Or do we wrap?
+	 */
+	*ptr = &targ2_app_data.buf[targ2_app_data.idx];
+	*len = targ2_app_data.bufsz - targ2_app_data.idx;
+
 	return 0;
 }
 

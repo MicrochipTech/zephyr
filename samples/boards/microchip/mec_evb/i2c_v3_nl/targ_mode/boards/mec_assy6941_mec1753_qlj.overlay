@@ -41,13 +41,13 @@
  * ----------------
  * JP14 3x6
  * --------
- * 7-8, 16-17 
+ * 7-8, 16-17
  *
  * JP76 2x17
  * ---------
  * 21-22 7.5K pull-up to VTR2
  * 23-24 7.5K pull-up to VTR2
- * 
+ *
  * J22 1x6
  * ------------------------------
  *	pin 1 = I2C07_SCL/GPIO013
@@ -95,7 +95,7 @@
 	 * issue plus one byte (matched target address). The driver strips
 	 * the address before invoking buf_write_received.
 	 */
-	target-buffer-size = <256>;
+	target-buffer-size = <240>;
 };
 
 &i2c_smb_1 {
@@ -117,7 +117,7 @@
 	 * issue plus one byte (matched target address). The driver strips
 	 * the address before invoking buf_write_received.
 	 */
-	target-buffer-size = <256>;
+	target-buffer-size = <240>;
 };
 
 /* Port 0 pins */
