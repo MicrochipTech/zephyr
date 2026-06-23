@@ -347,7 +347,6 @@ struct xec_i2c_nl_data {
 	struct xec_i2c_nl_target_slot tgt_slots[XEC_I2C_OA_NUM_TARGETS];
 	uint8_t tgt_count; /* number of populated slots */
 	enum xec_i2c_nl_target_phase tgt_phase;
-	struct i2c_target_config *tgt_active; /* slot picked by current xact */
 #endif
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	volatile uint32_t capidx;
@@ -798,6 +797,18 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
 
 static int xec_i2c_nl_target_arm(const struct device *ctrl);
 
+/* The IAS shadow register at offset 0x6C captures the address byte
+ * (7-bit address + R/W bit) every time the HW generates or receives a
+ * START or Sr, and the value persists until the next START/Sr. It is
+ * the canonical HW-truth source for "which address just landed on the
+ * bus" and is independent of how far the target RX DMA has drained
+ * TRX into memory.
+ */
+static inline uint8_t xec_i2c_nl_target_addr_byte(const struct xec_i2c_nl_config *cfg)
+{
+	return sys_read8(cfg->base + XEC_I2C_IAS_OFS);
+}
+
 /* Match an inbound address byte against the OA slots and return the
  * corresponding i2c_target_config, or NULL if no slot owns it.
  */
@@ -816,6 +827,18 @@ static struct i2c_target_config *xec_i2c_nl_target_lookup(struct xec_i2c_nl_data
 	return NULL;
 }
 
+/* Look the slot up by reading IAS directly. Used in every target ISR
+ * dispatch path -- IAS is stable across the transaction so all event
+ * handlers (read-pause, stop, error) reach the same slot without
+ * depending on the target RX DMA having drained TRX into memory by
+ * the time the ISR runs.
+ */
+static struct i2c_target_config *xec_i2c_nl_target_active(const struct xec_i2c_nl_config *cfg,
+							  struct xec_i2c_nl_data *data)
+{
+	return xec_i2c_nl_target_lookup(data, xec_i2c_nl_target_addr_byte(cfg));
+}
+
 static void xec_i2c_nl_tgt_rx_dma_cb(const struct device *dma_dev, void *user_data,
 				     uint32_t channel, int status)
 {
@@ -824,13 +847,15 @@ static void xec_i2c_nl_tgt_rx_dma_cb(const struct device *dma_dev, void *user_da
 	ARG_UNUSED(dma_dev);
 	ARG_UNUSED(channel);
 
-	if (status < 0 && data->tgt_active != NULL && data->tgt_active->callbacks->error != NULL) {
-		data->tgt_active->callbacks->error(data->tgt_active, I2C_ERROR_DMA);
+	ARG_UNUSED(data);
+
+	if (status < 0) {
+		/* Cannot read IAS here (no device pointer) and we don't
+		 * track an "active slot" anymore. The I2C ISR's CMPL.ERR
+		 * branch is the authoritative error dispatch path -- it
+		 * reads IAS and fires the slot's error callback.
+		 */
 	}
-	/* Success path is handled by the I2C ISR via TDONE / STOP-detect.
-	 * On error the caller (the ISR's CMPL.ERR branch) will tear down
-	 * via xec_i2c_nl_target_arm() on the next event.
-	 */
 }
 
 static void xec_i2c_nl_tgt_tx_dma_cb(const struct device *dma_dev, void *user_data,
@@ -840,9 +865,12 @@ static void xec_i2c_nl_tgt_tx_dma_cb(const struct device *dma_dev, void *user_da
 
 	ARG_UNUSED(dma_dev);
 	ARG_UNUSED(channel);
+	ARG_UNUSED(data);
 
-	if (status < 0 && data->tgt_active != NULL && data->tgt_active->callbacks->error != NULL) {
-		data->tgt_active->callbacks->error(data->tgt_active, I2C_ERROR_DMA);
+	if (status < 0) {
+		/* Same as the RX cb: the I2C ISR's error path handles
+		 * dispatch via IAS lookup.
+		 */
 	}
 }
 
@@ -958,28 +986,28 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
 	data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
-	data->tgt_active = NULL;
 
 	xec_i2c_nl_cap_update(data, 0xD4U);
 
 	return 0;
 }
 
-/* The HW just paused for a host-read. The address byte sits at
- * tgt_rx_buf[0] with R-bit == 1; ask the matching slot's
- * buf_read_requested for a TX buffer, reprogram the DMA channel for
- * MEM->PERIPH, set TCMD.WCL, and resume by setting PROCEED.
+/* The HW just paused for a host-read. Read the matched address byte
+ * from the IAS shadow register (HW-truth, captured at the Sr edge);
+ * ask the matching slot's buf_read_requested for a TX buffer,
+ * reprogram the DMA channel for MEM->PERIPH, set TCMD.WCL, and resume
+ * by setting PROCEED.
  *
- * If buf_read_requested fails or no slot matches, drive zeros from a
- * tiny driver-internal buffer until the host issues STOP.
+ * If buf_read_requested fails or no slot matches, drive a single zero
+ * byte from a tiny driver-internal buffer; the host's NAK and STOP
+ * then complete the transaction cleanly.
  */
 static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 {
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
-	uint8_t addr_byte = cfg->tgt_rx_buf[0];
-	struct i2c_target_config *tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
+	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
 	uint8_t *buf = NULL;
 	uint32_t len = 0, rval = 0;
 	static const uint8_t zero_byte;
@@ -1041,7 +1069,6 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 
 	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
-	data->tgt_active = tcfg;
 	data->tgt_phase = XEC_I2C_NL_TGT_TX;
 
 	xec_i2c_nl_cap_update(data, 0xA6U);
@@ -1065,15 +1092,13 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 
 	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
 
-	addr_byte = cfg->tgt_rx_buf[0];
-	tcfg = (data->tgt_active != NULL) ? data->tgt_active
-					  : xec_i2c_nl_target_lookup(data, addr_byte);
-	/* Use the HW-truth R/W bit in the matched address byte to decide
-	 * whether to deliver inbound data. tgt_phase is fragile against a
-	 * TDONE that re-asserts in the same ISR snapshot as the post-read
-	 * STOP's IDLE -- the TDONE else-clause would clobber TX back to RX
-	 * and we'd spuriously invoke buf_write_received on what was a host
-	 * read.
+	addr_byte = xec_i2c_nl_target_addr_byte(cfg);
+	tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
+	/* Use the HW-truth R/W bit in the matched address byte (read
+	 * directly from IAS) to decide whether to deliver inbound data.
+	 * IAS persists across the transaction so the slot lookup and the
+	 * direction gate both reach the same target_config that
+	 * handle_read_pause saw.
 	 */
 	was_write = ((addr_byte & XEC_I2C_NL_TGT_RBIT) == 0U);
 
@@ -1104,8 +1129,9 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 
 static void xec_i2c_nl_target_handle_error(const struct device *ctrl)
 {
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
-	struct i2c_target_config *tcfg = data->tgt_active;
+	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
 
 	xec_i2c_nl_cap_update(data, 0xE8U);
 
@@ -1353,7 +1379,6 @@ static int xec_i2c_nl_target_unregister(const struct device *port_dev,
 		sys_write32(CMPL_TGT_CLEAR, cfg->base + XEC_I2C_CMPL_OFS);
 
 		data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
-		data->tgt_active = NULL;
 		data->mode = XEC_I2C_NL_MODE_CONTROLLER;
 	}
 
