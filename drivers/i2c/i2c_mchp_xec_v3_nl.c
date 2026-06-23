@@ -143,9 +143,19 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  * or CMPL.DTS_STS to fire on an externally-generated STOP, so the
  * driver does not enable it; CMPL.IDLE alone carries the signal.
  */
-#define CMPL_TDONE BIT(XEC_I2C_CMPL_TDONE_POS)
+#define CMPL_TDONE  BIT(XEC_I2C_CMPL_TDONE_POS)
+#define CMPL_TPROT  BIT(XEC_I2C_CMPL_TPROT_POS)
+#define CMPL_RPT_RD BIT(XEC_I2C_CMPL_RPT_RD_POS)
+#define CMPL_RPT_WR BIT(XEC_I2C_CMPL_RPT_WR_POS)
+
 #define CFG_TD_IEN BIT(XEC_I2C_CFG_TD_IEN_POS)
 #define CFG_HD_IEN BIT(XEC_I2C_CFG_HD_IEN_POS)
+
+/* Bit 0 of the matched target address byte is the bus R/W bit:
+ * 0 -> host wrote to us (we deliver data via buf_write_received),
+ * 1 -> host read from us (no write delivery).
+ */
+#define XEC_I2C_NL_TGT_RBIT 0x01U
 
 /* Bus-idle status / interrupt-enable. CMPL.IDLE latches when SR.NBB
  * transitions 0->1 (the controller has driven STOP and released the
@@ -158,6 +168,17 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  */
 #define CMPL_IDLE    BIT(XEC_I2C_CMPL_IDLE_POS)
 #define CFG_IDLE_IEN BIT(XEC_I2C_CFG_IDLE_IEN_POS)
+
+/* RW1C bits the target-mode driver acknowledges and clears across every
+ * transaction. TPROT, RPT_RD, RPT_WR are informational status latches
+ * the HW asserts during certain transaction shapes (e.g. v3.8 silicon
+ * sets RPT_RD on host-write-then-Sr-read sequences) and that do NOT
+ * fire an interrupt on their own. Left unacked they survive into the
+ * next transaction and confuse anyone reading CMPL after the fact --
+ * the driver clears them at every re-arm.
+ */
+#define CMPL_TGT_CLEAR (CMPL_TDONE | CMPL_IDLE | CMPL_TPROT | \
+			CMPL_RPT_RD | CMPL_RPT_WR)
 
 /* BBCR (bit-bang control register) has two operating modes on v3.8:
  *
@@ -912,11 +933,13 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 		return rc;
 	}
 
-	/* Clear any latched target completion bits so the next event is
-	 * fresh. CMPL.IDLE in particular can carry the latch from the
-	 * previous transaction's STOP.
+	/* Clear all RW1C target-mode latches so the next transaction
+	 * starts with a clean CMPL. CMPL.IDLE in particular carries the
+	 * latch from the previous transaction's STOP; CMPL.TPROT /
+	 * CMPL.RPT_RD / CMPL.RPT_WR are status bits the HW asserts
+	 * during certain shapes but does not auto-clear.
 	 */
-	sys_write32(CMPL_TDONE | CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+	sys_write32(CMPL_TGT_CLEAR, base + XEC_I2C_CMPL_OFS);
 
 	/* TCMD: target reads (host writes to us) up to tgt_rx_buf_size
 	 * bytes including the address. WCL stays 0 — set later by the
@@ -1045,7 +1068,14 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	addr_byte = cfg->tgt_rx_buf[0];
 	tcfg = (data->tgt_active != NULL) ? data->tgt_active
 					  : xec_i2c_nl_target_lookup(data, addr_byte);
-	was_write = (data->tgt_phase != XEC_I2C_NL_TGT_TX);
+	/* Use the HW-truth R/W bit in the matched address byte to decide
+	 * whether to deliver inbound data. tgt_phase is fragile against a
+	 * TDONE that re-asserts in the same ISR snapshot as the post-read
+	 * STOP's IDLE -- the TDONE else-clause would clobber TX back to RX
+	 * and we'd spuriously invoke buf_write_received on what was a host
+	 * read.
+	 */
+	was_write = ((addr_byte & XEC_I2C_NL_TGT_RBIT) == 0U);
 
 	if (tcfg != NULL && was_write && tcfg->callbacks->buf_write_received != NULL) {
 		xec_i2c_nl_cap_update(data, 0xE1);
@@ -1104,7 +1134,7 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 
 	if ((cmpl & CMPL_ERR) != 0U) {
 		xec_i2c_nl_cap_update(data, 0x91U);
-		sys_write32(CMPL_ERR | CMPL_TDONE | CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+		sys_write32(CMPL_ERR | CMPL_TGT_CLEAR, base + XEC_I2C_CMPL_OFS);
 		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		xec_i2c_nl_target_handle_error(ctrl);
@@ -1135,14 +1165,18 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			sys_set_bit(base + XEC_I2C_CFG_OFS,
 				    XEC_I2C_CFG_IDLE_IEN_POS);
 		} else {
-			/* Inbound buffer fill: TCMD.RCL hit 0 and the HW
-			 * NAK'd further bytes. The host will issue STOP
-			 * shortly, but we deliver the payload now and let
-			 * the stop callback fire from the IDLE branch
-			 * below.
+			/* Other TDONE shapes (RUN==0, PROCEED==0): either
+			 * an inbound buffer fill (TCMD.RCL hit 0) or the
+			 * normal write-then-STOP completion. Both will be
+			 * carried by CMPL.IDLE below, which dispatches
+			 * handle_stop. handle_stop reads the R/W bit of
+			 * the matched address byte directly to decide
+			 * whether to invoke buf_write_received --
+			 * touching tgt_phase here would clobber the TX
+			 * phase that handle_read_pause just set and is
+			 * not necessary for the IDLE-driven dispatch.
 			 */
 			xec_i2c_nl_cap_update(data, 0x94U);
-			data->tgt_phase = XEC_I2C_NL_TGT_RX;
 		}
 	}
 
@@ -1316,7 +1350,7 @@ static int xec_i2c_nl_target_unregister(const struct device *port_dev,
 
 		soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_HD_IEN,
 				  CFG_TD_IEN | CFG_HD_IEN | CFG_IDLE_IEN);
-		sys_write32(CMPL_TDONE | CMPL_IDLE, cfg->base + XEC_I2C_CMPL_OFS);
+		sys_write32(CMPL_TGT_CLEAR, cfg->base + XEC_I2C_CMPL_OFS);
 
 		data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
 		data->tgt_active = NULL;
