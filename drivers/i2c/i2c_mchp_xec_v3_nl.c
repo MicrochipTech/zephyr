@@ -1161,22 +1161,6 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 
 	xec_i2c_nl_cap_update(data, 0xE0);
 
-	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
-	consumed = (cfg->tgt_rx_buf_size > st.pending_length)
-		? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
-
-	/* Spurious-IDLE guard. target_arm enables IDLE_IEN while NBB
-	 * may still be 1, which on v3.8 silicon can latch a one-shot
-	 * spurious IRQ. If the DMA hasn't moved a single byte then no
-	 * external transaction took place: skip the callbacks and the
-	 * re-arm, leaving the channel and TCMD in their already-armed
-	 * state. CMPL.IDLE was cleared by the ISR before this call.
-	 */
-	if (consumed == 0U) {
-		xec_i2c_nl_cap_update(data, 0xEF);
-		return;
-	}
-
 	addr_byte = xec_i2c_nl_target_addr_byte(cfg);
 	tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
 	/* Use the HW-truth R/W bit in the matched address byte (read
@@ -1186,6 +1170,35 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	 * handle_read_pause saw.
 	 */
 	was_write = ((addr_byte & XEC_I2C_NL_TGT_RBIT) == 0U);
+
+	/* The DMA pending_length is only an RX progress indicator when
+	 * the channel is still configured for inbound traffic -- i.e.
+	 * when tgt_phase has not been flipped to TGT_TX by
+	 * handle_read_pause. Compute consumed only on that path; on the
+	 * host-read path the same channel has been re-pointed at TTX
+	 * with an application-supplied buffer (potentially larger than
+	 * tgt_rx_buf_size), so the formula would yield meaningless
+	 * values and must not be used.
+	 */
+	if (data->tgt_phase == XEC_I2C_NL_TGT_IDLE) {
+		(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
+		consumed = (cfg->tgt_rx_buf_size > st.pending_length)
+			? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
+
+		/* Spurious-IDLE guard. target_arm enables IDLE_IEN while
+		 * NBB may still be 1, which on v3.8 silicon can latch a
+		 * one-shot spurious IRQ. If the channel is still in RX
+		 * configuration AND no bytes were consumed, no external
+		 * transaction took place: skip the callbacks and the
+		 * re-arm, leaving the channel and TCMD in their already-
+		 * armed state. CMPL.IDLE was cleared by the ISR before
+		 * this call.
+		 */
+		if (consumed == 0U) {
+			xec_i2c_nl_cap_update(data, 0xEFU);
+			return;
+		}
+	}
 
 	if (tcfg != NULL && was_write && tcfg->callbacks->buf_write_received != NULL) {
 		xec_i2c_nl_cap_update(data, 0xE1);
