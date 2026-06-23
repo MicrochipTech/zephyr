@@ -793,6 +793,15 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
  *     SR.STO or CMPL.DTS_STS to fire on an externally-generated
  *     STOP.
  *   - CMPL.{HNAK,LAB,BER}                         -> bus error.
+ *
+ * The driver pre-arms TCMD.WCL with 1 (a placeholder) at every
+ * (re-)arm. The HW samples WCL the moment a host-read address
+ * matches and asserts CMPL.TPROT (target protocol error) if WCL == 0
+ * at that instant -- it interprets a zero TX budget as "SW didn't
+ * preconfigure for a read." The placeholder defers the real WCL
+ * until the read-pause handler writes it from buf_read_requested's
+ * length, before the FSM is released via PROCEED, so the placeholder
+ * value never reaches the bus.
  * -------------------------------------------------------------------------*/
 
 static int xec_i2c_nl_target_arm(const struct device *ctrl);
@@ -970,8 +979,16 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	sys_write32(CMPL_TGT_CLEAR, base + XEC_I2C_CMPL_OFS);
 
 	/* TCMD: target reads (host writes to us) up to tgt_rx_buf_size
-	 * bytes including the address. WCL stays 0 — set later by the
-	 * read-pause handler. ELEN.TRD carries the upper byte of RCL.
+	 * bytes including the address. WCL is preset to 1 -- the HW
+	 * checks WCL the moment a host-read address matches and asserts
+	 * CMPL.TPROT (target protocol error) if WCL == 0 at that
+	 * instant, on the assumption that SW left no TX budget. Pre-
+	 * arming with a non-zero WCL suppresses the false TPROT; the
+	 * actual host-read byte count is written into WCL by the
+	 * read-pause handler from buf_read_requested's return, before
+	 * SW sets PROCEED to release the FSM, so the value of 1 here
+	 * never reaches the bus. ELEN.TRD carries the upper byte of
+	 * RCL; ELEN.TWR stays 0 (the WCL low byte covers our placeholder).
 	 */
 	xec_i2c_nl_cap_update(data, 0xD3U);
 	uint16_t rcl = (uint16_t)cfg->tgt_rx_buf_size;
@@ -981,7 +998,7 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	rval |= XEC_I2C_ELEN_TRD_SET((uint32_t)rcl >> 8);
 	sys_write32(rval, base + XEC_I2C_ELEN_OFS);
 
-	rval = (XEC_I2C_TCMD_RCL_SET((uint32_t)rcl & 0xFFU) | XEC_I2C_TCMD_WCL_SET(0) |
+	rval = (XEC_I2C_TCMD_RCL_SET((uint32_t)rcl & 0xFFU) | XEC_I2C_TCMD_WCL_SET(1) |
 		TCMD_RUN | TCMD_PROCEED);
 	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
