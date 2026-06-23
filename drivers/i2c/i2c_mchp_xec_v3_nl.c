@@ -1074,12 +1074,47 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
 	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
+	struct dma_status st = {0};
 	uint8_t *buf = NULL;
 	uint32_t len = 0, rval = 0;
+	size_t consumed;
 	static const uint8_t zero_byte;
 	int rc = -ENOENT;
 
 	xec_i2c_nl_cap_update(data, 0xA0U);
+
+	/* Combined write-then-Sr-read transaction handling. When the host
+	 * issues a write followed by Sr+R on a single START-to-STOP
+	 * transaction, the FSM DMAs every byte it receives into the
+	 * bounce buffer -- the first W address at tgt_rx_buf[0], the
+	 * write payload at [1..N-2], and the second (R) address at
+	 * [N-1] -- before pausing for SW to provide a TX buffer. The
+	 * outer ISR already determined this is a host-read pause via
+	 * the IAS R-bit gate, so tgt_rx_buf[N-1] carries the R address
+	 * and IAS has the same byte cached. If the consumed count says
+	 * we received more than one byte before the pause, the leading
+	 * bytes are a host-write delivery that has to be dispatched
+	 * BEFORE the read side gets reconfigured -- handle_stop's
+	 * IAS-driven was_write check sees the trailing R address and
+	 * would skip the write delivery entirely. Look up the writer
+	 * slot from tgt_rx_buf[0] (its R-bit must be 0) and call its
+	 * buf_write_received with the payload bytes between the two
+	 * address bytes.
+	 */
+	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
+	consumed = (cfg->tgt_rx_buf_size > st.pending_length)
+		? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
+
+	if (consumed > 2U &&
+	    (cfg->tgt_rx_buf[0] & XEC_I2C_NL_TGT_RBIT) == 0U) {
+		struct i2c_target_config *wtcfg =
+			xec_i2c_nl_target_lookup(data, cfg->tgt_rx_buf[0]);
+		if (wtcfg != NULL && wtcfg->callbacks->buf_write_received != NULL) {
+			xec_i2c_nl_cap_update(data, 0xA7U);
+			wtcfg->callbacks->buf_write_received(wtcfg, &cfg->tgt_rx_buf[1],
+							     (uint32_t)(consumed - 2U));
+		}
+	}
 
 	if (tcfg != NULL && tcfg->callbacks->buf_read_requested != NULL) {
 		xec_i2c_nl_cap_update(data, 0xA1U);
