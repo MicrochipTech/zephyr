@@ -1074,7 +1074,6 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
 	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
-	struct dma_status st = {0};
 	uint8_t *buf = NULL;
 	uint32_t len = 0, rval = 0;
 	size_t consumed;
@@ -1085,25 +1084,39 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 
 	/* Combined write-then-Sr-read transaction handling. When the host
 	 * issues a write followed by Sr+R on a single START-to-STOP
-	 * transaction, the FSM DMAs every byte it receives into the
-	 * bounce buffer -- the first W address at tgt_rx_buf[0], the
-	 * write payload at [1..N-2], and the second (R) address at
-	 * [N-1] -- before pausing for SW to provide a TX buffer. The
-	 * outer ISR already determined this is a host-read pause via
-	 * the IAS R-bit gate, so tgt_rx_buf[N-1] carries the R address
-	 * and IAS has the same byte cached. If the consumed count says
-	 * we received more than one byte before the pause, the leading
-	 * bytes are a host-write delivery that has to be dispatched
-	 * BEFORE the read side gets reconfigured -- handle_stop's
-	 * IAS-driven was_write check sees the trailing R address and
-	 * would skip the write delivery entirely. Look up the writer
-	 * slot from tgt_rx_buf[0] (its R-bit must be 0) and call its
-	 * buf_write_received with the payload bytes between the two
-	 * address bytes.
+	 * transaction, the FSM ACKs (and DMAs) every byte it receives
+	 * into the bounce buffer -- the first W address at
+	 * tgt_rx_buf[0], the write payload at [1..N-2], and the second
+	 * (R) address at [N-1] -- before pausing for SW to provide a
+	 * TX buffer. The outer ISR already determined this is a
+	 * host-read pause via the IAS R-bit gate; if more than one byte
+	 * reached the FSM before the pause, the leading bytes are a
+	 * host-write delivery that has to be dispatched BEFORE the read
+	 * side gets reconfigured -- handle_stop's IAS-driven was_write
+	 * check sees the trailing R address and would skip the write
+	 * delivery entirely.
+	 *
+	 * Source the byte count from TCMD.RCL + ELEN.TRD, not from
+	 * dma_get_status.pending_length: empirically, the DMA pipelines
+	 * one byte ahead of the FSM and pending_length reports one more
+	 * byte transferred than RCL admits (the post-pause phantom byte
+	 * sits at tgt_rx_buf[N] with the placeholder TRX value 0x00).
+	 * If we trust pending_length, the extra phantom + the R address
+	 * both end up in the buf_write_received payload and the
+	 * application's targ buffer is corrupted at the position the
+	 * subsequent host-read pulls from.
+	 *
+	 * Look up the writer slot from tgt_rx_buf[0] (R-bit==0) so the
+	 * delivery hits the correct slot even if the host's Sr changes
+	 * target address between the write and the read halves.
 	 */
-	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
-	consumed = (cfg->tgt_rx_buf_size > st.pending_length)
-		? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
+	uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+	uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+	uint16_t rcl_now = (uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) |
+				      (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+
+	consumed = (cfg->tgt_rx_buf_size > rcl_now)
+		? (cfg->tgt_rx_buf_size - rcl_now) : 0U;
 
 	if (consumed > 2U &&
 	    (cfg->tgt_rx_buf[0] & XEC_I2C_NL_TGT_RBIT) == 0U) {
