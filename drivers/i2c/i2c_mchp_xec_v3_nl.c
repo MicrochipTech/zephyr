@@ -773,17 +773,25 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
  * R/W bit to identify a host-read vs host-write.
  *
  * Event flow on v3.8 silicon:
- *   - CMPL.TDONE with TCMD.RUN=1, TCMD.PROCEED=0  -> host-read pause
- *     (HW received target-addr | R-bit, paused for SW to provide
- *     data via buf_read_requested). After handling the pause the
- *     ISR enables CFG.IDLE_IEN -- NBB is 0 here, so the v3.8
- *     IDLE-IEN HW bug is avoided -- to catch the host's eventual
- *     STOP via CMPL.IDLE.
+ *   - CMPL.TDONE with TCMD.RUN=1, TCMD.PROCEED=0, AND IAS.R-bit=1
+ *     -> host-read pause. HW received target-addr | R-bit, paused
+ *     for SW to provide data via buf_read_requested. After handling
+ *     the pause the ISR enables CFG.IDLE_IEN -- NBB is 0 here, so
+ *     the v3.8 IDLE-IEN HW bug is avoided -- to catch the host's
+ *     eventual STOP via CMPL.IDLE.
  *   - CMPL.TDONE with TCMD.RUN=0, TCMD.PROCEED=0  -> host-write
- *     transaction complete (either at host STOP, or after TCMD.RCL
- *     hit 0 and the HW NAK'd further bytes). CMPL.IDLE is also
- *     latched at this point and the IDLE branch dispatches the
- *     stop callback in the same ISR invocation.
+ *     transaction completed normally at the host's STOP.
+ *   - CMPL.TDONE with TCMD.RUN=1, TCMD.PROCEED=0, IAS.R-bit=0
+ *     -> host-write BUFFER FILL. TCMD.RCL hit 0; the HW NAK'd the
+ *     over-the-line byte but left RUN set until the host's STOP.
+ *     This signature is otherwise indistinguishable from a
+ *     read-pause -- the IAS.R-bit gate is what tells them apart.
+ *     The IDLE branch below carries this to handle_stop.
+ *
+ *     For all the write-side TDONE shapes, CMPL.IDLE is also
+ *     latched (the host STOPs after seeing the FSM's signal) and
+ *     the IDLE branch dispatches handle_stop in the same ISR
+ *     invocation.
  *   - CMPL.IDLE                                   -> external STOP
  *     (host has driven STOP, NBB transitioned 0->1). For host
  *     writes this rides into the ISR alongside TDONE; for host
@@ -1203,11 +1211,16 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 		sys_write32(CMPL_TDONE, base + XEC_I2C_CMPL_OFS);
 
 		uint32_t tcmd = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint8_t addr_byte = xec_i2c_nl_target_addr_byte(cfg);
+		bool host_read = ((addr_byte & XEC_I2C_NL_TGT_RBIT) != 0U);
+		bool fsm_paused = ((tcmd & TCMD_RUN) != 0U) &&
+				  ((tcmd & TCMD_PROCEED) == 0U);
 
-		if ((tcmd & TCMD_RUN) != 0U && (tcmd & TCMD_PROCEED) == 0U) {
-			/* Host-read pause: the address byte (with R-bit
-			 * set) is sitting in tgt_rx_buf[0] and the FSM is
-			 * waiting for SW to provide a TX buffer.
+		if (host_read && fsm_paused) {
+			/* Host-read pause: the matched address (from IAS)
+			 * carries R-bit=1 and the FSM has cleared
+			 * PROCEED while leaving RUN set, waiting for SW
+			 * to provide a TX buffer via buf_read_requested.
 			 */
 			xec_i2c_nl_cap_update(data, 0x93U);
 			xec_i2c_nl_target_handle_read_pause(ctrl);
@@ -1222,16 +1235,28 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			sys_set_bit(base + XEC_I2C_CFG_OFS,
 				    XEC_I2C_CFG_IDLE_IEN_POS);
 		} else {
-			/* Other TDONE shapes (RUN==0, PROCEED==0): either
-			 * an inbound buffer fill (TCMD.RCL hit 0) or the
-			 * normal write-then-STOP completion. Both will be
-			 * carried by CMPL.IDLE below, which dispatches
-			 * handle_stop. handle_stop reads the R/W bit of
-			 * the matched address byte directly to decide
-			 * whether to invoke buf_write_received --
-			 * touching tgt_phase here would clobber the TX
-			 * phase that handle_read_pause just set and is
-			 * not necessary for the IDLE-driven dispatch.
+			/* Other TDONE shapes -- either a normal
+			 * write-then-STOP completion (RUN==0, PROCEED==0)
+			 * or a buffer-fill NAK (host-write, RUN==1,
+			 * PROCEED==0 because RCL hit 0 and the HW NAK'd
+			 * but left the FSM in transaction state until
+			 * the host's STOP). The crucial point is that
+			 * the buffer-fill TDONE signature is
+			 * indistinguishable from a read-pause TDONE on
+			 * TCMD bits alone -- both have RUN=1, PROCEED=0.
+			 * The host_read gate (IAS R-bit) is the only way
+			 * to tell them apart: a host-write transaction
+			 * cannot produce a read-pause regardless of how
+			 * the FSM ends. Without that gate, the driver
+			 * would mistakenly invoke buf_read_requested on
+			 * a buffer-fill, reconfigure the target DMA for
+			 * outbound TX, and leave the FSM wedged with
+			 * PROCEED=1 after the host has already STOPped.
+			 *
+			 * For either of these write-side cases, the IDLE
+			 * branch below dispatches handle_stop in the
+			 * same ISR snapshot (CMPL.IDLE is latched by HW
+			 * when the host's STOP returns NBB to 1).
 			 */
 			xec_i2c_nl_cap_update(data, 0x94U);
 		}
