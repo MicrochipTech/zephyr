@@ -163,8 +163,18 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  * onto the controller's interrupt output. v3.8 silicon has a bug where
  * setting IDLE_IEN while NBB==1 (already idle) immediately fires the
  * interrupt — the driver works around this by enabling IDLE_IEN inside
- * the HDONE ISR, where NBB is guaranteed to be 0 (the controller is
- * still mid-STOP-generation when HDONE fires).
+ * the HDONE ISR (controller mode) where NBB is guaranteed to be 0
+ * because the controller is still mid-STOP-generation when HDONE fires.
+ *
+ * Target mode is different: a host-write that fills the target buffer
+ * never fires TDONE (the FSM stalls after the post-RCL=0 NAK and never
+ * asserts TDONE on the host's STOP), so IDLE_IEN MUST be on across the
+ * full lifetime of the armed target -- not just inside the read-pause
+ * branch -- otherwise the target wedges with AAT=1, RUN=1, PROC=1 and
+ * holds the bus. target_arm therefore enables IDLE_IEN itself, and
+ * target_handle_stop carries a DMA-progress guard so the one-shot
+ * spurious IRQ that the IEN-enable-while-NBB==1 bug may produce is a
+ * no-op (consumed bytes == 0 -> early return).
  */
 #define CMPL_IDLE    BIT(XEC_I2C_CMPL_IDLE_POS)
 #define CFG_IDLE_IEN BIT(XEC_I2C_CFG_IDLE_IEN_POS)
@@ -1010,6 +1020,28 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 		TCMD_RUN | TCMD_PROCEED);
 	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
+	/* Enable IDLE_IEN now -- end-of-transaction must be observable
+	 * for every host-write shape, not just the read-pause path. The
+	 * NL FSM does NOT assert TDONE when a host-write fills the
+	 * target buffer (RCL hits 0, the next byte is NAK'd via
+	 * TNAKR_STS, and the FSM stays in transaction state until the
+	 * host's STOP). Without IDLE_IEN that STOP latches CMPL.IDLE
+	 * silently and the target wedges with AAT=1, RUN=1, PROC=1.
+	 * With IDLE_IEN on, the NBB 0->1 transition at host STOP fires
+	 * the IRQ for every shape -- short writes, buffer-fill writes,
+	 * and reads alike.
+	 *
+	 * The v3.8 silicon has a documented quirk: setting IDLE_IEN
+	 * while NBB==1 can immediately fire a one-shot spurious IRQ.
+	 * We dampen the risk by clearing CMPL.IDLE on both sides of the
+	 * IEN write; if the bug still latches a spurious IDLE between
+	 * the two clears, handle_stop's DMA-progress guard treats the
+	 * resulting ISR run as a no-op.
+	 */
+	sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+	sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+	sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+
 	data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
 
 	xec_i2c_nl_cap_update(data, 0xD4U);
@@ -1130,6 +1162,20 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	xec_i2c_nl_cap_update(data, 0xE0);
 
 	(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
+	consumed = (cfg->tgt_rx_buf_size > st.pending_length)
+		? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
+
+	/* Spurious-IDLE guard. target_arm enables IDLE_IEN while NBB
+	 * may still be 1, which on v3.8 silicon can latch a one-shot
+	 * spurious IRQ. If the DMA hasn't moved a single byte then no
+	 * external transaction took place: skip the callbacks and the
+	 * re-arm, leaving the channel and TCMD in their already-armed
+	 * state. CMPL.IDLE was cleared by the ISR before this call.
+	 */
+	if (consumed == 0U) {
+		xec_i2c_nl_cap_update(data, 0xEF);
+		return;
+	}
 
 	addr_byte = xec_i2c_nl_target_addr_byte(cfg);
 	tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
@@ -1143,9 +1189,6 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 
 	if (tcfg != NULL && was_write && tcfg->callbacks->buf_write_received != NULL) {
 		xec_i2c_nl_cap_update(data, 0xE1);
-
-		consumed = (cfg->tgt_rx_buf_size > st.pending_length)
-			? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
 		/* The first byte of the bounce buffer is the matched
 		 * target address; data starts at offset 1.
 		 */
@@ -1200,7 +1243,6 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 	if ((cmpl & CMPL_ERR) != 0U) {
 		xec_i2c_nl_cap_update(data, 0x91U);
 		sys_write32(CMPL_ERR | CMPL_TGT_CLEAR, base + XEC_I2C_CMPL_OFS);
-		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		xec_i2c_nl_target_handle_error(ctrl);
 		return;
@@ -1221,19 +1263,12 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			 * carries R-bit=1 and the FSM has cleared
 			 * PROCEED while leaving RUN set, waiting for SW
 			 * to provide a TX buffer via buf_read_requested.
+			 * IDLE_IEN is already on (target_arm enables it)
+			 * so the host's STOP at end-of-read will fire
+			 * CMPL.IDLE -> handle_stop directly.
 			 */
 			xec_i2c_nl_cap_update(data, 0x93U);
 			xec_i2c_nl_target_handle_read_pause(ctrl);
-			/* Enable IDLE_IEN now to catch the host's STOP
-			 * at end-of-read. NBB is 0 (bus is busy
-			 * mid-transfer) so the v3.8 IDLE-IEN HW bug is
-			 * avoided. Clear any stale CMPL.IDLE first --
-			 * a previous transaction's STOP may have left
-			 * the latch set.
-			 */
-			sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
-			sys_set_bit(base + XEC_I2C_CFG_OFS,
-				    XEC_I2C_CFG_IDLE_IEN_POS);
 		} else {
 			/* Other TDONE shapes -- either a normal
 			 * write-then-STOP completion (RUN==0, PROCEED==0)
@@ -1266,16 +1301,18 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 	 * IDLE_IEN. On v3.8 silicon it is the only reliable
 	 * end-of-transaction signal in target mode -- CFG.STD_NL_IEN
 	 * (bit 27) does NOT cause CMPL.DTS_STS or SR.STO to fire on an
-	 * externally-generated STOP. For host-write transfers the TDONE
-	 * branch above brings us into this ISR with CMPL.IDLE already
-	 * set, so we observe it here. For host-read transfers, no TDONE
-	 * fires on the host's STOP -- only the IDLE interrupt does -- so
-	 * we rely on IDLE_IEN being enabled at read-pause time (above).
+	 * externally-generated STOP, and the NL FSM does not assert
+	 * TDONE when a host-write fills the target buffer (RCL exhausts
+	 * to 0, the next byte is NAK'd, and the FSM stalls in
+	 * transaction state until the host's STOP). IDLE_IEN is enabled
+	 * by target_arm and stays on for the lifetime of the armed
+	 * target; we leave it on across handle_stop and target_arm
+	 * picks up the next transaction. CMPL.IDLE is W1C-cleared here
+	 * (and again by target_arm at re-arm time).
 	 */
 	if ((cmpl & CMPL_IDLE) != 0U) {
 		xec_i2c_nl_cap_update(data, 0x95U);
 		sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
-		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_nl_target_handle_stop(ctrl);
 	}
 
@@ -1355,14 +1392,13 @@ static int xec_i2c_nl_target_register(const struct device *port_dev, struct i2c_
 		dma_stop(cfg->dma_dev, cfg->dma_chan);
 
 		/* Swap CFG IENs: drop HD_IEN, enable TD_IEN. IDLE_IEN
-		 * stays off here -- the target ISR enables it just in
-		 * time inside the read-pause branch (NBB=0 there, so
-		 * the v3.8 IDLE-IEN HW bug is avoided), and the STOP
-		 * dispatch from CMPL.IDLE is independent of IDLE_IEN
-		 * for the host-write case because TDONE already brings
-		 * us into the ISR. CFG.STD_NL_IEN (bit 27) is NOT
-		 * enabled -- on this silicon it does not cause
-		 * SR.STO / CMPL.DTS_STS to fire on an externally-
+		 * stays off here -- target_arm turns it on at the end of
+		 * its sequence (immediately after writing TCMD with
+		 * RUN=1, PROC=1) so the host's STOP at end-of-transaction
+		 * is observable for every shape, including buffer-fill
+		 * writes where TDONE does not fire. CFG.STD_NL_IEN (bit
+		 * 27) is NOT enabled -- on this silicon it does not
+		 * cause SR.STO / CMPL.DTS_STS to fire on an externally-
 		 * generated STOP, so it would just take up an interrupt
 		 * source we don't act on.
 		 */
