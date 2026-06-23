@@ -143,10 +143,12 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  * or CMPL.DTS_STS to fire on an externally-generated STOP, so the
  * driver does not enable it; CMPL.IDLE alone carries the signal.
  */
-#define CMPL_TDONE  BIT(XEC_I2C_CMPL_TDONE_POS)
-#define CMPL_TPROT  BIT(XEC_I2C_CMPL_TPROT_POS)
-#define CMPL_RPT_RD BIT(XEC_I2C_CMPL_RPT_RD_POS)
-#define CMPL_RPT_WR BIT(XEC_I2C_CMPL_RPT_WR_POS)
+#define CMPL_TDONE     BIT(XEC_I2C_CMPL_TDONE_POS)
+#define CMPL_TPROT     BIT(XEC_I2C_CMPL_TPROT_POS)
+#define CMPL_RPT_RD    BIT(XEC_I2C_CMPL_RPT_RD_POS)
+#define CMPL_RPT_WR    BIT(XEC_I2C_CMPL_RPT_WR_POS)
+#define CMPL_TNAKR_STS BIT(XEC_I2C_CMPL_TNAKR_STS_POS)
+#define CMPL_DTS_STS   BIT(XEC_I2C_CMPL_DTS_STS_POS)
 
 #define CFG_TD_IEN BIT(XEC_I2C_CFG_TD_IEN_POS)
 #define CFG_HD_IEN BIT(XEC_I2C_CFG_HD_IEN_POS)
@@ -183,12 +185,19 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  * transaction. TPROT, RPT_RD, RPT_WR are informational status latches
  * the HW asserts during certain transaction shapes (e.g. v3.8 silicon
  * sets RPT_RD on host-write-then-Sr-read sequences) and that do NOT
- * fire an interrupt on their own. Left unacked they survive into the
- * next transaction and confuse anyone reading CMPL after the fact --
- * the driver clears them at every re-arm.
+ * fire an interrupt on their own. TNAKR_STS latches when the FSM NAKs
+ * a byte (the buffer-fill case asserts it); empirically, leaving it
+ * set into the next transaction biases the FSM to NAK after the
+ * address byte on a subsequent host-write, so it must be cleared at
+ * every re-arm just like TPROT/RPT_*. DTS_STS is cleared
+ * defensively even though the v3.8 STD_NL_IEN path does not assert it
+ * for an externally-generated STOP. Left unacked these survive into
+ * the next transaction and confuse anyone reading CMPL after the
+ * fact -- the driver clears them at every re-arm.
  */
 #define CMPL_TGT_CLEAR (CMPL_TDONE | CMPL_IDLE | CMPL_TPROT | \
-			CMPL_RPT_RD | CMPL_RPT_WR)
+			CMPL_RPT_RD | CMPL_RPT_WR | CMPL_TNAKR_STS | \
+			CMPL_DTS_STS)
 
 /* BBCR (bit-bang control register) has two operating modes on v3.8:
  *
