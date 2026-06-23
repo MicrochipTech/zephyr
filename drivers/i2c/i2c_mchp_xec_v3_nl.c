@@ -1097,14 +1097,19 @@ static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
 	 * delivery entirely.
 	 *
 	 * Source the byte count from TCMD.RCL + ELEN.TRD, not from
-	 * dma_get_status.pending_length: empirically, the DMA pipelines
-	 * one byte ahead of the FSM and pending_length reports one more
-	 * byte transferred than RCL admits (the post-pause phantom byte
-	 * sits at tgt_rx_buf[N] with the placeholder TRX value 0x00).
-	 * If we trust pending_length, the extra phantom + the R address
-	 * both end up in the buf_write_received payload and the
-	 * application's targ buffer is corrupted at the position the
-	 * subsequent host-read pulls from.
+	 * dma_get_status.pending_length. In target receive mode the HW
+	 * triggers DMA to read one extra byte to clear PIN status (an
+	 * artifact of how the NL FSM rides on top of the legacy
+	 * byte-mode HW -- the byte-mode logic needs a dummy DATA read
+	 * after every receive end so SW would normally clear PIN, and
+	 * the NL HW emits that read as a DMA cycle instead). The
+	 * dummy byte is NOT counted in RCL or WCL and only the DMA
+	 * channel sees it; pending_length therefore reports one more
+	 * byte transferred than RCL admits. If we trust pending_length,
+	 * the dummy + the trailing R address both end up in the
+	 * buf_write_received payload and the application's targ buffer
+	 * is corrupted at the position the subsequent host-read pulls
+	 * from. RCL is the authoritative ACK count.
 	 *
 	 * Look up the writer slot from tgt_rx_buf[0] (R-bit==0) so the
 	 * delivery hits the correct slot even if the host's Sr changes
@@ -1210,7 +1215,7 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 {
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
-	struct dma_status st = {0};
+	mm_reg_t base = cfg->base;
 	struct i2c_target_config *tcfg;
 	size_t consumed = 0;
 	uint8_t addr_byte;
@@ -1228,19 +1233,26 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	 */
 	was_write = ((addr_byte & XEC_I2C_NL_TGT_RBIT) == 0U);
 
-	/* The DMA pending_length is only an RX progress indicator when
-	 * the channel is still configured for inbound traffic -- i.e.
-	 * when tgt_phase has not been flipped to TGT_TX by
-	 * handle_read_pause. Compute consumed only on that path; on the
-	 * host-read path the same channel has been re-pointed at TTX
-	 * with an application-supplied buffer (potentially larger than
-	 * tgt_rx_buf_size), so the formula would yield meaningless
-	 * values and must not be used.
+	/* Compute consumed from TCMD.RCL + ELEN.TRD only when the
+	 * channel is still in RX configuration -- handle_read_pause
+	 * flips tgt_phase to TGT_TX once it reconfigures the channel
+	 * for outbound, and a host-read transaction completes through
+	 * here without any inbound payload to deliver. Sourcing from
+	 * the RCL counters (rather than dma_get_status) avoids the
+	 * dummy-byte over-count: in target receive mode the HW
+	 * triggers DMA to read one extra byte on the external STOP to
+	 * clear PIN status, so the DMA channel always reports one more
+	 * byte transferred than the FSM admits. RCL is the authoritative
+	 * tally of ACK'd bytes.
 	 */
 	if (data->tgt_phase == XEC_I2C_NL_TGT_IDLE) {
-		(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &st);
-		consumed = (cfg->tgt_rx_buf_size > st.pending_length)
-			? (cfg->tgt_rx_buf_size - st.pending_length) : 0U;
+		uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+		uint16_t rcl_now = (uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) |
+					      (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+
+		consumed = (cfg->tgt_rx_buf_size > rcl_now)
+			? (cfg->tgt_rx_buf_size - rcl_now) : 0U;
 
 		/* Spurious-IDLE guard. target_arm enables IDLE_IEN while
 		 * NBB may still be 1, which on v3.8 silicon can latch a
