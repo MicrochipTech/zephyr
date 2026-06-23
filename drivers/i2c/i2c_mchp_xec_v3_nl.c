@@ -2369,7 +2369,7 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		(BUILD_ASSERT(DT_INST_PROP(inst, target_buffer_size) <=			\
 			      XEC_I2C_NL_LEN_MAX,					\
 			      "target-buffer-size exceeds 16-bit HW count");		\
-		 static uint8_t xec_i2c_nl_tgt_buf_##inst				\
+		 static uint8_t __aligned(4) xec_i2c_nl_tgt_buf_##inst			\
 			[DT_INST_PROP(inst, target_buffer_size)];), ())
 
 #define XEC_I2C_NL_TGT_FIELDS(inst)                                                                \
@@ -2384,7 +2384,8 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		 .tgt_dma_slot = 0,))
 
 #define XEC_I2C_NL_CTRL_INIT(inst)                                                                 \
-	static uint8_t xec_i2c_nl_bounce_##inst[DT_INST_PROP(inst, bounce_buffer_size)];           \
+	static uint8_t __aligned(4)                                                                \
+		xec_i2c_nl_bounce_##inst[DT_INST_PROP(inst, bounce_buffer_size)];                  \
 	XEC_I2C_NL_TGT_BUF_DEF(inst)                                                               \
 	static void xec_i2c_nl_irq_connect_##inst(void)                                            \
 	{                                                                                          \
