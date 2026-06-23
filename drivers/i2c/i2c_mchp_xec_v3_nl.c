@@ -17,6 +17,7 @@
  *
  *   write-only:  pulls (1 + wr_len) bytes via DMA, drives
  *                START -> wr-addr -> wr-data... -> STOP, fires HDONE.
+ *                HCMD has START0 | STOP, no STARTN.
  *   write-read:  pulls (1 + wr_len + 1) bytes via DMA, drives
  *                START -> wr-addr -> wr-data... -> Sr -> rd-addr,
  *                then PAUSEs (the HW clears HCMD.PROCEED) so software
@@ -24,9 +25,16 @@
  *                targeting the user's RX buffer. Software sets
  *                HCMD.PROCEED, the HW clocks rd_len bytes into memory
  *                via DMA and drives STOP. HDONE fires both for the
- *                PAUSE event and the final STOP.
- *   read-only:   same as write-read with wr_len == 0; the bounce buffer
- *                holds just the rd-addr byte.
+ *                PAUSE event and the final STOP. HCMD has
+ *                START0 | STARTN | STOP.
+ *   read-only:   pulls 1 byte (the rd-addr) via DMA, drives
+ *                START -> rd-addr, then PAUSEs for the direction
+ *                switch (same way as write-read, but with no
+ *                preceding write phase). HCMD has START0 | STOP --
+ *                STARTN is NOT set; emitting an extra Sr after a
+ *                zero-length write phase is a degenerate I2C shape
+ *                and is rejected as a protocol error by the v3.8
+ *                target FSM (CMPL.TPROT).
  *
  * Per the v3.8 errata captured in the repository README, HDONE alone is
  * not safe to use as the transfer-complete signal: on a read the HW
@@ -1604,7 +1612,18 @@ static int xec_i2c_nl_parse(const struct xec_i2c_nl_config *cfg, struct i2c_msg 
 	xfer->has_read = seen_read;
 	xfer->rx_via_bounce = seen_read && ((uint8_t)(num_msgs - xfer->first_read) > 1U);
 
-	uint32_t tx_total = 1U + xfer->total_wr_len + (xfer->has_read ? 1U : 0U);
+	/* tx_total mirrors what xec_i2c_nl_run actually pushes through DMA:
+	 *   pure-read (writes==0, has_read==1): just the rd-addr byte (1).
+	 *   write-only / ping:                   1 + sum(wr_len).
+	 *   write + read:                        1 + sum(wr_len) + 1.
+	 */
+	uint32_t tx_total;
+
+	if (xfer->has_read && xfer->total_wr_len == 0U) {
+		tx_total = 1U;
+	} else {
+		tx_total = 1U + xfer->total_wr_len + (xfer->has_read ? 1U : 0U);
+	}
 
 	if (tx_total > cfg->bounce_buf_size) {
 		return -ENOSPC;
@@ -1619,21 +1638,43 @@ static int xec_i2c_nl_parse(const struct xec_i2c_nl_config *cfg, struct i2c_msg 
 	return 0;
 }
 
-/* Build the contiguous TX bounce buffer:
+/* Build the contiguous TX bounce buffer. Three layouts depending on
+ * the transfer shape:
  *
- *     [ wr-addr | wr1 | wr2 | ... | wrN | rd-addr-if-reads ]
+ *   Pure write / address-probe ping (has_read=false):
+ *     [ wr-addr | wr1 | wr2 | ... | wrN ]
+ *     bus: START + wr-addr + wr-data... + STOP
  *
- * The wr-addr and rd-addr bytes encode the I2C R/W bit; wr-data is
- * omitted on a pure read; rd-addr is omitted when no read follows.
+ *   Write + read (has_read=true, total_wr_len > 0):
+ *     [ wr-addr | wr1 | ... | wrN | rd-addr ]
+ *     bus: START + wr-addr + wr-data... + Sr + rd-addr + rd-data... + STOP
+ *
+ *   Pure read (has_read=true, total_wr_len == 0):
+ *     [ rd-addr ]
+ *     bus: START + rd-addr + rd-data... + STOP
+ *
+ * The pure-read case MUST NOT emit a wr-addr-then-Sr-then-rd-addr
+ * sequence: the v3.8 target HW flags that as a protocol error
+ * (CMPL.TPROT in target mode), and it's a degenerate I2C shape
+ * regardless (zero-length write phase followed immediately by a
+ * repeated start).
  */
 static void xec_i2c_nl_fill_tx_bounce(const struct xec_i2c_nl_config *cfg, uint16_t addr,
 				      const struct xec_i2c_nl_xfer *xfer)
 {
 	uint8_t *buf = cfg->bounce_buf;
+	uint8_t addr7 = (uint8_t)((addr & 0x7FU) << 1);
+
+	if (xfer->has_read && xfer->total_wr_len == 0U) {
+		/* Pure-read: only the rd-addr byte goes on the bus. */
+		buf[0] = (uint8_t)(addr7 | XEC_I2C_NL_RWBIT_READ);
+		return;
+	}
+
+	buf[0] = (uint8_t)(addr7 | XEC_I2C_NL_RWBIT_WRITE);
+
 	size_t off = 1U;
 	uint8_t end = xfer->has_read ? xfer->first_read : xfer->num_msgs;
-
-	buf[0] = (uint8_t)(((addr & 0x7FU) << 1) | XEC_I2C_NL_RWBIT_WRITE);
 
 	for (uint8_t i = 0; i < end; i++) {
 		if (xfer->msgs[i].len > 0U) {
@@ -1644,7 +1685,7 @@ static void xec_i2c_nl_fill_tx_bounce(const struct xec_i2c_nl_config *cfg, uint1
 
 	if (xfer->has_read) {
 		buf[1U + xfer->total_wr_len] =
-			(uint8_t)(((addr & 0x7FU) << 1) | XEC_I2C_NL_RWBIT_READ);
+			(uint8_t)(addr7 | XEC_I2C_NL_RWBIT_READ);
 	}
 }
 
@@ -1671,7 +1712,11 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 	const struct xec_i2c_nl_config *cfg = ctrl->config;
 	struct xec_i2c_nl_data *data = ctrl->data;
 	mm_reg_t base = cfg->base;
-	uint16_t total_write = 1U + xfer->total_wr_len + (xfer->has_read ? 1U : 0U);
+	bool pure_read = xfer->has_read && (xfer->total_wr_len == 0U);
+	uint16_t total_write = pure_read
+				       ? 1U
+				       : (uint16_t)(1U + xfer->total_wr_len +
+						    (xfer->has_read ? 1U : 0U));
 	int rc;
 
 	xec_i2c_nl_cap_update(data, 0x20U);
@@ -1710,7 +1755,7 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 			XEC_I2C_HCMD_RCL_SET((uint32_t)xfer->total_rd_len & 0xFFU) | HCMD_RUN |
 			HCMD_PROCEED | HCMD_START0 | HCMD_STOP;
 
-	if (xfer->has_read) {
+	if (xfer->has_read && !pure_read) {
 		xec_i2c_nl_cap_update(data, 0x23U);
 		hcmd |= HCMD_STARTN;
 	}
