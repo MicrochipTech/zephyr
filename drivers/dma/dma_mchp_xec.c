@@ -182,6 +182,7 @@ struct xec_dchan {
 	struct xec_dchan_block blocks[XEC_CDMA_MAX_BLOCK_COUNT];
 	uint8_t num_blocks;
 	uint8_t cur_block;
+	bool cyclic;        /* on last-block DONE wrap to block 0 */
 	dma_callback_t cb;
 	void *cb_user_data;
 	uint8_t flags;
@@ -517,6 +518,7 @@ static int xec_cdma_config(const struct device *dev, uint32_t chan, struct dma_c
 	chdat->ctrl_base = ctrl_base;
 	chdat->num_blocks = (uint8_t)config->block_count;
 	chdat->cur_block = 0;
+	chdat->cyclic = (config->cyclic != 0U);
 
 	blk = config->head_block;
 	for (i = 0; i < config->block_count; i++) {
@@ -581,6 +583,7 @@ static int xec_cdma_reload(const struct device *dev, uint32_t chan, uint32_t src
 
 	chdat->num_blocks = 1U;
 	chdat->cur_block = 0U;
+	chdat->cyclic = false;
 
 	sys_write32(blk->mstart, rb + CDMA_CHAN_MSA_OFS);
 	sys_write32(blk->mstart + blk->nbytes, rb + CDMA_CHAN_MEA_OFS);
@@ -776,9 +779,18 @@ static int xec_cdma_get_attribute(const struct device *dev, uint32_t type, uint3
  * per-block callback fires here only when complete_callback_en was set
  * on the dma_config (XEC_DCHAN_EACH_BLOCK_DONE_CB_POS).
  *
- * On error, or on DONE of the last block, the channel is fully quiesced
- * (IER cleared, status W1C, GIRQ acknowledged) and the user callback
- * fires once with the appropriate status.
+ * If the channel was configured cyclic (config->cyclic), DONE on the
+ * final block wraps back to block 0 instead of taking the terminal path:
+ * the per-block callback fires (if enabled), cur_block resets to 0, and
+ * the channel is reprogrammed and restarted. Useful for ping-pong
+ * peripheral-to-memory transfers where the application drains each
+ * chunk during its per-block callback and the channel keeps cycling
+ * until the peripheral signals end-of-transfer (HFC_TERM) or an
+ * external dma_stop call.
+ *
+ * On error, or on DONE of the last block in a non-cyclic chain, the
+ * channel is fully quiesced (IER cleared, status W1C, GIRQ acknowledged)
+ * and the user callback fires once with the appropriate status.
  */
 static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 {
@@ -789,6 +801,7 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 	uint32_t chan_sr = sys_read32(rb + CDMA_CHAN_SR_OFS);
 	bool err = (chan_sr & BIT(CDMA_CHAN_IESR_BERR_POS)) != 0;
 	bool last_block = (chdat->cur_block + 1U) >= chdat->num_blocks;
+	bool advance = !err && (!last_block || chdat->cyclic);
 
 	/* W1C the status bits we observed (DONE, and possibly BERR). DONE
 	 * will not re-latch until the next RUN write per the HW spec, so
@@ -800,7 +813,9 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 	/* CDMA status register implements b[7:0] only */
 	chdat->hw_status = (uint8_t)chan_sr;
 
-	if (!err && !last_block) {
+	if (advance) {
+		uint32_t next = last_block ? 0U : (uint32_t)(chdat->cur_block + 1U);
+
 		/* Optional per-block callback for the block that just
 		 * completed. Fired BEFORE we advance so the application can
 		 * inspect status, reload state, etc.
@@ -810,12 +825,12 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 			chdat->cb(dev, chdat->cb_user_data, chan, DMA_STATUS_BLOCK);
 		}
 
-		chdat->cur_block++;
+		chdat->cur_block = (uint8_t)next;
 		xec_cdma_chan_reprogram(dev, chan, chdat->cur_block);
 		return;
 	}
 
-	/* Terminal: error, or DONE of the final block. */
+	/* Terminal: error, or DONE of the final block in a non-cyclic chain. */
 	sys_write32(0, rb + CDMA_CHAN_IER_OFS);
 
 	if (err) {

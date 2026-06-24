@@ -77,3 +77,24 @@ properties:
       buffer and i2c_target_register returns -ENOSYS. The hardware
       receive-byte counter is 16 bits, so this value must be
       <= 65535 (0xFFFF); a build assertion enforces the cap.
+
+  target-rx-chunk-count:
+    type: int
+    default: 1
+    description: |
+      Optional streaming-RX support. Splits target-buffer-size into
+      this many equal-sized chunks and configures the target DMA
+      channel as a cyclic chain. Each chunk completion fires
+      buf_write_received with that chunk's contents, and the chain
+      wraps so the bounce buffer is reused for arbitrarily large
+      host-write transactions. Default is 1, which preserves the
+      historical "single buf_write_received per transaction" shape.
+
+      target-buffer-size MUST be a multiple of target-rx-chunk-count
+      when this property is > 1. Reasonable values are 2..8; the
+      driver bounds it at CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN
+      (the cyclic chain is built from cached DMA blocks). Choose
+      a chunk size large enough that the application's
+      buf_write_received callback can comfortably finish before the
+      next chunk fills, and small enough that buffer reuse fits the
+      total transaction worst case.
