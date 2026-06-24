@@ -169,7 +169,12 @@ struct xec_dchan_block {
 	uint32_t mstart;
 	uint32_t dstart;
 	uint32_t nbytes;
-	uint8_t  inc_bits;   /* CDMA_CHAN_CR_INC_MEM / _INC_DEV only */
+	uint32_t inc_bits;   /* CDMA_CHAN_CR_INC_MEM / _INC_DEV bits in their
+			      * register positions (16 and 17); OR'd directly
+			      * with ctrl_base when programming the channel
+			      * control register. Must be wide enough to hold
+			      * BIT(17) -- uint8_t would silently truncate to 0.
+			      */
 };
 
 struct xec_dchan {
@@ -433,7 +438,7 @@ static void xec_cdma_translate_block(struct xec_dchan_block *out,
 				     const struct dma_block_config *blk,
 				     uint32_t direction)
 {
-	uint8_t inc = 0;
+	uint32_t inc = 0;
 
 	out->nbytes = blk->block_size;
 
