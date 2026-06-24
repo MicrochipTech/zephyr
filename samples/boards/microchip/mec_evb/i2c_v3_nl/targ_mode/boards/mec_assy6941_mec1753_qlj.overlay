@@ -96,6 +96,8 @@
 	 * the address before invoking buf_write_received.
 	 */
 	target-buffer-size = <240>;
+
+	target-rx-chunk-count = <4>;
 };
 
 &i2c_smb_1 {
@@ -118,6 +120,8 @@
 	 * the address before invoking buf_write_received.
 	 */
 	target-buffer-size = <240>;
+
+	target-rx-chunk-count = <4>;
 };
 
 /* Port 0 pins */
