@@ -586,6 +586,107 @@ static int test_host_write_then_read_targ1(void)
 			     sizeof(expect_read));
 }
 
+/* Streaming RX: host writes a payload larger than the controller's
+ * target-buffer-size so the cyclic DMA chain has to recycle the
+ * bounce buffer at least once during a single START-to-STOP
+ * transaction. Proves both the per-chunk DMA-DONE dispatch path and
+ * the trailing-partial-chunk dispatch out of handle_stop, plus that
+ * the application's wr_idx-driven accumulation reassembles the
+ * payload contiguously across multiple buf_write_received calls.
+ *
+ * Payload size 250 was chosen to (a) exceed target-buffer-size
+ * (240 in this overlay) so the cyclic wrap fires, (b) stay under
+ * I2C_TX_BUF_SIZE (256) and APP_TARG1_BUF_SIZE (256) so no DT or
+ * sample-buffer changes are needed, and (c) cleanly span >4
+ * chunk boundaries with a remainder so the partial-chunk dispatch
+ * is also exercised. With chunk_count = 4, chunk_size = 60: the
+ * driver fires four full-chunk callbacks (59+60+60+60 = 239 data
+ * bytes) plus one partial (11 data bytes from chunk 0 of cycle 2)
+ * for a total of 250 data bytes. wr_recv_cnt should be > 1 -- if
+ * the test sees only a single callback it's strong evidence that
+ * streaming did not engage (e.g., target-rx-chunk-count was left
+ * at 1 in DT).
+ *
+ * Skipped at runtime when the controller's chunk_count == 1, in
+ * which case the existing tier-1 buffer-fill test (test 3) already
+ * covers the relevant single-block path.
+ *
+ * To exercise HID-realistic 1024+ byte payloads, also bump
+ * &i2c_smb_1 bounce-buffer-size (currently 256, which caps a host-
+ * side write at ~254 data bytes since the host bounce holds the
+ * address byte plus the write data) and APP_TARG1_BUF_SIZE.
+ */
+#define APP_TARG_STREAM_PAYLOAD_LEN 250U
+
+static int test_host_write_streaming_targ1(void)
+{
+	const uint32_t payload_len = APP_TARG_STREAM_PAYLOAD_LEN;
+	int rc;
+
+	if (DT_PROP(DT_NODELABEL(i2c_smb_0), target_rx_chunk_count) <= 1) {
+		LOG_INF("SKIP: streaming not enabled "
+			"(target-rx-chunk-count == 1)");
+		return 0;
+	}
+
+	if (payload_len > I2C_TX_BUF_SIZE) {
+		LOG_WRN("payload %u > I2C_TX_BUF_SIZE %u",
+			payload_len, I2C_TX_BUF_SIZE);
+		return -ENOSPC;
+	}
+	if (payload_len > APP_TARG1_BUF_SIZE) {
+		LOG_WRN("payload %u > APP_TARG1_BUF_SIZE %u",
+			payload_len, APP_TARG1_BUF_SIZE);
+		return -ENOSPC;
+	}
+	if (payload_len <= APP_TARG_HW_RX_SIZE) {
+		LOG_WRN("payload %u <= target-buffer-size %u; cyclic wrap "
+			"will not fire -- pick a larger value",
+			payload_len, APP_TARG_HW_RX_SIZE);
+		return -EINVAL;
+	}
+
+	reset_all_targets();
+	memset(targ1_buf, 0x55U, APP_TARG1_BUF_SIZE);
+	for (uint32_t i = 0; i < payload_len; i++) {
+		i2c_tx_buf[i] = (uint8_t)(i & 0xFFU);
+	}
+
+	rc = i2c_write(mb_fram_spec.bus, i2c_tx_buf, payload_len, targ1_spec.addr);
+	if (rc != 0) {
+		LOG_ERR("i2c_write returned %d", rc);
+		return rc;
+	}
+	rc = wait_for_stop(&app_targ1_sem, "targ1");
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* Streaming should fragment delivery across multiple callbacks
+	 * for a payload spanning more than one chunk. A wr_recv_cnt of
+	 * 1 would mean either the cyclic chain didn't engage or the
+	 * driver coalesced everything into the trailing-partial path
+	 * -- both regressions worth surfacing.
+	 */
+	if (targ1_app_data.wr_recv_cnt < 2U) {
+		LOG_ERR("streaming did not fragment: wr_recv_cnt=%u",
+			targ1_app_data.wr_recv_cnt);
+		return -EINVAL;
+	}
+	if (targ1_app_data.stop_cnt != 1U || targ1_app_data.error_cnt != 0U ||
+	    targ1_app_data.rd_req_cnt != 0U) {
+		LOG_ERR("counters wr=%u rd=%u stop=%u err=%u",
+			targ1_app_data.wr_recv_cnt, targ1_app_data.rd_req_cnt,
+			targ1_app_data.stop_cnt, targ1_app_data.error_cnt);
+		return -EINVAL;
+	}
+
+	LOG_INF("streaming delivered %u bytes via %u callbacks",
+		payload_len, targ1_app_data.wr_recv_cnt);
+
+	return verify_buf_eq("targ1 stream", targ1_buf, i2c_tx_buf, payload_len);
+}
+
 static const struct test_case target_tests[] = {
 	{"host write 4B to targ1",          test_host_write_short_to_targ1},
 	{"host read 4B from targ2",         test_host_read_short_from_targ2},
@@ -593,6 +694,7 @@ static const struct test_case target_tests[] = {
 	{"host read targ1: no wr_recv_cb",  test_host_read_does_not_fire_write_cb},
 	{"symmetric: write targ2, read targ1", test_symmetric_targ2_write_targ1_read},
 	{"write 2B + read 4B targ1 (Sr)",   test_host_write_then_read_targ1},
+	{"streaming write 250B targ1",      test_host_write_streaming_targ1},
 };
 
 /* -------------------------------------------------------------------------
