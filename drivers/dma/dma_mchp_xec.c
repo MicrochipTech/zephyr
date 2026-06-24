@@ -29,8 +29,14 @@ LOG_MODULE_REGISTER(dma_mchp_xec_cdma, CONFIG_DMA_LOG_LEVEL);
 #define XEC_CDMA_BUF_SIZE_ALIGNMENT 1U
 #define XEC_CDMA_COPY_ALIGNMENT     1U
 
-/* Hardware and driver support one block transfer per channel */
-#define XEC_CDMA_MAX_BLOCK_COUNT 1U
+/* The XEC central DMA hardware programs one block at a time. The driver
+ * caches up to CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN block descriptors
+ * per channel from dma_config()'s linked list and chains them in the
+ * channel ISR (ABORT, rewrite MSA/MEA/DEVA + INC bits, set RUN). When
+ * the Kconfig knob is 1 (the historical default) the driver behaves
+ * exactly as the single-block implementation did.
+ */
+#define XEC_CDMA_MAX_BLOCK_COUNT CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN
 
 #define CDMA_MAIN_REGS_SIZE 0x40U
 #define CDMA_CHAN_REGS_SIZE 0x40U
@@ -139,24 +145,38 @@ struct xec_cdma_xcfg {
 	const struct xec_girq *girqs;
 };
 
-/* DMA callback flags from struct dma_config
- * Default behavior is to invoke a callback on error and transfer list is completed.
+/* DMA callback flags from struct dma_config.
+ * Default behavior is to invoke the user callback once when the entire
+ * transfer list completes, and once on any error along the way.
  * The caller can request changes in callback behavior:
- * Disable error callback
- * Done callback on each block in the transfer list. Our HW and driver only support one block.
- * This flag results in same behavior.
- * There is a flag for hardare/drivers supporting more than one block requesting a callback when
- * the hardware is halfway through the list. Our HW does not support this.
+ *  - Disable error callback (error_callback_dis).
+ *  - Fire a callback at every block boundary instead of only after
+ *    the last block (complete_callback_en). The block-mid-list
+ *    "halfway" callback flag in dma_config is not supported -- this
+ *    HW has no halfway-through-list interrupt.
  */
 #define XEC_DCHAN_EACH_BLOCK_DONE_CB_POS      0
 #define XEC_DCHAN_ERROR_CB_DIS_POS            1
-#define XEC_DCHAN_FLAG_BLOCK_HALF_DONE_CB_POS 2
+
+/* Per-block descriptor cached by the driver at dma_config time. The
+ * channel CR fields that are common to every block in a chain --
+ * direction (M2D), HFC peer/disable, transfer unit -- live in
+ * xec_dchan::ctrl_base; only the address-increment bits vary per block
+ * (different blocks may legitimately come from different sources or go
+ * to different destinations with different adjust modes).
+ */
+struct xec_dchan_block {
+	uint32_t mstart;
+	uint32_t dstart;
+	uint32_t nbytes;
+	uint8_t  inc_bits;   /* CDMA_CHAN_CR_INC_MEM / _INC_DEV only */
+};
 
 struct xec_dchan {
-	uint32_t mstart;
-	uint32_t nbytes;
-	uint32_t dstart;
-	uint32_t ctrl;
+	uint32_t ctrl_base;
+	struct xec_dchan_block blocks[XEC_CDMA_MAX_BLOCK_COUNT];
+	uint8_t num_blocks;
+	uint8_t cur_block;
 	dma_callback_t cb;
 	void *cb_user_data;
 	uint8_t flags;
@@ -255,7 +275,7 @@ static int validate_chan_dir(uint32_t dir)
 
 static int validate_dma_block(struct dma_block_config *block)
 {
-	if ((block->block_size == 0) || (block->next_block != NULL)) {
+	if (block->block_size == 0) {
 		return -EINVAL;
 	}
 
@@ -281,15 +301,17 @@ static int validate_dma_block(struct dma_block_config *block)
  *
  * Notes:
  * struct dma_config passed by the caller can be ephemeral. We must translate and process
- * all configuration into this drivers data and/or hardware registers. DMA config has a
- * pointer to a linked list of DMA blocks and a block count. We limit the number of DMA blocks
- * to one due to the driver not supporting HW scatter-gather. The caller can emulate use
- * this driver's callback mechanism to process multiple blocks via the DMA get status and
- * reload API's.
+ * all configuration into this driver's data and/or hardware registers. dma_config has a
+ * pointer to a linked list of dma_block_config entries and a block_count; we walk that
+ * list at config-time and cache up to CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN of them
+ * into per-channel storage. The channel ISR advances through the cached chain by
+ * ABORT/reprogram/restart on every DONE.
  */
 static int validate_dma_config(const struct device *dev, struct dma_config *config)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
+	struct dma_block_config *blk;
+	uint32_t i;
 
 	if (config->dma_slot >= xcfg->dma_requests) {
 		return -EINVAL;
@@ -312,31 +334,130 @@ static int validate_dma_config(const struct device *dev, struct dma_config *conf
 		return -EINVAL;
 	}
 
-	/* we support one block only */
-	if ((config->head_block == NULL) || (config->block_count != 1U)) {
+	if ((config->head_block == NULL) || (config->block_count == 0U) ||
+	    (config->block_count > XEC_CDMA_MAX_BLOCK_COUNT)) {
 		return -EINVAL;
 	}
 
-	/* validate block */
-	return validate_dma_block(config->head_block);
+	blk = config->head_block;
+	for (i = 0; i < config->block_count; i++) {
+		int rc;
+
+		if (blk == NULL) {
+			return -EINVAL;
+		}
+
+		rc = validate_dma_block(blk);
+		if (rc != 0) {
+			return rc;
+		}
+
+		blk = blk->next_block;
+	}
+
+	/* Chain must terminate at block_count; surplus entries are a
+	 * configuration error rather than silently ignored.
+	 */
+	if (blk != NULL) {
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
-/* Reset channel and load mem start address ,mem end address, device address,
- * and control register. Does not enable or program interrupt enables.
+/* Reset channel and load mem start address, mem end address, device address,
+ * and control register from the cached block at index `idx`. Does not enable
+ * or program interrupt enables. Used at xec_cdma_start time for the first
+ * block of a chain.
  */
-static void xec_cdma_load_chan(const struct device *dev, uint32_t chan)
+static void xec_cdma_load_chan(const struct device *dev, uint32_t chan, uint32_t idx)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = &xdat->chdata[chan];
+	struct xec_dchan_block *blk = &chdat->blocks[idx];
 	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
 
 	(void)xec_cdma_chan_reset(dev, chan);
 
-	sys_write32(chdat->mstart, rb + CDMA_CHAN_MSA_OFS);
-	sys_write32(chdat->mstart + chdat->nbytes, rb + CDMA_CHAN_MEA_OFS);
-	sys_write32(chdat->dstart, rb + CDMA_CHAN_DEVA_OFS);
-	sys_write32(chdat->ctrl, rb + CDMA_CHAN_CR_OFS);
+	sys_write32(blk->mstart, rb + CDMA_CHAN_MSA_OFS);
+	sys_write32(blk->mstart + blk->nbytes, rb + CDMA_CHAN_MEA_OFS);
+	sys_write32(blk->dstart, rb + CDMA_CHAN_DEVA_OFS);
+	sys_write32(chdat->ctrl_base | (uint32_t)blk->inc_bits, rb + CDMA_CHAN_CR_OFS);
+}
+
+/* Fast-path reprogram used by the channel ISR to chain to the next block
+ * without tearing down the channel state we need to keep (IER, ACTIVATE,
+ * GIRQ enables). The HW design team's guidance for issue SCG_MR_22NM-131
+ * is: a still-pending peripheral request can spontaneously start the new
+ * transfer the instant MSA<MEA becomes true after a reprogram, so we must
+ * use the channel ABORT bit to force HW IDLE before writing the new block.
+ * ABORT at natural DONE settles immediately; mid-transfer it waits at most
+ * one unit-size AHB transfer (~83 ns at 48 MHz worst case for a 4-byte
+ * unit), which is negligible compared to any peripheral byte time we care
+ * about. The DONE latch was W1C-cleared by the caller before we got here
+ * and will not re-latch until the new RUN write below takes effect.
+ */
+static void xec_cdma_chan_reprogram(const struct device *dev, uint32_t chan, uint32_t idx)
+{
+	const struct xec_cdma_xcfg *xcfg = dev->config;
+	struct xec_cdma_xdata *xdat = dev->data;
+	struct xec_dchan *chdat = &xdat->chdata[chan];
+	struct xec_dchan_block *blk = &chdat->blocks[idx];
+	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
+	uint32_t cr;
+
+	sys_set_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_ABORT_POS);
+	while (sys_test_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_BUSY_POS) != 0) {
+	}
+
+	sys_write32(blk->mstart, rb + CDMA_CHAN_MSA_OFS);
+	sys_write32(blk->mstart + blk->nbytes, rb + CDMA_CHAN_MEA_OFS);
+	sys_write32(blk->dstart, rb + CDMA_CHAN_DEVA_OFS);
+
+	cr = chdat->ctrl_base | (uint32_t)blk->inc_bits;
+	sys_write32(cr, rb + CDMA_CHAN_CR_OFS);
+
+	if ((cr & BIT(CDMA_CHAN_CR_DIS_HFC_POS)) == 0) {
+		sys_set_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_HFC_RUN_POS);
+	} else {
+		sys_set_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_SFC_GO_POS);
+	}
+}
+
+/* Translate one dma_block_config into the cached per-block descriptor.
+ * The channel-wide CR bits (direction, HFC peer, unit size, DIS_HFC) are
+ * already in ctrl_base; only the per-block INC bits land in blk->inc_bits.
+ */
+static void xec_cdma_translate_block(struct xec_dchan_block *out,
+				     const struct dma_block_config *blk,
+				     uint32_t direction)
+{
+	uint8_t inc = 0;
+
+	out->nbytes = blk->block_size;
+
+	if (direction == PERIPHERAL_TO_MEMORY) {
+		out->mstart = blk->dest_address;
+		out->dstart = blk->source_address;
+		if (blk->source_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
+			inc |= BIT(CDMA_CHAN_CR_INC_DEV_POS);
+		}
+		if (blk->dest_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
+			inc |= BIT(CDMA_CHAN_CR_INC_MEM_POS);
+		}
+	} else { /* MEMORY_TO_PERIPHERAL or MEMORY_TO_MEMORY */
+		out->mstart = blk->source_address;
+		out->dstart = blk->dest_address;
+		if (blk->source_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
+			inc |= BIT(CDMA_CHAN_CR_INC_MEM_POS);
+		}
+		if (blk->dest_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
+			inc |= BIT(CDMA_CHAN_CR_INC_DEV_POS);
+		}
+	}
+
+	out->inc_bits = inc;
 }
 
 /* Configure specified DMA channel. Callable from ISR context to switch direction of channel */
@@ -345,7 +466,8 @@ static int xec_cdma_config(const struct device *dev, uint32_t chan, struct dma_c
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = NULL;
 	struct dma_block_config *blk = NULL;
-	uint32_t ctrl = 0, unitsz = 0;
+	uint32_t ctrl_base = 0, unitsz = 0;
+	uint32_t i;
 	int rc = 0;
 
 	if ((chan >= XEC_DMAC_MAX_CHANS) || (config == NULL)) {
@@ -362,7 +484,6 @@ static int xec_cdma_config(const struct device *dev, uint32_t chan, struct dma_c
 		return rc;
 	}
 
-	blk = config->head_block;
 	chdat = &xdat->chdata[chan];
 
 	chdat->flags = 0;
@@ -371,54 +492,35 @@ static int xec_cdma_config(const struct device *dev, uint32_t chan, struct dma_c
 	}
 
 	if (config->error_callback_dis != 0) {
-		chdat->flags = BIT(XEC_DCHAN_ERROR_CB_DIS_POS);
+		chdat->flags |= BIT(XEC_DCHAN_ERROR_CB_DIS_POS);
 	}
 
 	chdat->cb = config->dma_callback;
 	chdat->cb_user_data = config->user_data;
 
-	chdat->nbytes = blk->block_size;
-
-	ctrl = CDMA_CHAN_CR_HFC_DEV_SET(config->dma_slot);
+	ctrl_base = CDMA_CHAN_CR_HFC_DEV_SET(config->dma_slot);
 	unitsz = MIN(config->source_data_size, config->dest_data_size);
-	ctrl |= CDMA_CHAN_CR_XU_SET(unitsz);
+	ctrl_base |= CDMA_CHAN_CR_XU_SET(unitsz);
 
 	if (config->channel_direction == MEMORY_TO_PERIPHERAL) {
-		chdat->mstart = blk->source_address;
-		chdat->dstart = blk->dest_address;
-		ctrl |= BIT(CDMA_CHAN_CR_M2D_POS);
-		if (blk->source_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_MEM_POS);
-		}
-		if (blk->dest_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_DEV_POS);
-		}
-	} else if (config->channel_direction == PERIPHERAL_TO_MEMORY) {
-		chdat->mstart = blk->dest_address;
-		chdat->dstart = blk->source_address;
-		if (blk->source_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_DEV_POS);
-		}
-		if (blk->dest_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_MEM_POS);
-		}
-	} else { /* MEMORY_TO_MEMORY */
-		chdat->mstart = blk->source_address;
-		chdat->dstart = blk->dest_address;
-		ctrl |= BIT(CDMA_CHAN_CR_M2D_POS);
-		ctrl |= BIT(CDMA_CHAN_CR_DIS_HFC_POS);
-		if (blk->source_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_MEM_POS);
-		}
-		if (blk->dest_addr_adj == DMA_ADDR_ADJ_INCREMENT) {
-			ctrl |= BIT(CDMA_CHAN_CR_INC_DEV_POS);
-		}
+		ctrl_base |= BIT(CDMA_CHAN_CR_M2D_POS);
+	} else if (config->channel_direction == MEMORY_TO_MEMORY) {
+		ctrl_base |= BIT(CDMA_CHAN_CR_M2D_POS) | BIT(CDMA_CHAN_CR_DIS_HFC_POS);
+	}
+	/* PERIPHERAL_TO_MEMORY: M2D=0, HFC enabled — both already cleared */
+
+	chdat->ctrl_base = ctrl_base;
+	chdat->num_blocks = (uint8_t)config->block_count;
+	chdat->cur_block = 0;
+
+	blk = config->head_block;
+	for (i = 0; i < config->block_count; i++) {
+		xec_cdma_translate_block(&chdat->blocks[i], blk, config->channel_direction);
+		blk = blk->next_block;
 	}
 
-	chdat->ctrl = ctrl;
-
-	/* Load channel registers, do not start */
-	xec_cdma_load_chan(dev, chan);
+	/* Load HW registers from blocks[0]; do not start. */
+	xec_cdma_load_chan(dev, chan, 0);
 
 	return 0;
 }
@@ -426,13 +528,22 @@ static int xec_cdma_config(const struct device *dev, uint32_t chan, struct dma_c
 /* Reload DMA channel and do not start. Callable from ISR context.
  * Channel configuration: direction, flow control, etc. are not changed.
  * We only reprogram the memory start, memory end, and device addresses.
+ *
+ * Reload collapses any multi-block chain previously configured on this
+ * channel into a single block (num_blocks = 1) at cur_block = 0. The
+ * caller's expectation for reload is "replace whatever block was about
+ * to run next", so chains beyond block 0 are not preserved -- callers
+ * needing chain-style behavior re-issue dma_config.
  */
 static int xec_cdma_reload(const struct device *dev, uint32_t chan, uint32_t src, uint32_t dst,
 			   size_t size)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
+	struct xec_cdma_xdata *xdat = dev->data;
+	struct xec_dchan *chdat;
+	struct xec_dchan_block *blk;
 	mm_reg_t rb = xcfg->regbase;
-	uint32_t cr = 0, msa = 0, mea = 0, deva = 0;
+	bool mem_source;
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
 		return -EINVAL;
@@ -442,27 +553,34 @@ static int xec_cdma_reload(const struct device *dev, uint32_t chan, uint32_t src
 		return -EBUSY;
 	}
 
+	chdat = &xdat->chdata[chan];
+	blk = &chdat->blocks[0];
 	rb += CDMA_CHAN_OFS(chan);
-	cr = sys_read32(rb + CDMA_CHAN_CR_OFS);
-	cr &= ~(BIT(CDMA_CHAN_CR_HFC_RUN_POS) | BIT(CDMA_CHAN_CR_SFC_GO_POS));
 
 	(void)xec_cdma_chan_reset(dev, chan);
 
-	if ((cr & (BIT(CDMA_CHAN_CR_M2D_POS) | BIT(CDMA_CHAN_CR_DIS_HFC_POS))) != 0) {
-		/* memory to memory or memory to peripheral */
-		msa = src;
-		mea = src + size;
-		deva = dst;
-	} else {
-		msa = dst;
-		mea = dst + size;
-		deva = src;
-	}
+	mem_source = (chdat->ctrl_base &
+		      (BIT(CDMA_CHAN_CR_M2D_POS) | BIT(CDMA_CHAN_CR_DIS_HFC_POS))) != 0;
 
-	sys_write32(msa, rb + CDMA_CHAN_MSA_OFS);
-	sys_write32(mea, rb + CDMA_CHAN_MEA_OFS);
-	sys_write32(deva, rb + CDMA_CHAN_DEVA_OFS);
-	sys_write32(cr, rb + CDMA_CHAN_CR_OFS);
+	if (mem_source) {
+		/* memory to memory or memory to peripheral */
+		blk->mstart = src;
+		blk->dstart = dst;
+	} else {
+		/* peripheral to memory */
+		blk->mstart = dst;
+		blk->dstart = src;
+	}
+	blk->nbytes = (uint32_t)size;
+	/* inc_bits inherited from prior config */
+
+	chdat->num_blocks = 1U;
+	chdat->cur_block = 0U;
+
+	sys_write32(blk->mstart, rb + CDMA_CHAN_MSA_OFS);
+	sys_write32(blk->mstart + blk->nbytes, rb + CDMA_CHAN_MEA_OFS);
+	sys_write32(blk->dstart, rb + CDMA_CHAN_DEVA_OFS);
+	sys_write32(chdat->ctrl_base | (uint32_t)blk->inc_bits, rb + CDMA_CHAN_CR_OFS);
 
 	return 0;
 }
@@ -478,6 +596,7 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
 	struct xec_cdma_xdata *xdat = dev->data;
+	struct xec_dchan *chdat;
 	mm_reg_t rb = xcfg->regbase;
 	uint8_t ier = BIT(CDMA_CHAN_IESR_BERR_POS) | BIT(CDMA_CHAN_IESR_DONE_POS);
 
@@ -489,7 +608,13 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 		return -EBUSY;
 	}
 
-	xdat->chdata[chan].hw_status = 0;
+	chdat = &xdat->chdata[chan];
+	chdat->hw_status = 0;
+	chdat->cur_block = 0;
+	/* HW registers were loaded from blocks[0] at xec_cdma_config or
+	 * xec_cdma_reload time; nothing to do here besides arm IER+ACTIVATE
+	 * and trip the run bit.
+	 */
 
 	rb += CDMA_CHAN_OFS(chan);
 
@@ -530,6 +655,10 @@ static int xec_cdma_stop(const struct device *dev, uint32_t chan)
  * We zero free, write_position, and read_position members.
  * Hardware does not implement a transferred by count accumlator therefore
  * we can't provide a total_copied value.
+ *
+ * pending_length is the live MEA-MSA of the currently running block plus
+ * the cached block_size of every block that has not started yet. After
+ * the final block's DONE this resolves to zero.
  */
 static int xec_cdma_get_status(const struct device *dev, uint32_t chan, struct dma_status *status)
 {
@@ -537,7 +666,7 @@ static int xec_cdma_get_status(const struct device *dev, uint32_t chan, struct d
 	struct xec_cdma_xdata *xdat = dev->data;
 	mm_reg_t rb = xcfg->regbase;
 	struct xec_dchan *chdat = NULL;
-	uint32_t msa = 0, mea = 0;
+	uint32_t msa = 0, mea = 0, remaining = 0;
 	int chan_status = 0;
 
 	if ((chan >= XEC_DMAC_MAX_CHANS) || (status == NULL)) {
@@ -559,14 +688,16 @@ static int xec_cdma_get_status(const struct device *dev, uint32_t chan, struct d
 
 	msa = sys_read32(rb + CDMA_CHAN_MSA_OFS);
 	mea = sys_read32(rb + CDMA_CHAN_MEA_OFS);
-
-	status->pending_length = 0;
 	if (mea > msa) {
-		status->pending_length = mea - msa;
+		remaining = mea - msa;
 	}
+	for (uint8_t i = (uint8_t)(chdat->cur_block + 1U); i < chdat->num_blocks; i++) {
+		remaining += chdat->blocks[i].nbytes;
+	}
+	status->pending_length = remaining;
 
-	if ((chdat->ctrl & BIT(CDMA_CHAN_CR_M2D_POS)) != 0) {
-		if ((chdat->ctrl & BIT(CDMA_CHAN_CR_DIS_HFC_POS)) != 0) {
+	if ((chdat->ctrl_base & BIT(CDMA_CHAN_CR_M2D_POS)) != 0) {
+		if ((chdat->ctrl_base & BIT(CDMA_CHAN_CR_DIS_HFC_POS)) != 0) {
 			status->dir = MEMORY_TO_MEMORY;
 		} else {
 			status->dir = MEMORY_TO_PERIPHERAL;
@@ -631,6 +762,18 @@ static int xec_cdma_get_attribute(const struct device *dev, uint32_t type, uint3
 
 /* Called by channel ISR passing the driver device pointer and channel number
  * NOTE: the callback can call any DMA driver API's for this channel.
+ *
+ * On a successful DONE with more cached blocks remaining, this advances
+ * the chain in-place: the channel is ABORTed back to HW IDLE, the next
+ * block is programmed via xec_cdma_chan_reprogram, and RUN is re-issued.
+ * IER and the GIRQ enables are deliberately left armed across the
+ * transition so the next block's DONE re-enters this handler. The
+ * per-block callback fires here only when complete_callback_en was set
+ * on the dma_config (XEC_DCHAN_EACH_BLOCK_DONE_CB_POS).
+ *
+ * On error, or on DONE of the last block, the channel is fully quiesced
+ * (IER cleared, status W1C, GIRQ acknowledged) and the user callback
+ * fires once with the appropriate status.
  */
 static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 {
@@ -639,25 +782,44 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
 	struct xec_dchan *chdat = &xdat->chdata[chan];
 	uint32_t chan_sr = sys_read32(rb + CDMA_CHAN_SR_OFS);
-	int cb_chan_status = DMA_STATUS_COMPLETE;
-	bool invoke_cb = true;
+	bool err = (chan_sr & BIT(CDMA_CHAN_IESR_BERR_POS)) != 0;
+	bool last_block = (chdat->cur_block + 1U) >= chdat->num_blocks;
 
-	sys_write32(0, rb + CDMA_CHAN_IER_OFS);
+	/* W1C the status bits we observed (DONE, and possibly BERR). DONE
+	 * will not re-latch until the next RUN write per the HW spec, so
+	 * clearing it here before any reprogram is safe.
+	 */
 	sys_write32(chan_sr, rb + CDMA_CHAN_SR_OFS);
 	soc_ecia_girq_status_clear(xcfg->girqs[chan].gnum, xcfg->girqs[chan].gpos);
 
 	/* CDMA status register implements b[7:0] only */
 	chdat->hw_status = (uint8_t)chan_sr;
 
-	if ((chan_sr & BIT(CDMA_CHAN_IESR_BERR_POS)) != 0) { /* error? */
-		cb_chan_status = -EIO;
-		if ((chdat->flags & BIT(XEC_DCHAN_ERROR_CB_DIS_POS)) != 0) {
-			invoke_cb = false;
+	if (!err && !last_block) {
+		/* Optional per-block callback for the block that just
+		 * completed. Fired BEFORE we advance so the application can
+		 * inspect status, reload state, etc.
+		 */
+		if (((chdat->flags & BIT(XEC_DCHAN_EACH_BLOCK_DONE_CB_POS)) != 0) &&
+		    (chdat->cb != NULL)) {
+			chdat->cb(dev, chdat->cb_user_data, chan, DMA_STATUS_BLOCK);
 		}
+
+		chdat->cur_block++;
+		xec_cdma_chan_reprogram(dev, chan, chdat->cur_block);
+		return;
 	}
 
-	if ((invoke_cb) && (chdat->cb != NULL)) {
-		chdat->cb(dev, chdat->cb_user_data, chan, cb_chan_status);
+	/* Terminal: error, or DONE of the final block. */
+	sys_write32(0, rb + CDMA_CHAN_IER_OFS);
+
+	if (err) {
+		if (((chdat->flags & BIT(XEC_DCHAN_ERROR_CB_DIS_POS)) == 0) &&
+		    (chdat->cb != NULL)) {
+			chdat->cb(dev, chdat->cb_user_data, chan, -EIO);
+		}
+	} else if (chdat->cb != NULL) {
+		chdat->cb(dev, chdat->cb_user_data, chan, DMA_STATUS_COMPLETE);
 	}
 }
 
