@@ -1375,22 +1375,28 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 	/* Streaming RX: every full chunk has already been dispatched by
 	 * the DMA per-block callback. The trailing partial chunk -- the
 	 * bytes the FSM ACKed into the current chunk between the last
-	 * DMA-DONE and the host's STOP -- still needs delivery. Read the
-	 * live MSA via dma_get_status BEFORE stopping the channel
-	 * (chan_reset zeros MSA), translate to bytes-into-current-chunk,
-	 * dispatch via the shared chunk helper, and let target_arm at
-	 * the bottom reset every per-transaction piece of state.
+	 * DMA-DONE and the host's STOP -- still needs delivery.
+	 *
+	 * Source the byte count from RCL, NOT from dma_get_status. With
+	 * a cyclic DMA chain the get_status pending_length sums the live
+	 * MEA-MSA of the current block plus the cached size of every
+	 * chain block past cur_block, which over-reports by ~3 chunks
+	 * worth of bytes; partial_len = chunk_size - pending then
+	 * collapses to 0 and the dispatch is silently skipped. RCL is
+	 * the FSM's authoritative tally of ACK'd bytes, ignores the
+	 * STOP-detect dummy DMA byte, and works for both cyclic and
+	 * non-cyclic chains.
 	 */
 	if (streaming && data->tgt_phase == XEC_I2C_NL_TGT_IDLE) {
-		struct dma_status dst = {0};
-		uint32_t partial_len;
-		uint32_t chunk_off;
-
-		(void)dma_get_status(cfg->dma_dev, cfg->tgt_dma_chan, &dst);
-		partial_len = (cfg->tgt_rx_chunk_size > dst.pending_length)
-				      ? (cfg->tgt_rx_chunk_size - dst.pending_length)
-				      : 0U;
-		chunk_off = (uint32_t)data->cur_rx_chunk * (uint32_t)cfg->tgt_rx_chunk_size;
+		uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+		uint16_t rcl_now = (uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) |
+					      (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+		uint32_t bytes_acked = (XEC_I2C_NL_LEN_MAX >= rcl_now)
+				? (uint32_t)(XEC_I2C_NL_LEN_MAX - rcl_now) : 0U;
+		uint32_t partial_len = bytes_acked % (uint32_t)cfg->tgt_rx_chunk_size;
+		uint32_t chunk_off =
+			(uint32_t)data->cur_rx_chunk * (uint32_t)cfg->tgt_rx_chunk_size;
 
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 

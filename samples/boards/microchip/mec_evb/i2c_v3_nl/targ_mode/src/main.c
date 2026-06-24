@@ -69,7 +69,15 @@ const struct device *i2c_smb1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c_smb_1));
 struct app_i2c_target {
 	uint8_t *buf;
 	size_t bufsz;
-	size_t idx;
+	size_t idx;          /* read-side cursor (start of next buf_read_requested) */
+	size_t wr_idx;       /* write-side cursor; advances each buf_write_received
+			      * so streaming-mode multi-chunk delivery accumulates
+			      * contiguously into the application buffer. Tracked
+			      * separately from idx so the read-side semantics
+			      * (start at the beginning of the buffer after reset)
+			      * are unaffected by write activity in tests that mix
+			      * directions on the same target.
+			      */
 	uint32_t wr_recv_cnt;
 	uint32_t rd_req_cnt;
 	uint32_t stop_cnt;
@@ -147,6 +155,7 @@ struct test_case {
 static void reset_target_state(struct app_i2c_target *t, struct k_sem *sem)
 {
 	t->idx = 0;
+	t->wr_idx = 0;
 	t->wr_recv_cnt = 0;
 	t->rd_req_cnt = 0;
 	t->stop_cnt = 0;
@@ -775,7 +784,7 @@ static int app_i2c_target_init(struct app_i2c_target *apptrg, uint8_t *buf, size
 
 static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len)
 {
-	uint32_t max_idx = targ1_app_data.idx + len;
+	uint32_t max_idx = targ1_app_data.wr_idx + len;
 	uint8_t *p = ptr;
 
 	targ1_app_data.wr_recv_cnt++;
@@ -787,9 +796,14 @@ static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 	if (max_idx > targ1_app_data.bufsz) {
 		max_idx = targ1_app_data.bufsz;
 	}
-	for (uint32_t i = targ1_app_data.idx; i < max_idx; i++) {
+	for (uint32_t i = targ1_app_data.wr_idx; i < max_idx; i++) {
 		targ1_app_data.buf[i] = *p++;
 	}
+	/* Advance wr_idx so streaming-mode multi-chunk delivery
+	 * accumulates contiguously across successive callbacks; the
+	 * read-side cursor (idx) stays put.
+	 */
+	targ1_app_data.wr_idx = max_idx;
 }
 
 static int targ1_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len)
@@ -824,7 +838,7 @@ static void targ1_error_cb(struct i2c_target_config *config, enum i2c_error_reas
 
 static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len)
 {
-	uint32_t max_idx = targ2_app_data.idx + len;
+	uint32_t max_idx = targ2_app_data.wr_idx + len;
 	uint8_t *p = ptr;
 
 	targ2_app_data.wr_recv_cnt++;
@@ -836,9 +850,11 @@ static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr,
 	if (max_idx > targ2_app_data.bufsz) {
 		max_idx = targ2_app_data.bufsz;
 	}
-	for (uint32_t i = targ2_app_data.idx; i < max_idx; i++) {
+	for (uint32_t i = targ2_app_data.wr_idx; i < max_idx; i++) {
 		targ2_app_data.buf[i] = *p++;
 	}
+	/* Advance wr_idx; see the targ1 cb for the rationale. */
+	targ2_app_data.wr_idx = max_idx;
 }
 
 static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len)
