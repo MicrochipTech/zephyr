@@ -273,6 +273,9 @@ config SOC_MEC_PROC_CLK_DIV
 	  HCLK = MCK / PROC_CLK_DIV
 	  Allowed divider values: 1, 3, 4, 16, and 48.
 
+config SOC_MCHP_MEC_I2C_SMB_V38
+	bool
+
 # Select SoC Part No. and configuration options
 rsource "*/Kconfig"
 
