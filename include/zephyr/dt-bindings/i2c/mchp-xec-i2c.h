@@ -1,0 +1,30 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#ifndef ZEPHYR_INCLUDE_DT_BINDINGS_I2C_MCHP_XEC_I2C_H_
+#define ZEPHYR_INCLUDE_DT_BINDINGS_I2C_MCHP_XEC_I2C_H_
+
+#define MCHP_XEC_I2C_CTRL_PORT(ctrl, port) (((ctrl & 0xf) << 4) | (port & 0xf))
+
+/* I2C-NL driver */
+#define MCHP_XEC_I2C_PORT0 0
+#define MCHP_XEC_I2C_PORT1 1
+#define MCHP_XEC_I2C_PORT2 2
+#define MCHP_XEC_I2C_PORT3 3
+#define MCHP_XEC_I2C_PORT4 4
+#define MCHP_XEC_I2C_PORT5 5
+#define MCHP_XEC_I2C_PORT6 6
+#define MCHP_XEC_I2C_PORT7 7
+#define MCHP_XEC_I2C_PORT8 8
+#define MCHP_XEC_I2C_PORT9 9
+#define MCHP_XEC_I2C_PORT10 10
+#define MCHP_XEC_I2C_PORT11 11
+#define MCHP_XEC_I2C_PORT12 12
+#define MCHP_XEC_I2C_PORT13 13
+#define MCHP_XEC_I2C_PORT14 14
+#define MCHP_XEC_I2C_PORT15 15
+#define MCHP_XEC_I2C_PORT_MAX 16
+
+#endif /* ZEPHYR_INCLUDE_DT_BINDINGS_I2C_MCHP_XEC_I2C_H_ */

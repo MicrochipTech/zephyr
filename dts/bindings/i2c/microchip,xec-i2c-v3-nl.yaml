@@ -1,0 +1,100 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2Cv3-NL I2C driver using network layer I2C protcol
+  FSM plus DMA.
+
+compatible: "microchip,xec-i2c-v3-nl"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+    description: MMIO Base address register mapping.
+
+  interrupts:
+    required: true
+    description: Hardware interrupt vector assignment.
+
+  girqs:
+    type: int
+    required: true
+    description: |
+      Hardware GIRQ encoded interrupt routing. Each peripheral
+      interrupt line is routed to a GIRQ bit in the XEC ECIA.
+      The GIRQ result bits which are bitwise AND of GIRQ enable
+      and status are routed to the peripheral's NVIC input.
+      The value is the encoded GIRQ number and bit position
+      for this peripheral instance.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Each peripheral instance has sleep enable, clock required, and
+      reset bits in the PCR block. The value is the encoded PCR register
+      index and bit position for the peripheral instance.
+
+  dmas:
+    required: true
+    description: |
+      Phandle and channel specs mapping this block to its DMA engine(s).
+      The driver expects up to two named entries:
+
+        "host"   - DMA channel + trigger source for controller-mode
+                   transfers (HCMD/HTX/HRX). Always required.
+        "target" - DMA channel + trigger source for target-mode
+                   transfers (TCMD/TTX/TRX). Required only when an
+                   application registers an I2C target via
+                   i2c_target_register(); target_register returns
+                   -ENODEV at runtime if this entry is absent.
+
+      The two entries must reference the same DMA controller but use
+      different channels and different trigger sources.
+
+  dma-names:
+    required: true
+    description: |
+      Names for the dmas entries. Use ["host"] for controller-only
+      use; use ["host", "target"] when target mode will be used.
+
+  bounce-buffer-size:
+    type: int
+    required: true
+    description: Per-instance sizing configuration for the hardware bounce buffer.
+
+  target-buffer-size:
+    type: int
+    description: |
+      Per-instance size, in bytes, of the target-mode RX buffer the
+      driver stages incoming bytes into before invoking the
+      buf_write_received callback. Sized to the largest write the
+      external host will issue plus one byte for the matched target
+      address (which the driver strips before passing data to the
+      callback). If absent, the driver does not allocate a target
+      buffer and i2c_target_register returns -ENOSYS. The hardware
+      receive-byte counter is 16 bits, so this value must be
+      <= 65535 (0xFFFF); a build assertion enforces the cap.
+
+  target-rx-chunk-count:
+    type: int
+    default: 1
+    description: |
+      Optional streaming-RX support. Splits target-buffer-size into
+      this many equal-sized chunks and configures the target DMA
+      channel as a cyclic chain. Each chunk completion fires
+      buf_write_received with that chunk's contents, and the chain
+      wraps so the bounce buffer is reused for arbitrarily large
+      host-write transactions. Default is 1, which preserves the
+      historical "single buf_write_received per transaction" shape.
+
+      target-buffer-size MUST be a multiple of target-rx-chunk-count
+      when this property is > 1. Reasonable values are 2..8; the
+      driver bounds it at CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN
+      (the cyclic chain is built from cached DMA blocks). Choose
+      a chunk size large enough that the application's
+      buf_write_received callback can comfortably finish before the
+      next chunk fills, and small enough that buffer reuse fits the
+      total transaction worst case.
