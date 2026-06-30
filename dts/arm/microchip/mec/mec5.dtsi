@@ -694,6 +694,7 @@
 				<MCHP_XEC_ECIA_GIRQ_ENC(19, 6)>, <MCHP_XEC_ECIA_GIRQ_ENC(19, 7)>,
 				<MCHP_XEC_ECIA_GIRQ_ENC(19, 8)>, <MCHP_XEC_ECIA_GIRQ_ENC(24, 255)>,
 				<MCHP_XEC_ECIA_GIRQ_ENC(25, 255)>, <MCHP_XEC_ECIA_GIRQ_ENC(22, 9)>;
+			pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 19)>;
 			status = "disabled";
 
 			/* Devices accessible to the Host via Logical Device mechanism.
@@ -705,6 +706,7 @@
 				reg = <0x400f0000 0x200>;
 				interrupts = <60 3>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 20)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 17)>;
 				status = "disabled";
 			};
 
@@ -714,6 +716,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 19)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 18)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 16)>;
 				status = "disabled";
 			};
 
@@ -723,6 +726,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 5)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 6)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 13)>;
 				status = "disabled";
 			};
 
@@ -732,6 +736,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15 ,7)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 8)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 14)>;
 				status = "disabled";
 			};
 
@@ -741,6 +746,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 9)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 10)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 21)>;
 				status = "disabled";
 			};
 
@@ -750,6 +756,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 11)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 12)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 22)>;
 				status = "disabled";
 			};
 
@@ -759,6 +766,7 @@
 				interrupt-names = "ibf", "obe";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 13)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 14)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 23)>;
 				status = "disabled";
 			};
 
@@ -769,6 +777,7 @@
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 15)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 16)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(15, 17)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 15)>;
 				status = "disabled";
 			};
 
@@ -776,6 +785,7 @@
 				reg = <0x400f3c00 0x200>;
 				interrupts = <172 1>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(21, 26)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 29)>;
 				status = "disabled";
 			};
 
@@ -783,6 +793,7 @@
 				reg = <0x400f4000 0x400>;
 				interrupts = <42 3>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 2)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 0)>;
 				status = "disabled";
 			};
 
@@ -790,6 +801,7 @@
 				reg = <0x400f4400 0x400>;
 				interrupts = <43 3>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 3)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 3)>;
 				status = "disabled";
 			};
 
@@ -797,6 +809,7 @@
 				reg = <0x400f4800 0x400>;
 				interrupts = <44 3>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 4)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 4)>;
 				status = "disabled";
 			};
 
@@ -808,6 +821,7 @@
 				reg = <0x400f8000 0x400>;
 				interrupts = <62 0>;
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 22)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 25)>;
 				status = "disabled";
 			};
 
@@ -823,6 +837,7 @@
 				interrupt-names = "done", "err";
 				girqs = <MCHP_XEC_ECIA_GIRQ_ENC(19, 9)>,
 					<MCHP_XEC_ECIA_GIRQ_ENC(19, 10)>;
+				pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 27)>;
 				status = "disabled";
 			};
 		};
