@@ -450,15 +450,11 @@ static int dma_xec_configure(const struct device *dev, uint32_t channel,
 
 	dma_xec_chan_reset(dev, channel);
 
-	sys_clear_bit(chregs + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 	sys_write32(mstart, chregs + XEC_DMA_CHAN_MEM_ADDR_OFS);
 	sys_write32(mend, chregs + XEC_DMA_CHAN_MEM_ADDR_END_OFS);
 	sys_write32(dstart, chregs + XEC_DMA_CHAN_DEV_ADDR_OFS);
 
 	sys_write32(ctrl, chregs + XEC_DMA_CHAN_CTRL_OFS);
-	sys_write32(BIT(XEC_DMA_CHAN_IES_BERR_POS) | BIT(XEC_DMA_CHAN_IES_DONE_POS),
-		    chregs + XEC_DMA_CHAN_IENABLE_OFS);
-	sys_set_bit(chregs + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 
 	return 0;
 }
@@ -533,8 +529,10 @@ static int dma_xec_start(const struct device *dev, uint32_t channel)
 
 	data->channels[channel].isr_hw_status = 0;
 
-	sys_write32(0u, chregs + XEC_DMA_CHAN_IENABLE_OFS);
-	sys_write32(0xffu, chregs + XEC_DMA_CHAN_ISTATUS_OFS);
+	sys_set_bit(chregs + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
+	sys_write32(XEC_DMA_CHAN_ISTATUS_MSK, chregs + XEC_DMA_CHAN_ISTATUS_OFS);
+	sys_write32(BIT(XEC_DMA_CHAN_IES_BERR_POS) | BIT(XEC_DMA_CHAN_IES_DONE_POS),
+		    chregs + XEC_DMA_CHAN_IENABLE_OFS);
 	chan_ctrl = sys_read32(chregs + XEC_DMA_CHAN_CTRL_OFS);
 
 	if (chan_ctrl & BIT(XEC_DMA_CHAN_CTRL_DIS_HWFL_POS)) {
@@ -543,10 +541,7 @@ static int dma_xec_start(const struct device *dev, uint32_t channel)
 		chan_ctrl |= BIT(XEC_DMA_CHAN_CTRL_HWFL_RUN_POS);
 	}
 
-	sys_write32(BIT(XEC_DMA_CHAN_IES_BERR_POS) | BIT(XEC_DMA_CHAN_IES_DONE_POS),
-		    chregs + XEC_DMA_CHAN_IENABLE_OFS);
 	sys_write32(chan_ctrl, chregs + XEC_DMA_CHAN_CTRL_OFS);
-	sys_set_bit(chregs + XEC_DMA_CHAN_ACTV_OFS, XEC_DMA_CHAN_ACTV_EN_POS);
 
 	return 0;
 }
