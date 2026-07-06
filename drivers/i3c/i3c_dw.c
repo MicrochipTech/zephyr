@@ -429,16 +429,6 @@ struct dw_i3c_config {
 #endif
 };
 
-/*
- * Read the synthesised device role (IC_DEVICE_ROLE) from HW_CAPABILITY. This is the
- * authoritative, read-only indicator of which registers exist in this IP instance.
- * Returns one of HW_CAP_DEVICE_ROLE_{MASTER,SEC_MASTER,SLAVE}.
- */
-static inline uint32_t dw_i3c_device_role(const struct dw_i3c_config *config)
-{
-	return sys_read32(config->regs + HW_CAPABILITY) & HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK;
-}
-
 struct dw_i3c_data {
 	struct i3c_driver_data common;
 	uint32_t free_pos;
@@ -446,6 +436,9 @@ struct dw_i3c_data {
 	uint16_t datstartaddr;
 	uint16_t dctstartaddr;
 	uint16_t maxdevs;
+
+	/* synthesised device role (HW_CAP_DEVICE_ROLE_*), cached from HW_CAPABILITY at init */
+	uint8_t role;
 
 	/* fifo depth is in words (32b) */
 	uint8_t ibififodepth;
@@ -476,6 +469,19 @@ struct dw_i3c_data {
 	uint8_t deftgts_count;
 #endif /* CONFIG_I3C_CONTROLLER && CONFIG_I3C_TARGET */
 };
+
+/*
+ * Synthesised device role (IC_DEVICE_ROLE, HW_CAPABILITY[2:0]) resolved once in
+ * dw_i3c_init() and cached in driver data. It is a read-only synthesis constant, so
+ * subsequent lookups are served from RAM rather than MMIO.
+ * Returns one of HW_CAP_DEVICE_ROLE_{MASTER,SEC_MASTER,SLAVE}.
+ */
+static inline uint32_t dw_i3c_device_role(const struct device *dev)
+{
+	const struct dw_i3c_data *data = dev->data;
+
+	return data->role;
+}
 
 static inline bool dw_i3c_is_current_controller(const struct device *dev)
 {
@@ -1252,7 +1258,7 @@ static int i3c_dw_endis_ibi(const struct device *dev, struct i3c_device_desc *ta
 {
 	struct dw_i3c_data *data = dev->data;
 	const struct dw_i3c_config *config = dev->config;
-	uint32_t role = dw_i3c_device_role(config);
+	uint32_t role = dw_i3c_device_role(dev);
 	uint32_t bitpos, sir_con;
 	struct i3c_ccc_events i3c_events;
 	int ret;
@@ -1269,7 +1275,8 @@ static int i3c_dw_endis_ibi(const struct device *dev, struct i3c_device_desc *ta
 			return pos;
 		}
 
-		uint32_t reg = sys_read32(config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
+		uint32_t reg =
+			sys_read32(config->regs + DEV_ADDR_TABLE_LOC(data->datstartaddr, pos));
 
 		if (i3c_ibi_has_payload(target)) {
 			reg |= DEV_ADDR_TABLE_IBI_WITH_DATA;
@@ -1815,12 +1822,12 @@ static int dw_i3c_init_scl_timing(const struct device *dev, struct i3c_config_co
 	 * (SEC_MASTER or SLAVE). Gate on the synthesised role, not on the boot mode: a
 	 * dual-role part that boots as controller still has - and needs - these registers.
 	 */
-	uint32_t role = dw_i3c_device_role(config);
+	uint32_t role = dw_i3c_device_role(dev);
 
 	if (DW_HAS_BUS_IDLE(role)) {
 		/* I3C Bus Available Time */
 		scl_timing = DIV_ROUND_UP(I3C_BUS_AVAILABLE_TIME_NS * (uint64_t)core_rate,
-						I3C_PERIOD_NS);
+					  I3C_PERIOD_NS);
 		sys_write32(BUS_I3C_AVAIL_TIME(scl_timing), config->regs + BUS_FREE_TIMING);
 
 		/* I3C Bus Idle Time */
@@ -2804,7 +2811,7 @@ static int dw_i3c_init(const struct device *dev)
 	data->respfifodepth = QUEUE_SIZE_CAPABILITY_RESP_BUF_DWORD_SIZE(queue_capability);
 	data->ibififodepth = QUEUE_SIZE_CAPABILITY_IBI_BUF_DWORD_SIZE(queue_capability);
 
-	/* get HDR capabilities */
+	/* get HDR capabilities and the device role (both live in HW_CAPABILITY) */
 	ctrl_config->supported_hdr = 0;
 	hw_capabilities = sys_read32(config->regs + HW_CAPABILITY);
 	if (hw_capabilities & HW_CAPABILITY_HDR_TS_EN) {
@@ -2815,6 +2822,13 @@ static int dw_i3c_init(const struct device *dev)
 	}
 
 	/*
+	 * DEVICE_ROLE_CONFIG is a read-only synthesis constant in the word just read;
+	 * cache it in driver data so later callers (dw_i3c_device_role()) read it from
+	 * RAM, not MMIO.
+	 */
+	data->role = hw_capabilities & HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK;
+
+	/*
 	 * Resolve the device role from the read-only synthesis option DEVICE_ROLE_CONFIG.
 	 * This decides which registers physically exist. The boot mode (is_secondary) is
 	 * derived from it: fixed for MASTER/SLAVE-only parts, and only read from
@@ -2822,7 +2836,7 @@ static int dw_i3c_init(const struct device *dev)
 	 * (that register does not exist on a SLAVE-only part). Cross-check the role
 	 * against the compiled-in controller/target support.
 	 */
-	role = dw_i3c_device_role(config);
+	role = data->role;
 	switch (role) {
 	case HW_CAP_DEVICE_ROLE_MASTER:
 		__ASSERT(IS_ENABLED(CONFIG_I3C_CONTROLLER),
@@ -2851,7 +2865,9 @@ static int dw_i3c_init(const struct device *dev)
 		return -ENOTSUP;
 	}
 
-	/* disable ibi - SIR/MR reject regs are the Secondary-Controller mechanism (databook Table 2-1) */
+	/* disable ibi -
+	 * SIR/MR reject regs are the Secondary-Controller mechanism (databook Table 2-1)
+	 */
 	if (DW_IBI_REJECT_VIA_REG(role)) {
 		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_SIR_REQ_REJECT);
 		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_MR_REQ_REJECT);
