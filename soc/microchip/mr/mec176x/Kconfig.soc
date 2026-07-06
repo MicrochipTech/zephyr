@@ -1,0 +1,19 @@
+# Microchip Mount Rainier MEC176x series
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_SERIES_MEC176X
+	bool
+	select SOC_FAMILY_MICROCHIP_MR
+	help
+	  Microchip Mount Rainier MEC176x ARM Cortex-M55 MCU series.
+
+config SOC_SERIES
+	default "mec176x" if SOC_SERIES_MEC176X
+
+config SOC_MEC1767_XYZ
+	bool
+	select SOC_SERIES_MEC176X
+
+config SOC
+	default "mec1767_xyz" if SOC_MEC1767_XYZ

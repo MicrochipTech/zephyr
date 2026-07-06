@@ -1,0 +1,24 @@
+# Microchip Mount Rainier MEC176x core series
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cortex-M55 (armv8.1-m) feature selection, per Mount Rainier DOS section 4.10:
+#   - M55 with TrustZone, Helium (MVE) extension, single-precision FPU
+#   - 16-region MPU (x2: secure + non-secure) + 8-region SAU
+#   - No cache controller; ITCM + DTCM present
+#   - NVIC 8 priority levels (3 priority bits), clock up to 192 MHz
+
+config SOC_SERIES_MEC176X
+	select ARM
+	select CPU_CORTEX_M55
+	select CPU_CORTEX_M_HAS_SYSTICK
+	select CPU_CORTEX_M_HAS_VTOR
+	select CPU_CORTEX_M_HAS_DWT
+	select CPU_HAS_FPU
+	select ARMV8_M_DSP
+	select ARMV8_1_M_MVEI
+	select ARMV8_1_M_MVEF
+	select CPU_HAS_ARM_MPU
+	select CPU_HAS_ARM_SAU
+	select ARM_TRUSTZONE_M
+	select SOC_EARLY_INIT_HOOK

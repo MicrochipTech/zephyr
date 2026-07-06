@@ -1,0 +1,17 @@
+# Microchip Mount Rainier MCU family
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FAMILY_MICROCHIP_MR
+	bool
+	# Declares the platform can use SEGGER RTT (live debug-probe console).
+	# Capability flag only; inert unless the segger module is present and RTT
+	# is configured. Standard pattern used by in-tree SoC families.
+	select HAS_SEGGER_RTT if ZEPHYR_SEGGER_MODULE
+
+if SOC_FAMILY_MICROCHIP_MR
+
+# Pull in the per-series hardware Kconfig (CPU/arch selects).
+rsource "*/Kconfig"
+
+endif # SOC_FAMILY_MICROCHIP_MR

@@ -1,0 +1,14 @@
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Out-of-tree Microchip "Mount Rainier" SoC family. A distinct family name
+# (microchip_mr) is used deliberately so it does NOT collide with the upstream
+# microchip_mec family in zephyr/soc/microchip/mec (which would clash on
+# SOC_FAMILY_MICROCHIP_MEC_DIR across SoC roots).
+
+family:
+  - name: microchip_mr
+    series:
+      - name: mec176x
+        socs:
+          - name: mec1767_xyz

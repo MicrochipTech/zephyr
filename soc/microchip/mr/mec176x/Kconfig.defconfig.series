@@ -1,0 +1,16 @@
+# Microchip Mount Rainier MEC176x series defaults
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+if SOC_SERIES_MEC176X
+
+config NUM_IRQS
+	# Must be > the highest NVIC line used. Mount Rainier GIRQ map tops out at
+	# NVIC 197 (Mount_Rainier_GIRQ_mapping.xlsx); UART3 is 184.
+	default 198
+
+# Plain Cortex-M SysTick as the kernel timer (no MEC RTOS timer in this bring-up).
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default $(dt_node_int_prop_int,/cpus/cpu@0,clock-frequency)
+
+endif # SOC_SERIES_MEC176X

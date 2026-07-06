@@ -1,0 +1,8 @@
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+if SOC_FAMILY_MICROCHIP_MR
+
+rsource "*/Kconfig.defconfig.series"
+
+endif # SOC_FAMILY_MICROCHIP_MR

@@ -1,0 +1,11 @@
+# Microchip Mount Rainier MCU family
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FAMILY_MICROCHIP_MR
+	bool
+
+config SOC_FAMILY
+	default "microchip_mr" if SOC_FAMILY_MICROCHIP_MR
+
+rsource "*/Kconfig.soc"
