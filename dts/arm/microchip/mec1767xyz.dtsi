@@ -1,0 +1,56 @@
+/*
+ * (c) 2026 Microchip Technology Inc. and its subsidiaries.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mount Rainier MEC1767 (ARM Cortex-M55) SoC devicetree.
+ */
+
+#include <arm/armv8.1-m.dtsi>
+
+#include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+#include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
+#include <freq.h>
+#include <mem.h>
+
+/ {
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,cortex-m55";
+			reg = <0>;
+			/* TODO: confirm actual FPGA core clock; DOS rates the part up
+			 * to 192 MHz. Only affects kernel timing, not UART baud.
+			 */
+			clock-frequency = <DT_FREQ_M(192)>;
+		};
+	};
+
+	/*
+	 * Mount Rainier is flashless / RAM-execution (see .openocd/profpga_mec1767.cfg):
+	 *   code SRAM  @ 0x00080000 (512 KB) -> zephyr,flash (.text/.rodata)
+	 *   data SRAM  @ 0x20000000 (128 KB) -> zephyr,sram  (.data/.bss/stack)
+	 * Both windows are general-purpose SRAM; the split is a Zephyr linker convention.
+	 */
+	flash0: flash@80000 {
+		reg = <0x00080000 DT_SIZE_K(512)>;
+	};
+
+	sram0: memory@20000000 {
+		compatible = "mmio-sram";
+		reg = <0x20000000 DT_SIZE_K(128)>;
+	};
+
+	soc {
+#include "mec176x_common.dtsi"
+	};
+};
+
+&nvic {
+	arm,num-irq-priority-bits = <3>;
+};

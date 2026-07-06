@@ -1,0 +1,196 @@
+/*
+ * (c) 2026 Microchip Technology Inc. and its subsidiaries.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mount Rainier MEC176x shared peripheral nodes. Included inside the SoC `soc {}`
+ * node. Register bases are XEC/MEC-compatible (DOS Table 4-3: Global MMCR base
+ * 0x40080000, EC MMCR base 0x40000000, Host MMCR base 0x400F0000).
+ * TODO: verify exact PCR/ECIA/GPIO bases against the Mount Rainier address map.
+ */
+
+/* EC Subsystem registers (referenced by the reused soc_ecia.c). */
+ecs: ecs@4000fc00 {
+	reg = <0x4000fc00 0x200>;
+};
+
+/*
+ * Power/Clock/Reset. Only the register base is needed by this bring-up: the
+ * microchip,xec-uart driver ungates its clock via the inline PCR sleep-enable
+ * helper (soc_pcr.h), which reads DT_NODELABEL(pcr) reg[0]. The full XEC clock
+ * driver is intentionally not built (CONFIG_CLOCK_CONTROL=n) to avoid poking
+ * PLL/VBAT clock-monitor hardware that the FPGA may not model.
+ */
+pcr: pcr@40080100 {
+	compatible = "microchip,xec-pcr";
+	reg = <0x40080100 0x100 0x4000a400 0x100>;
+	reg-names = "pcrr", "vbatr";
+	interrupts = <174 0>;
+	core-clock-div = <1>;
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_SIL_OSC>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_SO_SO>;
+	clk32kmon-period-min = <1435>;
+	clk32kmon-period-max = <1495>;
+	clk32kmon-duty-cycle-var-max = <132>;
+	clk32kmon-valid-min = <4>;
+	xtal-enable-delay-ms = <300>;
+	pll-lock-timeout-ms = <30>;
+	#clock-cells = <3>;
+};
+
+/*
+ * EC Interrupt Aggregator. soc_ecia_init()/soc_ecia_girq_ctrl() (reused common
+ * code) drive this block's registers directly via DT_NODELABEL(ecia); the ECIA
+ * interrupt-controller *driver* is not built (UART uses a direct NVIC line).
+ * direct-capable-girqs follows the Mount Rainier GIRQ map: MEC172x's set plus
+ * GIRQ28. GIRQ15 (the UARTs) is direct-capable.
+ */
+ecia: ecia@4000e000 {
+	compatible = "microchip,xec-ecia";
+	reg = <0x4000e000 0x400>;
+	direct-capable-girqs = <13 14 15 16 17 18 19 20 21 23 28>;
+	clocks = <&pcr 1 0 MCHP_XEC_PCR_CLK_PERIPH>;
+	#address-cells = <1>;
+	#size-cells = <1>;
+	ranges = <0x0 0x4000e000 0x400>;
+	/*
+	 * Disabled so the ECIA interrupt-controller *driver* (intc_mchp_ecia_xec.c)
+	 * is not instantiated - it needs MEC172x-specific register structs we don't
+	 * provide. The reused soc_ecia.c still reads this node's reg via DT_NODELABEL
+	 * (works on a disabled node) and configures the aggregator directly; the UART
+	 * reaches the CPU over its direct NVIC line, not the aggregated GIRQ driver.
+	 */
+	status = "disabled";
+};
+
+/*
+ * Pin controller + GPIO banks (Global MMCR @ 0x40081000). The microchip,xec-uart
+ * driver applies its pinctrl-0 state at init; only the pin-controller reg region
+ * is required for mux programming. GPIO bank children mirror MEC172x.
+ */
+pinctrl: pin-controller@40081000 {
+	compatible = "microchip,xec-pinctrl";
+	#address-cells = <1>;
+	#size-cells = <1>;
+	reg = <0x40081000 0x1000>;
+
+	gpio_000_036: gpio@40081000 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081000 0x80 0x40081300 0x04
+		       0x40081380 0x04 0x400813fc 0x04>;
+		interrupts = <3 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(11, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+
+	gpio_040_076: gpio@40081080 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081080 0x80 0x40081304 0x04
+		       0x40081384 0x04 0x400813f8 0x4>;
+		interrupts = <2 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(10, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+
+	gpio_100_136: gpio@40081100 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081100 0x80 0x40081308 0x04
+		       0x40081388 0x04 0x400813f4 0x04>;
+		interrupts = <1 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(9, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+
+	gpio_140_176: gpio@40081180 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081180 0x80 0x4008130c 0x04
+		       0x4008138c 0x04 0x400813f0 0x04>;
+		interrupts = <0 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(8, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+
+	gpio_200_236: gpio@40081200 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081200 0x80 0x40081310 0x04
+		       0x40081390 0x04 0x400813ec 0x04>;
+		interrupts = <4 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(12, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+
+	gpio_240_276: gpio@40081280 {
+		compatible = "microchip,xec-gpio";
+		reg = <0x40081280 0x80 0x40081314 0x04
+		       0x40081394 0x04 0x400813e8 0x04>;
+		interrupts = <17 2>;
+		girqs = <MCHP_XEC_ECIA_GIRQ_ENC(26, 255)>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		status = "disabled";
+	};
+};
+
+/*
+ * Four NS16C550A-compatible XEC UARTs (DOS), 1.8432 MHz UART_CLK reference.
+ * GIRQ15 source bits and direct NVIC numbers from Mount_Rainier_GIRQ_mapping.xlsx;
+ * pcr-scr (PCR sleep-enable) from DOS Table 4-4. `ldn` is required by the binding
+ * but is not read by the driver. All disabled here; the board enables its console.
+ */
+uart0: uart@400f2400 {
+	compatible = "microchip,xec-uart";
+	reg = <0x400f2400 0x400>;
+	interrupts = <40 1>;
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 0)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 1)>;
+	ldn = <9>;
+	status = "disabled";
+};
+
+uart1: uart@400f2800 {
+	compatible = "microchip,xec-uart";
+	reg = <0x400f2800 0x400>;
+	interrupts = <41 1>;
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 1)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 2)>;
+	ldn = <10>;
+	status = "disabled";
+};
+
+uart2: uart@400f2c00 {
+	compatible = "microchip,xec-uart";
+	reg = <0x400f2c00 0x400>;
+	interrupts = <183 1>;
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 25)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 28)>;
+	ldn = <11>;
+	status = "disabled";
+};
+
+uart3: uart@400f3000 {
+	compatible = "microchip,xec-uart";
+	reg = <0x400f3000 0x400>;
+	interrupts = <184 1>;
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 26)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 30)>;
+	ldn = <12>;
+	status = "disabled";
+};

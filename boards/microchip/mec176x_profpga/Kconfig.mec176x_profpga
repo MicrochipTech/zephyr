@@ -1,0 +1,6 @@
+# (c) 2026 Microchip Technology Inc. and its subsidiaries.
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_MEC176X_PROFPGA
+	select SOC_MEC1767_XYZ
+	select TRUSTED_EXECUTION_NONSECURE if BOARD_MEC176X_PROFPGA_MEC1767_XYZ_NS

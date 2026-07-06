@@ -1,0 +1,8 @@
+board:
+  name: mec176x_profpga
+  full_name: Mount Rainier MEC1767 proFPGA
+  vendor: microchip
+  socs:
+    - name: mec1767_xyz
+      variants:
+        - name: ns

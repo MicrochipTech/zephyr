@@ -1,0 +1,13 @@
+identifier: mec176x_profpga
+name: Mount Rainier MEC1767 proFPGA
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+ram: 128
+flash: 512
+supported:
+  - serial
+  - gpio
+vendor: microchip

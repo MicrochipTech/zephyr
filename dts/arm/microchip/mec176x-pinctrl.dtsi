@@ -1,0 +1,28 @@
+/*
+ * (c) 2026 Microchip Technology Inc. and its subsidiaries.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mount Rainier UART pin mux options. GPIO assignments and AF1 function match the
+ * DOS pin table (and are identical to MEC172x). Octal GPIO numbering, e.g. 0104.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/mchp-xec-pinctrl.h>
+
+&pinctrl {
+	/* UART0: TX=GPIO104, RX=GPIO105 */
+	/omit-if-no-ref/ uart0_tx_gpio104: uart0_tx_gpio104 {
+		pinmux = <MCHP_XEC_PINMUX(0104, MCHP_AF1)>;
+	};
+	/omit-if-no-ref/ uart0_rx_gpio105: uart0_rx_gpio105 {
+		pinmux = <MCHP_XEC_PINMUX(0105, MCHP_AF1)>;
+	};
+
+	/* UART1: TX=GPIO170, RX=GPIO171 */
+	/omit-if-no-ref/ uart1_tx_gpio170: uart1_tx_gpio170 {
+		pinmux = <MCHP_XEC_PINMUX(0170, MCHP_AF1)>;
+	};
+	/omit-if-no-ref/ uart1_rx_gpio171: uart1_rx_gpio171 {
+		pinmux = <MCHP_XEC_PINMUX(0171, MCHP_AF1)>;
+	};
+};

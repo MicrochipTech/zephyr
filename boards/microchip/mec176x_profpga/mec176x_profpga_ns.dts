@@ -1,0 +1,83 @@
+/dts-v1/;
+
+/*
+ * (c) 2026 Microchip Technology Inc. and its subsidiaries.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mount Rainier MEC1767 on the proFPGA prototyping platform.
+ * Non-Secure image for TF-M integration; runs in NS world after TF-M boot.
+ */
+
+#include <microchip/mec1767xyz.dtsi>
+#include <microchip/mec176x-pinctrl.dtsi>
+#include <mem.h>
+
+/ {
+	model = "Microchip Mount Rainier MEC1767 proFPGA NS";
+	compatible = "microchip,mec176x_profpga", "microchip,mec1767_xyz";
+
+	chosen {
+		zephyr,sram = &ns_ram;
+		zephyr,flash = &ns_flash;
+		zephyr,code-partition = &slot0_ns_partition;
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+	};
+
+	/*
+	 * Memory layout for TF-M + Zephyr NS (no BL2, RAM-only execution):
+	 *
+	 * Code SRAM (128 KB @ 0x00080000):
+	 *   0x00080000 - 0x00097FFF : Secure image (96 KB)
+	 *   0x00098000 - 0x0009FFFF : Non-Secure image (32 KB)
+	 *
+	 * Data SRAM (128 KB @ 0x20000000):
+	 *   0x20000000 - 0x2000FFFF : Secure data (64 KB)
+	 *   0x20010000 - 0x2001FFFF : Non-Secure data (64 KB)
+	 */
+
+	/* Spans 0x80000-0xE0000 (384 KB): Secure in ITGU block 4, NS code in
+	 * ITGU block 6 (0xC0000). NS must be its own 128 KB ITGU block. */
+	reserved-memory@80000 {
+		compatible = "soc-nv-flash";
+		reg = <0x00080000 DT_SIZE_K(384)>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* Secure image partition (TF-M) - block 4 (0x80000) */
+			slot0_partition: partition@0 {
+				reg = <0x00000000 DT_SIZE_K(96)>;
+				read-only;
+			};
+
+			/* Non-Secure image partition (Zephyr NS) - block 6 (0xC0000) */
+			slot0_ns_partition: partition@40000 {
+				reg = <0x00040000 DT_SIZE_K(128)>;
+			};
+		};
+
+		/* NS code region - Zephyr sees this as "flash" for .text/.rodata */
+		ns_flash: memory@c0000 {
+			reg = <0x000C0000 DT_SIZE_K(128)>;
+		};
+	};
+
+	/* NS data region - Zephyr uses this for .data/.bss/stack/heap */
+	ns_ram: memory@20010000 {
+		compatible = "mmio-sram";
+		reg = <0x20010000 DT_SIZE_K(64)>;
+	};
+};
+
+&uart0 {
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_tx_gpio104 &uart0_rx_gpio105>;
+	pinctrl-names = "default";
+	status = "okay";
+};
