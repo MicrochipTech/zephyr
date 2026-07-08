@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Sample-only pin-control holder for routing the MEC internal test clock to a
+  GPIO pad (see samples/boards/microchip/xec_cct_kt). It has no registers and no
+  driver; it exists solely so a pin-control state can be declared and applied
+  from the application with the pinctrl API.
+
+  Including pinctrl-device.yaml is what makes the pinctrl-0/pinctrl-names
+  properties typed in the binding, which is required for PINCTRL_DT_DEFINE()
+  (it expands to DT_FOREACH_PROP_ELEM(node, pinctrl_0, ...), whose helper macro
+  is only generated for a binding-declared property).
+
+compatible: "microchip,app-pins"
+
+include: [base.yaml, pinctrl-device.yaml]
