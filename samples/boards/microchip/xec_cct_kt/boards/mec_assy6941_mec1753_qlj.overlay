@@ -1,0 +1,65 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Make the MEC1753-QLJ board use the capture-compare timer (CCT) as the Zephyr
+ * kernel timer instead of the default RTOS timer.
+ *
+ * - cctmr0 is bound to the CCT kernel-timer driver and given the values its
+ *   binding/driver require (compatible, the Compare0/Compare1 interrupts and
+ *   GIRQ encodings, PCR sleep-enable, and input clock).
+ * - The RTOS timer remains as the low-power companion. In HOOKS mode no driver
+ *   binds it; the CCT driver reaches it by the &rtimer node label, so the node
+ *   stays present but disabled (which also keeps MCHP_XEC_RTOS_TIMER from being
+ *   auto-selected and conflicting with the CCT kernel timer).
+ */
+
+#include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
+#include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
+
+/ {
+	/*
+	 * Route the MEC internal test clock to GPIO060 (alternate function 2) so
+	 * the timer clock can be observed on a scope. This pin is not owned by any
+	 * device driver, so main.c applies this state via the pinctrl API. NOTE:
+	 * the pin mux only connects the pad; which clock is driven out is selected
+	 * separately in SoC clock-out/VBAT test logic and is not configured here.
+	 */
+	app_pin_list: app-pin-list {
+		/* App-local binding (dts/bindings/microchip,xec-test-clk-out.yaml)
+		 * includes pinctrl-device.yaml so pinctrl-0/pinctrl-names are typed
+		 * properties -- required for PINCTRL_DT_DEFINE() in main.c to compile.
+		 */
+		compatible = "microchip,app-pins";
+		pinctrl-0 = <&tst_clk_out_gpio060 &vci_in1_n_gpio162>;
+		pinctrl-names = "default";
+	};
+};
+
+&rtimer {
+	status = "disabled";
+};
+
+&cctmr0 {
+	compatible = "microchip,xec-cct-ktimer";
+	status = "okay";
+};
+
+/*
+ * The PM core arms the LPM companion (z_sys_clock_lpm_enter) only when the
+ * chosen power state has a non-zero exit-latency-us: the single
+ * sys_clock_set_timeout(..., idle=true) call at subsys/pm/pm.c is gated on
+ * exit_latency_ticks > 0. Without it, SUSPEND_TO_RAM powers the PLL (and the
+ * CCT) off with no companion armed and therefore no wake source, so the core
+ * hangs in __WFI(). The board's power-states omit exit-latency-us, so add it
+ * here. Values must be >= one tick (100 us at 10 kHz) to survive the floor
+ * conversion; these are placeholders pending measured PLL-relock/restore time.
+ */
+&idle {
+	exit-latency-us = <150>;
+};
+
+&suspend_to_ram {
+	exit-latency-us = <500>;
+};
