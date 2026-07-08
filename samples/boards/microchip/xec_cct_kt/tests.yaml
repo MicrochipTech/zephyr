@@ -1,0 +1,20 @@
+sample:
+  name: Microchip XEC CCT kernel timer
+  description: >
+    Run the Microchip MEC capture-compare timer (CCT) as the Zephyr system
+    timer, with the always-on 32 KHz RTOS timer as its low-power companion
+    through the SYSTEM_TIMER_LPM_COMPANION_HOOKS interface.
+tests:
+  sample.boards.microchip.xec_cct_kt:
+    platform_allow:
+      - mec_assy6941/mec1753_qlj
+    integration_platforms:
+      - mec_assy6941/mec1753_qlj
+    tags:
+      - timer
+      - pm
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "Sample complete"
