@@ -35,6 +35,23 @@
 
 #define XEC_UART0_REG_BASE DT_REG_ADDR(DT_NODELABEL(uart0))
 
+#define XEC_PM_DEEP_SLP_DEBUG
+#define XEC_PM_DEEP_SLP_VB_DEBUG
+
+#define XEC_VBMEM_BASE 0x4000A800U
+
+#define XEC_PM_DEEP_SLP_GPIO 0241 /* octal */
+
+#define XEC_PM_DEEP_SLP_GPIO_CR_ADDR MEC_GPIO_CR1_ADDR(0x40081000U, XEC_PM_DEEP_SLP_GPIO)
+
+#ifdef XEC_PM_DEEP_SLP_DEBUG
+#define XEC_DBG_PM_DEEP_SLP_ASSERT   sys_write32(0x00240, XEC_PM_DEEP_SLP_GPIO_CR_ADDR)
+#define XEC_DBG_PM_DEEP_SLP_DEASSERT sys_write32(0x10240, XEC_PM_DEEP_SLP_GPIO_CR_ADDR)
+#else
+#define XEC_DBG_PM_DEEP_SLP_ASSERT
+#define XEC_DBG_PM_DEEP_SLP_DEASSERT
+#endif
+
 static uint8_t basic_timer_cr_save[XEC_BASIC_TIMER_INSTANCES];
 static uint8_t uart_actv_save[MEC165XB_UART_INSTANCES];
 
@@ -119,12 +136,27 @@ static void z_power_soc_deep_sleep(void)
 
 	__disable_irq();
 
+	XEC_DBG_PM_DEEP_SLP_ASSERT;
+
 	soc_deep_sleep_periph_save();
 
 	SCB->SCR |= BIT(SCB_SCR_SLEEPDEEP_Pos);
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
+#ifdef XEC_PM_DEEP_SLP_VB_DEBUG
+	uint32_t r = sys_read32(XEC_PCR_CLK_REQ_BASE);
+
+	sys_write32(r, XEC_VBMEM_BASE);
+	r = sys_read32(XEC_PCR_CLK_REQ_BASE + 4U);
+	sys_write32(r, XEC_VBMEM_BASE + 4U);
+	r = sys_read32(XEC_PCR_CLK_REQ_BASE + 8U);
+	sys_write32(r, XEC_VBMEM_BASE + 8U);
+	r = sys_read32(XEC_PCR_CLK_REQ_BASE + 0xCU);
+	sys_write32(r, XEC_VBMEM_BASE + 0xCU);
+	r = sys_read32(XEC_PCR_CLK_REQ_BASE + 0x10U);
+	sys_write32(r, XEC_VBMEM_BASE + 0x10U);
+#endif
 	__set_BASEPRI(0);
 	__DSB();
 	__WFI(); /* triggers sleep hardware */
@@ -141,6 +173,8 @@ static void z_power_soc_deep_sleep(void)
 	}
 
 	soc_deep_sleep_periph_restore();
+
+	XEC_DBG_PM_DEEP_SLP_DEASSERT;
 }
 
 /* NOTE: Zephyr kernel does not block all interrupts.
