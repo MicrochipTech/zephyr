@@ -1,0 +1,28 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Make the MEC1753-QLJ board use the capture-compare timer (CCT) as the Zephyr
+ * kernel timer instead of the default RTOS timer.
+ *
+ */
+
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/ {
+	resources {
+		compatible = "test-kernel-timer-behavior-external";
+
+		timerout-gpios = <MCHP_GPIO_DECODE_241 GPIO_ACTIVE_LOW>;
+	};
+};
+
+&rtimer {
+	status = "disabled";
+};
+
+&cctmr0 {
+	compatible = "microchip,xec-cct-ktimer";
+	status = "okay";
+};
