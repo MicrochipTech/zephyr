@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC capture compare timer used as Zephyr's kernel timer
+
+compatible: "microchip,xec-cct-ktimer"
+
+include: ["base.yaml", "microchip,dmec-ecia-girq.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  interrupt-names:
+    required: true
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Encoded PCR register index and bit position for sleep enable,
+      clock required, and peripheral reset.
+
+  input-clock:
+    type: int
+    required: true
+    const: 48000000
+    description: Capture compare timer input frequency
