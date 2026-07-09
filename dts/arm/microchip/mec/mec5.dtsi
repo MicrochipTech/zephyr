@@ -375,8 +375,13 @@
 				     <150 0>, <151 0>, <152 0>, <153 0>, <154 0>;
 			interrupt-names = "counter", "cap0", "cap1", "cap2", "cap3",
 					  "cap4", "cap5", "comp0", "comp1";
-			girqs = <18 20>, <18 21>, <18 22>, <18 23>,
-				<18 24>, <18 25>, <18 26>, <18 27>, <18 28>;
+			girqs = <MCHP_XEC_ECIA_GIRQ_ENC(18, 20) MCHP_XEC_ECIA_GIRQ_ENC(18, 21)
+				 MCHP_XEC_ECIA_GIRQ_ENC(18, 22) MCHP_XEC_ECIA_GIRQ_ENC(18, 23)
+				 MCHP_XEC_ECIA_GIRQ_ENC(18, 24) MCHP_XEC_ECIA_GIRQ_ENC(18, 25)
+				 MCHP_XEC_ECIA_GIRQ_ENC(18, 26) MCHP_XEC_ECIA_GIRQ_ENC(18, 27)
+				 MCHP_XEC_ECIA_GIRQ_ENC(18, 28)>;
+			pcr-scr = <MCHP_XEC_SCR_ENCODE(3, 30)>;
+			input-clock = <48000000>;
 			status = "disabled";
 		};
 
