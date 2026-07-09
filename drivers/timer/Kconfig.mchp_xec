@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+config MCHP_XEC_CCT_KTIMER
+	bool "Microchip XEC Capture Compare timer as kernel timer"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_CCT_KTIMER_ENABLED && !MCHP_XEC_RTOS_TIMER
+	select TICKLESS_CAPABLE
+	select SYSTEM_TIMER_HAS_DISABLE_SUPPORT
+	# Advertise LPM-companion capability; the actual mode (HOOKS) is chosen as a
+	# default of the SYSTEM_TIMER_LPM_COMPANION choice (select cannot target a
+	# choice symbol). See drivers/timer/Kconfig.system_timer_lpm.
+	select SYSTEM_TIMER_HAS_LPM_COMPANION_SUPPORT
+	help
+	  Kernel device driver for system tick with tickless capability.
+	  The capture compare timer uses a 48MHz input clock with a power of 2
+	  clock divider register dividing by 1 through 128. (48MHz through 375 KHz).
+	  The device has a 32-bit free run auto-wrapping counter at the selected frequency,
+	  two 32-bit compare registers, and 6 32-bit capture registers. Each compare register
+	  can generate a separate interrupt when the free counter matches the value in the
+	  compare register. CCT requires the SoC PLL enabled. For sleep modes where the PLL
+	  is turn off, this driver implements the system timer LPM companion hooks called by
+	  the SoC PM code.
