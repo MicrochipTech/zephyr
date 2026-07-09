@@ -360,7 +360,7 @@ static inline void ctrl_write(const struct i2c_mec5_config *cfg, uint8_t extra)
 
 /* --- Forward decls for static helpers --------------------------------- */
 
-static void begin_msg(struct i2c_mec5_data *ctx);
+static void begin_msg(struct i2c_mec5_data *ctx, bool repeated);
 static void begin_or_continue(struct i2c_mec5_data *ctx);
 static void advance_or_stop(struct i2c_mec5_data *ctx, int result);
 static void schedule_stop(struct i2c_mec5_data *ctx, int result);
@@ -393,7 +393,7 @@ static int i2c_mec5_sm_kickoff(struct i2c_mec5_data *ctx, struct i2c_msg *msgs, 
 		/* Clear any stale Completion latches before starting. */
 		i2c_mec5_completion_w(cfg, I2C_MEC5_COMP_RW1C_MASK);
 
-		begin_msg(ctx);
+		begin_msg(ctx, false); /* first msg: fresh START from idle bus */
 	}
 
 	return ret;
@@ -401,7 +401,7 @@ static int i2c_mec5_sm_kickoff(struct i2c_mec5_data *ctx, struct i2c_msg *msgs, 
 
 /* --- START / repeated-START ------------------------------------------- */
 
-static void begin_msg(struct i2c_mec5_data *ctx)
+static void begin_msg(struct i2c_mec5_data *ctx, bool repeated)
 {
 	const struct i2c_mec5_config *cfg = ctx->dev->config;
 	struct i2c_msg *m = &ctx->msgs[ctx->cur_msg];
@@ -413,16 +413,42 @@ static void begin_msg(struct i2c_mec5_data *ctx)
 	ctx->buf_idx = 0;
 	ctx->state = CTRL_START_SENT;
 
-	/* README §START steps 2-5. */
-	i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ACK);
-
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 	soc_ecia_girq_ctrl(cfg->girq, cfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
 
-	i2c_mec5_data_w(cfg, addr_byte);
-	i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
-				    I2C_MEC5_CTRL_ENI | I2C_MEC5_CTRL_STA |
-				    I2C_MEC5_CTRL_ACK);
+	if (repeated) {
+		/*
+		 * Repeated-START. The controller already owns the bus (NBB=0,
+		 * PIN asserted by the previous byte's service IRQ). The order
+		 * is the reverse of a fresh START and PCLR/bit[7] must NOT be
+		 * set: write Control with STA (no PCLR) FIRST, THEN load the
+		 * address into Data. The Data write releases SCL so the
+		 * address is clocked out immediately after the repeated START.
+		 *
+		 * Doing it the fresh-START way here — PCLR-then-Data-then-STA —
+		 * clears PIN and writes Data while STA is not yet set, so the
+		 * hardware clocks the address out as a plain data byte
+		 * continuing the previous (write) transfer instead of issuing
+		 * a repeated START. That is a race: it works sometimes and
+		 * sometimes wedges the controller at NOSVC=1 with no further
+		 * service IRQ. See i2c_mchp_xec_v2.c gen_start(is_repeated=1).
+		 */
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI |
+					    I2C_MEC5_CTRL_STA | I2C_MEC5_CTRL_ACK);
+		i2c_mec5_data_w(cfg, addr_byte);
+	} else {
+		/*
+		 * Fresh START from an idle bus (README §START steps 2-5):
+		 * clear stale PIN state, load the address into Data, then
+		 * write STA together with PCLR to generate START + address.
+		 */
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
+					    I2C_MEC5_CTRL_ACK);
+		i2c_mec5_data_w(cfg, addr_byte);
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
+					    I2C_MEC5_CTRL_ENI | I2C_MEC5_CTRL_STA |
+					    I2C_MEC5_CTRL_ACK);
+	}
 
 	i2c_mec5_dbg_state_update(ctx, 0x21U);
 }
@@ -456,7 +482,12 @@ static void begin_or_continue(struct i2c_mec5_data *ctx)
 		return;
 	}
 
-	begin_msg(ctx);
+	/*
+	 * Direction change or explicit I2C_MSG_RESTART. The previous message
+	 * was a TX that did not STOP, so the controller still owns the bus:
+	 * this is a repeated START.
+	 */
+	begin_msg(ctx, true);
 }
 
 /* --- Message termination --------------------------------------------- */
@@ -663,11 +694,11 @@ static void handle_idle_wait(struct i2c_mec5_data *ctx, enum mec5_sm_action act)
 
 		if (more_msgs) {
 			i2c_mec5_dbg_state_update(ctx, 0x58U);
-			/* STOP was forced by the RX path; resume the
-			 * transaction with a fresh START for the next msg.
+			/* STOP was forced by the RX path; the bus is idle
+			 * again, so resume with a fresh START for the next msg.
 			 */
 			ctx->cur_msg++;
-			begin_msg(ctx);
+			begin_msg(ctx, false);
 		} else {
 			i2c_mec5_dbg_state_update(ctx, 0x59U);
 			ctx->state = CTRL_DONE;
