@@ -46,8 +46,14 @@
 	status = "disabled";
 };
 
-/* Enable MCHP kernel timer driver using 32KHz RTOS timer and 1MHz basic timer */
+/* Disable MCHP kernel timer driver using 32KHz RTOS timer and 1MHz basic timer */
 &rtimer {
+	status = "disabled";
+};
+
+/* Use MCHP CCT with 32KHz RTOS timer for LPM */
+&cctmr0 {
+	compatible = "microchip,xec-cct-ktimer";
 	status = "okay";
 };
 
