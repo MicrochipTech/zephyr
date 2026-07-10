@@ -20,8 +20,10 @@ extern "C" {
 #define XEC_I2C_SMB4_ID    4
 #define XEC_I2C_SMB_MAX_ID 5
 
-#define XEC_I2C_SMB_GIRQ    13U
-#define XEC_I2C_SMB_WK_GIRQ 22U
+#define XEC_I2C_SMB_GIRQ 13U
+
+#define XEC_I2C_SMB_WK_GIRQ               22U
+#define XEC_I2C_SMB_WK_GIRQ_POS(instance) ((instance) + 1U)
 
 #define XEC_I2C_SMB_INST_SIZE 0x400U
 
