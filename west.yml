@@ -23,6 +23,9 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: babblesim
       url-base: https://github.com/BabbleSim
+    # MEC176x TF-M port fork (Microchip Bitbucket, personal project ~i17752).
+    - name: mchp-bb
+      url-base: ssh://bitbucket.microchip.com/~i17752
 
   group-filter: [-babblesim, -optional, -testing]
 
@@ -398,8 +401,15 @@ manifest:
       path: modules/tee/tf-a/trusted-firmware-a
       groups:
         - tee
+    # MEC176x: point at the Microchip Bitbucket fork carrying the mec176x TF-M
+    # platform port (SAU/ITGU/DTGU, NS relocation to 0xC0000, NSC veneers) +
+    # the staged TEMP bring-up commits. Was upstream @2b2b1773 (vanilla, no port).
+    # NOTE: `west update` still checks this out as detached HEAD at the branch tip
+    # -> `git switch mec176x-tfm-port` to resume work on the branch.
     - name: trusted-firmware-m
-      revision: 2b2b177366080dccf68e6ff1780b75e8303bb9a4
+      remote: mchp-bb
+      repo-path: mec176x-trusted-firmware-m
+      revision: mec176x-tfm-port
       path: modules/tee/tf-m/trusted-firmware-m
       groups:
         - tee
