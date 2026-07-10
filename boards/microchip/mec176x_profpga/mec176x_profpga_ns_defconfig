@@ -8,7 +8,8 @@ CONFIG_ARM_TRUSTZONE_M=y
 
 # TF-M configuration
 CONFIG_TFM_BL2=n
-CONFIG_TFM_SFN=y
+# NOTE: TF-M model (SFN vs IPC) is an application choice - set it in the
+# sample/app prj.conf (CONFIG_TFM_IPC / CONFIG_TFM_SFN), not here.
 CONFIG_ARM_MPU=y
 CONFIG_RUNTIME_NMI=y
 
