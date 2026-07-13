@@ -640,8 +640,10 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 static int xec_i2c_nl_apply_port(const struct device *port_dev)
 {
 	const struct xec_i2c_nl_port_config *pc = port_dev->config;
-	const struct xec_i2c_nl_config *cfg = pc->parent->config;
-	struct xec_i2c_nl_data *data = pc->parent->data;
+	const struct device *ctrl = pc->parent;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uint32_t freq;
 	int rc;
 
 	if (data->active_port == pc->port_id) {
@@ -654,10 +656,25 @@ static int xec_i2c_nl_apply_port(const struct device *port_dev)
 		return rc;
 	}
 
-	soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_PORT_SET(pc->port_id),
-			  XEC_I2C_CFG_PORT_MSK);
-	data->active_port = pc->port_id;
-	return 0;
+	/* The v3.8 controller requires a full PCR reset when the port MUX
+	 * (or frequency) changes. A soft RMW of CFG.PORT alone -- which
+	 * this function did in prior revisions -- leaves internal FSM
+	 * state stale and the very next transfer on the new port returns
+	 * -ENXIO or -EIO on the address byte with no NAK on the wire.
+	 * Reset here through program_ctrl, which:
+	 *   - disables the GIRQ,
+	 *   - runs soc_xec_pcr_reset_en to clear all internal latches,
+	 *   - re-writes CFG (with the new port), timing, CR, and BBCR,
+	 *   - clears CMPL RW1C latches,
+	 *   - re-enables the GIRQ,
+	 *   - updates data->active_port / active_freq on the way out.
+	 * program_ctrl is safe to call here because every caller of
+	 * apply_port either holds data->lock (vport_transfer,
+	 * vport_recover_bus) or runs before any transfers are issued
+	 * (port_init).
+	 */
+	freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+	return xec_i2c_nl_program_ctrl(ctrl, freq, pc->port_id);
 }
 
 /* Reset the controller hard via PCR and re-arm it.
@@ -2576,6 +2593,8 @@ int mchp_xec_i2c_nl_port_set(const struct device *i2c_dev, uint8_t port)
 	const struct xec_i2c_nl_port_config *pc;
 	const struct xec_i2c_nl_config *cfg;
 	struct xec_i2c_nl_data *data;
+	uint32_t freq;
+	int rc;
 
 	if (i2c_dev == NULL || port >= XEC_I2C_CFG_MAX_PORT) {
 		return -EINVAL;
@@ -2592,11 +2611,19 @@ int mchp_xec_i2c_nl_port_set(const struct device *i2c_dev, uint8_t port)
 #endif
 
 	k_sem_take(&data->lock, K_FOREVER);
-	soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_PORT_SET(port),
-			  XEC_I2C_CFG_PORT_MSK);
-	data->active_port = port;
+	if (data->active_port == port) {
+		k_sem_give(&data->lock);
+		return 0;
+	}
+	/* Port MUX change requires a full PCR reset -- see the comment in
+	 * xec_i2c_nl_apply_port for why a soft RMW of CFG.PORT is not
+	 * enough on v3.8 silicon. program_ctrl runs the reset and
+	 * updates data->active_port on the way out.
+	 */
+	freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+	rc = xec_i2c_nl_program_ctrl(pc->parent, freq, port);
 	k_sem_give(&data->lock);
-	return 0;
+	return rc;
 }
 
 /* -------------------------------------------------------------------------
