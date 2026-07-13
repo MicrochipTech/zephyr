@@ -683,6 +683,7 @@ static int xec_i2c_nl_apply_port(const struct device *port_dev)
 	 * -ENXIO or -EIO on the address byte with no NAK on the wire.
 	 * Reset here through program_ctrl, which:
 	 *   - disables the GIRQ,
+	 *   - clears CFG (dropping ENAB and all IENs),
 	 *   - runs soc_xec_pcr_reset_en to clear all internal latches,
 	 *   - re-writes CFG (with the new port), timing, CR, and BBCR,
 	 *   - clears CMPL RW1C latches,
@@ -692,8 +693,20 @@ static int xec_i2c_nl_apply_port(const struct device *port_dev)
 	 * apply_port either holds data->lock (vport_transfer,
 	 * vport_recover_bus) or runs before any transfers are issued
 	 * (port_init).
+	 *
+	 * Use the target port's DT clock-frequency (pc->bitrate) rather
+	 * than data->active_freq. Each port node carries its own
+	 * clock-frequency property, and switching ports should adopt the
+	 * new port's configured rate -- a prior i2c_configure() call on
+	 * the previous port must not carry over to a port that may have
+	 * a completely different signal-integrity budget (e.g. port 0 at
+	 * 100 kHz, port 7 at 400 kHz in the sample overlay). Callers
+	 * wanting a non-DT rate on a specific port can follow up with
+	 * i2c_configure() on the port device; vport_configure keeps
+	 * active_port pinned so the configured rate survives subsequent
+	 * transfers on the same port.
 	 */
-	freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+	freq = (pc->bitrate != 0U) ? pc->bitrate : cfg->dflt_freq;
 	return xec_i2c_nl_program_ctrl(ctrl, freq, pc->port_id);
 }
 
@@ -2506,13 +2519,18 @@ static int xec_i2c_nl_vport_configure(const struct device *port_dev, uint32_t de
 
 	k_sem_take(&data->lock, K_FOREVER);
 
-	if (freq != data->active_freq) {
-		/* Reprogramming the controller resets the port-mux too; force
-		 * the next transfer to re-apply pinctrl + MUX for its port.
+	if (freq != data->active_freq || data->active_port != pc->port_id) {
+		/* Apply pinctrl for this port device before program_ctrl so
+		 * the PCR reset sees the correct pin muxing. program_ctrl
+		 * updates active_port to pc->port_id and active_freq to
+		 * freq on success, so subsequent transfers on this same
+		 * port device short-circuit through apply_port without
+		 * reverting the just-configured rate back to the port's
+		 * DT default.
 		 */
-		rc = xec_i2c_nl_program_ctrl(ctrl, freq, pc->port_id);
+		rc = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_DEFAULT);
 		if (rc == 0) {
-			data->active_port = XEC_I2C_NL_INVALID_PORT;
+			rc = xec_i2c_nl_program_ctrl(ctrl, freq, pc->port_id);
 		}
 	}
 
