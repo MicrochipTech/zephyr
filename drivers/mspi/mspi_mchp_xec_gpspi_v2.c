@@ -169,7 +169,7 @@ struct mspi_xec_gp_xdat {
 	bool ctrl_reinit;
 	bool dev_cfg_ok;
 #ifdef CONFIG_MULTITHREADING
-	struct k_mutex lock;
+	struct k_sem lock;
 	struct k_sem xfer_done;
 	struct k_timer async_timer;
 	struct k_work async_pkt_work;
@@ -395,26 +395,21 @@ static int api_mspi_mchp_xec_gpspi_cfg(const struct mspi_dt_spec *spec)
 	}
 
 	xdat->dev_cfg_ok = false;
+	xdat->dev_id = NULL;
+	xdat->ctrl_reinit = cfg->re_init;
 	xdat->max_cfg_freq = cfg->max_freq;
 	xdat->num_periph = cfg->num_periph;
 
-	if (cfg->re_init) {
-		xdat->ctrl_reinit = true;
 #ifdef CONFIG_MULTITHREADING
-		k_mutex_unlock(&xdat->lock);
-#else
-		xdat->ctx.lock = false;
-#endif
-	} else {
-		xdat->ctrl_reinit = false;
+	/* re-arm both cfg and ctx semaphores to "free". */
+	if (k_sem_count_get(&xdat->lock) == 0) {
+		k_sem_give(&xdat->lock);
 	}
-
-#ifdef CONFIG_MULTITHREADING
-	/* re-init the context semaphore */
 	if (k_sem_count_get(&xdat->ctx.lock) == 0) {
 		k_sem_give(&xdat->ctx.lock);
 	}
 #else
+	xdat->lock = false;
 	xdat->ctx.lock = false;
 #endif
 
@@ -616,6 +611,10 @@ static void apply_dev_config(const struct device *ctrl)
  * MSPI_DEVICE_CONFIG_NONE
  * MSPI_DEVICE_CONFIG_ALL
  *   We only validate those parameters supported by the HW/driver.
+ * This API implements session-style locking: on a new device selection, take the cfg lock
+ * and keep it held on success. The session ends when the application
+ * calls get_channel_status (see api_mspi_mchp_xec_gpspi_get_chs), which
+ * clears dev_id and releases the cfg lock.
  */
 static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 					   const struct mspi_dev_id *dev_id,
@@ -626,14 +625,16 @@ static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 	int rc = 0;
 	bool locked = false;
 
-	if (xdat->dev_id != dev_id) { /* caller requesting new target device? */
+	if (xdat->dev_id != dev_id) {
 #ifdef CONFIG_MULTITHREADING
-		rc = k_mutex_lock(&xdat->lock, K_MSEC(CONFIG_MSPI_COMPLETION_TIMEOUT_TOLERANCE));
+		if (k_sem_take(&xdat->lock, K_FOREVER) != 0) {
+			rc = -EBUSY;
+		}
 #else
 		if (xdat->lock == false) {
 			xdat->lock = true;
 		} else {
-			rc = -1;
+			rc = -EBUSY;
 		}
 #endif
 		if (rc != 0) {
@@ -673,9 +674,9 @@ static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 	xdat->dev_cfg_ok = true;
 
 exit_dev_cfg:
-	if (locked) {
+	if (locked && (rc != 0)) {
 #ifdef CONFIG_MULTITHREADING
-		k_mutex_unlock(&xdat->lock);
+		k_sem_give(&xdat->lock);
 #else
 		xdat->lock = false;
 #endif
@@ -684,20 +685,41 @@ exit_dev_cfg:
 	return rc;
 }
 
-/* TODO will checking XEC_QSPI_SR_CS_ASSERTED_POS work?
- * If transceive is called with hold_ce set then the API will
- * exit with the CE asserted. Are there other QSPI HW bitfields we could check?
- *
+/* Release the current session. Waits for any in-flight transfer, clears
+ * dev_id, and gives back the cfg lock so another dev_config call can start.
+ * The cached dev_cfg (dev_cfg_ok flag) is preserved so a follow-up
+ * dev_config(dev_id, NONE) still cheaply re-selects the same device.
  */
 static int api_mspi_mchp_xec_gpspi_get_chs(const struct device *ctrl, uint8_t ch)
 {
+	struct mspi_xec_gp_xdat *const xdat = ctrl->data;
+
 	if (ch != 0) {
 		return -EINVAL;
 	}
 
-	if (mspi_is_inp(ctrl)) {
+#ifdef CONFIG_MULTITHREADING
+	/* Block until any in-flight transfer (sync or async) has released ctx.
+	 * count=1 means "free"; taking it acts as "wait for idle."
+	 */
+	(void)k_sem_take(&xdat->ctx.lock, K_FOREVER);
+
+	if (xdat->dev_id != NULL) {
+		xdat->dev_id = NULL;
+		k_sem_give(&xdat->lock);
+	}
+
+	/* Re-arm ctx as "free" for the next transceive. */
+	k_sem_give(&xdat->ctx.lock);
+#else
+	if (xdat->ctx.lock) {
 		return -EBUSY;
 	}
+	if (xdat->dev_id != NULL) {
+		xdat->dev_id = NULL;
+		xdat->lock = false;
+	}
+#endif
 
 	return 0;
 }
@@ -1820,7 +1842,7 @@ static int mspi_xec_gpspi_init(const struct device *ctrl)
 	xdat->ctrl = ctrl;
 
 #ifdef CONFIG_MULTITHREADING
-	k_mutex_init(&xdat->lock);
+	k_sem_init(&xdat->lock, 1, 1);
 	k_sem_init(&xdat->xfer_done, 0, 1);
 	k_sem_init(&xdat->ctx.lock, 1, 1);
 	k_timer_init(&xdat->async_timer, async_tmout_timer_handler, NULL);
