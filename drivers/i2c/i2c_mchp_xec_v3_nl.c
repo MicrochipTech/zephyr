@@ -586,7 +586,25 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 	mm_reg_t base = cfg->base;
 
 	soc_ecia_girq_ctrl(cfg->girq, cfg->girq_pos, MCHP_MEC_ECIA_GIRQ_DIS);
+
+	/* Disable the controller BEFORE the PCR reset. Per HW guidance
+	 * (also matches the v2 driver's pattern) the port MUX or bus
+	 * frequency cannot be changed on a still-enabled controller; a
+	 * PCR reset on an enabled controller leaves residual bus state
+	 * that surfaces as CMPL.BER on the first transaction against
+	 * the new port. Clearing all of CFG (not just ENAB) also drops
+	 * every IEN and the port field, which is what the reset will
+	 * force to their defaults anyway -- doing it here in software
+	 * first guarantees the reset sees a quiesced peripheral.
+	 */
+	sys_write32(0U, base + XEC_I2C_CFG_OFS);
+
 	soc_xec_pcr_reset_en(cfg->enc_pcr);
+	/* The controller needs a short delay after PCR reset before its
+	 * registers are safe to write. v2 driver uses the same wait.
+	 */
+	k_busy_wait(10U);
+
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 
 	/* PIN=1 to clear any latent assertion left by the legacy engine. */
@@ -616,6 +634,8 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 
 	sys_write8(XEC_I2C_NL_CR_DFLT, base + XEC_I2C_CR_OFS);
 	sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+	/* Enable-to-first-transfer settling window; matches v2. */
+	k_busy_wait(20U);
 
 	/* Leave BBCR in live-readback mode so any later read of
 	 * BBCR.SCL_IN / BBCR.SDA_IN (e.g. from the recovery path)
