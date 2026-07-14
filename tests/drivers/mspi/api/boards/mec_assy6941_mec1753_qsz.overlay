@@ -8,25 +8,30 @@
 #include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
 
 /* mec_assy6941 EVB with MEC1753 daughter card.
- * Winbond 25Q128JVSM +3.3V installed in socket U6
- * Jumper block JP15 3x6
- * 2-3 ON
- * 5-6 ON
- * 8-9 ON
- * 11-12 ON
- * 17-18 ON
- * Jumper block JP85 3x4
- * 1-2 ON
- * 4-5 ON
- * 7-8 ON
- * 10-11 ON
- * Jumper block JP86 1x3
- * 2-3 ON
+ * Winbond 25Q128JVSM +3.3V installed in socket U7
+ * U7-5 SPI1_MOSI
+ * U7-2 SPI1_MISO
+ * U7-6 SPI1_CLK
+ * U7-1 SPI1_nCS
+ *
+ * Jumper block JP20 3x4
+ * 2-3 ON choose SPI1_nCS
+ * 5-6 ON choose SPI1_MIS0
+ * 8-9 ON choose SPI1_CLK
+ * 11-12 ON choose SPI1_MOSI
+ *
+ * Header J37 1x6
+ * 1 = VTR1
+ * 2 = SPI1_CLK
+ * 3 = SPI1_MOSI
+ * 4 = SPI1_MISO
+ * 5 = SPI1_nCS
+ * 6 = GND
  */
 
 / {
 	aliases {
-		mspi0 = &gpspi0;
+		mspi0 = &gpspi1;
 	};
 };
 
@@ -35,52 +40,52 @@
 };
 
 &pinctrl {
-	spi0_cs0_n_gpio003_lp: spi0_cs0_n_gpio003_lp {
-		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_AF4)>;
+	spi1_cs_n_gpio144_lp: spi1_cs_n_gpio144_lp {
+		pinmux = <MCHP_XEC_PINMUX(0144, MCHP_AF3)>;
 		low-power-enable;
 	};
 
-	spi0_sdo_gpio004_lp: spi0_sdo_gpio004_lp {
-		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_AF4)>;
+	spi1_clk_gpio141_lp: spi1_clk_gpio141_lp {
+		pinmux = <MCHP_XEC_PINMUX(0141, MCHP_AF3)>;
 		low-power-enable;
 	};
 
-	spi0_clk_gpio034_lp: spi0_clk_gpio034_lp {
-		pinmux = <MCHP_XEC_PINMUX(0034, MCHP_AF4)>;
+	spi1_sdo_gpio142_lp: spi1_sdo_gpio142_lp {
+		pinmux = <MCHP_XEC_PINMUX(0142, MCHP_AF3)>;
 		low-power-enable;
 	};
 
-	spi0_sdi_gpio036_lp: spi0_sdi_gpio036_lp {
-		pinmux = <MCHP_XEC_PINMUX(0036, MCHP_AF3)>;
+	spi1_sdi_gpio143_lp: spi1_sdi_gpio143_lp {
+		pinmux = <MCHP_XEC_PINMUX(0143, MCHP_AF3)>;
 		low-power-enable;
 	};
 };
 
-&gpspi0 {
+/* EVB use GP-SPI1 and flash socket U7 */
+&gpspi1 {
 	compatible = "microchip,xec-gpspi-v2-mspi-controller";
 	status = "okay";
 
-	dmas = <&dmac 12 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_TX>,
-	       <&dmac 13 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_RX>;
+	dmas = <&dmac 14 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_TX>,
+	       <&dmac 15 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_RX>;
 	dma-names = "tx", "rx";
 
-	pinctrl-0 = <&spi0_cs0_n_gpio003 &spi0_sdo_gpio004
-		     &spi0_clk_gpio034 &spi0_sdi_gpio036>;
-	pinctrl-1 = <&spi0_cs0_n_gpio003_lp &spi0_sdo_gpio004_lp
-		     &spi0_clk_gpio034_lp &spi0_sdi_gpio036_lp>;
+	pinctrl-0 = <&spi1_cs_n_gpio144 &spi1_clk_gpio141
+		     &spi1_sdo_gpio142 &spi1_sdi_gpio143>;
+	pinctrl-1 = <&spi1_cs_n_gpio144_lp &spi1_clk_gpio141_lp
+		     &spi1_sdo_gpio142_lp &spi1_sdi_gpio143_lp>;
 	pinctrl-names = "default", "sleep";
 
-	clock-frequency = <DT_FREQ_M(24)>; /* Maximum frequency we allow. HW limit is 48MHz*/
+	clock-frequency = <DT_FREQ_M(48)>; /* Maximum frequency the controller can support */
 	op-mode = "MSPI_OP_MODE_CONTROLLER";
 	duplex = "MSPI_HALF_DUPLEX";
-	software-multiperipheral; /* REQUIRED */
 
-	spiflash0: gpspi0-nor-flash@0 {
+	/* 25Q128JVSM +3.3V JEDEC-ID = 0xef7018 */
+	spiflash0: gpspi1-nor-flash@0 {
 		compatible = "zephyr,mspi-emul-device";
 		reg = <0>;
-
 		mspi-hardware-ce-num = <0>;
-		mspi-max-frequency = <DT_FREQ_M(24)>;
+		mspi-max-frequency = <DT_FREQ_M(4)>;
 		mspi-io-mode = "MSPI_IO_MODE_SINGLE";
 		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
 		mspi-endian = "MSPI_BIG_ENDIAN";
