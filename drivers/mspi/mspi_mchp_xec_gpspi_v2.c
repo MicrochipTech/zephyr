@@ -92,9 +92,6 @@ struct mspi_xec_gpspi_pkt {
 	uint8_t cr_idx;
 	bool dma_armed;
 	uint32_t cr[MSPI_XEC_GPKT_CR_MAX_IDX];
-	/* data_ptr / data_nbytes describe the CURRENT chunk (<= GPSPI_ALIGNED_NQUNITS_MAX).
-	 * rem_data_ptr / rem_nbytes describe what hasn't been programmed into a CR yet.
-	 */
 	uint8_t *data_ptr;
 	uint32_t data_nbytes;
 	uint8_t *rem_data_ptr;
@@ -169,7 +166,7 @@ struct mspi_xec_gp_xdat {
 	bool ctrl_reinit;
 	bool dev_cfg_ok;
 #ifdef CONFIG_MULTITHREADING
-	struct k_sem lock;
+	struct k_mutex lock;
 	struct k_sem xfer_done;
 	struct k_timer async_timer;
 	struct k_work async_pkt_work;
@@ -310,6 +307,17 @@ static int gpspi_hw_reset_and_init(const struct device *dev, uint32_t freq_hz)
 	return 0;
 }
 
+/* Check control configuration is valid.
+ * GP-SPIv2 hardware is a controller only.
+ * GP-SPIv2 hardware controls a single chip select, driver implementation does not support using
+ * generic GPIO pins as chip enables.
+ * Driver only supports half-duplex, hardware is capable of both full and half-duplex.
+ * Most targets for MSPI will be SPI flash devices. 
+ * Half-duplex means transmit tri-states RX input lines(s) and receive tri-states TX output line(s).
+ * Software-multiperipheral is a DT property that only needs to be true if there are 2 or more
+ * child devices. GPSPI is single-CE so num_periph is normally < 2 but we check it anyway for
+ * completeness.
+ */
 static int mspi_xec_validate_config(const struct mspi_cfg *cfg)
 {
 	if ((cfg->channel_num != 0) || (cfg->dqs_support)) {
@@ -320,40 +328,38 @@ static int mspi_xec_validate_config(const struct mspi_cfg *cfg)
 		return -ENOTSUP;
 	}
 
-	/* QMSPI controller requires software to set the HW CE field */
-	if (cfg->sw_multi_periph == false) {
+	if ((cfg->num_periph >= 2) && (cfg->sw_multi_periph == false)) {
 		return -ENOTSUP;
 	}
 
-	/* Initial driver implementation does not support using generic GPIO pins
-	 * as chip enable.
-	 */
 	if (cfg->num_ce_gpios != 0) {
 		return -ENOTSUP;
 	}
 
-	/* GP-SPI supports only one HW chip select */
 	if (cfg->num_periph > 1U) {
 		return -ENOTSUP;
 	}
 
-	/* GP-SPI is a controller only. */
 	if (cfg->op_mode != MSPI_OP_MODE_CONTROLLER) {
 		return -ENOTSUP;
 	}
 
-	/* Driver only supports half-duplex. Half-duplex means transmit command and
-	 * parameters ignoring RX lines. If command is read GP-SPI will clock in
-	 * data on the selected data lines (single, dual, quad). Full-duplex implies
-	 * transmit and receive on each clock. GP-SPI hardware supports full-duplex
-	 * but we are not implementing it at this time. Most targets for MSPI will be
-	 * SPI flash devices.
-	 */
 	if (cfg->duplex != MSPI_HALF_DUPLEX) {
 		return -ENOTSUP;
 	}
 
 	return 0;
+}
+
+/* HW-side "busy" check: CS_ASSERTED (STATUS bit 16, read-only) is set while
+ * the controller has chip-select driven low, i.e. a transfer is in progress
+ * on the wire. Reflects HW state directly, independent of ctx.lock.
+ */
+static bool mspi_hw_busy(const struct device *ctrl)
+{
+	const struct mspi_xec_gp_xcfg *xcfg = ctrl->config;
+
+	return (QR32(xcfg, XEC_QSPI_SR_OFS) & BIT(XEC_QSPI_SR_CS_ASSERTED_POS)) != 0;
 }
 
 static bool mspi_is_inp(const struct device *ctrl)
@@ -380,6 +386,8 @@ static bool mspi_is_inp(const struct device *ctrl)
  * If transceive is called with async flag set and returns success
  * we should be able to call get channel status without disrupting
  * the in-progress transfer or requiring a lock.
+ * 
+ * NOTE: The caller must call get_channel_status to release the API lock.
  */
 static int api_mspi_mchp_xec_gpspi_cfg(const struct mspi_dt_spec *spec)
 {
@@ -394,6 +402,11 @@ static int api_mspi_mchp_xec_gpspi_cfg(const struct mspi_dt_spec *spec)
 		return rc;
 	}
 
+	if (cfg->re_init && xdat->ctrl_cfg_ok &&
+	    (mspi_is_inp(spec->bus) || mspi_hw_busy(spec->bus))) {
+		return -EBUSY;
+	}
+
 	xdat->dev_cfg_ok = false;
 	xdat->dev_id = NULL;
 	xdat->ctrl_reinit = cfg->re_init;
@@ -401,15 +414,11 @@ static int api_mspi_mchp_xec_gpspi_cfg(const struct mspi_dt_spec *spec)
 	xdat->num_periph = cfg->num_periph;
 
 #ifdef CONFIG_MULTITHREADING
-	/* re-arm both cfg and ctx semaphores to "free". */
-	if (k_sem_count_get(&xdat->lock) == 0) {
-		k_sem_give(&xdat->lock);
-	}
+	/* re-init the context semaphore to the "free" state. */
 	if (k_sem_count_get(&xdat->ctx.lock) == 0) {
 		k_sem_give(&xdat->ctx.lock);
 	}
 #else
-	xdat->lock = false;
 	xdat->ctx.lock = false;
 #endif
 
@@ -483,99 +492,177 @@ static uint8_t cpp_to_mode_bits(enum mspi_cpp_mode cpp, uint32_t freq_hz)
 	return bits;
 }
 
+/* Per-param save helpers — see the QMSPI driver for the design rationale.
+ * GPSPI is single-CE so save_ce_num rejects any ce_num > 0. Freq base for the
+ * clock divider is XEC_GPSPI_FREQ_MAX (48 MHz) rather than QMSPI's 96 MHz.
+ */
+
+static int save_ce_num(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+		       const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CE_NUM) == 0) {
+		return 0;
+	}
+	if (dev_cfg->ce_num > 0) {
+		return -ENOTSUP;
+	}
+	xdcfg->ce_num = dev_cfg->ce_num;
+	return 0;
+}
+
+static int save_freq(struct mspi_xec_gp_xdat *xdat, struct mspi_xec_dev_cfg *xdcfg,
+		     enum mspi_dev_cfg_mask mask, const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_FREQUENCY) == 0) {
+		return 0;
+	}
+	if ((dev_cfg->freq > xdat->active_mspicfg.max_freq) ||
+	    (dev_cfg->freq < XEC_GPSPI_FREQ_MIN)) {
+		return -ENOTSUP;
+	}
+	xdcfg->freq_div = calc_ckdiv(XEC_GPSPI_FREQ_MAX, dev_cfg->freq);
+	return 0;
+}
+
+static int save_io_mode(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_IO_MODE) == 0) {
+		return 0;
+	}
+	return io_mode_decode(dev_cfg->io_mode, &xdcfg->iom);
+}
+
+static int save_cpp(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+		    const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CPP) == 0) {
+		return 0;
+	}
+	xdcfg->cpp = cpp_to_mode_bits(dev_cfg->cpp, dev_cfg->freq);
+	return 0;
+}
+
+static int save_rx_dummy(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			 const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_RX_DUMMY) == 0) {
+		return 0;
+	}
+	if (dev_cfg->rx_dummy > 0x7fffU) {
+		return -ENOTSUP;
+	}
+	xdcfg->rx_dummy = dev_cfg->rx_dummy;
+	return 0;
+}
+
+static int save_tx_dummy(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			 const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_TX_DUMMY) == 0) {
+		return 0;
+	}
+	if (dev_cfg->tx_dummy > 0x7fffU) {
+		return -ENOTSUP;
+	}
+	xdcfg->tx_dummy = dev_cfg->tx_dummy;
+	return 0;
+}
+
+static int save_cmd_len(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CMD_LEN) == 0) {
+		return 0;
+	}
+	if (dev_cfg->cmd_length > 4U) {
+		return -ENOTSUP;
+	}
+	xdcfg->cmd_len = dev_cfg->cmd_length;
+	return 0;
+}
+
+static int save_adr_len(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_ADDR_LEN) == 0) {
+		return 0;
+	}
+	if (dev_cfg->addr_length > 4U) {
+		return -ENOTSUP;
+	}
+	xdcfg->adr_len = dev_cfg->addr_length;
+	return 0;
+}
+
+/* Fields with no validation — just conditional copy. */
+static void save_scalar_fields(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			       const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_READ_CMD) != 0) {
+		xdcfg->read_cmd = dev_cfg->read_cmd;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_WRITE_CMD) != 0) {
+		xdcfg->write_cmd = dev_cfg->write_cmd;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_MEM_BOUND) != 0) {
+		xdcfg->mem_boundary = dev_cfg->mem_boundary;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_BREAK_TIME) != 0) {
+		xdcfg->time_to_break = dev_cfg->time_to_break;
+	}
+}
+
+/* Partial-mask updates must preserve fields not named in `param_mask`.
+ * xdat (and therefore xdcfg) is zero-initialized at driver startup, so
+ * unset fields start at zero naturally — no need to memset on every call.
+ */
 static int mspi_mchp_xec_dev_cfg_save(const struct device *ctrl,
 				      const enum mspi_dev_cfg_mask param_mask,
 				      const struct mspi_dev_cfg *dev_cfg)
 {
 	struct mspi_xec_gp_xdat *const xdat = ctrl->data;
 	struct mspi_xec_dev_cfg *xdcfg = &xdat->dev_cfg;
-	int rc = 0;
+	int rc;
 
 	if (dev_cfg == NULL) {
 		return -EINVAL;
 	}
 
-	/* Partial-mask updates must preserve fields not named in `param_mask`.
-	 * xdat (and therefore xdcfg) is zero-initialized at driver startup, so
-	 * unset fields start at zero naturally — no need to memset on every call.
-	 */
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CE_NUM) != 0) {
-		if (dev_cfg->ce_num > 0) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->ce_num = dev_cfg->ce_num;
+	rc = save_ce_num(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_freq(xdat, xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_io_mode(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_cpp(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_rx_dummy(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_tx_dummy(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_cmd_len(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_adr_len(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
 	}
 
-	if ((param_mask & MSPI_DEVICE_CONFIG_FREQUENCY) != 0) {
-		if ((dev_cfg->freq > xdat->active_mspicfg.max_freq) ||
-		    (dev_cfg->freq < XEC_GPSPI_FREQ_MIN)) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->freq_div = calc_ckdiv(XEC_GPSPI_FREQ_MAX, dev_cfg->freq);
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_IO_MODE) != 0) {
-		rc = io_mode_decode(dev_cfg->io_mode, &xdcfg->iom);
-		if (rc != 0) {
-			return rc;
-		}
-	}
-
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CPP) != 0) {
-		xdcfg->cpp = cpp_to_mode_bits(dev_cfg->cpp, dev_cfg->freq);
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_RX_DUMMY) != 0) {
-		if (dev_cfg->rx_dummy > 0x7fffU) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->rx_dummy = dev_cfg->rx_dummy;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_TX_DUMMY) != 0) {
-		if (dev_cfg->tx_dummy > 0x7fffU) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->tx_dummy = dev_cfg->tx_dummy;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_READ_CMD) != 0) {
-		xdcfg->read_cmd = dev_cfg->read_cmd;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_WRITE_CMD) != 0) {
-		xdcfg->write_cmd = dev_cfg->write_cmd;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CMD_LEN) != 0) {
-		if (dev_cfg->cmd_length > 4U) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->cmd_len = dev_cfg->cmd_length;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_ADDR_LEN) != 0) {
-		if (dev_cfg->addr_length > 4U) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->adr_len = dev_cfg->addr_length;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_MEM_BOUND) != 0) {
-		xdcfg->mem_boundary = dev_cfg->mem_boundary;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_BREAK_TIME) != 0) {
-		xdcfg->time_to_break = dev_cfg->time_to_break;
-	}
+	save_scalar_fields(xdcfg, param_mask, dev_cfg);
 
 	xdcfg->valid = true;
 
@@ -611,7 +698,12 @@ static void apply_dev_config(const struct device *ctrl)
  * MSPI_DEVICE_CONFIG_NONE
  * MSPI_DEVICE_CONFIG_ALL
  *   We only validate those parameters supported by the HW/driver.
- * This API implements session-style locking: on a new device selection, take the cfg lock
+ *
+ * software-multiperipheral is only required when 2+ child devices are
+ * present. GPSPI is single-CE so this check is normally inert; kept
+ * parallel with QMSPI.
+ *
+ * Use session-style locking: on a new device selection, take the cfg lock
  * and keep it held on success. The session ends when the application
  * calls get_channel_status (see api_mspi_mchp_xec_gpspi_get_chs), which
  * clears dev_id and releases the cfg lock.
@@ -627,9 +719,7 @@ static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 
 	if (xdat->dev_id != dev_id) {
 #ifdef CONFIG_MULTITHREADING
-		if (k_sem_take(&xdat->lock, K_FOREVER) != 0) {
-			rc = -EBUSY;
-		}
+		rc = k_mutex_lock(&xdat->lock, K_FOREVER);
 #else
 		if (xdat->lock == false) {
 			xdat->lock = true;
@@ -645,13 +735,13 @@ static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 		locked = true;
 	}
 
-	if (mspi_is_inp(ctrl)) {
+	if (mspi_is_inp(ctrl) || mspi_hw_busy(ctrl)) {
 		rc = -EBUSY;
 		goto exit_dev_cfg;
 	}
 
-	/* This driver requires software multiperipheral to always be true! */
-	if (xdat->active_mspicfg.sw_multi_periph == false) {
+	if ((xdat->active_mspicfg.num_periph >= 2) &&
+	    (xdat->active_mspicfg.sw_multi_periph == false)) {
 		rc = -EINVAL;
 		goto exit_dev_cfg;
 	}
@@ -676,7 +766,7 @@ static int api_mspi_mchp_xec_gpspi_dev_cfg(const struct device *ctrl,
 exit_dev_cfg:
 	if (locked && (rc != 0)) {
 #ifdef CONFIG_MULTITHREADING
-		k_sem_give(&xdat->lock);
+		k_mutex_unlock(&xdat->lock);
 #else
 		xdat->lock = false;
 #endif
@@ -685,10 +775,15 @@ exit_dev_cfg:
 	return rc;
 }
 
-/* Release the current session. Waits for any in-flight transfer, clears
- * dev_id, and gives back the cfg lock so another dev_config call can start.
- * The cached dev_cfg (dev_cfg_ok flag) is preserved so a follow-up
- * dev_config(dev_id, NONE) still cheaply re-selects the same device.
+/* Release the current session. Waits for any in-flight transfer, releases
+ * the cfg mutex, and clears dev_id. The cached dev_cfg (dev_cfg_ok flag) is
+ * preserved so a follow-up dev_config(dev_id, NONE) still cheaply re-selects
+ * the same device.
+ *
+ * Must be called from the same thread that owns the cfg mutex (the thread
+ * that did the dev_config on this dev_id). If called from a different thread,
+ * k_mutex_unlock returns -EPERM which is propagated back to the caller so
+ * the mis-use is visible instead of silently leaking the lock.
  */
 static int api_mspi_mchp_xec_gpspi_get_chs(const struct device *ctrl, uint8_t ch)
 {
@@ -705,8 +800,13 @@ static int api_mspi_mchp_xec_gpspi_get_chs(const struct device *ctrl, uint8_t ch
 	(void)k_sem_take(&xdat->ctx.lock, K_FOREVER);
 
 	if (xdat->dev_id != NULL) {
+		int unlock_rc = k_mutex_unlock(&xdat->lock);
+
+		if (unlock_rc != 0) {
+			k_sem_give(&xdat->ctx.lock);
+			return unlock_rc;
+		}
 		xdat->dev_id = NULL;
-		k_sem_give(&xdat->lock);
 	}
 
 	/* Re-arm ctx as "free" for the next transceive. */
@@ -725,6 +825,9 @@ static int api_mspi_mchp_xec_gpspi_get_chs(const struct device *ctrl, uint8_t ch
 }
 
 #ifdef CONFIG_MULTITHREADING
+/* Register a callback if the controller is not busy
+ * The driver does not support bus reset callback type. 
+ */
 static int api_mspi_mchp_xec_gpspi_rcb(const struct device *ctrl, const struct mspi_dev_id *dev_id,
 				       const enum mspi_bus_event evt_type,
 				       mspi_callback_handler_t cb,
@@ -740,7 +843,10 @@ static int api_mspi_mchp_xec_gpspi_rcb(const struct device *ctrl, const struct m
 		return -ENOTSUP;
 	}
 
-	/* TODO need locking? */
+	if (mspi_is_inp(ctrl) || mspi_hw_busy(ctrl)) {
+		return -EBUSY;
+	}
+
 	xdat->cbs[evt_type] = cb;
 	xdat->cbctxs[evt_type] = ctx;
 
@@ -780,13 +886,10 @@ static int pre_xfr_xdat_init(const struct device *ctrl, const struct mspi_xfer *
 	}
 
 #ifdef CONFIG_MULTITHREADING
-	/* Use a short, bounded wait to acquire the per-controller xfer slot.
-	 * The user's req->timeout is reserved for actual transfer completion
-	 * in wait_for_xfr_done(); don't double-count it here.
-	 */
 	if (k_sem_take(&ctx->lock, K_MSEC(CONFIG_MSPI_COMPLETION_TIMEOUT_TOLERANCE)) != 0) {
 		return -EBUSY;
 	}
+
 	/* Drop any stale "give" left behind by a previous timed-out / aborted
 	 * transfer so wait_for_xfr_done() actually waits for THIS xfer's ISR.
 	 */
@@ -994,6 +1097,12 @@ static void pio_rx_drain(const struct mspi_xec_gp_xcfg *xcfg, struct mspi_xec_co
  * Sync mode would wait on the semaphore which the ISR will only set
  * when it finishes all parts of struct mspi_xec_gpspi_pkt.
  *
+ * DMA is configured for the FIRST chunk only. The ISR's
+ * chunk-continuation path uses dma_reload() to re-arm the
+ * channel for each subsequent chunk so the GP-SPI controller
+ * sees a fresh per-burst DMA handshake every chunk and the
+ * channel stops cleanly at the chunk boundary instead of
+ * straddling one.
  */
 static int build_gpspi_pkt(const struct device *ctrl, uint32_t pkt_idx)
 {
@@ -1106,13 +1215,6 @@ static int build_gpspi_pkt(const struct device *ctrl, uint32_t pkt_idx)
 		if (xfer->xfer_mode == MSPI_DMA) {
 			gpkt->cr[cr_idx] |= gp_dma_unit;
 
-			/* DMA is configured for the FIRST chunk only. The ISR's
-			 * chunk-continuation path uses dma_reload() to re-arm the
-			 * channel for each subsequent chunk so the GP-SPI controller
-			 * sees a fresh per-burst DMA handshake every chunk and the
-			 * channel stops cleanly at the chunk boundary instead of
-			 * straddling one.
-			 */
 			dblk.block_size = ndata;
 
 			if (pkt->dir == MSPI_TX) {
@@ -1364,7 +1466,13 @@ static void signal_packet_done(struct mspi_xec_gp_xdat *xdat)
 #endif
 }
 
-/* Transcieve API */
+/* Transcieve API
+ * Sync path: we loop blocking on the xfer_done sem between packets.
+ * The ISR walks slots within each packet.
+ *
+ * Async path: we build packet 0, kick the first slot, start the total-xfer timeout, and
+ * return. The ISR + async_pkt_work_handler drive the rest of the transfer.
+ */
 static int api_mspi_mchp_xec_gpspi_tc(const struct device *ctrl, const struct mspi_dev_id *dev_id,
 				      const struct mspi_xfer *req)
 {
@@ -1417,10 +1525,6 @@ static int api_mspi_mchp_xec_gpspi_tc(const struct device *ctrl, const struct ms
 
 #ifdef CONFIG_MULTITHREADING
 	if (req->async) {
-		/* Async path: build packet 0, kick the first slot, start the
-		 * total-xfer timeout, return. The ISR + async_pkt_work_handler
-		 * drive the rest.
-		 */
 		uint32_t total_ms = (req->timeout != 0)
 					? (req->timeout * req->num_packet)
 					: (CONFIG_MSPI_COMPLETION_TIMEOUT_TOLERANCE *
@@ -1447,9 +1551,6 @@ static int api_mspi_mchp_xec_gpspi_tc(const struct device *ctrl, const struct ms
 	}
 #endif /* CONFIG_MULTITHREADING */
 
-	/* Sync path: drive the packet loop in caller context, blocking on the
-	 * xfer_done sem between packets. The ISR walks slots within each packet.
-	 */
 	for (uint32_t pkt_idx = 0; pkt_idx < req->num_packet; pkt_idx++) {
 		ctx->pkt_idx = pkt_idx;
 
@@ -1840,9 +1941,10 @@ static int mspi_xec_gpspi_init(const struct device *ctrl)
 	int rc = 0;
 
 	xdat->ctrl = ctrl;
+	xdat->active_mspicfg = xcfg->mspicfg;
 
 #ifdef CONFIG_MULTITHREADING
-	k_sem_init(&xdat->lock, 1, 1);
+	k_mutex_init(&xdat->lock);
 	k_sem_init(&xdat->xfer_done, 0, 1);
 	k_sem_init(&xdat->ctx.lock, 1, 1);
 	k_timer_init(&xdat->async_timer, async_tmout_timer_handler, NULL);
