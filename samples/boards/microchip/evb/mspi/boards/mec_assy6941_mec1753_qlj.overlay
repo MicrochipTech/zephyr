@@ -163,7 +163,7 @@
 	clock-frequency = <DT_FREQ_M(96)>; /* Maximum frequency the controller can support */
 	op-mode = "MSPI_OP_MODE_CONTROLLER";
 	duplex = "MSPI_HALF_DUPLEX";
-	software-multiperipheral; /* REQUIRED */
+	software-multiperipheral; /* REQUIRED because we have more than one flash device */
 	num-hw-ce = <2>; /* Shared SPI supports two HW chip enables */
 
 	/* Use Shared CS1 as a GPIO instead of HW CE for test purposes
@@ -196,7 +196,6 @@
 	spiflash0: qspi-nor-flash@0 {
 		compatible = "jedec,mspi-nor";
 		reg = <0>;
-
 		mspi-hardware-ce-num = <0>;
 		mspi-max-frequency = <DT_FREQ_M(4)>;
 		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
@@ -217,7 +216,6 @@
 	spiflash1: qspi-nor-flash@1 {
 		compatible = "jedec,mspi-nor";
 		reg = <1>;
-
 		mspi-hardware-ce-num = <1>;
 		mspi-max-frequency = <DT_FREQ_M(4)>;
 		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
@@ -255,13 +253,11 @@
 	clock-frequency = <DT_FREQ_M(48)>; /* Maximum frequency the controller can support */
 	op-mode = "MSPI_OP_MODE_CONTROLLER";
 	duplex = "MSPI_HALF_DUPLEX";
-	software-multiperipheral; /* REQUIRED */
 
 	/* 25Q128JVSM +3.3V JEDEC-ID = 0xef7018 */
 	spiflash2: gpspi1-nor-flash@0 {
 		compatible = "jedec,mspi-nor";
 		reg = <0>;
-
 		mspi-hardware-ce-num = <0>;
 		mspi-max-frequency = <DT_FREQ_M(4)>;
 		mspi-io-mode = "MSPI_IO_MODE_SINGLE";
