@@ -127,7 +127,7 @@ struct mspi_xec_xdat {
 	uint8_t num_periph;
 	bool ctrl_cfg_ok;
 #ifdef CONFIG_MULTITHREADING
-	struct k_sem lock;
+	struct k_mutex lock;
 	struct k_sem xfer_done;
 	struct k_timer async_timer;
 	struct k_work async_pkt_work;
@@ -246,6 +246,16 @@ static int qmspi_hw_reset_and_init(const struct device *dev, uint32_t freq_hz)
 	return 0;
 }
 
+/* Check control configuration is valid.
+ * QMSPI hardware is a controller only.
+ * Current QMSPI hardware controls up to two chip enables, driver implementation does not support
+ * using generic GPIO pins as chip enables.
+ * Hardware is capable of both full and half-duplex. Driver only support half-duplex as most MSPI
+ * target devices will be SPI flashes. 
+ * Half-duplex means transmit tri-states RX input lines(s) and receive tri-states TX output line(s).
+ * Software-multiperipheral is a DT property that only needs to be true if there are 2 or more
+ * child devices.
+ */
 static int mspi_xec_validate_config(const struct mspi_cfg *cfg)
 {
 	if ((cfg->channel_num != 0) || (cfg->dqs_support)) {
@@ -256,39 +266,22 @@ static int mspi_xec_validate_config(const struct mspi_cfg *cfg)
 		return -ENOTSUP;
 	}
 
-	/* QMSPI controller requires software to set the HW CE field */
-	if (cfg->sw_multi_periph == false) {
+	if ((cfg->num_periph >= 2) && (cfg->sw_multi_periph == false)) {
 		return -ENOTSUP;
 	}
 
-	/* Initial driver implementation does not support using generic GPIO pins
-	 * as chip enable.
-	 */
 	if (cfg->num_ce_gpios != 0) {
 		return -ENOTSUP;
 	}
 
-	/* TODO Per-port HW CE handling: QMSPI in MEC172x/4x/5x supports 2 HW
-	 * CE's on the shared SPI port and only one HW CE on the private and
-	 * internal SPI ports. The validator currently caps at 2 globally;
-	 * a proper port-aware check needs the port encoding from DT.
-	 */
 	if (cfg->num_periph > 2) {
 		return -ENOTSUP;
 	}
 
-	/* QMSPI is a controller only. */
 	if (cfg->op_mode != MSPI_OP_MODE_CONTROLLER) {
 		return -ENOTSUP;
 	}
 
-	/* Driver only supports half-duplex. Half-duplex means transmit command and
-	 * parameters ignoring RX lines. If command is read QMSPI will clock in
-	 * data on the selected data lines (single, dual, quad). Full-duplex implies
-	 * transmit and receive on each clock. QMSPI hardware supports full-duplex
-	 * but we are not implementing it at this time. Most targets for MSPI will be
-	 * SPI flash devices.
-	 */
 	if (cfg->duplex != MSPI_HALF_DUPLEX) {
 		return -ENOTSUP;
 	}
@@ -305,6 +298,17 @@ static bool mspi_is_inp(const struct device *ctrl)
 #else
 	return xdat->ctx.lock;
 #endif
+}
+
+/* HW-side "busy" check: CS_ASSERTED (STATUS bit 16, read-only) is set while
+ * the controller has chip-select driven low, i.e. a transfer is in progress
+ * on the wire. Reflects HW state directly, independent of ctx.lock.
+ */
+static bool mspi_hw_busy(const struct device *ctrl)
+{
+	const struct mspi_xec_xcfg *xcfg = ctrl->config;
+
+	return (QR32(xcfg, XEC_QSPI_SR_OFS) & BIT(XEC_QSPI_SR_CS_ASSERTED_POS)) != 0;
 }
 
 /* -------- Driver API -------- */
@@ -324,6 +328,8 @@ static bool mspi_is_inp(const struct device *ctrl)
  * If transceive is called with async flag set and returns success
  * we should be able to call get channel status without disrupting
  * the in-progress transfer or requiring a lock.
+ * 
+ * NOTE: The caller must call get_channel_status to release the API lock.
  */
 static int api_mspi_mchp_xec_qmspi_cfg(const struct mspi_dt_spec *spec)
 {
@@ -338,11 +344,11 @@ static int api_mspi_mchp_xec_qmspi_cfg(const struct mspi_dt_spec *spec)
 		return rc;
 	}
 
-	/* Controller (re)config invalidates every cached per-device cfg and
-	 * ends any active session. Force-release the cfg lock (idempotent
-	 * give — safe because it's a k_sem, not a k_mutex, so any thread can
-	 * release regardless of which one held it).
-	 */
+	if (cfg->re_init && xdat->ctrl_cfg_ok &&
+	    (mspi_is_inp(spec->bus) || mspi_hw_busy(spec->bus))) {
+		return -EBUSY;
+	}
+
 	for (int i = 0; i < XEC_QSPI_MAX_PERIPH; i++) {
 		xdat->dev_cfgs[i].valid = false;
 	}
@@ -351,15 +357,11 @@ static int api_mspi_mchp_xec_qmspi_cfg(const struct mspi_dt_spec *spec)
 	xdat->num_periph = cfg->num_periph;
 
 #ifdef CONFIG_MULTITHREADING
-	/* re-arm both cfg and ctx semaphores to "free". */
-	if (k_sem_count_get(&xdat->lock) == 0) {
-		k_sem_give(&xdat->lock);
-	}
+	/* re-init the context semaphore to the "free" state. */
 	if (k_sem_count_get(&xdat->ctx.lock) == 0) {
 		k_sem_give(&xdat->ctx.lock);
 	}
 #else
-	xdat->lock = false;
 	xdat->ctx.lock = false;
 #endif
 
@@ -443,6 +445,136 @@ static uint8_t cpp_to_mode_bits(enum mspi_cpp_mode cpp, uint32_t freq_hz)
 	return bits;
 }
 
+/* Per-param save helpers. Each one:
+ *   - returns 0 if the corresponding bit isn't in param_mask (no-op)
+ *   - validates the input, returns -ENOTSUP / -EINVAL on failure
+ *   - assigns the cached slot field on success
+ *
+ * Keeping each check in its own function keeps the top-level
+ * mspi_mchp_xec_dev_cfg_save below SonarQube's cognitive-complexity threshold.
+ */
+
+static int save_ce_num(struct mspi_xec_xdat *xdat, struct mspi_xec_dev_cfg *xdcfg,
+		       enum mspi_dev_cfg_mask mask, const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CE_NUM) == 0) {
+		return 0;
+	}
+	if (dev_cfg->ce_num >= xdat->active_mspicfg.num_periph) {
+		return -ENOTSUP;
+	}
+	xdcfg->ce_num = dev_cfg->ce_num;
+	return 0;
+}
+
+static int save_freq(struct mspi_xec_xdat *xdat, struct mspi_xec_dev_cfg *xdcfg,
+		     enum mspi_dev_cfg_mask mask, const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_FREQUENCY) == 0) {
+		return 0;
+	}
+	if ((dev_cfg->freq > xdat->active_mspicfg.max_freq) ||
+	    (dev_cfg->freq < XEC_QSPI_FREQ_MIN)) {
+		return -ENOTSUP;
+	}
+	xdcfg->freq_div = calc_ckdiv(MHZ(96), dev_cfg->freq);
+	return 0;
+}
+
+static int save_io_mode(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_IO_MODE) == 0) {
+		return 0;
+	}
+	return io_mode_decode(dev_cfg->io_mode, &xdcfg->iom);
+}
+
+static int save_cpp(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+		    const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CPP) == 0) {
+		return 0;
+	}
+	xdcfg->cpp = cpp_to_mode_bits(dev_cfg->cpp, dev_cfg->freq);
+	return 0;
+}
+
+static int save_rx_dummy(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			 const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_RX_DUMMY) == 0) {
+		return 0;
+	}
+	if (dev_cfg->rx_dummy > 0x7fffU) {
+		return -ENOTSUP;
+	}
+	xdcfg->rx_dummy = dev_cfg->rx_dummy;
+	return 0;
+}
+
+static int save_tx_dummy(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			 const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_TX_DUMMY) == 0) {
+		return 0;
+	}
+	if (dev_cfg->tx_dummy > 0x7fffU) {
+		return -ENOTSUP;
+	}
+	xdcfg->tx_dummy = dev_cfg->tx_dummy;
+	return 0;
+}
+
+static int save_cmd_len(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_CMD_LEN) == 0) {
+		return 0;
+	}
+	if (dev_cfg->cmd_length > 4U) {
+		return -ENOTSUP;
+	}
+	xdcfg->cmd_len = dev_cfg->cmd_length;
+	return 0;
+}
+
+static int save_adr_len(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_ADDR_LEN) == 0) {
+		return 0;
+	}
+	if (dev_cfg->addr_length > 4U) {
+		return -ENOTSUP;
+	}
+	xdcfg->adr_len = dev_cfg->addr_length;
+	return 0;
+}
+
+/* Fields with no validation — just conditional copy. */
+static void save_scalar_fields(struct mspi_xec_dev_cfg *xdcfg, enum mspi_dev_cfg_mask mask,
+			       const struct mspi_dev_cfg *dev_cfg)
+{
+	if ((mask & MSPI_DEVICE_CONFIG_READ_CMD) != 0) {
+		xdcfg->read_cmd = dev_cfg->read_cmd;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_WRITE_CMD) != 0) {
+		xdcfg->write_cmd = dev_cfg->write_cmd;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_MEM_BOUND) != 0) {
+		xdcfg->mem_boundary = dev_cfg->mem_boundary;
+	}
+	if ((mask & MSPI_DEVICE_CONFIG_BREAK_TIME) != 0) {
+		xdcfg->time_to_break = dev_cfg->time_to_break;
+	}
+}
+
+/* Save requested device configuration in driver data.
+ * Partial-mask updates must preserve fields not named in `param_mask`.
+ * Each slot is zero-initialized at driver startup (and on controller
+ * reconfig), so unset fields start at zero naturally.
+ */
 static int mspi_mchp_xec_dev_cfg_save(const struct device *ctrl,
 				      const struct mspi_dev_id *dev_id,
 				      const enum mspi_dev_cfg_mask param_mask,
@@ -450,99 +582,51 @@ static int mspi_mchp_xec_dev_cfg_save(const struct device *ctrl,
 {
 	struct mspi_xec_xdat *const xdat = ctrl->data;
 	struct mspi_xec_dev_cfg *xdcfg;
-	int rc = 0;
+	int rc;
 
 	if ((dev_cfg == NULL) || (dev_id == NULL)) {
 		return -EINVAL;
 	}
-
 	if (dev_id->dev_idx >= XEC_QSPI_MAX_PERIPH) {
 		return -ENOTSUP;
 	}
 
 	xdcfg = &xdat->dev_cfgs[dev_id->dev_idx];
 
-	/* Partial-mask updates must preserve fields not named in `param_mask`.
-	 * Each slot is zero-initialized at driver startup (and on controller
-	 * reconfig), so unset fields start at zero naturally — no need to
-	 * memset on every call.
-	 */
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CE_NUM) != 0) {
-		if (dev_cfg->ce_num >= xdat->active_mspicfg.num_periph) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->ce_num = dev_cfg->ce_num;
+	rc = save_ce_num(xdat, xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_freq(xdat, xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_io_mode(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_cpp(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_rx_dummy(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_tx_dummy(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_cmd_len(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
+	}
+	rc = save_adr_len(xdcfg, param_mask, dev_cfg);
+	if (rc != 0) {
+		return rc;
 	}
 
-	if ((param_mask & MSPI_DEVICE_CONFIG_FREQUENCY) != 0) {
-		if ((dev_cfg->freq > xdat->active_mspicfg.max_freq) ||
-		    (dev_cfg->freq < XEC_QSPI_FREQ_MIN)) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->freq_div = calc_ckdiv(MHZ(96), dev_cfg->freq);
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_IO_MODE) != 0) {
-		rc = io_mode_decode(dev_cfg->io_mode, &xdcfg->iom);
-		if (rc != 0) {
-			return rc;
-		}
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CPP) != 0) {
-		xdcfg->cpp = cpp_to_mode_bits(dev_cfg->cpp, dev_cfg->freq);
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_RX_DUMMY) != 0) {
-		if (dev_cfg->rx_dummy > 0x7fffU) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->rx_dummy = dev_cfg->rx_dummy;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_TX_DUMMY) != 0) {
-		if (dev_cfg->tx_dummy > 0x7fffU) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->tx_dummy = dev_cfg->tx_dummy;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_READ_CMD) != 0) {
-		xdcfg->read_cmd = dev_cfg->read_cmd;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_WRITE_CMD) != 0) {
-		xdcfg->write_cmd = dev_cfg->write_cmd;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_CMD_LEN) != 0) {
-		if (dev_cfg->cmd_length > 4U) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->cmd_len = dev_cfg->cmd_length;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_ADDR_LEN) != 0) {
-		if (dev_cfg->addr_length > 4U) {
-			return -ENOTSUP;
-		}
-
-		xdcfg->adr_len = dev_cfg->addr_length;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_MEM_BOUND) != 0) {
-		xdcfg->mem_boundary = dev_cfg->mem_boundary;
-	}
-
-	if ((param_mask & MSPI_DEVICE_CONFIG_BREAK_TIME) != 0) {
-		xdcfg->time_to_break = dev_cfg->time_to_break;
-	}
+	save_scalar_fields(xdcfg, param_mask, dev_cfg);
 
 	xdcfg->valid = true;
 
@@ -585,7 +669,8 @@ static void apply_dev_config(const struct device *ctrl)
  * MSPI_DEVICE_CONFIG_NONE
  * MSPI_DEVICE_CONFIG_ALL
  *   We only validate those parameters supported by the HW/driver.
- * This API implements session-style locking: on a new device selection, take the cfg lock
+ * 
+ * Implement session-style locking: on a new device selection, take the cfg lock
  * and keep it held on success. The session ends when the application
  * calls get_channel_status (see api_mspi_mchp_xec_qmspi_get_chs), which
  * clears dev_id and releases the cfg lock. dev_config for the same
@@ -603,9 +688,7 @@ static int api_mspi_mchp_xec_qmspi_dev_cfg(const struct device *ctrl,
 
 	if (xdat->dev_id != dev_id) {
 #ifdef CONFIG_MULTITHREADING
-		if (k_sem_take(&xdat->lock, K_FOREVER) != 0) {
-			rc = -EBUSY;
-		}
+		rc = k_mutex_lock(&xdat->lock, K_FOREVER);
 #else
 		if (xdat->lock == false) {
 			xdat->lock = true;
@@ -621,13 +704,13 @@ static int api_mspi_mchp_xec_qmspi_dev_cfg(const struct device *ctrl,
 		locked = true;
 	}
 
-	if (mspi_is_inp(ctrl)) {
+	if (mspi_is_inp(ctrl) || mspi_hw_busy(ctrl)) {
 		rc = -EBUSY;
 		goto exit_dev_cfg;
 	}
 
-	/* This driver requires software multiperipheral to always be true! */
-	if (xdat->active_mspicfg.sw_multi_periph == false) {
+	if ((xdat->active_mspicfg.num_periph >= 2) &&
+	    (xdat->active_mspicfg.sw_multi_periph == false)) {
 		rc = -EINVAL;
 		goto exit_dev_cfg;
 	}
@@ -638,11 +721,7 @@ static int api_mspi_mchp_xec_qmspi_dev_cfg(const struct device *ctrl,
 		goto exit_dev_cfg;
 	}
 
-	/* Re-select a previously-configured device. The cached cfg in this
-	 * device's slot must be re-applied to MODE so CKDIV / CPP / CS_SEL
-	 * reflect the new active device — without this, hardware keeps running
-	 * the previously-selected device's settings.
-	 */
+	/* Re-select a previously-configured device. */
 	if (param_mask == MSPI_DEVICE_CONFIG_NONE) {
 		if (xdat->dev_cfgs[dev_id->dev_idx].valid == false) {
 			rc = -EPERM;
@@ -669,7 +748,7 @@ static int api_mspi_mchp_xec_qmspi_dev_cfg(const struct device *ctrl,
 exit_dev_cfg:
 	if (locked && (rc != 0)) {
 #ifdef CONFIG_MULTITHREADING
-		k_sem_give(&xdat->lock);
+		k_mutex_unlock(&xdat->lock);
 #else
 		xdat->lock = false;
 #endif
@@ -678,10 +757,15 @@ exit_dev_cfg:
 	return rc;
 }
 
-/* Release the current session. Waits for any in-flight transfer, clears
- * dev_id, and gives back the cfg lock so another device can be configured.
- * The per-slot dev_cfgs[i].valid flag is preserved so a follow-up
- * dev_config(dev_id, NONE) still cheaply re-selects that device.
+/* Release the current session. Waits for any in-flight transfer, releases
+ * the cfg mutex, and clears dev_id. The per-slot dev_cfgs[i].valid flag is
+ * preserved so a follow-up dev_config(dev_id, NONE) still cheaply re-selects
+ * that device.
+ *
+ * Must be called from the same thread that owns the cfg mutex (the thread
+ * that did the dev_config on this dev_id). If called from a different thread,
+ * k_mutex_unlock returns -EPERM which is propagated back to the caller so
+ * the mis-use is visible instead of silently leaking the lock.
  */
 static int api_mspi_mchp_xec_qmspi_get_chs(const struct device *ctrl, uint8_t ch)
 {
@@ -698,8 +782,14 @@ static int api_mspi_mchp_xec_qmspi_get_chs(const struct device *ctrl, uint8_t ch
 	(void)k_sem_take(&xdat->ctx.lock, K_FOREVER);
 
 	if (xdat->dev_id != NULL) {
+		int unlock_rc = k_mutex_unlock(&xdat->lock);
+
+		if (unlock_rc != 0) {
+			/* Non-owner release attempt. */
+			k_sem_give(&xdat->ctx.lock);
+			return unlock_rc;
+		}
 		xdat->dev_id = NULL;
-		k_sem_give(&xdat->lock);
 	}
 
 	/* Re-arm ctx as "free" for the next transceive. */
@@ -733,7 +823,10 @@ static int api_mspi_mchp_xec_qmspi_rcb(const struct device *ctrl, const struct m
 		return -ENOTSUP;
 	}
 
-	/* TODO need locking? */
+	if (mspi_is_inp(ctrl) || mspi_hw_busy(ctrl)) {
+		return -EBUSY;
+	}
+
 	xdat->cbs[evt_type] = cb;
 	xdat->cbctxs[evt_type] = ctx;
 
@@ -906,12 +999,9 @@ static uint8_t emit_ldma_data_descr(struct mspi_xec_context *ctx, uint8_t start_
 	uint8_t rxdma = dir_tx ? XEC_QSPI_CR_DMA_DIS : XEC_QSPI_CR_LDMA_CH0;
 
 	ARG_UNUSED(qunit);
-	/* On the LDMA path, length-override drives the byte count and INCRA
-	 * walks the memory address. QUNIT only controls the SCK-side unit
-	 * granularity, so force 1-byte units to keep tail bytes safe regardless
-	 * of buffer alignment.
-	 */
+
 	__ASSERT_NO_MSG(start_idx < ARRAY_SIZE(ctx->descrs));
+
 	ctx->descrs[start_idx] =
 		desc_build(data_ifm, txm, rx_en, txdma, rxdma, XEC_QSPI_CR_QUNIT_1B, 1u,
 			   (uint8_t)((start_idx + 1u) & 0xFu), false, false);
@@ -998,16 +1088,209 @@ static void ldma_program(const struct mspi_xec_xcfg *hw, uint8_t ch, const void 
 /* Push a single byte into the TX FIFO, blocking only on TXB_FULL. The 8-byte
  * FIFO is shared across cmd/addr/data preloads, so writes that would overflow
  * are silently dropped by hardware unless we honor TXB_FULL.
+ * We spin until at least one slot drains; relevant only if cmd or addr already filled the FIFO.
+ * Pre-START this loop is bounded by FIFO depth (8) at most.
  */
 static void tx_fifo_push_byte(const struct mspi_xec_xcfg *hw, uint8_t b)
 {
 	while (QR32(hw, XEC_QSPI_SR_OFS) & BIT(XEC_QSPI_SR_TXB_FULL_POS)) {
-		/* spin until at least one slot drains; relevant only if cmd or
-		 * addr already filled the FIFO. Pre-START this loop is bounded
-		 * by FIFO depth (8) at most.
-		 */
 	}
 	QW8(hw, XEC_QSPI_TXB_OFS, b);
+}
+
+/* Emit the command-phase descriptor and (for LDMA) program its TX channel.
+ * Returns the next free descriptor slot index.
+ */
+static uint8_t emit_cmd_phase(struct mspi_xec_xdat *xdat, const struct mspi_xec_xcfg *hw,
+			      const struct mspi_xec_dev_cfg *dev_cfg,
+			      const struct mspi_xfer_packet *pkt, uint8_t cmd_len,
+			      bool use_ldma, uint8_t desc_idx)
+{
+	struct mspi_xec_context *ctx = &xdat->ctx;
+	uint8_t txdma = XEC_QSPI_CR_DMA_DIS;
+
+	if (cmd_len == 0) {
+		return desc_idx;
+	}
+
+	sys_put_be32(pkt->cmd, ctx->cmdbuf.b);
+	ctx->cmdbuf.w >>= ((4U - cmd_len) * 8U);
+
+	if (use_ldma) {
+		txdma = XEC_QSPI_CR_LDMA_CH0;
+	} else {
+		for (uint8_t i = 0; i < cmd_len; i++) {
+			tx_fifo_push_byte(hw, ctx->cmdbuf.b[i]);
+		}
+	}
+
+	ctx->descrs[desc_idx] = desc_build(IFM_SINGLE, XEC_QSPI_CR_TXM_DATA, false, txdma,
+					   XEC_QSPI_CR_DMA_DIS, XEC_QSPI_CR_QUNIT_1B,
+					   cmd_len, (desc_idx + 1u), false, false);
+
+#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+	if (use_ldma) {
+		ldma_program(hw, XEC_QSPI_LDMA_TX_CH0, &ctx->cmdbuf.b[0], cmd_len, 1u, true);
+		QW32(hw, XEC_QSPI_LDMA_TX_EN_OFS,
+		     QR32(hw, XEC_QSPI_LDMA_TX_EN_OFS) | BIT(desc_idx));
+	}
+#endif
+	ARG_UNUSED(dev_cfg);
+	return desc_idx + 1u;
+}
+
+/* Emit the address-phase descriptor and (for LDMA) program its TX channel.
+ * Returns the next free descriptor slot index.
+ */
+static uint8_t emit_addr_phase(struct mspi_xec_xdat *xdat, const struct mspi_xec_xcfg *hw,
+			       const struct mspi_xec_dev_cfg *dev_cfg,
+			       const struct mspi_xfer_packet *pkt, uint8_t addr_len,
+			       bool use_ldma, uint8_t desc_idx)
+{
+	struct mspi_xec_context *ctx = &xdat->ctx;
+	uint8_t txdma = XEC_QSPI_CR_DMA_DIS;
+	uint8_t ifm = dev_cfg->iom.addr_ifm;
+
+	if (addr_len == 0) {
+		return desc_idx;
+	}
+
+	sys_put_be32(pkt->address, ctx->adrbuf.b);
+	ctx->adrbuf.w >>= ((4U - addr_len) * 8U);
+
+	if (use_ldma) {
+		txdma = XEC_QSPI_CR_LDMA_CH1;
+	} else {
+		for (uint8_t i = 0; i < addr_len; i++) {
+			tx_fifo_push_byte(hw, ctx->adrbuf.b[i]);
+		}
+	}
+
+	ctx->descrs[desc_idx] =
+		desc_build(ifm, XEC_QSPI_CR_TXM_DATA, false, txdma, XEC_QSPI_CR_DMA_DIS,
+			   XEC_QSPI_CR_QUNIT_1B, addr_len, (desc_idx + 1u), false, false);
+
+#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+	if (use_ldma) {
+		ldma_program(hw, XEC_QSPI_LDMA_TX_CH1, &ctx->adrbuf.b[0], addr_len, 1u, true);
+		QW32(hw, XEC_QSPI_LDMA_TX_EN_OFS,
+		     QR32(hw, XEC_QSPI_LDMA_TX_EN_OFS) | BIT(desc_idx));
+	}
+#endif
+	return desc_idx + 1u;
+}
+
+/* Emit the dummy-clock descriptor (no I/O, just SCK). Returns next free slot. */
+static uint8_t emit_dummy_phase(struct mspi_xec_context *ctx, uint16_t dummy_cycles,
+				uint8_t desc_idx)
+{
+	if (dummy_cycles == 0) {
+		return desc_idx;
+	}
+
+	ctx->descrs[desc_idx] =
+		desc_build(IFM_SINGLE, XEC_QSPI_CR_TXM_DIS, false, XEC_QSPI_CR_DMA_DIS,
+			   XEC_QSPI_CR_DMA_DIS, XEC_QSPI_CR_QUNIT_BITS, dummy_cycles,
+			   (desc_idx + 1u), false, false);
+	return desc_idx + 1u;
+}
+
+/* PIO TX pre-fill: top up the TX FIFO from the data buffer so the data phase
+ * has bytes ready when the descriptor starts clocking. tx_fifo_push_byte
+ * respects TXB_FULL so this coexists with cmd/addr bytes already queued.
+ * The ISR's pio_tx_fill resumes from ctx->pio_pos.
+ */
+static void pio_tx_prefill(struct mspi_xec_context *ctx, const struct mspi_xec_xcfg *hw,
+			   const struct mspi_xfer_packet *pkt)
+{
+	const uint8_t *src = pkt->data_buf;
+	uint32_t pos = 0;
+
+	while ((pos < pkt->num_bytes) &&
+	       !(QR32(hw, XEC_QSPI_SR_OFS) & BIT(XEC_QSPI_SR_TXB_FULL_POS))) {
+		QW8(hw, XEC_QSPI_TXB_OFS, src[pos]);
+		pos++;
+	}
+	ctx->pio_pos = pos;
+}
+
+/* Emit the data-phase descriptor chain (LDMA: one descr; PIO: potentially
+ * many, sized by pick_unit_and_access). Sets *last_out to the last populated
+ * slot index. Returns 0 on success.
+ */
+static int emit_data_phase(struct mspi_xec_xdat *xdat, const struct mspi_xec_xcfg *hw,
+			   const struct mspi_xec_dev_cfg *dev_cfg,
+			   const struct mspi_xfer_packet *pkt, bool dir_tx, uint8_t qunit,
+			   uint8_t access, bool use_ldma, uint8_t desc_idx, uint8_t *last_out)
+{
+	struct mspi_xec_context *ctx = &xdat->ctx;
+	uint8_t ifm = dev_cfg->iom.data_ifm;
+	uint8_t last;
+
+	if (use_ldma) {
+#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
+		uint8_t ch = dir_tx ? XEC_QSPI_LDMA_TX_CH2 : XEC_QSPI_LDMA_RX_CH0;
+		uint32_t ofs_en = dir_tx ? XEC_QSPI_LDMA_TX_EN_OFS : XEC_QSPI_LDMA_RX_EN_OFS;
+
+		last = emit_ldma_data_descr(ctx, desc_idx, ifm, dir_tx, qunit);
+		ldma_program(hw, ch, pkt->data_buf, pkt->num_bytes, access, true);
+		QW32(hw, ofs_en, QR32(hw, ofs_en) | BIT(last));
+#else
+		return -ENOTSUP;
+#endif
+	} else {
+		last = emit_pio_data_descrs(ctx, desc_idx, ifm, dir_tx, pkt->data_buf,
+					    pkt->num_bytes);
+		if (dir_tx && (pkt->data_buf != NULL)) {
+			pio_tx_prefill(ctx, hw, pkt);
+		}
+	}
+
+	*last_out = last;
+	return 0;
+}
+
+/* Flush the descriptor mirror to the QMSPI descriptor register file (slots
+ * 0..last) and clear any slots beyond `last` so a stale entry from a previous
+ * transfer can't be reached if the chain advances.
+ */
+static void flush_descriptors(const struct mspi_xec_xcfg *hw, struct mspi_xec_context *ctx,
+			      uint8_t last)
+{
+	for (uint8_t i = 0; i <= last; i++) {
+		QW32(hw, XEC_QSPI_DESCR_OFS(i), ctx->descrs[i]);
+	}
+	for (uint8_t i = last + 1u; i < XEC_QSPI_MAX_DESCR_IDX; i++) {
+		QW32(hw, XEC_QSPI_DESCR_OFS(i), 0);
+	}
+}
+
+/* Final arming: MODE.LD_*_EN for LDMA, CR.DESCR_EN, IER, xfer_done reset,
+ * and START. In descriptor mode the controller reads per-phase fields (IFM, TXM,
+ * NQUNITS, ...) from the descriptor registers; CR's per-phase fields
+ * are unread. Write only DESCR_EN.
+ */
+static void arm_and_start(const struct mspi_xec_xcfg *hw, struct mspi_xec_xdat *xdat,
+			  bool use_ldma, bool dir_tx)
+{
+	if (use_ldma) {
+		uint32_t mask = BIT(XEC_QSPI_MODE_LD_RX_EN_POS) | BIT(XEC_QSPI_MODE_LD_TX_EN_POS);
+
+		QRMW32(hw, XEC_QSPI_MODE_OFS, mask, mask);
+	}
+
+	QW32(hw, XEC_QSPI_CR_OFS, BIT(XEC_QSPI_CR_DESCR_EN_POS));
+
+	prime_interrupts(hw, !use_ldma, dir_tx);
+
+	xdat->ctx.err = 0;
+#ifdef CONFIG_MULTITHREADING
+	k_sem_reset(&xdat->xfer_done);
+#else
+	xdat->xfer_done = false;
+#endif
+
+	QW32(hw, XEC_QSPI_EXE_OFS, BIT(XEC_QSPI_EXE_START_POS));
 }
 
 static int submit_packet(const struct device *ctrl, uint32_t pkt_idx)
@@ -1018,19 +1301,19 @@ static int submit_packet(const struct device *ctrl, uint32_t pkt_idx)
 	struct mspi_xec_context *ctx = &xdat->ctx;
 	struct mspi_xfer *xfer = &ctx->xfer;
 	const struct mspi_xfer_packet *pkt = &xfer->packets[pkt_idx];
-	uint32_t a = 0;
-	uint16_t dummy_cycles = 0;
 	uint8_t cmd_len = xfer->cmd_length;
 	uint8_t addr_len = xfer->addr_length;
-	uint8_t desc_idx = 0, qunit = 0, access = 0, ifm = 0, last = 0, txdma = 0;
+	uint8_t desc_idx = 0, qunit = 0, access = 0, last = 0;
+	uint16_t dummy_cycles;
 	bool use_ldma =
 		IS_ENABLED(CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA) && (xfer->xfer_mode == MSPI_DMA);
 	bool dir_tx = (pkt->dir == MSPI_TX);
+	int rc;
 
 	if (dev_cfg == NULL) {
 		return -EPERM;
 	}
-	if (cmd_len > 4U || addr_len > 4U) {
+	if ((cmd_len > 4U) || (addr_len > 4U)) {
 		return -EINVAL;
 	}
 
@@ -1042,182 +1325,36 @@ static int submit_packet(const struct device *ctrl, uint32_t pkt_idx)
 	ctx->adrbuf.w = 0;
 	ctx->pio_pos = 0;
 
-	/* Clear LDMA enable bitmaps from any prior transfer. */
-	prep_qspi(hw);
-
-	/* Flush any leftover bytes from a previous transfer that errored
-	 * before its FIFO drained. CLR_FIFOS is self-clearing.
+	/* Clear LDMA enable bitmaps from any prior transfer and flush any
+	 * leftover FIFO bytes from a transfer that errored before draining.
+	 * CLR_FIFOS is self-clearing.
 	 */
+	prep_qspi(hw);
 	QW32(hw, XEC_QSPI_EXE_OFS, BIT(XEC_QSPI_EXE_CLR_FIFOS_POS));
 
-	/* ----- Descriptor 0: command phase (TX, single lane) ----- */
-	if (cmd_len > 0) {
-		txdma = XEC_QSPI_CR_DMA_DIS;
-		ifm = dev_cfg->iom.cmd_ifm;
+	desc_idx = emit_cmd_phase(xdat, hw, dev_cfg, pkt, cmd_len, use_ldma, desc_idx);
+	desc_idx = emit_addr_phase(xdat, hw, dev_cfg, pkt, addr_len, use_ldma, desc_idx);
+	desc_idx = emit_dummy_phase(ctx, dummy_cycles, desc_idx);
 
-		/* Format cmd as MSB-first and adjust for length */
-		sys_put_be32(pkt->cmd, ctx->cmdbuf.b);
-		ctx->cmdbuf.w >>= ((4U - cmd_len) * 8U);
-
-		if (use_ldma) {
-			txdma = XEC_QSPI_CR_LDMA_CH0;
-		} else {
-			/* preload the TX FIFO */
-			for (uint8_t i = 0; i < cmd_len; i++) {
-				tx_fifo_push_byte(hw, ctx->cmdbuf.b[i]);
-			}
-		}
-
-		ctx->descrs[desc_idx] = desc_build(IFM_SINGLE, XEC_QSPI_CR_TXM_DATA, false, txdma,
-						   XEC_QSPI_CR_DMA_DIS, XEC_QSPI_CR_QUNIT_1B,
-						   cmd_len, (desc_idx + 1u), false, false);
-
-#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
-		if (use_ldma) {
-			ldma_program(hw, XEC_QSPI_LDMA_TX_CH0, &ctx->cmdbuf.b[0], cmd_len, 1u,
-				     true);
-			QW32(hw, XEC_QSPI_LDMA_TX_EN_OFS,
-			     QR32(hw, XEC_QSPI_LDMA_TX_EN_OFS) | BIT(desc_idx));
-		}
-#endif
-		desc_idx++;
-	}
-
-	/* ----- Descriptor 1: address phase (TX, 1-1-N or 1-N-N) ----- */
-	if (addr_len > 0) {
-		txdma = XEC_QSPI_CR_DMA_DIS;
-		ifm = dev_cfg->iom.addr_ifm;
-		a = pkt->address;
-
-		/* Serialize address MSB-first into addr_buf. */
-		sys_put_be32(a, ctx->adrbuf.b);
-		ctx->adrbuf.w >>= ((4U - addr_len) * 8U);
-
-		if (use_ldma) {
-			txdma = XEC_QSPI_CR_LDMA_CH1;
-		} else {
-			/* Preload the TX FIFO */
-			for (uint8_t i = 0; i < addr_len; i++) {
-				tx_fifo_push_byte(hw, ctx->adrbuf.b[i]);
-			}
-		}
-
-		ctx->descrs[desc_idx] =
-			desc_build(ifm, XEC_QSPI_CR_TXM_DATA, false, txdma, XEC_QSPI_CR_DMA_DIS,
-				   XEC_QSPI_CR_QUNIT_1B, addr_len, (desc_idx + 1u), false, false);
-
-#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
-		if (use_ldma) {
-			ldma_program(hw, XEC_QSPI_LDMA_TX_CH1, &ctx->adrbuf.b[0], addr_len, 1u,
-				     true);
-			QW32(hw, XEC_QSPI_LDMA_TX_EN_OFS,
-			     QR32(hw, XEC_QSPI_LDMA_TX_EN_OFS) | BIT(desc_idx));
-		}
-#endif
-		desc_idx++;
-	}
-
-	/* ----- Optional dummy-clocks descriptor ----- */
-	if (dummy_cycles > 0) {
-		ctx->descrs[desc_idx] =
-			desc_build(IFM_SINGLE, XEC_QSPI_CR_TXM_DIS, false, XEC_QSPI_CR_DMA_DIS,
-				   XEC_QSPI_CR_DMA_DIS, XEC_QSPI_CR_QUNIT_BITS, dummy_cycles,
-				   (desc_idx + 1u), false, false);
-		desc_idx++;
-	}
-
-	/* ----- Data phase ----- */
 	if (pkt->num_bytes > 0) {
-		ifm = dev_cfg->iom.data_ifm;
-
-		if (use_ldma) {
-#ifdef CONFIG_MSPI_MCHP_XEC_QMSPI_LDMA
-			uint8_t ch = dir_tx ? XEC_QSPI_LDMA_TX_CH2 : XEC_QSPI_LDMA_RX_CH0;
-			uint32_t ofs_en =
-				dir_tx ? XEC_QSPI_LDMA_TX_EN_OFS : XEC_QSPI_LDMA_RX_EN_OFS;
-
-			last = emit_ldma_data_descr(&xdat->ctx, desc_idx, ifm, dir_tx, qunit);
-			ldma_program(hw, ch, pkt->data_buf, pkt->num_bytes, access, true);
-			QW32(hw, ofs_en, QR32(hw, ofs_en) | BIT(last));
-#endif
-		} else {
-			last = emit_pio_data_descrs(&xdat->ctx, desc_idx, ifm, dir_tx,
-						    pkt->data_buf, pkt->num_bytes);
-
-			/* For PIO TX, top up the TX FIFO from the data buffer so
-			 * the data phase has bytes ready when the descriptor
-			 * starts clocking — don't rely on BCNT_TR firing at
-			 * empty. tx_fifo_push_byte respects TXB_FULL, so this
-			 * coexists with cmd/addr bytes already queued. The
-			 * ISR's pio_tx_fill resumes from ctx->pio_pos.
-			 */
-			if (dir_tx && pkt->data_buf != NULL) {
-				const uint8_t *src = pkt->data_buf;
-				uint32_t pos = 0;
-
-				while (pos < pkt->num_bytes && !(QR32(hw, XEC_QSPI_SR_OFS) &
-								 BIT(XEC_QSPI_SR_TXB_FULL_POS))) {
-					QW8(hw, XEC_QSPI_TXB_OFS, src[pos]);
-					pos++;
-				}
-				ctx->pio_pos = pos;
-			}
+		rc = emit_data_phase(xdat, hw, dev_cfg, pkt, dir_tx, qunit, access, use_ldma,
+				     desc_idx, &last);
+		if (rc != 0) {
+			return rc;
 		}
-
-		/* Mark the final data descriptor as CLOSE | LD. */
-		ctx->descrs[last] |= BIT(XEC_QSPI_CR_CLOSE_EN_POS) | BIT(XEC_QSPI_DR_LD_POS);
 	} else {
-		/* No data phase — mark the last non-data descriptor (in the
-		 * descrs[] mirror) as LD/CLOSE. The mirror is what gets
-		 * written to the QMSPI descriptor registers below.
-		 */
 		if (desc_idx == 0) {
-			/* Caller asked for a transfer with no cmd, addr, dummy,
-			 * or data. Nothing to send.
-			 */
+			/* Empty request: no cmd, addr, dummy, or data. */
 			return -EINVAL;
 		}
-
 		last = desc_idx - 1u;
-		ctx->descrs[last] |= BIT(XEC_QSPI_CR_CLOSE_EN_POS) | BIT(XEC_QSPI_DR_LD_POS);
 	}
 
-	/* Flush the descriptor mirror to the QMSPI descriptor register file
-	 * (slots 0..last) and clear any slots beyond `last` so a stale entry
-	 * from a previous transfer cannot be reached if the chain advances.
-	 */
-	for (uint8_t i = 0; i <= last; i++) {
-		QW32(hw, XEC_QSPI_DESCR_OFS(i), ctx->descrs[i]);
-	}
-	for (uint8_t i = last + 1u; i < XEC_QSPI_MAX_DESCR_IDX; i++) {
-		QW32(hw, XEC_QSPI_DESCR_OFS(i), 0);
-	}
+	/* Mark the last populated slot as CLOSE | LD. */
+	ctx->descrs[last] |= BIT(XEC_QSPI_CR_CLOSE_EN_POS) | BIT(XEC_QSPI_DR_LD_POS);
 
-	/* ----- Start: enable descriptor mode and fire ----- */
-	if (use_ldma) {
-		uint32_t mask = BIT(XEC_QSPI_MODE_LD_RX_EN_POS) | BIT(XEC_QSPI_MODE_LD_TX_EN_POS);
-
-		QRMW32(hw, XEC_QSPI_MODE_OFS, mask, mask);
-	}
-
-	/* In descriptor mode the controller reads descriptor fields from the
-	 * descriptor registers; CR's per-phase fields (IFM, TXM, NQUNITS, ...)
-	 * are unread. Write only DESCR_EN.
-	 */
-	QW32(hw, XEC_QSPI_CR_OFS, BIT(XEC_QSPI_CR_DESCR_EN_POS));
-
-	prime_interrupts(hw, !use_ldma, dir_tx);
-
-	/* Arm completion: clear stale signal/error before HW START. */
-	ctx->err = 0;
-#ifdef CONFIG_MULTITHREADING
-	k_sem_reset(&xdat->xfer_done);
-#else
-	xdat->xfer_done = false;
-#endif
-
-	/* QMSPI starts at descriptor 0 when DESCR_EN is set; just kick START. */
-	QW32(hw, XEC_QSPI_EXE_OFS, BIT(XEC_QSPI_EXE_START_POS));
+	flush_descriptors(hw, ctx, last);
+	arm_and_start(hw, xdat, use_ldma, dir_tx);
 
 	return 0;
 }
@@ -1246,10 +1383,6 @@ static int pre_xfr_xdat_init(const struct device *ctrl, const struct mspi_xfer *
 	struct mspi_xec_context *ctx = &xdat->ctx;
 
 #ifdef CONFIG_MULTITHREADING
-	/* Use a short, bounded wait to acquire the per-controller xfer slot.
-	 * The user's req->timeout is reserved for actual transfer completion
-	 * in wait_for_xfr_done(); don't double-count it here.
-	 */
 	if (k_sem_take(&ctx->lock, K_MSEC(CONFIG_MSPI_COMPLETION_TIMEOUT_TOLERANCE)) != 0) {
 		return -EBUSY;
 	}
@@ -1302,7 +1435,14 @@ static int wait_for_xfr_done(const struct device *ctrl, uint32_t timeout_ms)
 	return xdat->ctx.err;
 }
 
-/* Transcieve API */
+/* Transcieve API 
+ * Sync path: per-packet chain restart. Each packet rebuilds descriptors
+ * from index 0 and is started independently. The ISR signals xfer_done;
+ * we wait, check err, and advance the cursor here.
+ * Async path: kick packet 0, start the total-xfer timeout, return.
+ * The ISR routes end-of-packet via signal_packet_done() to
+ * async_pkt_work_handler, which advances or finalizes.
+ */
 static int api_mspi_mchp_xec_qmspi_tc(const struct device *ctrl, const struct mspi_dev_id *dev_id,
 				      const struct mspi_xfer *req)
 {
@@ -1356,10 +1496,6 @@ static int api_mspi_mchp_xec_qmspi_tc(const struct device *ctrl, const struct ms
 
 #ifdef CONFIG_MULTITHREADING
 	if (req->async) {
-		/* Async path: kick packet 0, start the total-xfer timeout, return.
-		 * The ISR routes end-of-packet via signal_packet_done() to
-		 * async_pkt_work_handler, which advances or finalizes.
-		 */
 		uint32_t total_ms = (req->timeout != 0)
 					? (req->timeout * req->num_packet)
 					: (CONFIG_MSPI_COMPLETION_TIMEOUT_TOLERANCE *
@@ -1380,10 +1516,7 @@ static int api_mspi_mchp_xec_qmspi_tc(const struct device *ctrl, const struct ms
 	}
 #endif /* CONFIG_MULTITHREADING */
 
-	/* Sync path: per-packet chain restart. Each packet rebuilds descriptors
-	 * from index 0 and is started independently. The ISR signals xfer_done;
-	 * we wait, check err, and advance the cursor here.
-	 */
+	/* Sync path */
 	for (ctx->pkt_idx = 0; ctx->pkt_idx < req->num_packet; ctx->pkt_idx++) {
 		rc = submit_packet(ctrl, ctx->pkt_idx);
 		if (rc != 0) {
@@ -1729,6 +1862,21 @@ static int mspi_mchp_xec_pm_action_cb(const struct device *ctrl, enum pm_device_
 }
 
 /* -------- Driver init and de-init -------- */
+
+/* Sets device's pm->state to PM_DEVICE_STATE_OFF
+ * if pm_device_is_powered(ctrl) returns false return 0 here
+ *   Note: pm_device_is_powered always returns TRUE if CONFIG_PM_DEVICE_POWER_DOMAIN
+ *         is not set. Otherwise it returns
+ *              TRUE if pm ptr == NULL or
+ *              TRUE if pm->domain ptr == NULL or
+ *              TRUE/FALSE based on pm->domain->pm_base->state == PM_DEVICE_STATE_ACTIVE
+ * Invokes callback with PM_DEVICE_ACTION_TURN_ON, exit if error other than -ENOTSUP
+ * If device has no PM structure returns callback with PM_DEVICE_ACTION_RESUME
+ * Set device's pm->state to PM_DEVICE_STATE_SUSPENDED
+ * If PM_CONFIG_RUNTIME is enabled and atomic PM_DEVICE_FLAG_RUNTIME_AUTO set then return 0
+ * Invoke callback with PM_DEVICE_ACTION_RESUME, return on error
+ * set pm->state = PM_DEVICE_STATE_ACTIVE
+ */
 static int mspi_xec_qmspi_init(const struct device *ctrl)
 {
 	const struct mspi_xec_xcfg *xcfg = ctrl->config;
@@ -1736,7 +1884,7 @@ static int mspi_xec_qmspi_init(const struct device *ctrl)
 	int rc = 0;
 
 #ifdef CONFIG_MULTITHREADING
-	k_sem_init(&xdat->lock, 1, 1);
+	k_mutex_init(&xdat->lock);
 	k_sem_init(&xdat->xfer_done, 0, 1);
 	k_sem_init(&xdat->ctx.lock, 1, 1);
 	k_timer_init(&xdat->async_timer, async_tmout_timer_handler, NULL);
@@ -1746,22 +1894,8 @@ static int mspi_xec_qmspi_init(const struct device *ctrl)
 	xdat->ctx.lock = false;
 #endif
 	xdat->ctrl = ctrl;
+	xdat->active_mspicfg = xcfg->mspicfg;
 
-	/* Sets device's pm->state to PM_DEVICE_STATE_OFF
-	 * if pm_device_is_powered(ctrl) returns false return 0 here
-	 *   Note: pm_device_is_powered always returns TRUE if CONFIG_PM_DEVICE_POWER_DOMAIN
-	 *         is not set. Otherwise it returns
-	 *              TRUE if pm ptr == NULL or
-	 *              TRUE if pm->domain ptr == NULL or
-	 *              TRUE/FALSE based on pm->domain->pm_base->state == PM_DEVICE_STATE_ACTIVE
-	 * Invokes callback with PM_DEVICE_ACTION_TURN_ON, exit if error other than -ENOTSUP
-	 * If device has no PM structure returns callback with PM_DEVICE_ACTION_RESUME
-	 * Set device's pm->state to PM_DEVICE_STATE_SUSPENDED
-	 * If PM_CONFIG_RUNTIME is enabled and atomic PM_DEVICE_FLAG_RUNTIME_AUTO set then return 0
-	 * Invoke callback with PM_DEVICE_ACTION_RESUME, return on error
-	 * set pm->state = PM_DEVICE_STATE_ACTIVE
-	 *
-	 */
 	rc = pm_device_driver_init(ctrl, mspi_mchp_xec_pm_action_cb);
 	if (rc != 0) {
 		return rc;
@@ -1800,7 +1934,7 @@ static DEVICE_API(mspi, mspi_mchp_xec_qmspi_api) = {
 		.op_mode = DT_INST_ENUM_IDX(inst, op_mode),                                        \
 		.duplex = DT_INST_ENUM_IDX(inst, duplex),                                          \
 		.dqs_support = DT_INST_PROP(inst, dqs_support),                                    \
-		.sw_multi_periph = DT_INST_PROP_OR(inst, software_multiperipheral, true),          \
+		.sw_multi_periph = DT_INST_PROP(inst, software_multiperipheral),                   \
 		.ce_group = NULL,                                                                  \
 		.num_ce_gpios = 0,                                                                 \
 		.num_periph = DT_INST_PROP(inst, num_hw_ce),                                       \
@@ -1809,6 +1943,12 @@ static DEVICE_API(mspi, mspi_mchp_xec_qmspi_api) = {
 	}
 
 #define MSPI_MCHP_XEC_QMSPI_DEVICE_DEF(inst)                                                       \
+	BUILD_ASSERT(DT_INST_PROP(inst, num_hw_ce) >= 1 &&                                         \
+		     DT_INST_PROP(inst, num_hw_ce) <= XEC_QSPI_MAX_PERIPH,                         \
+		     "num-hw-ce must be 1 or 2 for microchip,xec-qmspi-mspi-controller");          \
+	BUILD_ASSERT(DT_INST_PROP(inst, num_hw_ce) < 2 ||                                          \
+		     DT_INST_PROP(inst, software_multiperipheral),                                 \
+		     "software-multiperipheral is required when num-hw-ce > 1");                   \
 	PM_DEVICE_DT_INST_DEFINE(inst, mspi_mchp_xec_pm_action_cb);                                \
 	PINCTRL_DT_INST_DEFINE(inst);                                                              \
 	static void mspi_mchp_xec_qmspi_irq_cfg_##inst(void)                                       \
