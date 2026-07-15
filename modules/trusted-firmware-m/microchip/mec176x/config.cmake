@@ -46,3 +46,11 @@ set(TFM_PARTITION_INITIAL_ATTESTATION OFF CACHE BOOL "Disable attestation partit
 # DEV/TEST ONLY - MPU enforcement test App-RoT partition (see docs/mpu_enforcement_tests.md).
 # Proves L2 MPU actually isolates App-RoT from PSA-RoT. MUST be OFF for normal/production builds.
 set(TFM_PARTITION_MPU_TEST ON CACHE BOOL "Enable MPU enforcement test partition (dev only)" FORCE)
+
+# DEV/TEST ONLY - halt (spin) instead of rebooting on a secure core panic. Needed
+# for the destructive MPU tests (TC6-8): the unpriv->PSA-RoT access raises a
+# MemManage that TF-M's own handler claims and routes to tfm_core_panic; with the
+# default (reboot) the RAM-resident image re-runs and re-faults in a tight reset
+# loop that also resets the debug domain (kills JTAG). Halting spins in the secure
+# panic path so the fault is catchable at a stable halt. MUST be OFF for production.
+set(CONFIG_TFM_HALT_ON_CORE_PANIC ON CACHE BOOL "Halt (don't reboot) on secure panic (dev only)" FORCE)
