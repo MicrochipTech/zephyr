@@ -23,6 +23,7 @@
 #define MPU_TEST_API_READ_PROT_DATA  (0x10) /* TC6 destructive: real unpriv read PSA-RoT data */
 #define MPU_TEST_API_WRITE_PROT_DATA (0x11) /* TC7 destructive: real unpriv write PSA-RoT data */
 #define MPU_TEST_API_EXEC_PROT_CODE  (0x12) /* TC8 destructive: real unpriv exec PSA-RoT code */
+#define MPU_TEST_API_READ_NS_INVEC   (0x20) /* TC10/TC11: NS-supplied in_vec pointer check */
 
 /*
  * Set to one of the destructive API IDs (0x10/0x11/0x12) to run ONE real
@@ -52,6 +53,29 @@ static uint32_t mpu_test_call(uint32_t api_id)
 	return result;
 }
 
+/* Valid NS RAM buffer for the TC11 positive control. */
+static uint32_t ns_probe_buf = 0xC0DEu;
+
+/*
+ * M4 variant that passes an in_vec (base+len) so we can exercise the SPM's
+ * NS-pointer validation. Returns the raw psa_status_t (TC10 needs to see
+ * PSA_ERROR_PROGRAMMER_ERROR, which the plain mpu_test_call() would mask).
+ */
+static psa_status_t mpu_test_call_invec(uint32_t api_id, void *base, size_t len,
+					uint32_t *out_result)
+{
+	uint32_t result = 0xFFFFFFFFu;
+	psa_invec  in_vec[]  = { { base, len } };
+	psa_outvec out_vec[] = { { &result, sizeof(result) } };
+	psa_status_t st = psa_call(TFM_MPU_TEST_SERVICE_HANDLE, (int32_t)api_id,
+				   in_vec, 1, out_vec, 1);
+
+	if (out_result) {
+		*out_result = result;
+	}
+	return st;
+}
+
 static void run_mpu_enforcement_tests(void)
 {
 	uint32_t r;
@@ -73,6 +97,29 @@ static void run_mpu_enforcement_tests(void)
 	r = mpu_test_call(MPU_TEST_API_RW_OWN);
 	printk("TC9 own App-RoT data RW:      %s (r=0x%x, expect 0xA5) [REAL, authoritative]\n",
 	       (r == RES_RW_OK) ? "PASS" : "FAIL", r);
+
+	/* TC10/TC11 (M4): framework NS-pointer check (confused-deputy). The SPM
+	 * validates an NS-supplied in_vec base via tfm_hal_memory_check at psa_call
+	 * time. A secure base is rejected (PSA_ERROR_PROGRAMMER_ERROR, service never
+	 * dispatched); a valid NS base is accepted and the service reads it. Both
+	 * are non-destructive - the pass condition is the psa_call return code. */
+	{
+		uint32_t rr;
+		psa_status_t st;
+
+		/* TC10 negative: NS hands in a SECURE pointer -> must be rejected. */
+		st = mpu_test_call_invec(MPU_TEST_API_READ_NS_INVEC, (void *)0x20000100u,
+					 sizeof(uint32_t), &rr);
+		printk("TC10 NS->S secure-ptr iovec:  %s (st=%d, expect PROGRAMMER_ERROR=%d) [REAL]\n",
+		       (st == PSA_ERROR_PROGRAMMER_ERROR) ? "PASS" : "FAIL", st,
+		       PSA_ERROR_PROGRAMMER_ERROR);
+
+		/* TC11 positive control: valid NS buffer -> accepted, service reads it. */
+		st = mpu_test_call_invec(MPU_TEST_API_READ_NS_INVEC, &ns_probe_buf,
+					 sizeof(ns_probe_buf), &rr);
+		printk("TC11 NS->S valid NS buffer:   %s (st=%d r=0x%x, expect st=0 r=0xA5) [positive]\n",
+		       ((st == PSA_SUCCESS) && (rr == RES_RW_OK)) ? "PASS" : "FAIL", st, rr);
+	}
 
 #if MPU_TEST_DESTRUCTIVE
 	/* TC6/7/8: the definitive negative test. ONE real illegal access to PSA-RoT
