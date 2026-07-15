@@ -42,3 +42,7 @@ set(TFM_PARTITION_INTERNAL_TRUSTED_STORAGE OFF CACHE BOOL "Disable ITS partition
 set(TFM_PARTITION_PROTECTED_STORAGE OFF CACHE BOOL "Disable PS partition" FORCE)
 set(TFM_PARTITION_PLATFORM OFF CACHE BOOL "Disable platform partition" FORCE)
 set(TFM_PARTITION_INITIAL_ATTESTATION OFF CACHE BOOL "Disable attestation partition" FORCE)
+
+# DEV/TEST ONLY - MPU enforcement test App-RoT partition (see docs/mpu_enforcement_tests.md).
+# Proves L2 MPU actually isolates App-RoT from PSA-RoT. MUST be OFF for normal/production builds.
+set(TFM_PARTITION_MPU_TEST ON CACHE BOOL "Enable MPU enforcement test partition (dev only)" FORCE)
