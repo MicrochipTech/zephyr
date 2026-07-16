@@ -65,9 +65,36 @@ int mec5_espi_oob_upstream(const struct device *dev, struct espi_oob_packet *pck
 		return -EBUSY;
 	}
 
+	/* Drain any stale RX semaphore count and re-arm the HW receive buffer
+	 * before sending the new upstream packet.  Without this, a downstream
+	 * packet that arrived between the previous rx_buffer_avail() call and
+	 * this TX (e.g. an unsolicited OOB packet from the host, or a late
+	 * retransmit) would leave rx_sync at count=1.  The subsequent
+	 * downstream() call would then consume that stale count immediately
+	 * and read the wrong response — creating a permanent off-by-one
+	 * desync where every downstream() reads the PREVIOUS transaction's
+	 * data instead of the current one.
+	 *
+	 * k_sem_reset() sets the count to 0 so downstream() will only
+	 * succeed when THIS transaction's RX ISR fires.
+	 * rx_buffer_avail() ensures the HW DMA is armed even if the stale
+	 * packet had consumed the previous arming — the write-only
+	 * RX_AVAIL bit is safe to set unconditionally. */
+#ifndef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
+	k_sem_reset(&odata->rx_sync);
+#endif
+	mec_hal_espi_oob_rx_buffer_avail(iob);
+
 	memcpy(odata->tx_mem, pckt->buf, pckt->len);
 
-	oob_buf.maddr = (uint32_t)pckt->buf;
+	/* Transmit from the driver-owned, 4-byte-aligned, persistent tx_mem we just
+	 * copied into -- NOT the caller's pckt->buf, which may be unaligned (the OOB
+	 * DMA requires a 4-byte-aligned buffer, see NOTE above) and whose lifetime
+	 * ends when this call returns.  This matches the buffer configured in
+	 * mec5_espi_oob_init() and the MEC15xx/172x driver pattern.  (mec5 port bug:
+	 * using pckt->buf made the memcpy dead and handed an unaligned/transient
+	 * buffer to the OOB DMA engine.) */
+	oob_buf.maddr = (uint32_t)odata->tx_mem;
 	oob_buf.len = pckt->len;
 	ret = mec_hal_espi_oob_buffer_set(iob, MEC_ESPI_OOB_DIR_UP, &oob_buf);
 	if (ret) {
@@ -93,6 +120,14 @@ int mec5_espi_oob_upstream(const struct device *dev, struct espi_oob_packet *pck
  * and will use the caller's buffer. If the caller's buffer is not aligned
  * on a 4-byte boundary we will return an error. The other downside to using
  * a buffer supplied by the caller is we can lose packets.
+ *
+ * IMPORTANT: mec_hal_espi_oob_rx_buffer_avail() must be called on EVERY
+ * path (success and error) to re-arm the HW receive DMA buffer.  Without
+ * it, the MEC5 cannot receive any subsequent downstream packets and all
+ * future OOB receives will time out permanently.  The rx_status error
+ * check is performed AFTER k_sem_take() so that it evaluates the CURRENT
+ * transaction's ISR-reported status rather than a stale value left over
+ * from a previous transaction.
  */
 int mec5_espi_oob_downstream(const struct device *dev, struct espi_oob_packet *pckt)
 {
@@ -107,20 +142,23 @@ int mec5_espi_oob_downstream(const struct device *dev, struct espi_oob_packet *p
 		return -EINVAL;
 	}
 
-	if (mec_hal_espi_oob_is_error(odata->rx_status, MEC_ESPI_OOB_DIR_DN)) {
-		return -EIO;
-	}
-
 #ifdef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
 #else
 	ret = k_sem_take(&odata->rx_sync, K_MSEC(MEC5_MAX_OOB_TIMEOUT_MS));
 	if (ret == -EAGAIN) {
+		mec_hal_espi_oob_rx_buffer_avail(iob);
 		return -ETIMEDOUT;
 	}
 #endif
 
+	if (mec_hal_espi_oob_is_error(odata->rx_status, MEC_ESPI_OOB_DIR_DN)) {
+		mec_hal_espi_oob_rx_buffer_avail(iob);
+		return -EIO;
+	}
+
 	rxlen = mec_hal_espi_oob_received_len(iob);
 	if (rxlen > pckt->len) {
+		mec_hal_espi_oob_rx_buffer_avail(iob);
 		return -EIO;
 	}
 
@@ -152,10 +190,17 @@ static void mec5_espi_oob_init(const struct device *dev)
 	uint32_t ien = 0;
 	int ret = 0;
 
-	/* init semaphore */
-	k_sem_init(&oob_data->tx_sync, 1, 1);
+	/* Completion semaphores: start EMPTY (count 0).  tx_sync is given by the
+	 * OOB-up ISR on TX-done and taken by mec5_espi_oob_upstream(); rx_sync is
+	 * given by the OOB-down ISR on packet receipt and taken by
+	 * mec5_espi_oob_downstream().  Initializing to 1 (available) let the FIRST
+	 * take pass without the HW having completed -- the first TX would return
+	 * before the transfer finished (reading a stale tx_status) and the first RX
+	 * would read a stale/empty rx_mem.  Start at 0 so the first op blocks until
+	 * its ISR signals; the K_MSEC(MEC5_MAX_OOB_TIMEOUT_MS) take bounds it. */
+	k_sem_init(&oob_data->tx_sync, 0, 1);
 #ifndef CONFIG_ESPI_OOB_CHANNEL_RX_ASYNC
-	k_sem_init(&oob_data->rx_sync, 1, 1);
+	k_sem_init(&oob_data->rx_sync, 0, 1);
 #endif
 
 	oob_buf.maddr = (uint32_t)&oob_data->tx_mem[0];
