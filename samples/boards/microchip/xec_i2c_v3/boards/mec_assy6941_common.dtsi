@@ -1,0 +1,113 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+#include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
+
+&dmac {
+	status = "okay";
+};
+
+&pinctrl {
+	i2c00_sda_gpio003_lp: i2c00_sda_gpio003_lp {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_AF1)>;
+		low-power-enable;
+	};
+
+	i2c00_scl_gpio004_lp: i2c00_scl_gpio004_lp {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_AF1)>;
+		low-power-enable;
+	};
+
+	i2c07_sda_gpio012_lp: i2c07_sda_gpio012_lp {
+		pinmux = <MCHP_XEC_PINMUX(0012, MCHP_AF1)>;
+		low-power-enable;
+	};
+
+	i2c07_scl_gpio013_lp: i2c07_scl_gpio013_lp {
+		pinmux = <MCHP_XEC_PINMUX(0013, MCHP_AF1)>;
+		low-power-enable;
+	};
+};
+
+/* Port 0 pins */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+};
+
+/* Port 7 pins */
+&i2c07_sda_gpio012 {
+	drive-open-drain;
+	drive-strength = <3>;
+};
+
+&i2c07_scl_gpio013 {
+	drive-open-drain;
+	drive-strength = <3>;
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-v3";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+};
+
+/ {
+	zephyr,user {
+		i2c-p0-test-gpios = <MCHP_GPIO_DECODE_115 GPIO_ACTIVE_HIGH>;
+	};
+
+	/* Port 0 (default port) on I2C Controller 0 */
+	i2c0_p0: i2c-port0 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+		pinctrl-1 = <&i2c00_sda_gpio003_lp &i2c00_scl_gpio004_lp>;
+		pinctrl-names = "default", "sleep";
+		default-port;
+		status = "okay";
+
+		pca9555_evb: pca9555@26 {
+			reg = <0x26>;
+			status = "okay";
+		};
+
+		ltc2489_evb: ltc2489@34 {
+			reg = <0x34>;
+			status = "okay";
+		};
+	};
+
+	/* Port 7 on I2C controller 0 */
+	i2c0_p7: i2c-port7 {
+		compatible = "microchip,xec-i2c-v3-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(1, 7)>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_FAST>;
+		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
+		pinctrl-1 = <&i2c07_sda_gpio012_lp &i2c07_scl_gpio013_lp>;
+		pinctrl-names = "default", "sleep";
+		status = "okay";
+
+		mb85rc256v_fram: mb85rc256v_fram@50 {
+			reg = <0x50>;
+			status = "okay";
+		};
+	};
+};

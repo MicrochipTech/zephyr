@@ -1,0 +1,14 @@
+sample:
+  description: Microchip XEC I2C V3 sample
+  name: mchp_xec_i2c_v3_sample
+tests:
+  sample.boards.microchip.xec_i2c_v3:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: i2c
+    depends_on:
+      - dma
+      - gpio
+      - i2c
