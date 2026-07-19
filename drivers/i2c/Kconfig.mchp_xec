@@ -19,6 +19,39 @@ config I2C_XEC_V2
 	help
 	  Enable the Microchip XEC I2C V2 driver.
 
+config I2C_MCHP_XEC_V3
+	bool "XEC Microchip V3 I2C driver"
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_ENABLED && SOC_MCHP_MEC_I2C_SMB_V38
+	select PINCTRL
+	help
+	  Enable Microchip XEC V3 I2C driver
+
+if I2C_MCHP_XEC_V3
+
+config I2C_MCHP_XEC_V3_PORT_INIT_PRIORITY
+	int "Microchip XEC I2C v3 port init priority"
+	default 51
+	help
+	  Initialization priority for the I2C v3-NL virtual port devices. Must
+	  be greater than CONFIG_I2C_INIT_PRIORITY so that the controller
+	  device referenced by the port's "controller" phandle is ready before
+	  the port's init function runs.
+
+config I2C_MCHP_XEC_V3_STATE_CAPTURE
+	bool "XEC Microchip I2C V3 state capture size"
+	default n
+	help
+	  Enable Microchip XEC V3 I2C driver state capture
+
+config I2C_MCHP_XEC_V3_STATE_CAPTURE_SIZE
+	int "XEC Microchip I2C V3 state capture entries"
+	default 256
+	depends on I2C_MCHP_XEC_V3_STATE_CAPTURE
+	help
+	  Number of 8-bit state entries captured by the driver
+
+endif # I2C_MCHP_XEC_V3
+
 config I2C_MCHP_XEC_V3_NL
 	bool "Microchip XEC I2Cv3 network layer driver"
 	default y
