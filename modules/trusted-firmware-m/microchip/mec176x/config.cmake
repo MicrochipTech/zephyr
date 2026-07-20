@@ -45,7 +45,9 @@ set(TFM_PARTITION_INITIAL_ATTESTATION OFF CACHE BOOL "Disable attestation partit
 
 # DEV/TEST ONLY - MPU enforcement test App-RoT partition (see docs/mpu_enforcement_tests.md).
 # Proves L2 MPU actually isolates App-RoT from PSA-RoT. MUST be OFF for normal/production builds.
-set(TFM_PARTITION_MPU_TEST ON CACHE BOOL "Enable MPU enforcement test partition (dev only)" FORCE)
+# 2026-07-20: turned OFF - MPU enforcement (M1-M4) is HW-verified/tagged; disabled to get a clean
+# IPC baseline for driver bring-up. Re-enable (ON) only to re-run the MPU enforcement suite.
+set(TFM_PARTITION_MPU_TEST OFF CACHE BOOL "Enable MPU enforcement test partition (dev only)" FORCE)
 
 # DEV/TEST ONLY - halt (spin) instead of rebooting on a secure core panic. Needed
 # for the destructive MPU tests (TC6-8): the unpriv->PSA-RoT access raises a
