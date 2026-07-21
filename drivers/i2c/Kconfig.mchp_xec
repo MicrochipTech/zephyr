@@ -37,6 +37,22 @@ config I2C_MCHP_XEC_V3_BM_PORT_INIT_PRIORITY
 	  device referenced by the port's "controller" phandle is ready before
 	  the port's init function runs.
 
+config I2C_MCHP_XEC_V3_BM_KWQ_STACK_SIZE
+	int "Microchip XEC I2C V3 custom kernel work queue stack size"
+	default 320
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Stack size in bytes of the I2Cv3 byte mode driver's custom kernel
+	  work queue.
+
+config I2C_MCHP_XEC_V3_BM_KWQ_PRIORITY
+	int "Microchip XEC I2C V3 custom kernel work queue priority"
+	default 10
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Custom kernel work queue priority. Default is 10. Higher
+	  positive numbers are lower priority.
+
 config I2C_MCHP_XEC_V3_NL
 	bool "Microchip XEC I2Cv3 network layer driver"
 	default y
