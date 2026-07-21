@@ -32,52 +32,50 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 
 /* --- Register offsets -------------------------------------------------- */
 
-#define I2C_MEC5_CTRL_OFS        0x00U /* write-only */
-#define I2C_MEC5_STATUS_OFS      0x00U /* read-only  */
-#define I2C_MEC5_OWN_ADDR_OFS    0x04U
-#define I2C_MEC5_DATA_OFS        0x08U
-#define I2C_MEC5_COMPLETION_OFS  0x20U
-#define I2C_MEC5_CONFIG_OFS      0x28U
-#define I2C_MEC5_BUS_CLK_OFS     0x2CU
-#define I2C_MEC5_BBCR_OFS        0x38U
+#define I2C_MEC5_CTRL_OFS       0x00U /* write-only */
+#define I2C_MEC5_STATUS_OFS     0x00U /* read-only  */
+#define I2C_MEC5_OWN_ADDR_OFS   0x04U
+#define I2C_MEC5_DATA_OFS       0x08U
+#define I2C_MEC5_COMPLETION_OFS 0x20U
+#define I2C_MEC5_CONFIG_OFS     0x28U
+#define I2C_MEC5_BUS_CLK_OFS    0x2CU
+#define I2C_MEC5_BBCR_OFS       0x38U
 
 /* --- Control register (offset 0x00, W/O) ------------------------------- */
 
-#define I2C_MEC5_CTRL_ACK        BIT(0)
-#define I2C_MEC5_CTRL_STO        BIT(1)
-#define I2C_MEC5_CTRL_STA        BIT(2)
-#define I2C_MEC5_CTRL_ENI        BIT(3)
-#define I2C_MEC5_CTRL_ESO        BIT(6)
-#define I2C_MEC5_CTRL_PCLR       BIT(7)
+#define I2C_MEC5_CTRL_ACK  BIT(0)
+#define I2C_MEC5_CTRL_STO  BIT(1)
+#define I2C_MEC5_CTRL_STA  BIT(2)
+#define I2C_MEC5_CTRL_ENI  BIT(3)
+#define I2C_MEC5_CTRL_ESO  BIT(6)
+#define I2C_MEC5_CTRL_PCLR BIT(7)
 
 /* --- Status register (offset 0x00, R/O) -------------------------------- */
 
-#define I2C_MEC5_STATUS_NBB      BIT(0) /* bus-busy-not: 1 = idle */
-#define I2C_MEC5_STATUS_LAB      BIT(1) /* lost arbitration */
-#define I2C_MEC5_STATUS_AAT      BIT(2) /* addressed as target */
-#define I2C_MEC5_STATUS_LRB      BIT(3) /* last RX bit: 0=ACK, 1=NAK */
-#define I2C_MEC5_STATUS_BER      BIT(4) /* bus error */
-#define I2C_MEC5_STATUS_STS      BIT(5) /* external STOP detected */
-#define I2C_MEC5_STATUS_NOSVC    BIT(7) /* 0 = service required */
+#define I2C_MEC5_STATUS_NBB   BIT(0) /* bus-busy-not: 1 = idle */
+#define I2C_MEC5_STATUS_LAB   BIT(1) /* lost arbitration */
+#define I2C_MEC5_STATUS_AAT   BIT(2) /* addressed as target */
+#define I2C_MEC5_STATUS_LRB   BIT(3) /* last RX bit: 0=ACK, 1=NAK */
+#define I2C_MEC5_STATUS_BER   BIT(4) /* bus error */
+#define I2C_MEC5_STATUS_STS   BIT(5) /* external STOP detected */
+#define I2C_MEC5_STATUS_NOSVC BIT(7) /* 0 = service required */
 
 /* Expected idle Status value before generating START (README §START step 1) */
-#define I2C_MEC5_STATUS_IDLE_EXPECTED \
-	(I2C_MEC5_STATUS_NBB | I2C_MEC5_STATUS_NOSVC)
+#define I2C_MEC5_STATUS_IDLE_EXPECTED (I2C_MEC5_STATUS_NBB | I2C_MEC5_STATUS_NOSVC)
 
 /* --- OwnAddr register (offset 0x04, R/W) ------------------------------- */
 
-#define I2C_MEC5_OWN_ADDR0_POS   0U
-#define I2C_MEC5_OWN_ADDR0_MSK   (0x7FU << I2C_MEC5_OWN_ADDR0_POS)
-#define I2C_MEC5_OWN_ADDR1_POS   8U
-#define I2C_MEC5_OWN_ADDR1_MSK   (0x7FU << I2C_MEC5_OWN_ADDR1_POS)
+#define I2C_MEC5_OWN_ADDR0_POS 0U
+#define I2C_MEC5_OWN_ADDR0_MSK (0x7FU << I2C_MEC5_OWN_ADDR0_POS)
+#define I2C_MEC5_OWN_ADDR1_POS 8U
+#define I2C_MEC5_OWN_ADDR1_MSK (0x7FU << I2C_MEC5_OWN_ADDR1_POS)
 
 /* --- Completion register (offset 0x20) --------------------------------- */
 
-#define I2C_MEC5_COMP_BER        BIT(13) /* R/W1C latched BER          */
-#define I2C_MEC5_COMP_LAB        BIT(14) /* R/W1C latched LAB          */
-#define I2C_MEC5_COMP_IDLE       BIT(29) /* R/W1C latched NBB (idle)   */
-#define I2C_MEC5_COMP_RW1C_MASK  (I2C_MEC5_COMP_BER | I2C_MEC5_COMP_LAB | \
-				  I2C_MEC5_COMP_IDLE)
+#define I2C_MEC5_COMP_BER       BIT(13) /* R/W1C latched BER          */
+#define I2C_MEC5_COMP_LAB       BIT(14) /* R/W1C latched LAB          */
+#define I2C_MEC5_COMP_IDLE      BIT(29) /* R/W1C latched NBB (idle)   */
+#define I2C_MEC5_COMP_RW1C_MASK (I2C_MEC5_COMP_BER | I2C_MEC5_COMP_LAB | I2C_MEC5_COMP_IDLE)
 
 /* --- Configuration register (offset 0x28, R/W) ------------------------- */
 
@@ -97,14 +95,14 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
  * SCL_Hz = 16_000_000 / ((LOW_PERIOD + 1) + (HIGH_PERIOD + 1))
  * Baud clock = 16 MHz, period 62.5 ns.
  */
-#define I2C_MEC5_BAUD_CLOCK_HZ   16000000U
+#define I2C_MEC5_BAUD_CLOCK_HZ    16000000U
 #define I2C_MEC5_BUS_CLK_LOW_POS  0U
 #define I2C_MEC5_BUS_CLK_LOW_MSK  (0xFFU << I2C_MEC5_BUS_CLK_LOW_POS)
 #define I2C_MEC5_BUS_CLK_HIGH_POS 8U
 #define I2C_MEC5_BUS_CLK_HIGH_MSK (0xFFU << I2C_MEC5_BUS_CLK_HIGH_POS)
 
-#define I2C_MEC5_BUS_CLK_PACK(low, high) \
-	((((uint16_t)(low) & 0xFFU) << I2C_MEC5_BUS_CLK_LOW_POS) | \
+#define I2C_MEC5_BUS_CLK_PACK(low, high)                                                           \
+	((((uint16_t)(low) & 0xFFU) << I2C_MEC5_BUS_CLK_LOW_POS) |                                 \
 	 (((uint16_t)(high) & 0xFFU) << I2C_MEC5_BUS_CLK_HIGH_POS))
 
 /* --- Bit-Bang Control register (offset 0x38, R/W) ---------------------- */
@@ -119,7 +117,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 
 /* --- Target address format helper -------------------------------------- */
 
-#define I2C_MEC5_ADDR_BYTE(addr7, read) \
+#define I2C_MEC5_ADDR_BYTE(addr7, read)                                                            \
 	((uint8_t)((((addr7) & 0x7FU) << 1) | ((read) ? 0x01U : 0x00U)))
 
 /* ---- Post reset pin sample wait --------------------------------------- */
@@ -131,40 +129,40 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 /* --- Controller + target state enums ---------------------------------- */
 enum mec5_ctrl_state {
 	CTRL_IDLE = 0,
-	CTRL_START_SENT,  /* addr byte clocking out, waiting for 9th-clock ACK */
-	CTRL_TX_DATA,     /* transmitting message data, byte-by-byte IRQ      */
-	CTRL_RX_DATA,     /* mid-stream reads; reading Data clocks next byte   */
-	CTRL_RX_LAST,     /* reading final byte of current read msg            */
-	CTRL_IDLE_WAIT,   /* STS handled; awaiting Completion.IDLE latch       */
+	CTRL_START_SENT, /* addr byte clocking out, waiting for 9th-clock ACK */
+	CTRL_TX_DATA,    /* transmitting message data, byte-by-byte IRQ      */
+	CTRL_RX_DATA,    /* mid-stream reads; reading Data clocks next byte   */
+	CTRL_RX_LAST,    /* reading final byte of current read msg            */
+	CTRL_IDLE_WAIT,  /* STS handled; awaiting Completion.IDLE latch       */
 	CTRL_DONE,
 	CTRL_ERROR,
 };
 
 enum mec5_target_state {
 	TGT_IDLE = 0,
-	TGT_ADDRESSED_RX,     /* external master is writing to us */
-	TGT_ADDRESSED_TX,     /* external master is reading from us */
-	TGT_STOP_PENDING,     /* external STOP detected, awaiting cleanup */
+	TGT_ADDRESSED_RX, /* external master is writing to us */
+	TGT_ADDRESSED_TX, /* external master is reading from us */
+	TGT_STOP_PENDING, /* external STOP detected, awaiting cleanup */
 };
 
 enum mec5_sm_action {
 	ACT_NONE = 0,
-	ACT_SERVICE,          /* NOSVC=0, normal byte transfer in progress */
-	ACT_BUS_ERROR,        /* Status.BER */
-	ACT_LOST_ARB,         /* Status.LAB */
-	ACT_TGT_ADDRESSED,    /* Status.AAT */
-	ACT_STOP_DET,         /* Status.STS */
-	ACT_IDLE,             /* Completion.IDLE latch */
+	ACT_SERVICE,       /* NOSVC=0, normal byte transfer in progress */
+	ACT_BUS_ERROR,     /* Status.BER */
+	ACT_LOST_ARB,      /* Status.LAB */
+	ACT_TGT_ADDRESSED, /* Status.AAT */
+	ACT_STOP_DET,      /* Status.STS */
+	ACT_IDLE,          /* Completion.IDLE latch */
 };
 
 /* --- Per-instance configuration (const, from DT) ---------------------- */
 
 struct i2c_mec5_config {
 	mm_reg_t base;
-	uint8_t  girq;
-	uint8_t  girq_pos;
-	uint8_t  enc_pcr;
-	bool     general_call;
+	uint8_t girq;
+	uint8_t girq_pos;
+	uint8_t enc_pcr;
+	bool general_call;
 	void (*irq_connect)(void);
 #ifdef CONFIG_I2C_TARGET
 	uint8_t *targ_buf;
@@ -186,10 +184,10 @@ struct i2c_mec5_data {
 	/* Current controller transaction */
 	struct i2c_msg *msgs;
 	uint32_t buf_idx;
-	uint8_t  num_msgs;
-	uint8_t  cur_msg;
+	uint8_t num_msgs;
+	uint8_t cur_msg;
 	uint16_t addr;
-	int      result;
+	int result;
 
 	enum mec5_ctrl_state state;
 	const struct i2c_mec5_xfer_ops *ops;
@@ -199,7 +197,7 @@ struct i2c_mec5_data {
 
 #ifdef CONFIG_I2C_CALLBACK
 	i2c_callback_t cb;
-	void          *userdata;
+	void *userdata;
 	struct k_work_delayable cb_work;
 #endif
 
@@ -208,11 +206,11 @@ struct i2c_mec5_data {
 	 * clocked in on AAT.
 	 */
 	struct i2c_target_config *targets[2];
-	enum mec5_target_state    tgt_state;
-	uint8_t                   tgt_slot;
+	enum mec5_target_state tgt_state;
+	uint8_t tgt_slot;
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	/* Internal buffer for buffer-mode RX accumulation and TX serving. */
-	uint8_t  *tgt_buf;
+	uint8_t *tgt_buf;
 	uint32_t tgt_buf_idx;
 	uint32_t tgt_buf_len; /* meaningful for TX; caps at bufsize */
 	uint8_t *tgt_tx_ptr;  /* TX source when buf_read_requested returns
@@ -351,11 +349,29 @@ static inline void i2c_mec5_bbcr_w(const struct i2c_mec5_config *cfg, uint8_t v)
 
 /* --- Control-register word builders ----------------------------------- */
 
-#define CTRL_BASE  (I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI)
+#define CTRL_BASE (I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI)
 
 static inline void ctrl_write(const struct i2c_mec5_config *cfg, uint8_t extra)
 {
 	i2c_mec5_ctrl_w(cfg, CTRL_BASE | extra);
+}
+
+/*
+ * Control write for read-phase ACK/NAK reconfiguration. Unlike ctrl_write()
+ * this deliberately omits PCLR (bit[7]).
+ *
+ * Reading Data clears PIN and clocks in the next byte (read-ahead). PCLR ALSO
+ * clears PIN, so a read-phase ctrl_write() with PCLR set followed immediately
+ * by a Data read advances the byte state machine twice — the controller
+ * over-clocks the bus by one byte and faults with BER when the STOP lands.
+ * ESO and ENI stay set so serial output and the byte-service IRQ remain
+ * enabled; PIN is managed solely by the Data reads. Mirrors the "do not clear
+ * PIN" ACK-off write in i2c_mchp_xec_v2.c ctrl_rx().
+ */
+static inline void rx_ack_ctrl_write(const struct i2c_mec5_config *cfg, bool ack)
+{
+	i2c_mec5_ctrl_w(cfg,
+			I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI | (ack ? I2C_MEC5_CTRL_ACK : 0U));
 }
 
 /* --- Forward decls for static helpers --------------------------------- */
@@ -364,7 +380,6 @@ static void begin_msg(struct i2c_mec5_data *ctx, bool repeated);
 static void begin_or_continue(struct i2c_mec5_data *ctx);
 static void advance_or_stop(struct i2c_mec5_data *ctx, int result);
 static void schedule_stop(struct i2c_mec5_data *ctx, int result);
-
 
 /* --- Entry points ----------------------------------------------------- */
 
@@ -433,8 +448,8 @@ static void begin_msg(struct i2c_mec5_data *ctx, bool repeated)
 		 * sometimes wedges the controller at NOSVC=1 with no further
 		 * service IRQ. See i2c_mchp_xec_v2.c gen_start(is_repeated=1).
 		 */
-		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI |
-					    I2C_MEC5_CTRL_STA | I2C_MEC5_CTRL_ACK);
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI | I2C_MEC5_CTRL_STA |
+					     I2C_MEC5_CTRL_ACK);
 		i2c_mec5_data_w(cfg, addr_byte);
 	} else {
 		/*
@@ -442,12 +457,10 @@ static void begin_msg(struct i2c_mec5_data *ctx, bool repeated)
 		 * clear stale PIN state, load the address into Data, then
 		 * write STA together with PCLR to generate START + address.
 		 */
-		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
-					    I2C_MEC5_CTRL_ACK);
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ACK);
 		i2c_mec5_data_w(cfg, addr_byte);
-		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
-					    I2C_MEC5_CTRL_ENI | I2C_MEC5_CTRL_STA |
-					    I2C_MEC5_CTRL_ACK);
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI |
+					     I2C_MEC5_CTRL_STA | I2C_MEC5_CTRL_ACK);
 	}
 
 	i2c_mec5_dbg_state_update(ctx, 0x21U);
@@ -470,17 +483,24 @@ static void begin_or_continue(struct i2c_mec5_data *ctx)
 	bool next_read = (next->flags & I2C_MSG_READ) == I2C_MSG_READ;
 	bool restart = (next->flags & I2C_MSG_RESTART) == I2C_MSG_RESTART;
 
+	i2c_mec5_dbg_state_update(ctx, 0x38);
+
 	if (!restart && !prev_read && !next_read) {
+		i2c_mec5_dbg_state_update(ctx, 0x39);
 		ctx->buf_idx = 0U;
 		if (next->len == 0U) {
 			advance_or_stop(ctx, 0);
 			return;
 		}
+		
+		i2c_mec5_dbg_state_update(ctx, 0x3A);
 		ctx->ops->push_byte(ctx, next->buf[0]);
 		ctx->buf_idx = 1U;
 		ctx->state = CTRL_TX_DATA;
 		return;
 	}
+
+	i2c_mec5_dbg_state_update(ctx, 0x3B);
 
 	/*
 	 * Direction change or explicit I2C_MSG_RESTART. The previous message
@@ -550,8 +570,8 @@ static void handle_start_sent(struct i2c_mec5_data *ctx, uint8_t status)
 
 	if ((status & I2C_MEC5_STATUS_LRB) != 0U) {
 		i2c_mec5_dbg_state_update(ctx, 0x41U);
-		/* Address NAK'd. Generate STOP and signal -EIO. */
-		schedule_stop(ctx, -EIO);
+		/* Address NAK'd. Generate STOP and signal -EAGAIN. */
+		schedule_stop(ctx, -EAGAIN);
 	} else if (m->len == 0U) {
 		i2c_mec5_dbg_state_update(ctx, 0x42U);
 		/* Zero-length probe ping: address was ACK'd, nothing to
@@ -566,18 +586,19 @@ static void handle_start_sent(struct i2c_mec5_data *ctx, uint8_t status)
 	} else if (m->len == 1U) {
 		i2c_mec5_dbg_state_update(ctx, 0x44U);
 		/* Single-byte read: NAK the one byte we're about to clock
-		 * in. The next Control write before reading the byte will
-		 * set STO to suppress further clocks.
+		 * in. No PCLR here (see rx_ack_ctrl_write) — the dummy read
+		 * alone advances the byte machine. handle_rx_last then sets
+		 * STO to suppress further clocks before reading the byte.
 		 */
-		ctrl_write(cfg, 0U);                   /* ACK=0 */
-		(void)ctx->ops->pull_byte(ctx);        /* dummy read kicks
-							* byte 0 clocking
-							*/
+		rx_ack_ctrl_write(cfg, false);  /* ACK=0, no PCLR */
+		(void)ctx->ops->pull_byte(ctx); /* dummy read kicks
+						 * byte 0 clocking
+						 */
 		ctx->state = CTRL_RX_LAST;
 	} else {
 		i2c_mec5_dbg_state_update(ctx, 0x45U);
-		ctrl_write(cfg, I2C_MEC5_CTRL_ACK);    /* byte 0 ACKs */
-		(void)ctx->ops->pull_byte(ctx);        /* dummy read */
+		rx_ack_ctrl_write(cfg, true);   /* byte 0 ACKs, no PCLR */
+		(void)ctx->ops->pull_byte(ctx); /* dummy read */
 		ctx->state = CTRL_RX_DATA;
 	}
 
@@ -630,7 +651,7 @@ static void handle_rx_data(struct i2c_mec5_data *ctx)
 	 */
 	if ((ctx->buf_idx + 1U) == (m->len - 1U)) {
 		i2c_mec5_dbg_state_update(ctx, 0x51U);
-		ctrl_write(cfg, 0U); /* next byte NAKs */
+		rx_ack_ctrl_write(cfg, false); /* next byte NAKs, no PCLR */
 	}
 
 	m->buf[ctx->buf_idx] = ctx->ops->pull_byte(ctx);
@@ -689,8 +710,7 @@ static void handle_idle_wait(struct i2c_mec5_data *ctx, enum mec5_sm_action act)
 	if (act == ACT_IDLE) {
 		i2c_mec5_dbg_state_update(ctx, 0x57U);
 
-		more_msgs = (ctx->result == 0) &&
-			    ((ctx->cur_msg + 1U) < ctx->num_msgs);
+		more_msgs = (ctx->result == 0) && ((ctx->cur_msg + 1U) < ctx->num_msgs);
 
 		if (more_msgs) {
 			i2c_mec5_dbg_state_update(ctx, 0x58U);
@@ -819,8 +839,8 @@ static void pio_on_complete(struct i2c_mec5_data *ctx, int result)
 }
 
 static const struct i2c_mec5_xfer_ops i2c_mec5_pio_ops = {
-	.push_byte   = pio_push_byte,
-	.pull_byte   = pio_pull_byte,
+	.push_byte = pio_push_byte,
+	.pull_byte = pio_pull_byte,
 	.on_complete = pio_on_complete,
 };
 
@@ -1668,16 +1688,11 @@ static int i2c_mec5_xfr_cb(const struct device *dev, struct i2c_msg *msgs, uint8
 	return ret;
 }
 
-static int i2c_mec5_transfer_cb(const struct device *dev,
-				struct i2c_msg *msgs,
-				uint8_t num_msgs,
-				uint16_t addr,
-				i2c_callback_t cb,
-				void *userdata)
+static int i2c_mec5_transfer_cb(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
+				uint16_t addr, i2c_callback_t cb, void *userdata)
 {
 	struct i2c_mec5_data *ctx = dev->data;
 	int ret = 0;
-	uint8_t i2c_src = 0;
 
 	if (num_msgs == 0U) {
 		if (cb != NULL) {
@@ -1759,8 +1774,7 @@ static int find_slot_by_addr(struct i2c_mec5_data *ctx, uint8_t addr7)
 	int i;
 
 	for (i = 0; i < 2; i++) {
-		if (ctx->targets[i] != NULL &&
-		    ctx->targets[i]->address == addr7) {
+		if (ctx->targets[i] != NULL && ctx->targets[i]->address == addr7) {
 			slot = i;
 			break;
 		}
@@ -1768,8 +1782,7 @@ static int find_slot_by_addr(struct i2c_mec5_data *ctx, uint8_t addr7)
 	return slot;
 }
 
-static void own_addr_write_slot(const struct i2c_mec5_config *cfg,
-				int slot, uint8_t addr7)
+static void own_addr_write_slot(const struct i2c_mec5_config *cfg, int slot, uint8_t addr7)
 {
 	uint32_t v = i2c_mec5_own_addr_r(cfg);
 
@@ -1785,8 +1798,7 @@ static void own_addr_write_slot(const struct i2c_mec5_config *cfg,
 
 /* --- Register API ---------------------------------------------------- */
 
-static int i2c_mec5_target_register_impl(const struct device *dev,
-					 struct i2c_target_config *tcfg)
+static int i2c_mec5_target_register_impl(const struct device *dev, struct i2c_target_config *tcfg)
 {
 	struct i2c_mec5_data *ctx = dev->data;
 	const struct i2c_mec5_config *cfg = dev->config;
@@ -1814,8 +1826,7 @@ static int i2c_mec5_target_register_impl(const struct device *dev,
 	return ret;
 }
 
-static int i2c_mec5_target_unregister_impl(const struct device *dev,
-					   struct i2c_target_config *tcfg)
+static int i2c_mec5_target_unregister_impl(const struct device *dev, struct i2c_target_config *tcfg)
 {
 	struct i2c_mec5_data *ctx = dev->data;
 	const struct i2c_mec5_config *cfg = dev->config;
@@ -1837,8 +1848,7 @@ static int i2c_mec5_target_unregister_impl(const struct device *dev,
 	return ret;
 }
 
-int mchp_xec_i2c_v3_ctrl_target_register(const struct device *ctrl,
-					 struct i2c_target_config *tcfg)
+int mchp_xec_i2c_v3_ctrl_target_register(const struct device *ctrl, struct i2c_target_config *tcfg)
 {
 	if ((ctrl == NULL) || (tcfg == NULL)) {
 		return -EINVAL;
@@ -1881,12 +1891,9 @@ static void flush_rx_buffer(struct i2c_mec5_data *ctx)
 {
 	struct i2c_target_config *tcfg = ctx->targets[ctx->tgt_slot];
 
-	if (tcfg != NULL && has_buf_mode(tcfg) &&
-	    tcfg->callbacks->buf_write_received != NULL &&
+	if (tcfg != NULL && has_buf_mode(tcfg) && tcfg->callbacks->buf_write_received != NULL &&
 	    ctx->tgt_buf_idx > 0U) {
-		tcfg->callbacks->buf_write_received(tcfg,
-						    ctx->tgt_buf,
-						    ctx->tgt_buf_idx);
+		tcfg->callbacks->buf_write_received(tcfg, ctx->tgt_buf, ctx->tgt_buf_idx);
 	}
 	ctx->tgt_buf_idx = 0U;
 }
@@ -1963,8 +1970,7 @@ static void handle_addressed(struct i2c_mec5_data *ctx, uint8_t status)
 		 * still in Data.
 		 */
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
-		if (has_buf_mode(tcfg) &&
-		    tcfg->callbacks->buf_read_requested != NULL) {
+		if (has_buf_mode(tcfg) && tcfg->callbacks->buf_read_requested != NULL) {
 			uint8_t *p = NULL;
 			uint32_t len = 0;
 			int rc = tcfg->callbacks->buf_read_requested(tcfg, &p, &len);
@@ -2009,8 +2015,7 @@ static void handle_addressed(struct i2c_mec5_data *ctx, uint8_t status)
 		 * to be set before that byte's 9th clock.
 		 */
 		i2c_mec5_ctrl_w(cfg, CTRL_TGT_RUN | I2C_MEC5_CTRL_ACK);
-		if (!has_buf_mode(tcfg) &&
-		    tcfg->callbacks->write_requested != NULL) {
+		if (!has_buf_mode(tcfg) && tcfg->callbacks->write_requested != NULL) {
 			i2c_mec5_dbg_state_update(ctx, 0x99U);
 			(void)tcfg->callbacks->write_requested(tcfg);
 		}
@@ -2058,7 +2063,7 @@ static void handle_target_service(struct i2c_mec5_data *ctx, uint8_t status)
 			}
 		} else
 #endif
-		if (tcfg->callbacks->write_received != NULL) {
+			if (tcfg->callbacks->write_received != NULL) {
 			i2c_mec5_dbg_state_update(ctx, 0xA7U);
 			/*
 			 * Per Zephyr API: a negative return means "don't
@@ -2086,16 +2091,15 @@ static void handle_target_service(struct i2c_mec5_data *ctx, uint8_t status)
 				i2c_mec5_dbg_state_update(ctx, 0xACU);
 				if (ctx->tgt_buf_idx < ctx->tgt_buf_len) {
 					i2c_mec5_dbg_state_update(ctx, 0xADU);
-					i2c_mec5_data_w(cfg,
-						ctx->tgt_tx_ptr[ctx->tgt_buf_idx]);
+					i2c_mec5_data_w(cfg, ctx->tgt_tx_ptr[ctx->tgt_buf_idx]);
 					ctx->tgt_buf_idx++;
 				} else {
 					i2c_mec5_data_w(cfg, 0xFFU);
 				}
 			} else
 #endif
-			if (tcfg->callbacks->read_processed != NULL &&
-			    tcfg->callbacks->read_processed(tcfg, &next) == 0) {
+				if (tcfg->callbacks->read_processed != NULL &&
+				    tcfg->callbacks->read_processed(tcfg, &next) == 0) {
 				i2c_mec5_dbg_state_update(ctx, 0xAEU);
 				i2c_mec5_data_w(cfg, next);
 			} else {
@@ -2218,8 +2222,8 @@ static void i2c_mec5_isr(const struct device *dev)
 {
 	struct i2c_mec5_data *ctx = dev->data;
 	const struct i2c_mec5_config *cfg = dev->config;
-	uint8_t  status = i2c_mec5_status_r(cfg);
-	uint32_t comp   = i2c_mec5_completion_r(cfg);
+	uint8_t status = i2c_mec5_status_r(cfg);
+	uint32_t comp = i2c_mec5_completion_r(cfg);
 	uint32_t icfg = i2c_mec5_config_r(cfg);
 	enum mec5_sm_action act;
 	uint32_t comp_clear = 0U, regv = 0;
@@ -2251,7 +2255,7 @@ static void i2c_mec5_isr(const struct device *dev)
 		 * HERE (not in the SM handler) so no further IDLE IRQs fire
 		 * even if sm_step takes time.
 		 */
-		regv  = i2c_mec5_config_r(cfg);
+		regv = i2c_mec5_config_r(cfg);
 		regv &= (uint32_t)~(I2C_MEC5_CFG_ENIDI | I2C_MEC5_CFG_STOP_DET_EN);
 		i2c_mec5_config_w(cfg, regv);
 
@@ -2332,67 +2336,59 @@ static int i2c_mec5_init(const struct device *dev)
 /* --- Driver API struct ----------------------------------------------- */
 
 static DEVICE_API(i2c, i2c_mec5_driver_api) = {
-	.configure     = i2c_mec5_configure,
-	.get_config    = i2c_mec5_get_config,
-	.transfer      = i2c_mec5_transfer,
-	.recover_bus   = i2c_mec5_recover_bus,
+	.configure = i2c_mec5_configure,
+	.get_config = i2c_mec5_get_config,
+	.transfer = i2c_mec5_transfer,
+	.recover_bus = i2c_mec5_recover_bus,
 #ifdef CONFIG_I2C_CALLBACK
-	.transfer_cb   = i2c_mec5_transfer_cb,
+	.transfer_cb = i2c_mec5_transfer_cb,
 #endif
 #ifdef CONFIG_I2C_TARGET
-	.target_register   = i2c_mec5_target_register_impl,
+	.target_register = i2c_mec5_target_register_impl,
 	.target_unregister = i2c_mec5_target_unregister_impl,
 #endif
 #ifdef CONFIG_I2C_RTIO
 	/* TODO(rtio-native): native SQE-into-SM path once performance warrants. */
-	.iodev_submit  = i2c_iodev_submit_fallback,
+	.iodev_submit = i2c_iodev_submit_fallback,
 #endif
 };
 
 /* --- Per-instance instantiation -------------------------------------- */
-#define I2C_MEC5_GIRQ_DT(inst) MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define I2C_MEC5_GIRQ_DT(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 #define I2C_MEC5_GIRQ_POS_DT(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 
 #ifdef CONFIG_I2C_TARGET
-#define I2C_MEC5_TARG_BUF_DEF_DT(i)                                            \
+#define I2C_MEC5_TARG_BUF_DEF_DT(i)                                                                \
 	static __aligned(4) uint8_t i2c_mec5_targ_buf_##i[DT_INST_PROP(i, target_buf_size)];
 
-#define I2C_MEC5_TARG_BUF_DT(i)                                                \
-	.targ_buf = i2c_mec5_targ_buf_##i,                                     \
-	.targ_buf_size = DT_INST_PROP(i, target_buf_size),
+#define I2C_MEC5_TARG_BUF_DT(i)                                                                    \
+	.targ_buf = i2c_mec5_targ_buf_##i, .targ_buf_size = DT_INST_PROP(i, target_buf_size),
 #else
 #define I2C_MEC5_TARG_BUF_DEF_DT(i)
 #define I2C_MEC5_TARG_BUF_DT(i)
 #endif
 
-#define I2C_MEC5_INIT(inst)                                                    \
-	static void i2c_mec5_irq_connect_##inst(void)                          \
-	{                                                                      \
-		IRQ_CONNECT(DT_INST_IRQN(inst),                                \
-			    DT_INST_IRQ(inst, priority),                       \
-			    i2c_mec5_isr,                                      \
-			    DEVICE_DT_INST_GET(inst), 0);                      \
-		irq_enable(DT_INST_IRQN(inst));                                \
-	}                                                                      \
-	I2C_MEC5_TARG_BUF_DEF_DT(inst)                                         \
-	static struct i2c_mec5_data i2c_mec5_data_##inst;                      \
-									       \
-	static const struct i2c_mec5_config i2c_mec5_cfg_##inst = {            \
-		.base         = DT_INST_REG_ADDR(inst),                        \
-		.girq = I2C_MEC5_GIRQ_DT(inst),                                \
-		.girq_pos = I2C_MEC5_GIRQ_POS_DT(inst),                        \
-		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                        \
-		.general_call = DT_INST_PROP(inst, general_call),              \
-		.irq_connect  = i2c_mec5_irq_connect_##inst,                   \
-		I2C_MEC5_TARG_BUF_DT(inst)                                     \
-	};                                                                     \
-									       \
-	I2C_DEVICE_DT_INST_DEFINE(inst,                                        \
-				  i2c_mec5_init, NULL,                         \
-				  &i2c_mec5_data_##inst,                       \
-				  &i2c_mec5_cfg_##inst,                        \
-				  POST_KERNEL,                                 \
-				  CONFIG_I2C_INIT_PRIORITY,                    \
+#define I2C_MEC5_INIT(inst)                                                                        \
+	static void i2c_mec5_irq_connect_##inst(void)                                              \
+	{                                                                                          \
+		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), i2c_mec5_isr,         \
+			    DEVICE_DT_INST_GET(inst), 0);                                          \
+		irq_enable(DT_INST_IRQN(inst));                                                    \
+	}                                                                                          \
+	I2C_MEC5_TARG_BUF_DEF_DT(inst)                                                             \
+	static struct i2c_mec5_data i2c_mec5_data_##inst;                                          \
+                                                                                                   \
+	static const struct i2c_mec5_config i2c_mec5_cfg_##inst = {                                \
+		.base = DT_INST_REG_ADDR(inst),                                                    \
+		.girq = I2C_MEC5_GIRQ_DT(inst),                                                    \
+		.girq_pos = I2C_MEC5_GIRQ_POS_DT(inst),                                            \
+		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
+		.general_call = DT_INST_PROP(inst, general_call),                                  \
+		.irq_connect = i2c_mec5_irq_connect_##inst,                                        \
+		I2C_MEC5_TARG_BUF_DT(inst)};                                                       \
+                                                                                                   \
+	I2C_DEVICE_DT_INST_DEFINE(inst, i2c_mec5_init, NULL, &i2c_mec5_data_##inst,                \
+				  &i2c_mec5_cfg_##inst, POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,     \
 				  &i2c_mec5_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(I2C_MEC5_INIT)
