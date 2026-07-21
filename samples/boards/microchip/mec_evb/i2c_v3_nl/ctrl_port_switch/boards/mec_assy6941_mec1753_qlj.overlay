@@ -97,6 +97,13 @@
 	target-buffer-size = <256>;
 };
 
+&i2c_smb_4 {
+	compatible = "microchip,xec-i2c-v3-bm";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+};
+
 /* Port 0 pins */
 &i2c00_sda_gpio003 {
 	drive-open-drain;
@@ -104,6 +111,17 @@
 
 &i2c00_scl_gpio004 {
 	drive-open-drain;
+};
+
+/* Port 3 pins */
+&i2c03_sda_gpio007 {
+	drive-open-drain;
+	drive-strength = <3>;
+};
+
+&i2c03_scl_gpio010 {
+	drive-open-drain;
+	drive-strength = <3>;
 };
 
 /* Port 7 pins */
@@ -127,7 +145,7 @@
 		compatible = "microchip,xec-i2c-v3-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
+		port = <0>;
 		controller = <&i2c_smb_0>;
 		clock-frequency = <I2C_BITRATE_STANDARD>;
 		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
@@ -151,7 +169,7 @@
 		compatible = "microchip,xec-i2c-v3-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		port = <MCHP_XEC_I2C_CTRL_PORT(1, 7)>;
+		port = <7>;
 		controller = <&i2c_smb_0>;
 		clock-frequency = <I2C_BITRATE_FAST>;
 		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
@@ -162,5 +180,19 @@
 			reg = <0x50>;
 			#io-channels-cells = <1>;
 		};
+	};
+
+	/* Port 3 on I2C controller 4 */
+	i2c4_p3: i2c-port3 {
+		compatible = "microchip,xec-i2c-v3-bm-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <3>;
+		controller = <&i2c_smb_4>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c03_sda_gpio007 &i2c03_scl_gpio010>;
+		pinctrl-names = "default";
+		default-port;
+		status = "okay";
 	};
 };
