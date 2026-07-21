@@ -19,7 +19,7 @@
 #include <zephyr/logging/log_ctrl.h>
 LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
-/* #define APP_TEST_LTC2489 */
+#define APP_TEST_LTC2489
 
 #define PCA9555_CMD_PORT0_IN  0
 #define PCA9555_CMD_PORT1_IN  1u
@@ -32,6 +32,8 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define LTC2489_ADC_CONV_TIME_MS 150
 #define LTC2489_ADC_READ_RETRIES 10
+#define LTC2489_ADC_CMD_RETRIES 10
+#define LTC2489_ADC_CMD_DELAY_MS 50
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
 
@@ -64,22 +66,23 @@ static uint8_t i2c_rx_buf[I2C_RX_BUF_SIZE];
 
 static int pca9555_test1(const struct i2c_dt_spec *dts, uint8_t port, uint16_t *port_value);
 #ifdef APP_TEST_LTC2489
-static int ltc2489_test1(const struct i2c_dt_spec *dts);
+static int ltc2489_test1(const struct i2c_dt_spec *dts, uint32_t *reading, uint32_t *cmd_attempts,
+			 uint32_t *rd_attempts);
 #endif
 static int fram_test1(const struct i2c_dt_spec *dts);
 static int fram_test2(const struct i2c_dt_spec *dts);
 
 static volatile bool run = false;
 
-#ifdef APP_TEST_LTC2489
-static volatile bool app_dbg_halt = true;
-#endif
-
 int main(void)
 {
 	uint64_t test_loops = 0;
-	uint64_t pca9555_errors = 0;
-	uint64_t fram_errors = 0;
+	uint64_t pca9555_errors = 0, pca9555_err_prev = 0;
+	uint64_t fram_errors = 0, fram_err_prev = 0;
+#ifdef APP_TEST_LTC2489
+	uint64_t ltc2489_errors = 0, ltc2489_err_prev = 0;
+	uint32_t adc_reading = 0, adc_cmd_attempts = 0, adc_rd_attempts = 0;
+#endif
 	int ctrl_ready_count = 0;
 	int port_ready_count = 0;
 	int rc = 0;
@@ -136,45 +139,52 @@ int main(void)
 		rc = pca9555_test1(&pca9555_spec, PCA9555_CMD_PORT0_IN, NULL);
 		if (rc != 0) {
 			pca9555_errors++;
-#if 0
-			LOG_ERR("PCA9555 test error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = fram_test1(&mb_fram_spec);
 		if (rc != 0) {
 			fram_errors++;
-#if 0
-			LOG_ERR("FRAM test1 error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = pca9555_test1(&pca9555_spec, PCA9555_CMD_PORT1_IN, NULL);
 		if (rc != 0) {
 			pca9555_errors++;
-#if 0
-			LOG_ERR("PCA9555 test error (%d)", rc);
-			break;
-#endif
 		}
 
 		rc = fram_test2(&mb_fram_spec);
 		if (rc != 0) {
 			fram_errors++;
-#if 0
-			LOG_ERR("FRAM test2 error (%d)", rc);
-			break;
-#endif
 		}
 
 #ifdef APP_TEST_LTC2489
-		rc = ltc2489_test1(&ltc2489_spec);
+		adc_reading = 0xDEADBEEFU;
+		adc_cmd_attempts = 0;
+		adc_rd_attempts = 0;
+
+		rc = ltc2489_test1(&ltc2489_spec, &adc_reading, &adc_cmd_attempts,
+				   &adc_rd_attempts);
 		if (rc != 0) {
-			LOG_ERR("LTC2489 test error (%d)", rc);
-			break;
+			ltc2489_errors++;
 		}
+#endif
+		if (pca9555_errors != pca9555_err_prev) {
+			pca9555_err_prev = pca9555_errors;
+			LOG_ERR("PCA9555 errors change 0x%0llx", pca9555_errors); 
+		}
+
+		if (fram_err_prev != fram_errors) {
+			fram_err_prev = fram_errors;
+			LOG_ERR("FRAM errors change 0x%0llx", fram_errors); 
+		}
+
+#ifdef APP_TEST_LTC2489
+		if (ltc2489_err_prev != ltc2489_errors) {
+			ltc2489_err_prev = ltc2489_errors;
+			LOG_ERR("LTC2489 errors change 0x%0llx", ltc2489_errors); 
+		}
+
+		LOG_INF("LTC2489 reading = 0x%08x, cmd attempts = %u rd attempts = %u",
+			adc_reading, adc_cmd_attempts, adc_rd_attempts);
 #endif
 	};
 
@@ -214,48 +224,62 @@ static int pca9555_test1(const struct i2c_dt_spec *dts, uint8_t port, uint16_t *
 /* LTC2489 is a troublesome device
  * It will NAK its address if it is busy. Power on reset causes it to be busy.
  */
-static int ltc2489_test1(const struct i2c_dt_spec *dts)
+static int ltc2489_test1(const struct i2c_dt_spec *dts, uint32_t *reading, uint32_t *cmd_attempts,
+			 uint32_t *rd_attempts)
 {
 	int rc = -ENOTSUP;
-	uint32_t adc_retry_count = 0, reading = 0;
+	uint32_t adc_read_attempts = 0, n = 0;
+	uint32_t readval = 0xff000000U;
 
 	if (dts == NULL) {
 		return -EINVAL;
 	}
 
-	/* Read ADC channel 0. Selecting the channel initiates a reading */
-	i2c_tx_buf[0] = 0xb0U; /* 1011_0000 selects channel 0 as single ended */
+	while (n < LTC2489_ADC_CMD_RETRIES) {
+		n++;
 
-	rc = i2c_write_dt(dts, i2c_tx_buf, 1U);
-	if (rc != 0) {
-		while (app_dbg_halt) {
-			;
+		/* Read ADC channel 0. Selecting the channel initiates a reading */
+		i2c_tx_buf[0] = 0xb0U; /* 1011_0000 selects channel 0 as single ended */
+
+		rc = i2c_write_dt(dts, i2c_tx_buf, 1U);
+		if (rc == 0) {
+			break;
 		}
-		LOG_ERR("I2C write to LTC2489 channel select error (%d)", rc);
-		return rc;
+
+		k_sleep(K_MSEC(LTC2489_ADC_CMD_DELAY_MS));
+	}
+
+	if (cmd_attempts != NULL) {
+		*cmd_attempts = n;
 	}
 
 	/* LTC2489 will NAK while it is converting */
 	k_sleep(K_MSEC(LTC2489_ADC_CONV_TIME_MS));
 
 	do {
+		adc_read_attempts++;
+
 		i2c_rx_buf[0] = 0x55U;
 		i2c_rx_buf[1] = 0x55U;
 		i2c_rx_buf[2] = 0x55U;
 
 		rc = i2c_read_dt(dts, i2c_rx_buf, 3U);
-		if (rc != 0) {
-			adc_retry_count++;
+		if (rc == 0) {
+			break;
 		}
+	} while (adc_read_attempts <= LTC2489_ADC_READ_RETRIES);
 
-	} while ((rc != 0) && (adc_retry_count < LTC2489_ADC_READ_RETRIES));
+	if (rd_attempts != NULL) {
+		*rd_attempts = adc_read_attempts;
+	}
 
 	if (rc == 0) {
-		reading = ((uint32_t)i2c_rx_buf[0] + ((uint32_t)i2c_rx_buf[1] << 8) +
+		readval = ((uint32_t)i2c_rx_buf[0] + ((uint32_t)i2c_rx_buf[1] << 8) +
 			   ((uint32_t)i2c_rx_buf[2] << 16));
-		LOG_INF("LTC2489 conversion done: raw reading = 0x%0x", reading);
-	} else {
-		LOG_ERR("LTC2489 conversion timeout: FAIL");
+	}
+
+	if (reading != NULL) {
+		*reading = readval;
 	}
 
 	return rc;
@@ -280,7 +304,7 @@ static int fram_test1(const struct i2c_dt_spec *dts)
 	i2c_tx_buf[4] = 0x03U;
 	i2c_tx_buf[5] = 0x04U;
 
-	rc = i2c_write_dt(dts, i2c_tx_buf, 6U);
+	rc = i2c_write_dt(dts, i2c_tx_buf, 4U);
 	if (rc != 0) {
 		return rc;
 	}
@@ -288,12 +312,12 @@ static int fram_test1(const struct i2c_dt_spec *dts)
 	i2c_tx_buf[0] = 0x43U;
 	i2c_tx_buf[1] = 0x21U;
 
-	rc = i2c_write_read_dt(dts, i2c_tx_buf, 2U, i2c_rx_buf, 4U);
+	rc = i2c_write_read_dt(dts, i2c_tx_buf, 2U, i2c_rx_buf, 2U);
 	if (rc != 0) {
 		return rc;
 	}
 
-	rc = memcmp(&i2c_tx_buf[2], i2c_rx_buf, 4U);
+	rc = memcmp(&i2c_tx_buf[2], i2c_rx_buf, 2U);
 	if (rc != 0) {
 		rc = -EPERM;
 	}
