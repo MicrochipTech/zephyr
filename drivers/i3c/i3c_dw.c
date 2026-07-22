@@ -49,28 +49,16 @@ LOG_MODULE_REGISTER(i3c_dw, CONFIG_I3C_DW_LOG_LEVEL);
 #define HW_CAPABILITY_HDR_DDR_EN              BIT(3)
 #define HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK GENMASK(2, 0)
 
-/*
- * HW_CAPABILITY[2:0] DEVICE_ROLE_CONFIG - reflects the IC_DEVICE_ROLE synthesis
- * Read-only; fixed at RTL synthesis. This is what decides
- * whether a given register physically exists in the silicon - orthogonal to the
- * runtime boot mode reported by DEVICE_CTRL_EXTENDED[DEV_OPERATION_MODE].
- */
-#define HW_CAP_DEVICE_ROLE_MASTER     0x1 /* controller only            */
-#define HW_CAP_DEVICE_ROLE_SEC_MASTER 0x3 /* dual-role (secondary ctrl) */
-#define HW_CAP_DEVICE_ROLE_SLAVE      0x4 /* target only                */
+/* HW_CAPABILITY[2:0] DEVICE_ROLE_CONFIG (IC_DEVICE_ROLE): fixed at synthesis. */
+#define HW_CAP_DEVICE_ROLE_MASTER     0x1 /* controller only */
+#define HW_CAP_DEVICE_ROLE_SEC_MASTER 0x3 /* dual-role       */
+#define HW_CAP_DEVICE_ROLE_SLAVE      0x4 /* target only     */
 
-/*
- * Databook Table 2-1 (sec 2.6.3, "IBI Response and Notify Controls"):
- * the SIR/MR rejection mechanism is selected by device role. A Controller-Only part
- * uses the DAT entry [SIR_REJECT]/[MR_REJECT] bits; a Secondary Controller uses the
- * IBI_SIR_REQ_REJECT / IBI_MR_REQ_REJECT registers. Those registers must not be
- * accessed on a controller-only part (the access can fault).
+/* Dual-role rejects SIR/MR via the reject registers; controller-only uses the DAT
+ * entry (databook Table 2-1).
  */
 #define DW_IBI_REJECT_VIA_REG(role) ((role) == HW_CAP_DEVICE_ROLE_SEC_MASTER)
-/*
- * Target-side bus timing: BUS_AVAILABLE_TIME (0xd4[31:16]) + BUS_IDLE_TIMING (0xd8),
- * both slave-mode fields existing for 1 < IC_DEVICE_ROLE < 5 (SEC_MASTER, SLAVE).
- */
+/* BUS_AVAILABLE_TIME/BUS_IDLE_TIMING exist for 1 < IC_DEVICE_ROLE < 5. */
 #define DW_HAS_BUS_IDLE(role)                                                                      \
 	((role) == HW_CAP_DEVICE_ROLE_SEC_MASTER || (role) == HW_CAP_DEVICE_ROLE_SLAVE)
 
@@ -437,7 +425,7 @@ struct dw_i3c_data {
 	uint16_t dctstartaddr;
 	uint16_t maxdevs;
 
-	/* synthesised device role (HW_CAP_DEVICE_ROLE_*), cached from HW_CAPABILITY at init */
+	/* IC_DEVICE_ROLE, cached from HW_CAPABILITY */
 	uint8_t role;
 
 	/* fifo depth is in words (32b) */
@@ -469,19 +457,6 @@ struct dw_i3c_data {
 	uint8_t deftgts_count;
 #endif /* CONFIG_I3C_CONTROLLER && CONFIG_I3C_TARGET */
 };
-
-/*
- * Synthesised device role (IC_DEVICE_ROLE, HW_CAPABILITY[2:0]) resolved once in
- * dw_i3c_init() and cached in driver data. It is a read-only synthesis constant, so
- * subsequent lookups are served from RAM rather than MMIO.
- * Returns one of HW_CAP_DEVICE_ROLE_{MASTER,SEC_MASTER,SLAVE}.
- */
-static inline uint32_t dw_i3c_device_role(const struct device *dev)
-{
-	const struct dw_i3c_data *data = dev->data;
-
-	return data->role;
-}
 
 static inline bool dw_i3c_is_current_controller(const struct device *dev)
 {
@@ -1258,16 +1233,15 @@ static int i3c_dw_endis_ibi(const struct device *dev, struct i3c_device_desc *ta
 {
 	struct dw_i3c_data *data = dev->data;
 	const struct dw_i3c_config *config = dev->config;
-	uint32_t role = dw_i3c_device_role(dev);
+	uint32_t role = data->role;
 	uint32_t bitpos, sir_con;
 	struct i3c_ccc_events i3c_events;
 	int ret;
 	int pos;
 
-	/* Select the SIR reject mechanism by device role (databook Table 2-1). */
 	if (!DW_IBI_REJECT_VIA_REG(role)) {
 
-		/* Controller-Only: enable/disable SIR through the DAT entry */
+		/* controller-only: SIR via DAT entry */
 
 		pos = get_i3c_addr_pos(dev, target->dynamic_addr, false);
 		if (pos < 0) {
@@ -1292,7 +1266,7 @@ static int i3c_dw_endis_ibi(const struct device *dev, struct i3c_device_desc *ta
 
 	} else {
 
-		/* Secondary Controller: enable/disable SIR through the IBI_SIR_REQ_REJECT reg */
+		/* dual-role: SIR via IBI_SIR_REQ_REJECT */
 
 		sir_con = sys_read32(config->regs + IBI_SIR_REQ_REJECT);
 		/* TODO: what is this macro doing?? */
@@ -1725,9 +1699,9 @@ static bool i3c_any_i2c_fast_mode(const struct i3c_dev_list *dev_list)
 static int dw_i3c_init_scl_timing(const struct device *dev, struct i3c_config_controller *ctrl_cfg)
 {
 	const struct dw_i3c_config *config = dev->config;
+	struct dw_i3c_data *data = dev->data;
 	uint32_t core_rate, scl_timing;
 #ifdef CONFIG_I3C_CONTROLLER
-	struct dw_i3c_data *data = dev->data;
 	uint32_t hcnt, lcnt, fmlcnt, fmplcnt, free_cnt;
 #endif /* CONFIG_I3C_CONTROLLER */
 
@@ -1816,15 +1790,8 @@ static int dw_i3c_init_scl_timing(const struct device *dev, struct i3c_config_co
 	}
 #endif /* CONFIG_I3C_CONTROLLER */
 #ifdef CONFIG_I3C_TARGET
-	/*
-	 * BUS_AVAILABLE_TIME (BUS_FREE_AVAIL_TIMING[31:16] @ 0xd4) and BUS_IDLE_TIMING (0xd8)
-	 * are slave-mode timing fields that only exist for 1 < IC_DEVICE_ROLE < 5
-	 * (SEC_MASTER or SLAVE). Gate on the synthesised role, not on the boot mode: a
-	 * dual-role part that boots as controller still has - and needs - these registers.
-	 */
-	uint32_t role = dw_i3c_device_role(dev);
-
-	if (DW_HAS_BUS_IDLE(role)) {
+	/* Target bus timing (0xd4[31:16], 0xd8) exists for 1 < IC_DEVICE_ROLE < 5. */
+	if (DW_HAS_BUS_IDLE(data->role)) {
 		/* I3C Bus Available Time */
 		scl_timing = DIV_ROUND_UP(I3C_BUS_AVAILABLE_TIME_NS * (uint64_t)core_rate,
 					  I3C_PERIOD_NS);
@@ -2821,35 +2788,26 @@ static int dw_i3c_init(const struct device *dev)
 		ctrl_config->supported_hdr |= I3C_MSG_HDR_DDR;
 	}
 
-	/*
-	 * DEVICE_ROLE_CONFIG is a read-only synthesis constant in the word just read;
-	 * cache it in driver data so later callers (dw_i3c_device_role()) read it from
-	 * RAM, not MMIO.
-	 */
-	data->role = hw_capabilities & HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK;
+	/* Cache the synthesis-constant role from the HW_CAPABILITY word just read. */
+	data->role = FIELD_GET(HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK, hw_capabilities);
 
-	/*
-	 * Resolve the device role from the read-only synthesis option DEVICE_ROLE_CONFIG.
-	 * This decides which registers physically exist. The boot mode (is_secondary) is
-	 * derived from it: fixed for MASTER/SLAVE-only parts, and only read from
-	 * DEVICE_CTRL_EXTENDED[DEV_OPERATION_MODE] for a dual-role (SEC_MASTER) part
-	 * (that register does not exist on a SLAVE-only part). Cross-check the role
-	 * against the compiled-in controller/target support.
+	/* Derive is_secondary from the role and ASSERT it against the Kconfig selection.
+	 * DEV_OPERATION_MODE (0xb0) is read only for the dual-role part.
 	 */
 	role = data->role;
 	switch (role) {
 	case HW_CAP_DEVICE_ROLE_MASTER:
 		__ASSERT(IS_ENABLED(CONFIG_I3C_CONTROLLER),
 			 "HW is controller-only but CONFIG_I3C_CONTROLLER is not set");
-		ctrl_config->is_secondary = false; /* role fixed; do NOT read 0xb0 */
+		ctrl_config->is_secondary = false;
 		break;
 	case HW_CAP_DEVICE_ROLE_SLAVE:
 		__ASSERT(IS_ENABLED(CONFIG_I3C_TARGET),
 			 "HW is target-only but CONFIG_I3C_TARGET is not set");
-		ctrl_config->is_secondary = true; /* role fixed; 0xb0 doesn't exist on SLAVE */
+		ctrl_config->is_secondary = true;
 		break;
 	case HW_CAP_DEVICE_ROLE_SEC_MASTER: {
-		/* dual-role: DEV_OPERATION_MODE selects the boot/default mode */
+		/* dual-role: DEV_OPERATION_MODE selects the boot mode */
 		uint32_t device_ctrl_ext = sys_read32(config->regs + DEVICE_CTRL_EXTENDED);
 
 		ctrl_config->is_secondary =
@@ -2865,9 +2823,7 @@ static int dw_i3c_init(const struct device *dev)
 		return -ENOTSUP;
 	}
 
-	/* disable ibi -
-	 * SIR/MR reject regs are the Secondary-Controller mechanism (databook Table 2-1)
-	 */
+	/* disable ibi (dual-role rejects via these regs */
 	if (DW_IBI_REJECT_VIA_REG(role)) {
 		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_SIR_REQ_REJECT);
 		sys_write32(IBI_REQ_REJECT_ALL, config->regs + IBI_MR_REQ_REJECT);
