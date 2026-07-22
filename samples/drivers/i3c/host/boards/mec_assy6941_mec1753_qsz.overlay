@@ -19,7 +19,7 @@
 	 * reg = <static_addr  pid_hi  pid_lo>
 	 * The node unit address is PID[47:0] = 0xB0123456789A.
 	 */
-	i3c0_dev0: dev0@B0123456789A {
+	i3c0_dev0: dev0@80000b0123456789a {
 		compatible = "microchip,i3c-fake-target";
 		reg = <0x08 0xB012 0x3456789A>;
 		assigned-address = <0x08>;
