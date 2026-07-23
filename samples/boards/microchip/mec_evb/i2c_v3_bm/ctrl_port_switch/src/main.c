@@ -79,6 +79,25 @@ static volatile bool run;
 static volatile bool app_dbg_halt = true;
 #endif
 
+#ifdef CONFIG_I2C_CALLBACK
+struct app_i2c_cb_s {
+	struct k_sem i2c_cb_sem;
+	volatile uint32_t i2c_cb_count;
+	volatile int i2c_cb_result;
+	void *i2c_cb_ud;
+};
+
+struct app_i2c_cb_s pca9555_cb_data;
+struct app_i2c_cb_s fram_cb_data;
+
+static int app_i2c_cb_init(struct app_i2c_cb_s *p);
+static int app_i2c_cb_prep(struct app_i2c_cb_s *p);
+static void app_i2c_cb_func(const struct device *i2c_port_dev, int result, void *data);
+static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_port);
+static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_offset,
+				uint32_t nbytes);
+#endif
+
 void minute_timer_cb(struct k_timer *kt)
 {
 	LOG_INF("10 minutes has elapsed");
@@ -101,6 +120,11 @@ int main(void)
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
 
 	k_timer_init(&minute_timer, minute_timer_cb, NULL);
+
+#ifdef CONFIG_I2C_CALLBACK
+	app_i2c_cb_init(&pca9555_cb_data);
+	app_i2c_cb_init(&fram_cb_data);
+#endif
 
 	for (size_t i = 0; i < ARRAY_SIZE(i2c_smb_ctrls); i++) {
 		const struct device *ctrl_dev = i2c_smb_ctrls[i];
@@ -166,6 +190,14 @@ int main(void)
 	}
 
 	log_flush();
+
+#ifdef CONFIG_I2C_CALLBACK
+	(void)app_i2c_cb_test_pca9555(&pca9555_spec, PCA9555_CMD_PORT0_IN);
+	log_flush();
+
+	(void)app_i2c_cb_test_fram(&mb_fram_spec, 0x1024U, 64U);
+	log_flush();
+#endif
 
 	if (run) {
 		k_timer_start(&minute_timer, K_MINUTES(10), K_MINUTES(10));
@@ -394,3 +426,182 @@ static int fram_test2(const struct i2c_dt_spec *dts)
 
 	return rc;
 }
+
+#ifdef CONFIG_I2C_CALLBACK
+
+static int app_i2c_cb_init(struct app_i2c_cb_s *p)
+{
+	if (p == NULL) {
+		return -EINVAL;
+	}
+
+	k_sem_init(&p->i2c_cb_sem, 0, 1);
+	p->i2c_cb_count = 0;
+	p->i2c_cb_result = 0;
+	p->i2c_cb_ud = NULL;
+
+	return 0;
+}
+
+static int app_i2c_cb_prep(struct app_i2c_cb_s *p)
+{
+	if (p == NULL) {
+		return -EINVAL;
+	}
+
+	k_sem_reset(&p->i2c_cb_sem);
+	p->i2c_cb_count = 0;
+	p->i2c_cb_result = 0;
+	p->i2c_cb_ud = NULL;
+
+	return 0;
+}
+
+static void app_i2c_cb_func(const struct device *i2c_port_dev, int result, void *data)
+{
+	struct app_i2c_cb_s *cbs = data;
+
+	if (cbs != NULL) {
+		cbs->i2c_cb_count++;
+		cbs->i2c_cb_result = result;
+		cbs->i2c_cb_ud = data;
+
+		k_sem_give(&cbs->i2c_cb_sem);
+	}
+}
+
+static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_port)
+{
+	int rc = 0;
+	uint16_t gpio_port_value = 0U;
+
+	if (dts == NULL) {
+		LOG_ERR("App I2C PCA9555 async test bad i2c_dt_spec");
+		return -EINVAL;
+	}
+
+	memset(i2c_tx_buf, 0x55, sizeof(i2c_tx_buf));
+	memset(i2c_rx_buf, 0xAA, sizeof(i2c_rx_buf));
+
+	i2c_tx_buf[0] = gpio_port;
+
+	app_i2c_cb_prep(&pca9555_cb_data);
+
+	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 1U,
+				  (void *)i2c_rx_buf, 2U, app_i2c_cb_func,
+				  (void *)&pca9555_cb_data);
+	if (rc != 0) {
+		LOG_ERR("App I2C wr-rd-cb-dt error (%d)", rc);
+		return rc;
+	}
+
+	rc = k_sem_take(&pca9555_cb_data.i2c_cb_sem, K_MSEC(2000));
+	if (rc == 0) {
+		LOG_INF("Take PCA9555 CB semaphore success!");
+		gpio_port_value = ((uint16_t)i2c_rx_buf[1] << 8) | i2c_rx_buf[0];
+		LOG_INF("PCA9555 input port %u = 0x%04x", gpio_port, gpio_port_value);
+	} else if (rc == -EAGAIN) {
+		LOG_ERR("Take PCA9555 CB semaphore returned -EAGAIN which is timeout");
+		rc = -ETIMEDOUT;
+	} else if (rc == -EBUSY) {
+		LOG_ERR("Take PCA9555 CB semaphore returned -EBUSY");
+	} else {
+		LOG_ERR("Take PCA9555 CB semaphore returned unexpected error (%d)", rc);
+	}
+
+	return rc;
+}
+
+static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_offset,
+				uint32_t nbytes)
+{
+	int rc = 0;
+
+	if ((dts == NULL) || ((nbytes + 2U) > I2C_RX_BUF_SIZE)) {
+		LOG_ERR("App I2C FRAM async test bad i2c_dt_spec or nbytes");
+		return -EINVAL;
+	}
+
+	memset(i2c_tx_buf, 0x55, sizeof(i2c_tx_buf));
+	memset(i2c_rx_buf, 0xAA, sizeof(i2c_rx_buf));
+
+	i2c_tx_buf[0] = (uint8_t)(fram_offset >> 8);
+	i2c_tx_buf[1] = (uint8_t)(fram_offset >> 0);
+
+	for (uint32_t i = 0; i < nbytes; i++) {
+		i2c_tx_buf[i + 2U] = (uint8_t)(i % 256U);
+	}
+
+	LOG_INF("Write data to FRAM");
+
+	app_i2c_cb_prep(&fram_cb_data);
+
+	msgs[0].buf = i2c_tx_buf;
+	msgs[0].len = nbytes + 2U;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+
+	rc = i2c_transfer_cb(dts->bus, msgs, 1U, dts->addr, app_i2c_cb_func,
+			     (void *)&fram_cb_data);
+	if (rc != 0) {
+		LOG_ERR("App I2C wr-cb for write error (%d)", rc);
+		return rc;
+	}
+
+	rc = k_sem_take(&fram_cb_data.i2c_cb_sem, K_MSEC(2000));
+	if (rc == 0) {
+		LOG_INF("Take FRAM CB semaphore success!");
+	} else if (rc == -EAGAIN) {
+		LOG_ERR("Take FRAM CB semaphore returned -EAGAIN which is timeout");
+		rc = -ETIMEDOUT;
+	} else if (rc == -EBUSY) {
+		LOG_ERR("Take FRAM CB semaphore returned -EBUSY");
+	} else {
+		LOG_ERR("Take FRAM CB semaphore returned unexpected error (%d)", rc);
+	}
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	LOG_INF("Read back data from FRAM");
+
+	i2c_tx_buf[0] = (uint8_t)(fram_offset >> 8);
+	i2c_tx_buf[1] = (uint8_t)(fram_offset >> 0);
+
+	app_i2c_cb_prep(&fram_cb_data);
+
+	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 2U,
+				  (void *)i2c_rx_buf, nbytes, app_i2c_cb_func,
+				  (void *)&fram_cb_data);
+	if (rc != 0) {
+		LOG_ERR("App I2C wr-rd-cb-dt: write offset, read data error (%d)", rc);
+		return rc;
+	}
+
+	rc = k_sem_take(&fram_cb_data.i2c_cb_sem, K_MSEC(2000));
+	if (rc == 0) {
+		LOG_INF("Take FRAM CB semaphore success!");
+	} else if (rc == -EAGAIN) {
+		LOG_ERR("Take FRAM CB semaphore returned -EAGAIN which is timeout");
+		rc = -ETIMEDOUT;
+	} else if (rc == -EBUSY) {
+		LOG_ERR("Take FRAM CB semaphore returned -EBUSY");
+	} else {
+		LOG_ERR("Take FRAM CB semaphore returned unexpected error (%d)", rc);
+	}
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	rc = memcmp(&i2c_tx_buf[2U], i2c_rx_buf, nbytes);
+	if (rc == 0) {
+		LOG_INF("Success: data read back matches");
+	} else {
+		LOG_ERR("FAIL: data read back does not match");
+	}
+
+	return rc;
+}
+
+#endif
