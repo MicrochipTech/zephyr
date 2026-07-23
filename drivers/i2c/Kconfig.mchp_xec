@@ -93,6 +93,25 @@ config I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY
 
 if I2C_MCHP_XEC_V3_NL
 
+config I2C_MCHP_XEC_V3_NL_KWQ_STACK_SIZE
+	int "Microchip XEC I2C v3-NL custom kernel work queue stack size"
+	default 512
+	depends on I2C_CALLBACK
+	help
+	  Stack size in bytes of the I2Cv3 network layer driver's custom kernel
+	  work queue, shared by all controller instances. Only used by the async
+	  (CONFIG_I2C_CALLBACK) completion path. The user callback runs on this
+	  stack, so size it for what the callback does. Larger than the byte-mode
+	  driver's default because the work steps reprogram DMA and split groups.
+
+config I2C_MCHP_XEC_V3_NL_KWQ_PRIORITY
+	int "Microchip XEC I2C v3-NL custom kernel work queue priority"
+	default 10
+	depends on I2C_CALLBACK
+	help
+	  Custom kernel work queue priority. Default is 10. Higher positive
+	  numbers are lower priority.
+
 config I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	bool "Microchip XEC I2Cv3 network layer state capture feature"
 	help
