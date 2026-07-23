@@ -2805,6 +2805,7 @@ static int xec_i2c_nl_vport_transfer_cb(const struct device *port_dev, struct i2
 	const struct xec_i2c_nl_port_config *pc = port_dev->config;
 	const struct device *ctrl = pc->parent;
 	struct xec_i2c_nl_data *data = ctrl->data;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
 
 	if (cb == NULL) {
 		/* No callback: behave exactly like the synchronous entry. */
@@ -2826,6 +2827,37 @@ static int xec_i2c_nl_vport_transfer_cb(const struct device *port_dev, struct i2
 		return -EBUSY;
 	}
 #endif
+
+	/* Fail fast, synchronously, like the sync path: pre-parse every
+	 * STOP-delimited group so unsupported or oversized transfers
+	 * (-ENOTSUP / -ENOSPC / -EMSGSIZE / -EINVAL) are reported by the return
+	 * value here rather than surfacing only via the callback. parse() is
+	 * pure computation and writes only the scratch xfer, so the work handler
+	 * re-parses each group cleanly when it actually runs. Mirrors the group
+	 * splitting in xec_i2c_nl_async_kick_group / xec_i2c_nl_vport_transfer.
+	 */
+	{
+		struct xec_i2c_nl_xfer scratch;
+		uint8_t gs = 0;
+
+		while (gs < num_msgs) {
+			uint8_t ge = gs;
+			uint8_t glen;
+			int prc;
+
+			while (ge < (uint8_t)(num_msgs - 1U) &&
+			       (msgs[ge].flags & I2C_MSG_STOP) == 0U) {
+				ge++;
+			}
+			glen = (uint8_t)((ge - gs) + 1U);
+
+			prc = xec_i2c_nl_parse(cfg, &msgs[gs], glen, &scratch);
+			if (prc != 0) {
+				return prc;
+			}
+			gs = (uint8_t)(ge + 1U);
+		}
+	}
 
 	/* Non-blocking / ISR-callable: never wait for the lock. apply_port and
 	 * bus recovery are deferred to the KICK work step because they can
