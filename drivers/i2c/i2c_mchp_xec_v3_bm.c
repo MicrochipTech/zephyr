@@ -141,6 +141,25 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_bm, CONFIG_I2C_LOG_LEVEL);
 
 #define BM_TIMEOUT K_MSEC(1000)
 
+#ifdef CONFIG_I2C_TARGET
+/* Target (peripheral) mode. The received address byte carries the R/W
+ * direction in bit 0; the default byte clocked out when the application
+ * has no data for a target-transmit is 0. Target-mode CR commands:
+ *   BM_CR_TGT_ARM   PIN|ESO|ACK|ENI  auto-ACK own address, interrupt on PIN
+ *   BM_CR_TGT_NACK  PIN|ESO|ENI      ACK cleared: NACK the next received byte
+ * (ACK must be re-armed before the next transaction or the controller would
+ * NACK its own target address.)
+ */
+#define BM_TGT_RW_POS     0U
+#define BM_TGT_DFLT_DATA  0U
+#define BM_CR_TGT_ARM                                                                              \
+	(BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_ACK_POS) | BM_CR_ENI)
+#define BM_CR_TGT_NACK (BIT(XEC_I2C_CR_PIN_POS) | BIT(XEC_I2C_CR_ESO_POS) | BM_CR_ENI)
+
+#define BM_SR_AAT BIT(XEC_I2C_SR_AAT_POS)
+#define BM_SR_STO BIT(XEC_I2C_SR_STO_POS)
+#endif /* CONFIG_I2C_TARGET */
+
 /* Per-byte transfer state driven by the PIN interrupt. */
 enum bm_state {
 	BM_STATE_IDLE,  /* no transfer in flight                          */
@@ -197,6 +216,14 @@ struct xec_i2c_v3_bm_xcfg {
 	uint8_t girq;
 	uint8_t girq_pos;
 	void (*irq_connect)(void);
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	/* Statically allocated per-controller staging buffer for target
+	 * receive: bytes the external host writes are accumulated here and
+	 * handed to buf_write_received() in one call at STOP.
+	 */
+	uint8_t *tgt_rx_buf;
+	uint16_t tgt_rx_buf_size;
+#endif
 };
 
 struct xec_i2c_v3_bm_xdat {
@@ -229,6 +256,25 @@ struct xec_i2c_v3_bm_xdat {
 	const struct device *cb_dev;
 	struct k_work_delayable timeout_dwork; /* async completion watchdog */
 	atomic_t async_done;                   /* claim: completion vs watchdog */
+#endif
+#ifdef CONFIG_I2C_TARGET
+	/* Target (peripheral) mode. Registered targets occupy the two OA
+	 * slots; the controller is pinned to target_port while attached, and
+	 * all controller-mode (master) entry points return -EBUSY. active_slot
+	 * is the OA slot matched by the in-progress transaction; target_read
+	 * tracks its direction.
+	 */
+	struct i2c_target_config *targets[XEC_I2C_MAX_TARGETS];
+	const struct device *target_port;
+	bool target_attached;
+	bool target_read;
+	uint8_t active_slot;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	uint16_t tgt_rx_pos;   /* bytes staged in cfg->tgt_rx_buf this transaction */
+	uint8_t *tgt_tx_buf;   /* buffer returned by buf_read_requested()          */
+	uint32_t tgt_tx_len;   /* its length                                       */
+	uint32_t tgt_tx_pos;   /* next byte to transmit                            */
+#endif
 #endif
 };
 
@@ -661,6 +707,281 @@ static void bm_write_advance(const struct device *ctrl)
 	}
 }
 
+#ifdef CONFIG_I2C_TARGET
+/* ---- target (peripheral) mode ------------------------------------------- */
+
+/* Index of a free Own-Address slot, or -1 when both are occupied. */
+static int bm_tgt_find_free_slot(const struct xec_i2c_v3_bm_xdat *xdat)
+{
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		if (xdat->targets[i] == NULL) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* OA slot whose registered address matches addr7, or -1. */
+static int bm_tgt_find_slot_by_addr(const struct xec_i2c_v3_bm_xdat *xdat, uint8_t addr7)
+{
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		if (xdat->targets[i] != NULL &&
+		    (xdat->targets[i]->address & XEC_I2C_TARGET_ADDR_MSK) == addr7) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* OA slot holding this exact config pointer, or -1. */
+static int bm_tgt_find_slot_by_cfg(const struct xec_i2c_v3_bm_xdat *xdat,
+				   const struct i2c_target_config *tcfg)
+{
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		if (xdat->targets[i] == tcfg) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* Reprogram both Own-Address slots from the registered targets. Empty slots
+ * read back as address 0, which never matches a real transaction here.
+ */
+static void bm_tgt_program_oa(const struct device *ctrl)
+{
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	uint32_t oa = 0;
+
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		if (xdat->targets[i] != NULL) {
+			oa |= XEC_I2C_OA_SET(i, xdat->targets[i]->address & XEC_I2C_TARGET_ADDR_MSK);
+		}
+	}
+	sys_write32(oa, cfg->base + XEC_I2C_OA_OFS);
+}
+
+/* Re-arm to auto-ACK the own address and interrupt on every byte (PIN). */
+static inline void bm_tgt_restart(uintptr_t base)
+{
+	sys_write8(BM_CR_TGT_ARM, base + XEC_I2C_CR_OFS);
+}
+
+/* Clear ACK so the controller NACKs the next byte (write declined/overflow). */
+static inline void bm_tgt_nack_next(uintptr_t base)
+{
+	sys_write8(BM_CR_TGT_NACK, base + XEC_I2C_CR_OFS);
+}
+
+/* Address-phase interrupt: the matched address byte is in DATA. Reading it
+ * clears AAT/SAD and releases SCL; bit 0 carries the R/W direction.
+ */
+static void bm_tgt_addr(const struct device *ctrl)
+{
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	uintptr_t base = cfg->base;
+	uint8_t rx = sys_read8(base + XEC_I2C_DATA_OFS);
+	uint8_t addr7 = (uint8_t)((rx >> 1) & XEC_I2C_TARGET_ADDR_MSK);
+	int slot = bm_tgt_find_slot_by_addr(xdat, addr7);
+	struct i2c_target_config *tcfg = NULL;
+	const struct i2c_target_callbacks *cbs = NULL;
+
+	if (slot >= 0) {
+		xdat->active_slot = (uint8_t)slot;
+		tcfg = xdat->targets[slot];
+		cbs = tcfg->callbacks;
+	}
+
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	/* A repeated START after a write (combined write-then-read) reaches the
+	 * address phase with staged RX bytes and no intervening STOP: deliver
+	 * them before turning the bus around.
+	 */
+	if (!xdat->target_read && xdat->tgt_rx_pos > 0U && cbs != NULL &&
+	    cbs->buf_write_received != NULL) {
+		cbs->buf_write_received(tcfg, cfg->tgt_rx_buf, xdat->tgt_rx_pos);
+	}
+	xdat->tgt_rx_pos = 0U;
+#endif
+
+	if ((rx & BIT(BM_TGT_RW_POS)) != 0U) {
+		/* Target transmitter: the external host reads from us. Preload
+		 * the first byte; writing DATA releases SCL to clock it out.
+		 */
+		uint8_t val = BM_TGT_DFLT_DATA;
+
+		xdat->target_read = true;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+		xdat->tgt_tx_buf = NULL;
+		xdat->tgt_tx_len = 0U;
+		xdat->tgt_tx_pos = 0U;
+		if (cbs != NULL && cbs->buf_read_requested != NULL) {
+			uint8_t *p = NULL;
+			uint32_t l = 0U;
+
+			if (cbs->buf_read_requested(tcfg, &p, &l) == 0 && p != NULL) {
+				xdat->tgt_tx_buf = p;
+				xdat->tgt_tx_len = l;
+			}
+		}
+		if (xdat->tgt_tx_buf != NULL && xdat->tgt_tx_pos < xdat->tgt_tx_len) {
+			val = xdat->tgt_tx_buf[xdat->tgt_tx_pos++];
+		}
+#else
+		if (cbs != NULL && cbs->read_requested != NULL) {
+			(void)cbs->read_requested(tcfg, &val);
+		}
+#endif
+		sys_write8(val, base + XEC_I2C_DATA_OFS);
+	} else {
+		/* Target receiver: the external host writes to us. Reading the
+		 * address above already released SCL for the first data byte.
+		 */
+		xdat->target_read = false;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+		xdat->tgt_rx_pos = 0U;
+#else
+		if (cbs == NULL || cbs->write_requested == NULL ||
+		    cbs->write_requested(tcfg) != 0) {
+			bm_tgt_nack_next(base);
+		}
+#endif
+	}
+}
+
+/* Data-phase interrupt, target receiver: a byte from the external host is in
+ * DATA. Reading it releases SCL for the next byte.
+ */
+static void bm_tgt_rx(const struct device *ctrl)
+{
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	uintptr_t base = cfg->base;
+	uint8_t val = sys_read8(base + XEC_I2C_DATA_OFS);
+
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	if (xdat->tgt_rx_pos < cfg->tgt_rx_buf_size) {
+		cfg->tgt_rx_buf[xdat->tgt_rx_pos++] = val;
+	} else {
+		bm_tgt_nack_next(base);
+	}
+#else
+	struct i2c_target_config *tcfg = xdat->targets[xdat->active_slot];
+	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
+
+	if (cbs == NULL || cbs->write_received == NULL || cbs->write_received(tcfg, val) != 0) {
+		bm_tgt_nack_next(base);
+	}
+#endif
+}
+
+/* Data-phase interrupt, target transmitter: SR.LRB reflects the external
+ * host's ACK/NACK of the byte we just sent. NACK => the host is done reading;
+ * arm IDLE_IEN to catch the STOP and clock a dummy byte to release PIN.
+ * Otherwise fetch and send the next byte.
+ */
+static void bm_tgt_tx(const struct device *ctrl)
+{
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	uintptr_t base = cfg->base;
+	uint8_t val = BM_TGT_DFLT_DATA;
+
+	if ((sys_read8(base + XEC_I2C_SR_OFS) & BM_SR_LRB) != 0U) {
+		sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+		sys_write8(BM_TGT_DFLT_DATA, base + XEC_I2C_DATA_OFS);
+		return;
+	}
+
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	if (xdat->tgt_tx_buf != NULL && xdat->tgt_tx_pos < xdat->tgt_tx_len) {
+		val = xdat->tgt_tx_buf[xdat->tgt_tx_pos++];
+	}
+#else
+	struct i2c_target_config *tcfg = xdat->targets[xdat->active_slot];
+	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
+
+	if (cbs != NULL && cbs->read_processed != NULL) {
+		(void)cbs->read_processed(tcfg, &val);
+	}
+#endif
+	sys_write8(val, base + XEC_I2C_DATA_OFS);
+}
+
+/* Target-mode interrupt service. Dispatched from the top of the controller
+ * ISR while a target is attached; master ops are -EBUSY then, so the
+ * controller state machine is dormant and the two paths never interleave.
+ */
+static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
+{
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	uintptr_t base = cfg->base;
+	uint8_t sr = sys_read8(base + XEC_I2C_SR_OFS);
+	uint32_t cmpl = sys_read32(base + XEC_I2C_CMPL_OFS);
+	uint32_t cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
+	struct i2c_target_config *tcfg = xdat->targets[xdat->active_slot];
+	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
+
+	/* Target-transmit external STOP: after the host NACKs the final read
+	 * byte and issues STOP, NBB goes 0->1 and CMPL.IDLE latches (IDLE_IEN
+	 * was armed in bm_tgt_tx). Deliver the stop and re-arm.
+	 */
+	if ((cfgr & BM_CFG_IDLE_IEN) != 0U && (cmpl & BM_CMPL_IDLE) != 0U) {
+		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+		sys_write32(BM_CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+		/* IDLE latches on NBB 0->1 after the host's STOP releases the
+		 * lines. Only then is the read transaction truly over: deliver
+		 * stop and re-arm. A latch without NBB set is spurious -- just
+		 * clear it and let the transfer continue.
+		 */
+		if ((sr & BM_SR_NBB) != 0U) {
+			if (cbs != NULL && cbs->stop != NULL) {
+				cbs->stop(tcfg);
+			}
+			bm_tgt_restart(base);
+		}
+		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+		return;
+	}
+
+	/* External STOP after a write, or a bus error: end the transaction. */
+	if ((sr & (BM_SR_BER | BM_SR_STO)) != 0U) {
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+		if (!xdat->target_read && xdat->tgt_rx_pos > 0U && cbs != NULL &&
+		    cbs->buf_write_received != NULL) {
+			cbs->buf_write_received(tcfg, cfg->tgt_rx_buf, xdat->tgt_rx_pos);
+		}
+		xdat->tgt_rx_pos = 0U;
+#endif
+		if (cbs != NULL && cbs->stop != NULL) {
+			cbs->stop(tcfg);
+		}
+		sys_write32(cmpl & XEC_I2C_CMPL_RW1C_MSK, base + XEC_I2C_CMPL_OFS);
+		bm_tgt_restart(base);
+		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+		return;
+	}
+
+	/* Address phase: AAT set with PIN clear (byte complete, addressed). */
+	if ((sr & (BM_SR_AAT | BM_SR_PIN)) == BM_SR_AAT) {
+		bm_tgt_addr(ctrl);
+		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+		return;
+	}
+
+	/* Data phase. */
+	if (xdat->target_read) {
+		bm_tgt_tx(ctrl);
+	} else {
+		bm_tgt_rx(ctrl);
+	}
+	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+}
+#endif /* CONFIG_I2C_TARGET */
+
 /* ---- interrupt service routine ------------------------------------------ */
 
 static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
@@ -669,6 +990,17 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	struct xec_i2c_v3_bm_xdat *xdat = ctrl_dev->data;
 	uintptr_t base = cfg->base;
 	uint8_t sr;
+
+#ifdef CONFIG_I2C_TARGET
+	/* While a target is attached the controller runs as a peripheral: master
+	 * entry points are -EBUSY, so the state machine below is dormant and this
+	 * branch owns every interrupt.
+	 */
+	if (xdat->target_attached) {
+		xec_i2c_v3_bm_isr_target(ctrl_dev);
+		return;
+	}
+#endif
 
 	/* Awaiting the post-STOP IDLE interrupt (the controller does not
 	 * interrupt on STOP itself). CMPL.IDLE latches when NBB goes 0->1;
@@ -943,6 +1275,13 @@ static int xec_i2c_v3_bm_vport_transfer(const struct device *port_dev, struct i2
 
 	k_sem_take(&xdat->lock, K_FOREVER);
 
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->target_attached) {
+		k_sem_give(&xdat->lock);
+		return -EBUSY;
+	}
+#endif
+
 	rc = xec_i2c_v3_bm_start(port_dev, msgs, num_msgs, address, NULL, NULL);
 
 	/* One iteration per STOP-delimited group: wait for the group to
@@ -1009,6 +1348,13 @@ static int xec_i2c_v3_bm_vport_transfer_cb(const struct device *port_dev, struct
 
 	k_sem_take(&xdat->lock, K_FOREVER);
 
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->target_attached) {
+		k_sem_give(&xdat->lock);
+		return -EBUSY;
+	}
+#endif
+
 	/* Open the completion claim and arm the watchdog BEFORE issuing the
 	 * START inside start(): if the transfer completes immediately, the
 	 * work handler's async_deliver then finds a scheduled watchdog to
@@ -1063,6 +1409,12 @@ static int xec_i2c_v3_bm_vport_configure(const struct device *port_dev, uint32_t
 	}
 
 	k_sem_take(&xdat->lock, K_FOREVER);
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->target_attached) {
+		k_sem_give(&xdat->lock);
+		return -EBUSY;
+	}
+#endif
 	if (freq != xdat->active_freq || xdat->active_port != pc->port_id) {
 		rc = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_DEFAULT);
 		if (rc == 0) {
@@ -1105,6 +1457,12 @@ static int xec_i2c_v3_bm_vport_recover_bus(const struct device *port_dev)
 	int rc;
 
 	k_sem_take(&xdat->lock, K_FOREVER);
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->target_attached) {
+		k_sem_give(&xdat->lock);
+		return -EBUSY;
+	}
+#endif
 	rc = xec_i2c_v3_bm_apply_port(port_dev);
 	if (rc == 0) {
 		rc = xec_i2c_v3_bm_bus_recover(ctrl, freq, pc->port_id);
@@ -1112,6 +1470,143 @@ static int xec_i2c_v3_bm_vport_recover_bus(const struct device *port_dev)
 	k_sem_give(&xdat->lock);
 	return rc;
 }
+
+#ifdef CONFIG_I2C_TARGET
+/* Register a target (peripheral) on this port. The first target switches the
+ * controller onto the port and locks it: while any target is attached the
+ * master entry points return -EBUSY and runtime port switching is frozen.
+ * A second target may share the port (two OA slots); a target on a different
+ * port of the same controller is rejected until all targets are unregistered.
+ */
+static int xec_i2c_v3_bm_target_register(const struct device *port_dev,
+					 struct i2c_target_config *tcfg)
+{
+	const struct xec_i2c_v3_bm_port_xcfg *pc = port_dev->config;
+	const struct device *ctrl = pc->parent;
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	int slot;
+	int rc = 0;
+
+	if (tcfg == NULL || tcfg->callbacks == NULL) {
+		return -EINVAL;
+	}
+	if ((tcfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0U) {
+		return -ENOTSUP;
+	}
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	if (tcfg->callbacks->buf_write_received == NULL ||
+	    tcfg->callbacks->buf_read_requested == NULL) {
+		return -EINVAL;
+	}
+	if (cfg->tgt_rx_buf == NULL || cfg->tgt_rx_buf_size == 0U) {
+		return -ENOMEM;
+	}
+#endif
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+
+	if (xdat->target_attached && xdat->target_port != port_dev) {
+		rc = -EBUSY;
+		goto out;
+	}
+	if (bm_tgt_find_slot_by_cfg(xdat, tcfg) >= 0) {
+		rc = -EALREADY;
+		goto out;
+	}
+	if (bm_tgt_find_slot_by_addr(xdat, tcfg->address & XEC_I2C_TARGET_ADDR_MSK) >= 0) {
+		rc = -EADDRINUSE;
+		goto out;
+	}
+	slot = bm_tgt_find_free_slot(xdat);
+	if (slot < 0) {
+		rc = -EBUSY;
+		goto out;
+	}
+
+	xdat->targets[slot] = tcfg;
+
+	if (!xdat->target_attached) {
+		/* First target: switch onto the port (PCR reset clears OA),
+		 * program the own address, and arm target mode.
+		 */
+		rc = xec_i2c_v3_bm_apply_port(port_dev);
+		if (rc != 0) {
+			xdat->targets[slot] = NULL;
+			goto out;
+		}
+		xdat->active_slot = (uint8_t)slot;
+		xdat->target_read = false;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+		xdat->tgt_rx_pos = 0U;
+#endif
+		bm_tgt_program_oa(ctrl);
+		bm_tgt_restart(cfg->base);
+		xdat->target_port = port_dev;
+		xdat->target_attached = true;
+	} else {
+		/* Second slot on the same port: update OA atomically w.r.t. the
+		 * target ISR.
+		 */
+		unsigned int key = irq_lock();
+
+		bm_tgt_program_oa(ctrl);
+		irq_unlock(key);
+	}
+
+out:
+	k_sem_give(&xdat->lock);
+	return rc;
+}
+
+/* Unregister a target. When the last target on the controller is removed the
+ * driver disarms target interrupts (CR.ENI off, OA cleared) and reverts to
+ * controller mode, re-allowing master transfers and runtime port switching.
+ * The GIRQ stays enabled -- master transfers re-arm CR.ENI per transfer.
+ */
+static int xec_i2c_v3_bm_target_unregister(const struct device *port_dev,
+					   struct i2c_target_config *tcfg)
+{
+	const struct xec_i2c_v3_bm_port_xcfg *pc = port_dev->config;
+	const struct device *ctrl = pc->parent;
+	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
+	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
+	unsigned int key;
+	int remaining = 0;
+	int slot;
+	int rc = 0;
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+
+	slot = bm_tgt_find_slot_by_cfg(xdat, tcfg);
+	if (slot < 0) {
+		rc = -EINVAL;
+		goto out;
+	}
+
+	xdat->targets[slot] = NULL;
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		if (xdat->targets[i] != NULL) {
+			remaining++;
+		}
+	}
+
+	key = irq_lock();
+	if (remaining == 0) {
+		sys_write8(BM_CR_DFLT, cfg->base + XEC_I2C_CR_OFS);
+		sys_write32(0U, cfg->base + XEC_I2C_OA_OFS);
+		xdat->target_attached = false;
+		xdat->target_port = NULL;
+	} else {
+		bm_tgt_program_oa(ctrl);
+	}
+	irq_unlock(key);
+
+out:
+	k_sem_give(&xdat->lock);
+	return rc;
+}
+#endif /* CONFIG_I2C_TARGET */
 
 /* ---- work queue: async completion dispatch ------------------------------ */
 
@@ -1233,6 +1728,14 @@ static int xec_i2c_v3_bm_ctrl_init(const struct device *ctrl)
 	xdat->active_port = BM_INVALID_PORT;
 	xdat->active_freq = 0;
 
+#ifdef CONFIG_I2C_TARGET
+	for (int i = 0; i < XEC_I2C_MAX_TARGETS; i++) {
+		xdat->targets[i] = NULL;
+	}
+	xdat->target_attached = false;
+	xdat->target_port = NULL;
+#endif
+
 	k_sem_init(&xdat->lock, 1, 1);
 	k_sem_init(&xdat->sync, 0, 1);
 #ifdef CONFIG_I2C_CALLBACK
@@ -1287,6 +1790,10 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 	.transfer_cb = xec_i2c_v3_bm_vport_transfer_cb,
 #endif
 	.recover_bus = xec_i2c_v3_bm_vport_recover_bus,
+#ifdef CONFIG_I2C_TARGET
+	.target_register = xec_i2c_v3_bm_target_register,
+	.target_unregister = xec_i2c_v3_bm_target_unregister,
+#endif
 #ifdef CONFIG_I2C_RTIO
 	.iodev_submit = i2c_iodev_submit_fallback,
 #endif
@@ -1300,6 +1807,22 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 #define XEC_I2C_V3_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP(inst, girqs))
 #define XEC_I2C_V3_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP(inst, girqs))
 
+/* Buffer-mode target RX staging: one static per-controller buffer sized from
+ * the optional target-buffer-size DT property (default 256). Compiled out
+ * entirely unless CONFIG_I2C_TARGET_BUFFER_MODE.
+ */
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+#define XEC_I2C_V3_BM_TGT_BUF_DEF(inst)                                                             \
+	static uint8_t xec_i2c_v3_bm_tgt_rx_buf_##inst[DT_INST_PROP_OR(inst, target_buffer_size,   \
+								       256)];
+#define XEC_I2C_V3_BM_TGT_BUF_INIT(inst)                                                            \
+	.tgt_rx_buf = xec_i2c_v3_bm_tgt_rx_buf_##inst,                                              \
+	.tgt_rx_buf_size = DT_INST_PROP_OR(inst, target_buffer_size, 256),
+#else
+#define XEC_I2C_V3_BM_TGT_BUF_DEF(inst)
+#define XEC_I2C_V3_BM_TGT_BUF_INIT(inst)
+#endif
+
 #define XEC_I2C_V3_BM_CTRL_INIT(inst)                                                              \
 	static void xec_i2c_v3_bm_irq_connect_##inst(void)                                         \
 	{                                                                                          \
@@ -1307,6 +1830,7 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 			    DEVICE_DT_INST_GET(inst), 0);                                          \
 		irq_enable(DT_INST_IRQN(inst));                                                    \
 	}                                                                                          \
+	XEC_I2C_V3_BM_TGT_BUF_DEF(inst)                                                             \
 	static const struct xec_i2c_v3_bm_xcfg xec_i2c_v3_bm_xcfg_##inst = {                       \
 		.base = DT_INST_REG_ADDR(inst),                                                    \
 		.irq_connect = xec_i2c_v3_bm_irq_connect_##inst,                                   \
@@ -1314,6 +1838,7 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 		.girq = XEC_I2C_V3_GIRQ(inst),                                                     \
 		.girq_pos = XEC_I2C_V3_GIRQ_POS(inst),                                             \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
+		XEC_I2C_V3_BM_TGT_BUF_INIT(inst)                                                   \
 	};                                                                                         \
 	static struct xec_i2c_v3_bm_xdat xec_i2c_v3_bm_xdat_##inst;                                \
 	DEVICE_DT_INST_DEFINE(inst, xec_i2c_v3_bm_ctrl_init, NULL, &xec_i2c_v3_bm_xdat_##inst,     \
