@@ -288,15 +288,11 @@ int main(void)
 		test_loops++;
 
 		get_random_fram_offset_size(&fram_offset, &num_bytes);
- 
+
 		rc = app_i2c_cb_test_pca9555(&pca9555_spec, PCA9555_CMD_PORT0_IN);
 		if (rc != 0) {
 			pca9555_errors++;
 		}
-
-		/* DEBUG */
-		fram_offset = 0;
-		num_bytes = 200U; /* 254 fails every transaction! */
 
 		rc = app_i2c_cb_test_fram(&mb_fram_spec, fram_offset, num_bytes);
 		if (rc != 0) {
@@ -668,6 +664,16 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 		return rc;
 	}
 
+	/* The sem is given regardless of outcome; the transfer's real result is
+	 * delivered in the callback. Check it, else a failed write (e.g. the
+	 * driver rejecting an oversized transfer) would masquerade as a data
+	 * mismatch on the read-back below.
+	 */
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async write callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
+	}
+
 	i2c_tx_buf[0] = (uint8_t)(fram_offset >> 8);
 	i2c_tx_buf[1] = (uint8_t)(fram_offset >> 0);
 
@@ -699,6 +705,11 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 
 	if (rc != 0) {
 		return rc;
+	}
+
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async read-back callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
 	}
 
 	rc = memcmp(&i2c_tx_buf[2U], i2c_rx_buf, nbytes);
@@ -775,6 +786,11 @@ static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_
 
 	if (rc != 0) {
 		return rc;
+	}
+
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async multi-STOP callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
 	}
 
 	rc = memcmp(&i2c_tx_buf[2U], i2c_rx_buf, nbytes);
