@@ -85,11 +85,12 @@
 	dma-names = "host", "target";
 	/* Holds [wr-addr | wr-data... | rd-addr] for the TX phase, and on
 	 * multi-read transfers also the RX scatter staging area, so the
-	 * larger of (1 + sum(wr) + 1) and sum(rd) must fit. 256 lets the
-	 * sample exercise multi-write batches and multi-read scatter; bump
-	 * it for clients that need more.
+	 * larger of (1 + sum(wr) + 1) and sum(rd) must fit. The FRAM test
+	 * writes up to 254 data bytes + a 2-byte offset, i.e. 1 + 256 = 257
+	 * TX bytes, so 256 is one short; 260 covers the whole test range with
+	 * headroom. Bump it further for clients that need larger writes.
 	 */
-	bounce-buffer-size = <256>;
+	bounce-buffer-size = <260>;
 	/* Target-mode RX staging: largest write the external host will
 	 * issue plus one byte (matched target address). The driver strips
 	 * the address before invoking buf_write_received.
