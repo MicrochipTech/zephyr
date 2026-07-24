@@ -18,3 +18,51 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_V3_BM
+	bool "XEC Microchip I2Cv3 byte mode driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_V3_BM_ENABLED
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C version 3 byte mode driver.
+
+config I2C_MCHP_XEC_V3_BM_PORT_INIT_PRIORITY
+	int "Microchip XEC I2C V3 port init priority"
+	default 51
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Initialization priority for the I2Cv3 virtual port devices. Must
+	  be greater than CONFIG_I2C_INIT_PRIORITY so that the controller
+	  device referenced by the port's "controller" phandle is ready before
+	  the port's init function runs.
+
+config I2C_MCHP_XEC_V3_BM_KWQ_STACK_SIZE
+	int "Microchip XEC I2C V3 custom kernel work queue stack size"
+	default 320
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Stack size in bytes of the I2Cv3 byte mode driver's custom kernel
+	  work queue.
+
+config I2C_MCHP_XEC_V3_BM_KWQ_PRIORITY
+	int "Microchip XEC I2C V3 custom kernel work queue priority"
+	default 10
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Custom kernel work queue priority. Default is 10. Higher
+	  positive numbers are lower priority.
+
+config I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+	bool "MCHP XEC I2Cv3-BM driver state capture"
+	default n
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Enable driver state capture for helping diagnosing I2C issues
+
+config I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE
+	int
+	default 256
+	depends on I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+	help
+	  Size of state capture buffer in bytes. Default is 256.
