@@ -21,7 +21,17 @@ extern "C" {
 #define XEC_I2C_SMB_MAX_ID 5
 
 #define XEC_I2C_SMB_GIRQ    13U
-#define XEC_I2C_SMB_WK_GIRQ 26U
+
+/* Peripheral-clock wake aggregator. The controller's START-detect wake
+ * (WKCR.SBEN / WKSR.SB, offsets 0x64/0x60) is routed to GIRQ22, which is NOT
+ * connected to the NVIC - it re-enables the PLL so an armed target can clock in
+ * the address. The CPU wake itself still comes from the normal GIRQ13 path on an
+ * own-address match. GIRQ22 source bit per instance = instance + 1 (bit0 is the
+ * SPI peripheral): SMB0->bit1 .. SMB4->bit5. Confirmed against the SoC layer
+ * soc/microchip/mec/mec172x/reg/mec172x_ecia.h (MCHP_I2C_SMB_n_WK_CLK_GIRQ_POS).
+ */
+#define XEC_I2C_SMB_WK_GIRQ            22U
+#define XEC_I2C_SMB_WK_GIRQ_POS(instance) ((instance) + 1U)
 
 #define XEC_I2C_SMB_INST_SIZE 0x400U
 
