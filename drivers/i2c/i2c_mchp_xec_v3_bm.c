@@ -312,6 +312,21 @@ static inline bool bm_msg_is_read(const struct i2c_msg *m)
 	return (m->flags & I2C_MSG_READ) != 0U;
 }
 
+/* Write-1-to-clear the named status bits in the Completion register while
+ * preserving its read/write control bits[5:2]. The completion register mixes
+ * RW1C status (IDLE, BER, ...) with RW enables (DTEN/HCEN/TCEN/BIDEN) in one
+ * word, so a bare sys_write32 of a status constant would also write 0 into
+ * those enables -- harmless only while they are unused. Read-modify-write:
+ * OR the current RW control bits back in, and mask `bits` to the RW1C field
+ * (RW1C bits written 0 are left unchanged; RO bits are ignored on write).
+ */
+static inline void bm_cmpl_clear(uintptr_t base, uint32_t bits)
+{
+	uint32_t rw = sys_read32(base + XEC_I2C_CMPL_OFS) & XEC_I2C_CMPL_RW_MSK;
+
+	sys_write32(rw | (bits & XEC_I2C_CMPL_RW1C_MSK), base + XEC_I2C_CMPL_OFS);
+}
+
 static const struct bm_timing *bm_timing_for(uint32_t freqhz)
 {
 	if (freqhz <= KHZ(100)) {
@@ -660,7 +675,7 @@ static void bm_arm_group(const struct device *ctrl)
 	 * this group enables IDLE_IEN at its own STOP. IDLE_IEN itself stays
 	 * off here -- NBB==1 now, and it must not be enabled until STOP.
 	 */
-	sys_write32(BM_CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+	bm_cmpl_clear(base, BM_CMPL_IDLE);
 
 	sys_write8(bm_addr_byte(xdat->addr, xdat->dir_read), base + XEC_I2C_DATA_OFS);
 	sys_write8(BM_CR_START, base + XEC_I2C_CR_OFS);
@@ -890,6 +905,18 @@ static void bm_tgt_tx(const struct device *ctrl)
 	uint8_t val = BM_TGT_DFLT_DATA;
 
 	if ((sys_read8(base + XEC_I2C_SR_OFS) & BM_SR_LRB) != 0U) {
+		/* Host NACKed the final read byte and will now issue STOP. Clear
+		 * any stale CMPL.IDLE latch before arming IDLE_IEN: IDLE latches
+		 * on every STOP's NBB 0->1 edge regardless of IDLE_IEN, and the
+		 * preceding write transaction's STO-branch RW1C can race that
+		 * edge and leave IDLE set. If armed with a stale latch, the next
+		 * interrupt takes the IDLE branch while NBB is still clear (bus
+		 * busy), disarming IDLE_IEN before this transaction's real STOP
+		 * and losing its stop callback. At this point the host has only
+		 * NACKed (STOP not yet issued, NBB still 0), so any latch here is
+		 * stale by definition -- clearing it cannot drop a real STOP.
+		 */
+		bm_cmpl_clear(base, BM_CMPL_IDLE);
 		sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		sys_write8(BM_TGT_DFLT_DATA, base + XEC_I2C_DATA_OFS);
 		return;
@@ -931,7 +958,7 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 	 */
 	if ((cfgr & BM_CFG_IDLE_IEN) != 0U && (cmpl & BM_CMPL_IDLE) != 0U) {
 		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
-		sys_write32(BM_CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+		bm_cmpl_clear(base, BM_CMPL_IDLE);
 		/* IDLE latches on NBB 0->1 after the host's STOP releases the
 		 * lines. Only then is the read transaction truly over: deliver
 		 * stop and re-arm. A latch without NBB set is spurious -- just
@@ -959,7 +986,7 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 		if (cbs != NULL && cbs->stop != NULL) {
 			cbs->stop(tcfg);
 		}
-		sys_write32(cmpl & XEC_I2C_CMPL_RW1C_MSK, base + XEC_I2C_CMPL_OFS);
+		bm_cmpl_clear(base, cmpl);
 		bm_tgt_restart(base);
 		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		return;
@@ -1010,7 +1037,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	if (xdat->state == BM_STATE_STOP) {
 		if ((sys_read32(base + XEC_I2C_CMPL_OFS) & BM_CMPL_IDLE) != 0U) {
 			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
-			sys_write32(BM_CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+			bm_cmpl_clear(base, BM_CMPL_IDLE);
 			xec_i2c_v3_bm_finish(ctrl_dev);
 		}
 		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
