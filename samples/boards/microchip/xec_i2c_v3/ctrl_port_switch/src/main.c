@@ -40,6 +40,9 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define I2C_SMB_GET_DEV(nid) DEVICE_DT_GET(nid),
 
+#define I2C_CTRL0_NODE DT_ALIAS(i2c0)
+#define I2C_CTRL1_NODE DT_ALIAS(i2c1)
+
 #define NODE_PCA9555 DT_NODELABEL(pca9555_evb)
 #define NODE_LTC2489 DT_NODELABEL(ltc2489_evb)
 #define NODE_FRAM    DT_NODELABEL(mb85rc256v_fram)
@@ -52,18 +55,16 @@ const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 
 static const struct device *i2c_smb_ctrls[] = {
 	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)
-};
+		DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)};
 
 /* Ports on the controllers */
 static const struct device *i2c_smb_ports[] = {
 	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)
-};
+		DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)};
 
 struct k_timer minute_timer;
 
-#define APP_I2C_PORT_SWITCH_LOOPS 10000U
+#define APP_I2C_PORT_SWITCH_LOOPS    10000U
 #define APP_I2C_CB_PORT_SWITCH_LOOPS 10000U
 
 #define I2C_MAX_MSGS    8
@@ -112,8 +113,8 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 				uint32_t nbytes);
 static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_offset,
 				   uint32_t nbytes);
-static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread,
-			   struct app_i2c_cb_s *pcbs, i2c_callback_t cb);
+static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread, struct app_i2c_cb_s *pcbs,
+			   i2c_callback_t cb);
 #endif
 
 void minute_timer_cb(struct k_timer *kt)
@@ -139,6 +140,24 @@ int main(void)
 	memset((void *)msgs, 0, sizeof(msgs));
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
+
+#ifdef CONFIG_BOARD_QUALIFIERS
+	LOG_INF("Microchip XEC I2Cv3 ctrl_port_switch: board: %s/%s", CONFIG_BOARD,
+		CONFIG_BOARD_QUALIFIERS);
+#else
+	LOG_INF("Microchip XEC I2Cv3 ctrl_port_switch: board: %s", CONFIG_BOARD);
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL0_NODE, compatible)
+	LOG_INF("I2C Ctrl0 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL0_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl0 does not have a compatible!");
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL1_NODE, compatible)
+	LOG_INF("I2C Ctrl1 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL1_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl1 does not have a compatible!");
+#endif
+	log_flush();
 
 	k_timer_init(&minute_timer, minute_timer_cb, NULL);
 
@@ -584,9 +603,8 @@ static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_p
 
 	app_i2c_cb_prep(&pca9555_cb_data);
 
-	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 1U,
-				  (void *)i2c_rx_buf, 2U, app_i2c_cb_func,
-				  (void *)&pca9555_cb_data);
+	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 1U, (void *)i2c_rx_buf,
+				  2U, app_i2c_cb_func, (void *)&pca9555_cb_data);
 	if (rc != 0) {
 		LOG_ERR("App I2C wr-rd-cb-dt error (%d)", rc);
 		return rc;
@@ -598,7 +616,7 @@ static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_p
 		gpio_port_value = ((uint16_t)i2c_rx_buf[1] << 8) | i2c_rx_buf[0];
 		if (gpio_port_value != PCA9555_PORT0_IN_EXPECTED) {
 			LOG_ERR("PCA9555 input port %u = 0x%04x expected 0x%04x", gpio_port,
-			gpio_port_value, PCA9555_PORT0_IN_EXPECTED);
+				gpio_port_value, PCA9555_PORT0_IN_EXPECTED);
 			rc = -EBADMSG;
 		}
 		break;
@@ -641,8 +659,7 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 	msgs[0].len = nbytes + 2U;
 	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
 
-	rc = i2c_transfer_cb(dts->bus, msgs, 1U, dts->addr, app_i2c_cb_func,
-			     (void *)&fram_cb_data);
+	rc = i2c_transfer_cb(dts->bus, msgs, 1U, dts->addr, app_i2c_cb_func, (void *)&fram_cb_data);
 	if (rc != 0) {
 		LOG_ERR("App I2C wr-cb for write error (%d)", rc);
 		return rc;
@@ -683,9 +700,8 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 
 	app_i2c_cb_prep(&fram_cb_data);
 
-	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 2U,
-				  (void *)i2c_rx_buf, nbytes, app_i2c_cb_func,
-				  (void *)&fram_cb_data);
+	rc = i2c_write_read_cb_dt(dts, msgs, 2U, (const void *)i2c_tx_buf, 2U, (void *)i2c_rx_buf,
+				  nbytes, app_i2c_cb_func, (void *)&fram_cb_data);
 	if (rc != 0) {
 		LOG_ERR("App I2C wr-rd-cb-dt: write offset, read data error (%d)", rc);
 		return rc;
@@ -765,8 +781,7 @@ static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_
 
 	app_i2c_cb_prep(&fram_cb_data);
 
-	rc = i2c_transfer_cb(dts->bus, msgs, 3U, dts->addr, app_i2c_cb_func,
-			     (void *)&fram_cb_data);
+	rc = i2c_transfer_cb(dts->bus, msgs, 3U, dts->addr, app_i2c_cb_func, (void *)&fram_cb_data);
 	if (rc != 0) {
 		LOG_ERR("App I2C xfr cb 3 messages with multiple STOPs (%d)", rc);
 		return rc;
@@ -805,8 +820,8 @@ static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_
 	return rc;
 }
 
-static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread,
-			   struct app_i2c_cb_s *pcbs, i2c_callback_t cb)
+static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread, struct app_i2c_cb_s *pcbs,
+			   i2c_callback_t cb)
 {
 	int rc = 0;
 

@@ -137,6 +137,11 @@
 };
 
 / {
+	aliases {
+		i2c0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_4;
+	};
+
 	zephyr,user {
 		i2c-p0-test-gpios = <MCHP_GPIO_DECODE_115 GPIO_ACTIVE_HIGH>;
 	};
