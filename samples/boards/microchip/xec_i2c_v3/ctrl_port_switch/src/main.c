@@ -40,6 +40,9 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define I2C_SMB_GET_DEV(nid) DEVICE_DT_GET(nid),
 
+#define I2C_CTRL0_NODE DT_ALIAS(i2c0)
+#define I2C_CTRL1_NODE DT_ALIAS(i2c1)
+
 #define NODE_PCA9555 DT_NODELABEL(pca9555_evb)
 #define NODE_LTC2489 DT_NODELABEL(ltc2489_evb)
 #define NODE_FRAM    DT_NODELABEL(mb85rc256v_fram)
@@ -139,6 +142,24 @@ int main(void)
 	memset((void *)msgs, 0, sizeof(msgs));
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
+
+#ifdef CONFIG_BOARD_QUALIFIERS
+	LOG_INF("Microchip XEC I2Cv3 ctrl_port_switch: board: %s/%s", CONFIG_BOARD,
+		CONFIG_BOARD_QUALIFIERS);
+#else
+	LOG_INF("Microchip XEC I2Cv3 ctrl_port_switch: board: %s", CONFIG_BOARD);
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL0_NODE, compatible)
+	LOG_INF("I2C Ctrl0 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL0_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl0 does not have a compatible!");
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL1_NODE, compatible)
+	LOG_INF("I2C Ctrl1 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL1_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl1 does not have a compatible!");
+#endif
+	log_flush();
 
 	k_timer_init(&minute_timer, minute_timer_cb, NULL);
 
