@@ -96,11 +96,16 @@
 	 * it for clients that need more.
 	 */
 	bounce-buffer-size = <256>;
-	/* Target-mode RX staging: largest write the external host will
-	 * issue plus one byte (matched target address). The driver strips
-	 * the address before invoking buf_write_received.
+	/* Target-mode RX staging = one cyclic-DMA wrap cycle. The driver
+	 * strips the matched address before invoking buf_write_received.
+	 * Sized deliberately SMALLER than the streaming test's 250-byte
+	 * payload so the cyclic wrap fires mid-transaction; with
+	 * target-rx-chunk-count = 4 that yields 60-byte chunks. It must
+	 * also stay below the host bounce-buffer-size above (256 => <=255
+	 * data bytes per host write) — otherwise no payload can both exceed
+	 * this buffer (to trigger the wrap) and still fit in one host write.
 	 */
-	target-buffer-size = <260>;
+	target-buffer-size = <240>;
 
 	target-rx-chunk-count = <4>;
 };
@@ -120,11 +125,16 @@
 	 * it for clients that need more.
 	 */
 	bounce-buffer-size = <256>;
-	/* Target-mode RX staging: largest write the external host will
-	 * issue plus one byte (matched target address). The driver strips
-	 * the address before invoking buf_write_received.
+	/* Target-mode RX staging = one cyclic-DMA wrap cycle. The driver
+	 * strips the matched address before invoking buf_write_received.
+	 * Sized deliberately SMALLER than the streaming test's 250-byte
+	 * payload so the cyclic wrap fires mid-transaction; with
+	 * target-rx-chunk-count = 4 that yields 60-byte chunks. It must
+	 * also stay below the host bounce-buffer-size above (256 => <=255
+	 * data bytes per host write) — otherwise no payload can both exceed
+	 * this buffer (to trigger the wrap) and still fit in one host write.
 	 */
-	target-buffer-size = <260>;
+	target-buffer-size = <240>;
 
 	target-rx-chunk-count = <4>;
 };
@@ -150,6 +160,11 @@
 };
 
 / {
+	aliases {
+		i2c0 = &i2c_smb_0;
+		i2c1 = &i2c_smb_1;
+	};
+
 	zephyr,user {
 		i2c-p0-test-gpios = <MCHP_GPIO_DECODE_115 GPIO_ACTIVE_HIGH>;
 	};

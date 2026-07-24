@@ -40,6 +40,9 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define I2C_SMB_GET_DEV(nid) DEVICE_DT_GET(nid),
 
+#define I2C_CTRL0_NODE DT_ALIAS(i2c0)
+#define I2C_CTRL1_NODE DT_ALIAS(i2c1)
+
 /* Target nodes */
 #define NODE_I2C_TARG1 DT_NODELABEL(i2c_targ1)
 #define NODE_I2C_TARG2 DT_NODELABEL(i2c_targ2)
@@ -55,9 +58,24 @@ const struct i2c_dt_spec targ2_spec = I2C_DT_SPEC_GET(NODE_I2C_TARG2);
 const struct device *i2c_smb0_dev = DEVICE_DT_GET(DT_NODELABEL(i2c_smb_0));
 const struct device *i2c_smb1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c_smb_1));
 
-#define I2C_MAX_MSGS    8
-#define I2C_TX_BUF_SIZE 256
-#define I2C_RX_BUF_SIZE 256
+#define I2C_MAX_MSGS 8
+
+/* Target-buffer-size from DT for smb_0 (the target controller). Tests
+ * that intentionally exceed the HW receive budget reference this. The
+ * buffer-mode driver stages up to this many bytes before delivering
+ * them via buf_write_received; the buffer-fill test writes one more.
+ */
+#define APP_TARG_HW_RX_SIZE       DT_PROP(DT_NODELABEL(i2c_smb_0), target_buffer_size)
+#define APP_TARG_HW_DATA_CAPACITY (APP_TARG_HW_RX_SIZE - 1U)
+
+/* Host TX/RX scratch. The buffer-fill test drives APP_TARG_HW_DATA_CAPACITY + 1
+ * (== APP_TARG_HW_RX_SIZE) bytes out of i2c_tx_buf, so the scratch must be at
+ * least that large or the test skips itself with -ENOSPC. Derive the size from
+ * DT with a 256-byte floor so it tracks any target-buffer-size while preserving
+ * the original headroom the fixed-size tests were written against.
+ */
+#define I2C_TX_BUF_SIZE MAX(256, APP_TARG_HW_RX_SIZE)
+#define I2C_RX_BUF_SIZE MAX(256, APP_TARG_HW_RX_SIZE)
 
 /* Bounded wait for a target stop callback. Driver's own per-transfer
  * timeout is ~1s; 500ms here is well below that so a hang in the
@@ -92,14 +110,14 @@ static struct i2c_msg msgs[I2C_MAX_MSGS];
 static uint8_t i2c_tx_buf[I2C_TX_BUF_SIZE];
 static uint8_t i2c_rx_buf[I2C_RX_BUF_SIZE];
 
-#define APP_TARG1_BUF_SIZE 256
-#define APP_TARG2_BUF_SIZE 64
-
-/* Target-buffer-size from DT for smb_0. Tests that intentionally
- * exceed the HW receive budget reference this constant.
+/* targ1 is the buffer-fill target: its application buffer must hold a
+ * full HW-buffer delivery (up to APP_TARG_HW_RX_SIZE bytes -- the byte-
+ * mode driver stages data only, so it can deliver the whole staging
+ * buffer), and the buffer-fill test verifies APP_TARG_HW_DATA_CAPACITY
+ * of those bytes. Track target-buffer-size with a 256-byte floor.
  */
-#define APP_TARG_HW_RX_SIZE       DT_PROP(DT_NODELABEL(i2c_smb_0), target_buffer_size)
-#define APP_TARG_HW_DATA_CAPACITY (APP_TARG_HW_RX_SIZE - 1U)
+#define APP_TARG1_BUF_SIZE MAX(256, APP_TARG_HW_RX_SIZE)
+#define APP_TARG2_BUF_SIZE 64
 
 static uint8_t targ1_buf[APP_TARG1_BUF_SIZE];
 static uint8_t targ2_buf[APP_TARG2_BUF_SIZE];
@@ -723,10 +741,22 @@ int main(void)
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
 
+#ifdef CONFIG_BOARD_QUALIFIERS
+	LOG_INF("Microchip XEC I2Cv3 targ_mode: board: %s/%s", CONFIG_BOARD,
+		CONFIG_BOARD_QUALIFIERS);
+#else
 	LOG_INF("Microchip XEC I2Cv3 targ_mode: board: %s", CONFIG_BOARD);
-	LOG_INF("i2c_smb_0: %s", i2c_smb0_dev->name);
-	LOG_INF("i2c_smb_0 target_buffer_size = %u", APP_TARG_HW_RX_SIZE);
-	LOG_INF("i2c_smb_1: %s", i2c_smb1_dev->name);
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL0_NODE, compatible)
+	LOG_INF("I2C Ctrl0 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL0_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl0 does not have a compatible!");
+#endif
+#if DT_NODE_HAS_PROP(I2C_CTRL1_NODE, compatible)
+	LOG_INF("I2C Ctrl1 compatible: %s", DT_PROP_BY_IDX(I2C_CTRL1_NODE, compatible, 0));
+#else
+	LOG_INF("I2C Ctrl1 does not have a compatible!");
+#endif
 	log_flush();
 
 	k_sem_init(&app_targ1_sem, 0, 1);
