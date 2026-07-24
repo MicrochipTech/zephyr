@@ -101,6 +101,10 @@ struct app_i2c_target {
 	uint32_t stop_cnt;
 	uint32_t error_cnt;
 	enum i2c_error_reason err;
+	size_t nack_after; /* byte-mode only: NACK once this many write bytes
+			    * have been accepted (0 = never). Used by the
+			    * byte-mode overflow test; unused in buffer mode.
+			    */
 };
 
 static struct k_sem app_targ1_sem;
@@ -122,26 +126,52 @@ static uint8_t i2c_rx_buf[I2C_RX_BUF_SIZE];
 static uint8_t targ1_buf[APP_TARG1_BUF_SIZE];
 static uint8_t targ2_buf[APP_TARG2_BUF_SIZE];
 
-static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len);
-static int targ1_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len);
+/* stop/error are mode-agnostic and shared by both callback flavors. */
 static int targ1_stop_cb(struct i2c_target_config *config);
 static void targ1_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code);
-
-static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len);
-static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len);
 static int targ2_stop_cb(struct i2c_target_config *config);
 static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code);
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len);
+static int targ1_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len);
+static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len);
+static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, uint32_t *len);
+#else
+static int targ1_wr_req_cb(struct i2c_target_config *config);
+static int targ1_wr_recv_byte_cb(struct i2c_target_config *config, uint8_t val);
+static int targ1_rd_req_byte_cb(struct i2c_target_config *config, uint8_t *val);
+static int targ1_rd_proc_cb(struct i2c_target_config *config, uint8_t *val);
+static int targ2_wr_req_cb(struct i2c_target_config *config);
+static int targ2_wr_recv_byte_cb(struct i2c_target_config *config, uint8_t val);
+static int targ2_rd_req_byte_cb(struct i2c_target_config *config, uint8_t *val);
+static int targ2_rd_proc_cb(struct i2c_target_config *config, uint8_t *val);
+#endif
+
 const struct i2c_target_callbacks targ1_callbacks = {
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	.buf_write_received = targ1_buf_wr_recv_cb,
 	.buf_read_requested = targ1_buf_rd_req_cb,
+#else
+	.write_requested = targ1_wr_req_cb,
+	.write_received = targ1_wr_recv_byte_cb,
+	.read_requested = targ1_rd_req_byte_cb,
+	.read_processed = targ1_rd_proc_cb,
+#endif
 	.stop = targ1_stop_cb,
 	.error = targ1_error_cb,
 };
 
 const struct i2c_target_callbacks targ2_callbacks = {
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	.buf_write_received = targ2_buf_wr_recv_cb,
 	.buf_read_requested = targ2_buf_rd_req_cb,
+#else
+	.write_requested = targ2_wr_req_cb,
+	.write_received = targ2_wr_recv_byte_cb,
+	.read_requested = targ2_rd_req_byte_cb,
+	.read_processed = targ2_rd_proc_cb,
+#endif
 	.stop = targ2_stop_cb,
 	.error = targ2_error_cb,
 };
@@ -175,6 +205,7 @@ static void reset_target_state(struct app_i2c_target *t, struct k_sem *sem)
 	t->stop_cnt = 0;
 	t->error_cnt = 0;
 	t->err = 0;
+	t->nack_after = 0;
 	k_sem_reset(sem);
 }
 
@@ -347,6 +378,7 @@ static int test_host_read_short_from_targ2(void)
 	return verify_buf_eq("targ2", hostbuf, want, sizeof(hostbuf));
 }
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 /* Tier 1 #1: buffer-fill. Host writes APP_TARG_HW_DATA_CAPACITY + 1
  * data bytes -- one more than the HW receive budget will accept after
  * the address byte. Expect the target to NAK the over-the-line byte
@@ -358,6 +390,10 @@ static int test_host_read_short_from_targ2(void)
  * Catches: TCMD.RCL exhaustion -> TDONE-with-RUN=0 path,
  * write-received-on-fill-then-stop dispatch, lack of stuck state
  * after a buffer-fill transaction.
+ *
+ * Buffer-mode only: the NAK is driven by the HW receive budget. The
+ * byte-mode build substitutes test_host_write_overflow_nack_targ1
+ * below, which drives the NAK from the write_received return value.
  */
 static int test_host_write_buffer_fill_targ1(void)
 {
@@ -415,6 +451,68 @@ static int test_host_write_buffer_fill_targ1(void)
 	}
 	return 0;
 }
+
+#else /* byte-mode: NAK is application-driven, not HW-budget-driven */
+
+/* Byte-mode analogue of the buffer-fill test. There is no HW receive
+ * budget in byte mode -- every received byte reaches write_received --
+ * so the NAK is produced by the application: write_received returns
+ * nonzero once nack_after bytes have been accepted, and the driver
+ * NACKs the next byte (bm_tgt_nack_next). This is the only coverage of
+ * the byte-mode callback-driven NACK return path.
+ *
+ * Host writes nack_after + 4 bytes; expect the first nack_after bytes
+ * stored, the host write to see a NAK (rc != 0) or report success
+ * (rc == 0) -- both accepted, as in the buffer-fill test -- and exactly
+ * one stop callback.
+ */
+static int test_host_write_overflow_nack_targ1(void)
+{
+	const size_t nack_after = 4U;
+	const uint32_t write_len = (uint32_t)nack_after + 4U;
+	int rc;
+
+	if (write_len > sizeof(i2c_tx_buf)) {
+		LOG_WRN("test buffer too small; increase I2C_TX_BUF_SIZE");
+		return -ENOSPC;
+	}
+
+	reset_all_targets();
+	targ1_app_data.nack_after = nack_after;
+
+	for (uint32_t i = 0; i < write_len; i++) {
+		i2c_tx_buf[i] = (uint8_t)(i & 0xFFU);
+	}
+
+	rc = i2c_write(mb_fram_spec.bus, i2c_tx_buf, write_len, targ1_spec.addr);
+	if (rc != 0) {
+		LOG_INF("i2c_write returned %d (expected; host saw target NAK)", rc);
+	} else {
+		LOG_INF("i2c_write returned 0 (host driver did not surface the NAK)");
+	}
+
+	rc = wait_for_stop(&app_targ1_sem, "targ1");
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* The first nack_after bytes must have been accepted and stored. */
+	rc = verify_buf_eq("targ1", targ1_buf, i2c_tx_buf, nack_after);
+	if (rc != 0) {
+		return rc;
+	}
+
+	if (targ1_app_data.stop_cnt != 1U || targ1_app_data.wr_recv_cnt != 1U ||
+	    targ1_app_data.rd_req_cnt != 0U) {
+		LOG_ERR("targ1 counters: wr_recv=%u rd_req=%u stop=%u error=%u "
+			"(expected stop==1, wr_recv==1, rd_req==0)",
+			targ1_app_data.wr_recv_cnt, targ1_app_data.rd_req_cnt,
+			targ1_app_data.stop_cnt, targ1_app_data.error_cnt);
+		return -EINVAL;
+	}
+	return 0;
+}
+#endif /* CONFIG_I2C_TARGET_BUFFER_MODE */
 
 /* Tier 1 #7: regression test for the R-bit gate. Host reads from
  * targ1; the only callback fired must be buf_read_requested (plus
@@ -726,7 +824,11 @@ static int test_host_write_streaming_targ1(void)
 static const struct test_case target_tests[] = {
 	{"host write 4B to targ1", test_host_write_short_to_targ1},
 	{"host read 4B from targ2", test_host_read_short_from_targ2},
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	{"buffer fill targ1", test_host_write_buffer_fill_targ1},
+#else
+	{"byte-mode overflow NACK targ1", test_host_write_overflow_nack_targ1},
+#endif
 	{"host read targ1: no wr_recv_cb", test_host_read_does_not_fire_write_cb},
 	{"symmetric: write targ2, read targ1", test_symmetric_targ2_write_targ1_read},
 	{"write 2B + read 4B targ1 (Sr)", test_host_write_then_read_targ1},
@@ -932,6 +1034,42 @@ static int app_i2c_target_init(struct app_i2c_target *apptrg, uint8_t *buf, size
 	return 0;
 }
 
+/* stop/error are identical in both modes: they observe completion and
+ * count errors, independent of how payload bytes are delivered.
+ */
+static int targ1_stop_cb(struct i2c_target_config *config)
+{
+	targ1_app_data.stop_cnt++;
+	targ1_app_data.idx = 0;
+
+	k_sem_give(&app_targ1_sem);
+
+	return 0;
+}
+
+static void targ1_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code)
+{
+	targ1_app_data.error_cnt++;
+	targ1_app_data.err = error_code;
+}
+
+static int targ2_stop_cb(struct i2c_target_config *config)
+{
+	targ2_app_data.stop_cnt++;
+	targ2_app_data.idx = 0;
+
+	k_sem_give(&app_targ2_sem);
+
+	return 0;
+}
+
+static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code)
+{
+	targ2_app_data.error_cnt++;
+	targ2_app_data.err = error_code;
+}
+
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 static void targ1_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len)
 {
 	uint32_t max_idx = targ1_app_data.wr_idx + len;
@@ -970,22 +1108,6 @@ static int targ1_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, 
 	return 0;
 }
 
-static int targ1_stop_cb(struct i2c_target_config *config)
-{
-	targ1_app_data.stop_cnt++;
-	targ1_app_data.idx = 0;
-
-	k_sem_give(&app_targ1_sem);
-
-	return 0;
-}
-
-static void targ1_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code)
-{
-	targ1_app_data.error_cnt++;
-	targ1_app_data.err = error_code;
-}
-
 static void targ2_buf_wr_recv_cb(struct i2c_target_config *config, uint8_t *ptr, uint32_t len)
 {
 	uint32_t max_idx = targ2_app_data.wr_idx + len;
@@ -1021,18 +1143,118 @@ static int targ2_buf_rd_req_cb(struct i2c_target_config *config, uint8_t **ptr, 
 	return 0;
 }
 
-static int targ2_stop_cb(struct i2c_target_config *config)
-{
-	targ2_app_data.stop_cnt++;
-	targ2_app_data.idx = 0;
+#else /* byte-granular target callbacks (CONFIG_I2C_TARGET_BUFFER_MODE=n) */
 
-	k_sem_give(&app_targ2_sem);
+/* Byte returned to the host when a read runs past the stored payload;
+ * matches the 0x55 initial fill the read-back tests expect.
+ */
+#define BM_TGT_RD_FILL 0x55U
+
+/* The byte-mode callbacks feed the SAME app state as their buffer-mode
+ * counterparts so every test's counter/data assertions hold unchanged:
+ *   - write_requested fires once per write txn      -> wr_recv_cnt++
+ *   - write_received appends one byte at wr_idx      (read cursor idx untouched)
+ *   - read_requested fires once per read txn        -> rd_req_cnt++, first byte
+ *   - read_processed supplies each subsequent byte, walking idx
+ * write uses wr_idx, read walks idx (reset at stop) -- writes never move idx,
+ * so a read after a write still starts at buf[0], matching buffer mode.
+ */
+static int targ1_wr_req_cb(struct i2c_target_config *config)
+{
+	targ1_app_data.wr_recv_cnt++;
 
 	return 0;
 }
 
-static void targ2_error_cb(struct i2c_target_config *config, enum i2c_error_reason error_code)
+static int targ1_wr_recv_byte_cb(struct i2c_target_config *config, uint8_t val)
 {
-	targ2_app_data.error_cnt++;
-	targ2_app_data.err = error_code;
+	if (targ1_app_data.wr_idx < targ1_app_data.bufsz) {
+		targ1_app_data.buf[targ1_app_data.wr_idx++] = val;
+	}
+
+	/* Byte-mode overflow test: NACK once nack_after bytes are accepted. */
+	if ((targ1_app_data.nack_after != 0U) &&
+	    (targ1_app_data.wr_idx >= targ1_app_data.nack_after)) {
+		return -1;
+	}
+
+	return 0;
 }
+
+static int targ1_rd_req_byte_cb(struct i2c_target_config *config, uint8_t *val)
+{
+	targ1_app_data.rd_req_cnt++;
+
+	if (val == NULL) {
+		return -EINVAL;
+	}
+
+	*val = (targ1_app_data.idx < targ1_app_data.bufsz)
+		       ? targ1_app_data.buf[targ1_app_data.idx++]
+		       : BM_TGT_RD_FILL;
+
+	return 0;
+}
+
+static int targ1_rd_proc_cb(struct i2c_target_config *config, uint8_t *val)
+{
+	if (val == NULL) {
+		return -EINVAL;
+	}
+
+	*val = (targ1_app_data.idx < targ1_app_data.bufsz)
+		       ? targ1_app_data.buf[targ1_app_data.idx++]
+		       : BM_TGT_RD_FILL;
+
+	return 0;
+}
+
+static int targ2_wr_req_cb(struct i2c_target_config *config)
+{
+	targ2_app_data.wr_recv_cnt++;
+
+	return 0;
+}
+
+static int targ2_wr_recv_byte_cb(struct i2c_target_config *config, uint8_t val)
+{
+	if (targ2_app_data.wr_idx < targ2_app_data.bufsz) {
+		targ2_app_data.buf[targ2_app_data.wr_idx++] = val;
+	}
+
+	if ((targ2_app_data.nack_after != 0U) &&
+	    (targ2_app_data.wr_idx >= targ2_app_data.nack_after)) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static int targ2_rd_req_byte_cb(struct i2c_target_config *config, uint8_t *val)
+{
+	targ2_app_data.rd_req_cnt++;
+
+	if (val == NULL) {
+		return -EINVAL;
+	}
+
+	*val = (targ2_app_data.idx < targ2_app_data.bufsz)
+		       ? targ2_app_data.buf[targ2_app_data.idx++]
+		       : BM_TGT_RD_FILL;
+
+	return 0;
+}
+
+static int targ2_rd_proc_cb(struct i2c_target_config *config, uint8_t *val)
+{
+	if (val == NULL) {
+		return -EINVAL;
+	}
+
+	*val = (targ2_app_data.idx < targ2_app_data.bufsz)
+		       ? targ2_app_data.buf[targ2_app_data.idx++]
+		       : BM_TGT_RD_FILL;
+
+	return 0;
+}
+#endif /* CONFIG_I2C_TARGET_BUFFER_MODE */
