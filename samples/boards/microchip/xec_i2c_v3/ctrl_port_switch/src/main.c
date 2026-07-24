@@ -51,11 +51,15 @@ const struct i2c_dt_spec ltc2489_spec = I2C_DT_SPEC_GET(NODE_LTC2489);
 const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 
 static const struct device *i2c_smb_ctrls[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)
+};
 
 /* Ports on the controllers */
 static const struct device *i2c_smb_ports[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)
+};
 
 struct k_timer minute_timer;
 

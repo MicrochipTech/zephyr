@@ -56,6 +56,12 @@
  *	pin 5 = VTR2
  *	pin 6 = GND
  *
+ * Target mode test uses i2c_smb_0 as the target controller connected
+ * to port 0 with two target addresses.
+ *
+ * i2c_smb_1 using port 7 as the host controller.
+ *
+ * Fly wire J22-1 to J12-1 and J22-3 to J12-3 
  */
 
 #include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
@@ -76,10 +82,51 @@
 };
 
 &i2c_smb_0 {
-	compatible = "microchip,xec-i2c-v3-bm";
+	compatible = "microchip,xec-i2c-v3-nl";
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
+	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_CTRL>,
+	       <&dmac 1 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_TARG>;
+	dma-names = "host", "target";
+	/* Holds [wr-addr | wr-data... | rd-addr] for the TX phase, and on
+	 * multi-read transfers also the RX scatter staging area, so the
+	 * larger of (1 + sum(wr) + 1) and sum(rd) must fit. 256 lets the
+	 * sample exercise multi-write batches and multi-read scatter; bump
+	 * it for clients that need more.
+	 */
+	bounce-buffer-size = <256>;
+	/* Target-mode RX staging: largest write the external host will
+	 * issue plus one byte (matched target address). The driver strips
+	 * the address before invoking buf_write_received.
+	 */
+	target-buffer-size = <260>;
+
+	target-rx-chunk-count = <4>;
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-v3-nl";
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	dmas = <&dmac 2 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_CTRL>,
+	       <&dmac 3 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB2_TARG>;
+	dma-names = "host", "target";
+	/* Holds [wr-addr | wr-data... | rd-addr] for the TX phase, and on
+	 * multi-read transfers also the RX scatter staging area, so the
+	 * larger of (1 + sum(wr) + 1) and sum(rd) must fit. 256 lets the
+	 * sample exercise multi-write batches and multi-read scatter; bump
+	 * it for clients that need more.
+	 */
+	bounce-buffer-size = <256>;
+	/* Target-mode RX staging: largest write the external host will
+	 * issue plus one byte (matched target address). The driver strips
+	 * the address before invoking buf_write_received.
+	 */
+	target-buffer-size = <260>;
+
+	target-rx-chunk-count = <4>;
 };
 
 /* Port 0 pins */
@@ -89,17 +136,6 @@
 
 &i2c00_scl_gpio004 {
 	drive-open-drain;
-};
-
-/* Port 3 pins */
-&i2c03_sda_gpio007 {
-	drive-open-drain;
-	drive-strength = <3>;
-};
-
-&i2c03_scl_gpio010 {
-	drive-open-drain;
-	drive-strength = <3>;
 };
 
 /* Port 7 pins */
@@ -120,10 +156,10 @@
 
 	/* Port 0 (default port) on I2C Controller 0 */
 	i2c0_p0: i2c-port0 {
-		compatible = "microchip,xec-i2c-v3-bm-port";
+		compatible = "microchip,xec-i2c-v3-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		port = <0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(0, 0)>;
 		controller = <&i2c_smb_0>;
 		clock-frequency = <I2C_BITRATE_STANDARD>;
 		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
@@ -131,24 +167,24 @@
 		default-port;
 		status = "okay";
 
-		pca9555_evb: pca9555@26 {
-			reg = <0x26>;
+		i2c_targ1: i2c_target@40 {
+			reg = <0x40>;
 			status = "okay";
 		};
 
-		ltc2489_evb: ltc2489@34 {
-			reg = <0x34>;
+		i2c_targ2: i2c_target@41 {
+			reg = <0x41>;
 			status = "okay";
 		};
 	};
 
 	/* Port 7 on I2C controller 0 */
-	i2c0_p7: i2c-port7 {
-		compatible = "microchip,xec-i2c-v3-bm-port";
+	i2c1_p7: i2c-port7 {
+		compatible = "microchip,xec-i2c-v3-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		port = <7>;
-		controller = <&i2c_smb_0>;
+		port = <MCHP_XEC_I2C_CTRL_PORT(1, 7)>;
+		controller = <&i2c_smb_1>;
 		clock-frequency = <I2C_BITRATE_FAST>;
 		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
 		pinctrl-names = "default";
