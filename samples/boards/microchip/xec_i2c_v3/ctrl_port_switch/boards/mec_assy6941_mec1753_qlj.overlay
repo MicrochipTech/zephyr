@@ -160,7 +160,11 @@
 		status = "okay";
 
 		pca9555_evb: pca9555@26 {
+			compatible = "nxp,pca9555";
 			reg = <0x26>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <16>;
 			status = "okay";
 		};
 
