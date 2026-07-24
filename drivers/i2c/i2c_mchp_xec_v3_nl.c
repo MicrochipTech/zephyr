@@ -48,6 +48,7 @@
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
@@ -285,6 +286,13 @@ struct xec_i2c_nl_config {
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint16_t enc_pcr;
+#ifdef CONFIG_PM_DEVICE
+	/* GIRQ22 (peripheral-clock wake) source position for this controller;
+	 * armed for START-detect wake only in target mode with wakeup-source.
+	 */
+	uint8_t wk_girq_pos;
+	bool wakeup_source;
+#endif
 	uint8_t dma_chan;     /* host-mode channel  */
 	uint8_t dma_slot;     /* host-mode trigsrc  */
 	uint8_t tgt_dma_chan; /* target-mode channel; valid if tgt_rx_buf != NULL */
@@ -3036,6 +3044,123 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 	return 0;
 }
 
+/* ---- power management ---------------------------------------------------- */
+
+#ifdef CONFIG_PM_DEVICE
+/* A controller is armed for START-detect wake only when it is in target mode
+ * AND its DT node carries wakeup-source. In controller mode the block cannot
+ * wake the SoC, so suspend just disables it.
+ */
+static inline bool nl_ctrl_wake_armed(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+
+#ifdef CONFIG_I2C_TARGET
+	const struct xec_i2c_nl_data *data = ctrl->data;
+
+	return cfg->wakeup_source && (data->mode == XEC_I2C_NL_MODE_TARGET);
+#else
+	ARG_UNUSED(cfg);
+	return false;
+#endif
+}
+
+/* Controller node PM: owns CFG.ENAB and the START-detect wake arm/disarm.
+ * Pin state is handled by the port node's callback.
+ */
+static int xec_i2c_nl_ctrl_pm_action(const struct device *ctrl, enum pm_device_action action)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	mm_reg_t base = cfg->base;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		if (nl_ctrl_wake_armed(ctrl)) {
+			/* Target mode + wakeup-source: arm START-detect wake and
+			 * leave the controller (and GIRQ13) enabled. The silicon
+			 * requires this exact order: clear the wake status, clear
+			 * and enable the GIRQ22 (peripheral-clock/PLL) source, then
+			 * enable start-bit detection. GIRQ22 re-enables the PLL on a
+			 * START; the CPU still wakes via GIRQ13 on own-address match.
+			 */
+			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
+			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+					   MCHP_MEC_ECIA_GIRQ_EN);
+			sys_set_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+		} else {
+			/* Controller mode: cannot wake the SoC, so just clear the
+			 * enable bit. The port callback turns the pads off.
+			 */
+			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+		}
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		if (nl_ctrl_wake_armed(ctrl)) {
+			/* Disarm START-detect wake; the controller stayed enabled. */
+			sys_clear_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+					   MCHP_MEC_ECIA_GIRQ_DIS);
+			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
+			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+		} else {
+			/* Controller mode: full PCR reset + re-arm on the last
+			 * active (freq, port), restoring timing and the enable bit.
+			 */
+			uint32_t freq = (data->active_freq != 0U) ? data->active_freq
+								  : cfg->dflt_freq;
+			uint8_t port = (data->active_port == XEC_I2C_NL_INVALID_PORT)
+					       ? 0U : data->active_port;
+
+			(void)xec_i2c_nl_program_ctrl(ctrl, freq, port);
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
+/* Port node PM: owns pinctrl for its own pads. Turning the pads off drops the
+ * SCL/SDA function inputs to logic-high internally (idle bus), so ordering
+ * against the controller's enable bit cannot latch a bus error.
+ */
+static int xec_i2c_nl_port_pm_action(const struct device *port_dev, enum pm_device_action action)
+{
+	const struct xec_i2c_nl_port_config *pc = port_dev->config;
+	int ret;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+#ifdef CONFIG_I2C_TARGET
+		/* Keep the pads live on the port a wake-armed target listens on
+		 * (the port the controller is currently muxed to); an external
+		 * START must still reach the controller.
+		 */
+		if (nl_ctrl_wake_armed(pc->parent)) {
+			const struct xec_i2c_nl_data *pdata = pc->parent->data;
+
+			if (pc->port_id == pdata->active_port) {
+				return 0;
+			}
+		}
+#endif
+		ret = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_SLEEP);
+		if (ret == -ENOENT) {
+			/* No "sleep" pinctrl state on this port -> nothing to do. */
+			ret = 0;
+		}
+		return ret;
+	case PM_DEVICE_ACTION_RESUME:
+		return pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_DEFAULT);
+	default:
+		return -ENOTSUP;
+	}
+}
+#endif /* CONFIG_PM_DEVICE */
+
 /* Devicetree instantiation */
 
 #define DT_DRV_COMPAT microchip_xec_i2c_v3_nl
@@ -3049,6 +3174,17 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
  * port-device.
  */
 #define XEC_I2C_NL_DFLT_FREQ(inst) I2C_BITRATE_STANDARD
+
+/* GIRQ13 (runtime IRQ) source position equals the SMB hardware instance
+ * (SMB0->0 .. SMB4->4), so the GIRQ22 wake source position is instance + 1.
+ */
+#ifdef CONFIG_PM_DEVICE
+#define XEC_I2C_NL_PM_INIT(inst)                                                                   \
+	.wakeup_source = DT_INST_PROP_OR(inst, wakeup_source, 0),                                  \
+	.wk_girq_pos = XEC_I2C_SMB_WK_GIRQ_POS(XEC_I2C_NL_GIRQ_POS(inst)),
+#else
+#define XEC_I2C_NL_PM_INIT(inst)
+#endif
 
 /* Target-mode buffer + DMA cells, only allocated/initialised when the
  * DT instance carries a target-buffer-size property and the dmas list
@@ -3124,13 +3260,15 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		.girq = XEC_I2C_NL_GIRQ(inst),                                                     \
 		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst),                                             \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
+		XEC_I2C_NL_PM_INIT(inst)                                                           \
 		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                        \
 		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc),                        \
 		XEC_I2C_NL_TGT_FIELDS(inst)};                                                      \
 	static struct xec_i2c_nl_data xec_i2c_nl_data_##inst;                                      \
-	DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_init, NULL, &xec_i2c_nl_data_##inst,           \
-			      &xec_i2c_nl_cfg_##inst, POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,       \
-			      NULL);
+	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_pm_action);                                 \
+	DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_init, PM_DEVICE_DT_INST_GET(inst),             \
+			      &xec_i2c_nl_data_##inst, &xec_i2c_nl_cfg_##inst, POST_KERNEL,        \
+			      CONFIG_I2C_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 
@@ -3146,8 +3284,10 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 		.port_id = (uint8_t)(DT_INST_PROP(inst, port) & 0x0FU),                            \
 		.is_default = DT_INST_PROP(inst, default_port),                                    \
 	};                                                                                         \
-	I2C_DEVICE_DT_INST_DEFINE(                                                                 \
-		inst, xec_i2c_nl_port_init, NULL, NULL, &xec_i2c_nl_port_cfg_##inst, POST_KERNEL,  \
-		CONFIG_I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY, &xec_i2c_nl_port_api);
+	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_port_pm_action);                                 \
+	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_port_init, PM_DEVICE_DT_INST_GET(inst), NULL,   \
+				  &xec_i2c_nl_port_cfg_##inst, POST_KERNEL,                        \
+				  CONFIG_I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY,                    \
+				  &xec_i2c_nl_port_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_PORT_INIT)
