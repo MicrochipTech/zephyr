@@ -14,7 +14,7 @@
 #include <zephyr/drivers/i2c/target/eeprom.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
-
+#include <zephyr/random/random.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
 LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
@@ -29,6 +29,9 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define PCA9555_CMD_PORT1_POL 5u
 #define PCA9555_CMD_PORT0_CFG 6u
 #define PCA9555_CMD_PORT1_CFG 7u
+
+/* depends on board jumpers */
+#define PCA9555_PORT0_IN_EXPECTED 0xfffcU
 
 #define LTC2489_ADC_CONV_TIME_MS 150
 #define LTC2489_ADC_READ_RETRIES 10
@@ -48,13 +51,20 @@ const struct i2c_dt_spec ltc2489_spec = I2C_DT_SPEC_GET(NODE_LTC2489);
 const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 
 static const struct device *i2c_smb_ctrls[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)
+};
 
 /* Ports on the controllers */
 static const struct device *i2c_smb_ports[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)
+};
 
 struct k_timer minute_timer;
+
+#define APP_I2C_PORT_SWITCH_LOOPS 10000U
+#define APP_I2C_CB_PORT_SWITCH_LOOPS 10000U
 
 #define I2C_MAX_MSGS    8
 #define I2C_TX_BUF_SIZE 256
@@ -63,6 +73,10 @@ struct k_timer minute_timer;
 static struct i2c_msg msgs[I2C_MAX_MSGS];
 static uint8_t i2c_tx_buf[I2C_TX_BUF_SIZE];
 static uint8_t i2c_rx_buf[I2C_RX_BUF_SIZE];
+
+#ifdef CONFIG_I2C_CALLBACK
+static void get_random_fram_offset_size(uint16_t *ofs, uint32_t *nbytes);
+#endif
 
 static int pca9555_test1(const struct i2c_dt_spec *dts, uint8_t port, uint16_t *port_value);
 #ifdef APP_TEST_LTC2489
@@ -96,6 +110,10 @@ static void app_i2c_cb_func(const struct device *i2c_port_dev, int result, void 
 static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_port);
 static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_offset,
 				uint32_t nbytes);
+static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_offset,
+				   uint32_t nbytes);
+static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread,
+			   struct app_i2c_cb_s *pcbs, i2c_callback_t cb);
 #endif
 
 void minute_timer_cb(struct k_timer *kt)
@@ -113,7 +131,10 @@ int main(void)
 	int ctrl_ready_count = 0;
 	int port_ready_count = 0;
 	int rc = 0;
-
+#ifdef CONFIG_I2C_CALLBACK
+	uint32_t num_bytes = 0;
+	uint16_t fram_offset;
+#endif
 	run = false;
 	memset((void *)msgs, 0, sizeof(msgs));
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
@@ -197,9 +218,16 @@ int main(void)
 
 	(void)app_i2c_cb_test_fram(&mb_fram_spec, 0x1024U, 64U);
 	log_flush();
+
+	(void)test_read_async(&mb_fram_spec, 10U, &fram_cb_data, app_i2c_cb_func);
+	log_flush();
+
+	(void)app_i2c_cb_test_fram_mm(&mb_fram_spec, 0x7654U, 32U);
+	log_flush();
 #endif
 
 	if (run) {
+		LOG_INF("Start kernel 10 minute timer and begin infinite port switch test loop");
 		k_timer_start(&minute_timer, K_MINUTES(10), K_MINUTES(10));
 	}
 
@@ -242,21 +270,90 @@ int main(void)
 			fram_errors_logged = fram_errors;
 			LOG_ERR("FRAM test1 error count %llu", fram_errors_logged);
 		}
+
+		if (test_loops >= APP_I2C_PORT_SWITCH_LOOPS) {
+			break;
+		}
 	};
 
-	LOG_INF("Test loop exit: loops = %llu", test_loops);
+	LOG_INF("Executed %llu synchronous port switch loops", test_loops);
+
+#ifdef CONFIG_I2C_CALLBACK
+	if (run) {
+		pca9555_errors = 0;
+		pca9555_errors_logged = 0;
+		fram_errors = 0;
+		fram_errors_logged = 0;
+		test_loops = 0;
+		LOG_INF("Begin async test loop");
+	}
+
+	while (run) {
+		test_loops++;
+
+		get_random_fram_offset_size(&fram_offset, &num_bytes);
+
+		rc = app_i2c_cb_test_pca9555(&pca9555_spec, PCA9555_CMD_PORT0_IN);
+		if (rc != 0) {
+			pca9555_errors++;
+		}
+
+		rc = app_i2c_cb_test_fram(&mb_fram_spec, fram_offset, num_bytes);
+		if (rc != 0) {
+			fram_errors++;
+		}
+
+		if (pca9555_errors != pca9555_errors_logged) {
+			pca9555_errors_logged = pca9555_errors;
+			LOG_ERR("PCA9555 test error count %llu", pca9555_errors_logged);
+		}
+
+		if (fram_errors != fram_errors_logged) {
+			fram_errors_logged = fram_errors;
+			LOG_ERR("FRAM test1 error count %llu", fram_errors_logged);
+		}
+
+		if (test_loops >= APP_I2C_CB_PORT_SWITCH_LOOPS) {
+			break;
+		}
+	};
+
+	LOG_INF("Executed %llu async port switch loops", test_loops);
+#endif /* CONFIG_I2C_CALLBACK */
 	LOG_INF("Program End");
 	log_flush();
 
 	return 0;
 }
 
+#ifdef CONFIG_I2C_CALLBACK
+static void get_random_fram_offset_size(uint16_t *ofs, uint32_t *nbytes)
+{
+	uint32_t nb = 512U;
+	uint32_t temp = 0;
+	uint16_t fram_ofs = 0;
+
+	do {
+		sys_rand_get((void *)&temp, 4U);
+		fram_ofs = (uint16_t)temp;
+	} while (fram_ofs < (0x8000U - 0x100U));
+
+	while ((nb == 0) || (nb > 254U)) {
+		sys_rand_get((void *)&temp, 4U);
+		nb = temp & 0xfffu;
+	}
+
+	*ofs = fram_ofs;
+	*nbytes = nb;
+}
+#endif
+
 static int test_read(const struct i2c_dt_spec *dts, uint32_t nread)
 {
 	int rc = 0;
 
-	if (dts == NULL) {
-		LOG_ERR("test read bad i2c DT spec");
+	if ((dts == NULL) || (nread > I2C_RX_BUF_SIZE)) {
+		LOG_ERR("test read bad i2c DT spec or nread > I2C_RX_BUF_SIZE");
 		return -EINVAL;
 	}
 
@@ -496,17 +593,25 @@ static int app_i2c_cb_test_pca9555(const struct i2c_dt_spec *dts, uint8_t gpio_p
 	}
 
 	rc = k_sem_take(&pca9555_cb_data.i2c_cb_sem, K_MSEC(2000));
-	if (rc == 0) {
-		LOG_INF("Take PCA9555 CB semaphore success!");
+	switch (rc) {
+	case 0:
 		gpio_port_value = ((uint16_t)i2c_rx_buf[1] << 8) | i2c_rx_buf[0];
-		LOG_INF("PCA9555 input port %u = 0x%04x", gpio_port, gpio_port_value);
-	} else if (rc == -EAGAIN) {
+		if (gpio_port_value != PCA9555_PORT0_IN_EXPECTED) {
+			LOG_ERR("PCA9555 input port %u = 0x%04x expected 0x%04x", gpio_port,
+			gpio_port_value, PCA9555_PORT0_IN_EXPECTED);
+			rc = -EBADMSG;
+		}
+		break;
+	case -EAGAIN:
 		LOG_ERR("Take PCA9555 CB semaphore returned -EAGAIN which is timeout");
 		rc = -ETIMEDOUT;
-	} else if (rc == -EBUSY) {
+		break;
+	case -EBUSY:
 		LOG_ERR("Take PCA9555 CB semaphore returned -EBUSY");
-	} else {
+		break;
+	default:
 		LOG_ERR("Take PCA9555 CB semaphore returned unexpected error (%d)", rc);
+		break;
 	}
 
 	return rc;
@@ -518,7 +623,7 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 	int rc = 0;
 
 	if ((dts == NULL) || ((nbytes + 2U) > I2C_RX_BUF_SIZE)) {
-		LOG_ERR("App I2C FRAM async test bad i2c_dt_spec or nbytes");
+		LOG_ERR("App I2C FRAM async test bad i2c_dt_spec or nbytes: %p, %u", dts, nbytes);
 		return -EINVAL;
 	}
 
@@ -528,11 +633,7 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 	i2c_tx_buf[0] = (uint8_t)(fram_offset >> 8);
 	i2c_tx_buf[1] = (uint8_t)(fram_offset >> 0);
 
-	for (uint32_t i = 0; i < nbytes; i++) {
-		i2c_tx_buf[i + 2U] = (uint8_t)(i % 256U);
-	}
-
-	LOG_INF("Write data to FRAM");
+	sys_rand_get(&i2c_tx_buf[2], nbytes);
 
 	app_i2c_cb_prep(&fram_cb_data);
 
@@ -548,22 +649,34 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 	}
 
 	rc = k_sem_take(&fram_cb_data.i2c_cb_sem, K_MSEC(2000));
-	if (rc == 0) {
-		LOG_INF("Take FRAM CB semaphore success!");
-	} else if (rc == -EAGAIN) {
+	switch (rc) {
+	case 0:
+		break; /* success */
+	case -EAGAIN:
 		LOG_ERR("Take FRAM CB semaphore returned -EAGAIN which is timeout");
 		rc = -ETIMEDOUT;
-	} else if (rc == -EBUSY) {
+		break;
+	case -EBUSY:
 		LOG_ERR("Take FRAM CB semaphore returned -EBUSY");
-	} else {
+		break;
+	default:
 		LOG_ERR("Take FRAM CB semaphore returned unexpected error (%d)", rc);
+		break;
 	}
 
 	if (rc != 0) {
 		return rc;
 	}
 
-	LOG_INF("Read back data from FRAM");
+	/* The sem is given regardless of outcome; the transfer's real result is
+	 * delivered in the callback. Check it, else a failed write (e.g. the
+	 * driver rejecting an oversized transfer) would masquerade as a data
+	 * mismatch on the read-back below.
+	 */
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async write callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
+	}
 
 	i2c_tx_buf[0] = (uint8_t)(fram_offset >> 8);
 	i2c_tx_buf[1] = (uint8_t)(fram_offset >> 0);
@@ -579,27 +692,156 @@ static int app_i2c_cb_test_fram(const struct i2c_dt_spec *dts, uint16_t fram_off
 	}
 
 	rc = k_sem_take(&fram_cb_data.i2c_cb_sem, K_MSEC(2000));
-	if (rc == 0) {
-		LOG_INF("Take FRAM CB semaphore success!");
-	} else if (rc == -EAGAIN) {
-		LOG_ERR("Take FRAM CB semaphore returned -EAGAIN which is timeout");
+	switch (rc) {
+	case 0:
+		break; /* success */
+	case -EAGAIN:
+		LOG_ERR("Read-back: Take FRAM CB semaphore returned -EAGAIN which is timeout");
 		rc = -ETIMEDOUT;
-	} else if (rc == -EBUSY) {
-		LOG_ERR("Take FRAM CB semaphore returned -EBUSY");
-	} else {
-		LOG_ERR("Take FRAM CB semaphore returned unexpected error (%d)", rc);
+		break;
+	case -EBUSY:
+		LOG_ERR("Read-back: Take FRAM CB semaphore returned -EBUSY");
+		break;
+	default:
+		LOG_ERR("Read-back: Take FRAM CB semaphore returned unexpected error (%d)", rc);
+		break;
 	}
 
 	if (rc != 0) {
 		return rc;
 	}
 
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async read-back callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
+	}
+
 	rc = memcmp(&i2c_tx_buf[2U], i2c_rx_buf, nbytes);
-	if (rc == 0) {
-		LOG_INF("Success: data read back matches");
-	} else {
+	if (rc != 0) {
 		LOG_ERR("FAIL: data read back does not match");
 	}
+
+	return rc;
+}
+
+/* Use combine FRAM accesses into a single message array with I2C_MSG_STOP
+ * delineating the complete messages.
+ * Msg 0 : Write FRAM two byte offset plus data STOP. Use i2c_tx_buf
+ * Msg 1 : Write FRAM two byte offset. Use local buffer
+ * Msg 2:  Read RAM data STOP. Use i2c_rx_buf
+ */
+static int app_i2c_cb_test_fram_mm(const struct i2c_dt_spec *dts, uint16_t fram_offset,
+				   uint32_t nbytes)
+{
+	uint8_t buf[4] = {0};
+	int rc = 0;
+
+	if ((dts == NULL) || ((nbytes + 2U) > I2C_RX_BUF_SIZE)) {
+		LOG_ERR("App I2C FRAM async test bad i2c_dt_spec or nbytes");
+		return -EINVAL;
+	}
+
+	LOG_INF("Test I2C multiple STOPs in message sequence");
+
+	memset(i2c_tx_buf, 0x55, sizeof(i2c_tx_buf));
+	memset(i2c_rx_buf, 0xAA, sizeof(i2c_rx_buf));
+
+	buf[0] = (uint8_t)(fram_offset >> 8);
+	buf[1] = (uint8_t)(fram_offset >> 0);
+	i2c_tx_buf[0] = buf[0];
+	i2c_tx_buf[1] = buf[1];
+
+	sys_rand_get(&i2c_tx_buf[2], nbytes);
+
+	msgs[0].buf = i2c_tx_buf;
+	msgs[0].len = nbytes + 2U;
+	msgs[0].flags = I2C_MSG_WRITE | I2C_MSG_STOP;
+	msgs[1].buf = buf;
+	msgs[1].len = 2U;
+	msgs[1].flags = I2C_MSG_WRITE;
+	msgs[2].buf = i2c_rx_buf;
+	msgs[2].len = nbytes;
+	msgs[2].flags = I2C_MSG_RESTART | I2C_MSG_READ | I2C_MSG_STOP;
+
+	app_i2c_cb_prep(&fram_cb_data);
+
+	rc = i2c_transfer_cb(dts->bus, msgs, 3U, dts->addr, app_i2c_cb_func,
+			     (void *)&fram_cb_data);
+	if (rc != 0) {
+		LOG_ERR("App I2C xfr cb 3 messages with multiple STOPs (%d)", rc);
+		return rc;
+	}
+
+	rc = k_sem_take(&fram_cb_data.i2c_cb_sem, K_MSEC(2000));
+	switch (rc) {
+	case 0:
+		break;
+	case -EAGAIN:
+		LOG_ERR("Take FRAM CB semaphore returned -EAGAIN which is timeout");
+		rc = -ETIMEDOUT;
+		break;
+	case -EBUSY:
+		LOG_ERR("Take FRAM CB semaphore returned -EBUSY");
+		break;
+	default:
+		LOG_ERR("Take FRAM CB semaphore returned unexpected error (%d)", rc);
+		break;
+	}
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	if (fram_cb_data.i2c_cb_result != 0) {
+		LOG_ERR("FRAM async multi-STOP callback error (%d)", fram_cb_data.i2c_cb_result);
+		return fram_cb_data.i2c_cb_result;
+	}
+
+	rc = memcmp(&i2c_tx_buf[2U], i2c_rx_buf, nbytes);
+	if (rc != 0) {
+		LOG_ERR("FAIL: data read back does not match");
+	}
+
+	return rc;
+}
+
+static int test_read_async(const struct i2c_dt_spec *dts, uint32_t nread,
+			   struct app_i2c_cb_s *pcbs, i2c_callback_t cb)
+{
+	int rc = 0;
+
+	if ((dts == NULL) || (pcbs == NULL) || (cb == NULL) || (nread > I2C_RX_BUF_SIZE)) {
+		LOG_ERR("Test async read bad parameter(s)");
+		return -EINVAL;
+	}
+
+	memset(i2c_rx_buf, 0xAA, sizeof(i2c_rx_buf));
+
+	msgs[0].buf = i2c_rx_buf;
+	msgs[0].len = nread;
+	msgs[0].flags = I2C_MSG_READ | I2C_MSG_STOP;
+
+	app_i2c_cb_prep(pcbs);
+
+	rc = i2c_transfer_cb_dt(dts, msgs, 1U, cb, (void *)pcbs);
+	if (rc != 0) {
+		LOG_ERR("I2C xfr cb error (%d)", rc);
+		return rc;
+	}
+
+	rc = k_sem_take(&pcbs->i2c_cb_sem, K_MSEC(5000));
+	if (rc == 0) {
+		LOG_INF("I2C cb xfr start success");
+	} else if (rc == -EAGAIN) {
+		LOG_ERR("I2C cb xfr timeout (-EAGAIN)");
+		rc = -ETIMEDOUT;
+	} else if (rc == -EBUSY) {
+		LOG_ERR("I2C cb xfr -EBUSY");
+	} else {
+		LOG_ERR("I2C cb xfr unexpected error (%d)", rc);
+	}
+
+	LOG_HEXDUMP_INF(i2c_rx_buf, nread, "I2C cb read data");
 
 	return rc;
 }

@@ -164,8 +164,10 @@ static void reset_all_targets(void)
 {
 	reset_target_state(&targ1_app_data, &app_targ1_sem);
 	reset_target_state(&targ2_app_data, &app_targ2_sem);
+#ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	(void)mchp_xec_i2c_nl_clear_capture(i2c_smb0_dev);
 	(void)mchp_xec_i2c_nl_clear_capture(i2c_smb1_dev);
+#endif
 }
 
 /* Wait for a target's stop callback with the test timeout. Returns
@@ -618,14 +620,33 @@ static int test_host_write_then_read_targ1(void)
  */
 #define APP_TARG_STREAM_PAYLOAD_LEN 250U
 
+#if DT_NODE_HAS_COMPAT(DT_NODELABEL(i2c_smb_0), microchip_xec_i2c_v3_nl)
+static bool target_has_chunk_count(void)
+{
+	if (DT_NODE_HAS_COMPAT(DT_NODELABEL(i2c_smb_0), microchip_xec_i2c_v3_nl) != 0) {
+		if (DT_PROP(DT_NODELABEL(i2c_smb_0), target_rx_chunk_count) <= 1) {
+			return false;
+		} else {
+			return true;
+		}
+	}
+
+	return false;
+}
+#else
+static bool target_has_chunk_count(void)
+{
+	return false;
+}
+#endif
+
 static int test_host_write_streaming_targ1(void)
 {
 	const uint32_t payload_len = APP_TARG_STREAM_PAYLOAD_LEN;
 	int rc;
 
-	if (DT_PROP(DT_NODELABEL(i2c_smb_0), target_rx_chunk_count) <= 1) {
-		LOG_INF("SKIP: streaming not enabled "
-			"(target-rx-chunk-count == 1)");
+	if (!target_has_chunk_count()) {
+		LOG_INF("SKIP: streaming not enabled (target-rx-chunk-count == 1)");
 		return 0;
 	}
 
@@ -701,6 +722,12 @@ int main(void)
 	memset((void *)msgs, 0, sizeof(msgs));
 	memset(i2c_tx_buf, 0x55, I2C_TX_BUF_SIZE);
 	memset(i2c_rx_buf, 0xAA, I2C_RX_BUF_SIZE);
+
+	LOG_INF("Microchip XEC I2Cv3 targ_mode: board: %s", CONFIG_BOARD);
+	LOG_INF("i2c_smb_0: %s", i2c_smb0_dev->name);
+	LOG_INF("i2c_smb_0 target_buffer_size = %u", APP_TARG_HW_RX_SIZE);
+	LOG_INF("i2c_smb_1: %s", i2c_smb1_dev->name);
+	log_flush();
 
 	k_sem_init(&app_targ1_sem, 0, 1);
 	k_sem_init(&app_targ2_sem, 0, 1);

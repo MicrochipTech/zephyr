@@ -56,6 +56,12 @@
  *	pin 5 = VTR2
  *	pin 6 = GND
  *
+ * Target mode test uses i2c_smb_0 as the target controller connected
+ * to port 0 with two target addresses.
+ *
+ * i2c_smb_1 using port 7 as the host controller.
+ *
+ * Fly wire J22-1 to J12-1 and J22-3 to J12-3
  */
 
 #include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
@@ -94,7 +100,7 @@
 	 * issue plus one byte (matched target address). The driver strips
 	 * the address before invoking buf_write_received.
 	 */
-	target-buffer-size = <240>;
+	target-buffer-size = <260>;
 
 	target-rx-chunk-count = <4>;
 };
@@ -118,7 +124,7 @@
 	 * issue plus one byte (matched target address). The driver strips
 	 * the address before invoking buf_write_received.
 	 */
-	target-buffer-size = <240>;
+	target-buffer-size = <260>;
 
 	target-rx-chunk-count = <4>;
 };

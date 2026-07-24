@@ -59,27 +59,22 @@
  */
 
 #include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
-#include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
-/* I2C Controller 0 - pulled into the V3-NL driver. Two DMA channels:
- * "host" for controller-mode transfers, "target" for target-mode
- * transfers when the application registers an I2C target. Both use the
- * same DMAC instance but different channels and different trigger
- * sources. Target slot is wired even though the sample is
- * controller-only today, so target-mode applications can layer on
- * without an overlay edit.
- */
-&dmac {
-	status = "okay";
-};
-
+/* Use I2Cv3 byte mode driver */
 &i2c_smb_0 {
 	compatible = "microchip,xec-i2c-v3-bm";
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
+};
+
+&i2c_smb_4 {
+	compatible = "microchip,xec-i2c-v3-bm";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
 };
 
 /* Port 0 pins */
@@ -158,5 +153,19 @@
 			reg = <0x50>;
 			#io-channels-cells = <1>;
 		};
+	};
+
+	/* Port 3 on I2C controller 4 */
+	i2c4_p3: i2c-port3 {
+		compatible = "microchip,xec-i2c-v3-bm-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <3>;
+		controller = <&i2c_smb_4>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c03_sda_gpio007 &i2c03_scl_gpio010>;
+		pinctrl-names = "default";
+		default-port;
+		status = "okay";
 	};
 };
