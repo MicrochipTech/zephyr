@@ -41,7 +41,6 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 #define I2C_SMB_GET_DEV(nid) DEVICE_DT_GET(nid),
 
 #define I2C_CTRL0_NODE DT_ALIAS(i2c0)
-#define I2C_CTRL1_NODE DT_ALIAS(i2c1)
 
 #define NODE_PCA9555 DT_NODELABEL(pca9555_evb)
 #define NODE_LTC2489 DT_NODELABEL(ltc2489_evb)
@@ -54,11 +53,13 @@ const struct i2c_dt_spec ltc2489_spec = I2C_DT_SPEC_GET(NODE_LTC2489);
 const struct i2c_dt_spec mb_fram_spec = I2C_DT_SPEC_GET(NODE_FRAM);
 
 static const struct device *i2c_smb_ctrls[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl, I2C_SMB_GET_DEV)};
 
 /* Ports on the controllers */
 static const struct device *i2c_smb_ports[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)};
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_bm_port, I2C_SMB_GET_DEV)
+	DT_FOREACH_STATUS_OKAY(microchip_xec_i2c_v3_nl_port, I2C_SMB_GET_DEV)};
 
 struct k_timer minute_timer;
 
