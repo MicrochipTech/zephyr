@@ -11,3 +11,11 @@ tests:
     depends_on:
       - i2c
       - dma
+  # Byte-mode driver build (qsz): no DMA.
+  sample.board.microchip.evb.i2c_v3.dual_ctrl_async.bm:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qsz
+    tags: i2c
+    depends_on:
+      - i2c
