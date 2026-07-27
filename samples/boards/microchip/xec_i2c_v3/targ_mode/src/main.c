@@ -28,6 +28,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/i2c/mchp_xec_i2c.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
 
@@ -212,6 +213,10 @@ static void reset_all_targets(void)
 {
 	reset_target_state(&targ1_app_data, &app_targ1_sem);
 	reset_target_state(&targ2_app_data, &app_targ2_sem);
+#ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
+	(void)mchp_xec_i2c_nl_clear_capture(targ1_spec.bus);
+	(void)mchp_xec_i2c_nl_clear_capture(targ2_spec.bus);
+#endif
 }
 
 /* Wait for a target's stop callback with the test timeout. Returns

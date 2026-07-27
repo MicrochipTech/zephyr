@@ -7,6 +7,7 @@ tests:
     harness: i2c
     platform_allow:
       - mec_assy6941/mec1753_qsz
+      - mec_assy6941/mec1753_qlj
     tags: i2c
     depends_on:
       - dma
