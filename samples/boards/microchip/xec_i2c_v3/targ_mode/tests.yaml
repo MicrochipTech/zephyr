@@ -12,3 +12,15 @@ tests:
       - dma
       - i2c
       - gpio
+  # Byte-granular target callbacks (CONFIG_I2C_TARGET_BUFFER_MODE=n).
+  # BM driver only -- the NL driver requires buffer-mode callbacks.
+  sample.board.microchip.evb.i2c_v3.targ_mode.bytemode:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qsz
+    extra_configs:
+      - CONFIG_I2C_TARGET_BUFFER_MODE=n
+    tags: i2c
+    depends_on:
+      - i2c
+      - gpio
