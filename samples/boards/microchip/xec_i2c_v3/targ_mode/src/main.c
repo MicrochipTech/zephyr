@@ -213,10 +213,13 @@ static void reset_all_targets(void)
 {
 	reset_target_state(&targ1_app_data, &app_targ1_sem);
 	reset_target_state(&targ2_app_data, &app_targ2_sem);
+<<<<<<< HEAD
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	(void)mchp_xec_i2c_nl_clear_capture(i2c_smb0_dev);
 	(void)mchp_xec_i2c_nl_clear_capture(i2c_smb1_dev);
 #endif
+=======
+>>>>>>> 018f28e8e50 (samples: boards: microchip: xec_i2c_v3: byte mode target tests)
 }
 
 /* Wait for a target's stop callback with the test timeout. Returns
