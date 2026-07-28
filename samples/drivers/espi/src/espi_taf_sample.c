@@ -53,16 +53,16 @@ static uint8_t safbuf2[SAF_TEST_BUF_SIZE] __aligned(4);
  * other special SAF configuration.
  */
 static const struct espi_saf_flash_cfg flash_w25q128 = {
-	.flashsz = 0x1000000U,
+	.flashsz = 0x2000000U,
 	.opa = MCHP_SAF_OPCODE_REG_VAL(0x06U, 0x75U, 0x7aU, 0x05U),
 	.opb = MCHP_SAF_OPCODE_REG_VAL(0x20U, 0x52U, 0xd8U, 0x02U),
 	.opc = MCHP_SAF_OPCODE_REG_VAL(0xebU, 0xffU, 0xa5U, 0x35U),
-	.poll2_mask = MCHP_W25Q128_POLL2_MASK,
+	.poll2_mask = MCHP_W25Q256_POLL2_MASK,
 	.cont_prefix = 0U,
 	.cs_cfg_descr_ids = MCHP_CS0_CFG_DESCR_IDX_REG_VAL,
-	.flags = 0,
-	.descr = {MCHP_W25Q128_CM_RD_D0, MCHP_W25Q128_CM_RD_D1, MCHP_W25Q128_CM_RD_D2,
-		  MCHP_W25Q128_ENTER_CM_D0, MCHP_W25Q128_ENTER_CM_D1, MCHP_W25Q128_ENTER_CM_D2}};
+	.flags = MCHP_FLASH_FLAG_ADDR32,
+	.descr = {MCHP_W25Q256_CM_RD_D0, MCHP_W25Q256_CM_RD_D1, MCHP_W25Q256_CM_RD_D2,
+		  MCHP_W25Q256_ENTER_CM_D0, MCHP_W25Q256_ENTER_CM_D1, MCHP_W25Q256_ENTER_CM_D2}};
 
 /*
  * SAF driver configuration.
@@ -279,6 +279,13 @@ int spi_saf_init(void)
 			return -1;
 		}
 	}
+	/* Enter 4Byte mode */
+        ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg,0xB7,
+                               NULL, 0, NULL, 0);
+        if (ret) {
+                LOG_ERR("Read JEDEC ID spi_transceive failure: error %d", ret);
+                return ret;
+        }
 
 	return 0;
 }
