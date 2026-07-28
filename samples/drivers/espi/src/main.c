@@ -51,9 +51,11 @@ LOG_MODULE_DECLARE(espi, CONFIG_ESPI_LOG_LEVEL);
 #define ESPI_TAF_NODE            DT_NODELABEL(espi_saf0)
 #endif
 
+#if 0
 #ifdef CONFIG_ESPI_USE_BOARD_POWER
 static const struct gpio_dt_spec pwrgd_gpio = GPIO_DT_SPEC_GET(BRD_PWR_NODE, pwrg_gpios);
 static const struct gpio_dt_spec rsm_gpio = GPIO_DT_SPEC_GET(BRD_PWR_NODE, rsm_gpios);
+#endif
 #endif
 
 static const struct device *const espi_dev = DEVICE_DT_GET(DT_NODELABEL(espi0));
@@ -225,6 +227,7 @@ int espi_init(void)
 	return ret;
 }
 
+#if 0
 #ifdef CONFIG_ESPI_USE_BOARD_POWER
 static int wait_for_pin(const struct gpio_dt_spec *gpio, uint16_t timeout, int exp_level)
 {
@@ -254,6 +257,7 @@ static int wait_for_pin(const struct gpio_dt_spec *gpio, uint16_t timeout, int e
 
 	return 0;
 }
+#endif
 #endif
 
 static int wait_for_vwire(const struct device *espi_dev, enum espi_vwire_signal signal,
@@ -285,7 +289,7 @@ static int wait_for_vwire(const struct device *espi_dev, enum espi_vwire_signal 
 
 	return 0;
 }
-
+#if 0
 static int wait_for_espi_reset(uint8_t exp_sts)
 {
 	uint16_t loop_cnt = CONFIG_ESPI_VIRTUAL_WIRE_TIMEOUT;
@@ -304,7 +308,7 @@ static int wait_for_espi_reset(uint8_t exp_sts)
 
 	return 0;
 }
-
+#endif
 int espi_handshake(void)
 {
 	int ret;
@@ -353,6 +357,7 @@ int espi_handshake(void)
 	return 0;
 }
 
+#if 0
 #ifndef CONFIG_ESPI_AUTOMATIC_WARNING_ACKNOWLEDGE
 static void send_target_bootdone(void)
 {
@@ -370,6 +375,7 @@ static void send_target_bootdone(void)
 	}
 }
 #endif
+#endif
 
 int espi_test(void)
 {
@@ -379,7 +385,7 @@ int espi_test(void)
 	 * be seen
 	 */
 	k_sleep(K_SECONDS(1));
-
+#if 0
 #ifdef CONFIG_ESPI_USE_BOARD_POWER
 	if (!gpio_is_ready_dt(&pwrgd_gpio)) {
 		LOG_ERR("%s: device not ready.", pwrgd_gpio.port->name);
@@ -389,6 +395,7 @@ int espi_test(void)
 		LOG_ERR("%s: device not ready.", rsm_gpio.port->name);
 		return -ENODEV;
 	}
+#endif
 #endif
 	if (!device_is_ready(espi_dev)) {
 		LOG_ERR("%s: device not ready.", espi_dev->name);
@@ -411,7 +418,7 @@ int espi_test(void)
 #endif
 
 	LOG_INF("Hello eSPI test %s", CONFIG_BOARD);
-
+#if 0
 #ifdef CONFIG_ESPI_USE_BOARD_POWER
 	ret = gpio_pin_configure_dt(&pwrgd_gpio, GPIO_INPUT);
 	if (ret) {
@@ -430,6 +437,7 @@ int espi_test(void)
 		LOG_ERR("Unable to initialize %d", rsm_gpio.pin);
 		return -1;
 	}
+#endif
 #endif
 
 	espi_init();
@@ -457,7 +465,7 @@ int espi_test(void)
 		LOG_INF("eSPI SAF test1 returned error %d", ret);
 	}
 #endif
-
+#if 0
 #ifdef CONFIG_ESPI_USE_BOARD_POWER
 	ret = wait_for_pin(&pwrgd_gpio, PWR_SEQ_TIMEOUT, 1);
 	if (ret) {
@@ -537,7 +545,7 @@ int espi_test(void)
 	espi_remove_callback(espi_dev, &espi_bus_cb);
 	espi_remove_callback(espi_dev, &vw_rdy_cb);
 	espi_remove_callback(espi_dev, &vw_cb);
-
+#endif
 	LOG_INF("eSPI sample completed err: %d", ret);
 
 	return ret;

@@ -210,7 +210,7 @@ int spi_saf_init(void)
 		return ret;
 	}
 
-	if ((jedec_id != W25Q128_JEDEC_ID) && (jedec_id != W25Q128_FW_JEDEC_ID)) {
+	if ((jedec_id != W25Q256_JEDEC_ID) && (jedec_id != W25Q128_FW_JEDEC_ID)) {
 		LOG_ERR("JEDIC ID 0x%08x does not match W25Q128(0x%08x) or W25Q128_FW(0x%08x)",
 			jedec_id, W25Q128_JEDEC_ID, W25Q128_FW_JEDEC_ID);
 		return -1;
