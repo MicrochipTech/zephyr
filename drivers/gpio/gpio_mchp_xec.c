@@ -269,6 +269,13 @@ static int gpio_xec_pin_interrupt_config(const struct device *dev, gpio_pin_t pi
 	struct gpio_xec_data *data = dev->data;
 	uint32_t cr1 = 0, cr1_addr = 0, idet = 0, idet_curr = 0, port_num = 0;
 
+	/* Interrupt support (and the underlying ECIA/GIRQ access) is compiled out.
+	 * Report unsupported rather than touching a possibly-absent ECIA block.
+	 */
+	if (!IS_ENABLED(CONFIG_GPIO_XEC_INTERRUPT)) {
+		return -ENOTSUP;
+	}
+
 	/* Check if GPIO port supports interrupts */
 	if ((mode != GPIO_INT_MODE_DISABLED) && !(devcfg->flags & GPIO_INT_ENABLE)) {
 		return -ENOTSUP;
@@ -528,7 +535,7 @@ static DEVICE_API(gpio, gpio_xec_driver_api) = {
 	static int gpio_xec_port_init##i(const struct device *dev)                                 \
 	{                                                                                          \
 		const struct gpio_xec_devcfg *devcfg = dev->config;                                \
-		if (!(DT_INST_IRQ_HAS_CELL(i, irq))) {                                             \
+		if (!IS_ENABLED(CONFIG_GPIO_XEC_INTERRUPT) || !(DT_INST_IRQ_HAS_CELL(i, irq))) {    \
 			return 0;                                                                  \
 		}                                                                                  \
 		soc_ecia_girq_aggr_ctrl(devcfg->girq, 1u);                                         \

@@ -6,7 +6,16 @@
  * Mount Rainier MEC176x shared peripheral nodes. Included inside the SoC `soc {}`
  * node. Register bases are XEC/MEC-compatible (DOS Table 4-3: Global MMCR base
  * 0x40080000, EC MMCR base 0x40000000, Host MMCR base 0x400F0000).
- * TODO: verify exact PCR/ECIA/GPIO bases against the Mount Rainier address map.
+ *
+ * Base verification (2026-07-20): GPIO 0x40081000, PCR 0x40080100, ECIA 0x4000E000,
+ * ECS 0x4000FC00 all confirmed against the vendor HAL (hal_microchip/mec5 device
+ * headers, MEC5 generation) AND, for GPIO+PCR, against a live Mem-AP probe on the
+ * proFPGA (GPIO CR1/PAROUT read/write-verified at 0x40081000; GPIO layout matches
+ * mec5_gpio_8f_6port_v1_5.h: CTRL[192]@0x000, PARIN[6]@0x300, PAROUT[6]@0x380,
+ * CTL2[192]@0x500). NOTE: ECS/ECIA are addressed correctly but the interrupt-
+ * aggregator blocks are NOT implemented on the current FPGA bitstream (reads
+ * bus-fault) -- hence they stay `status = "disabled"` and GPIO is polled-only until
+ * a bitstream with ECIA is available.
  */
 
 /* EC Subsystem registers (referenced by the reused soc_ecia.c). */

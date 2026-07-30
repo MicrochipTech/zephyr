@@ -9,3 +9,18 @@ config GPIO_XEC
 	depends on DT_HAS_MICROCHIP_XEC_GPIO_ENABLED
 	help
 	  Enable the Microchip XEC gpio driver.
+
+config GPIO_XEC_INTERRUPT
+	bool "XEC Microchip GPIO interrupt support"
+	default y
+	depends on GPIO_XEC
+	help
+	  Enable GPIO interrupt (edge/level detection) support in the XEC GPIO
+	  driver. This requires a functional EC Interrupt Aggregator (ECIA/GIRQ)
+	  block, which the driver programs via soc_ecia_girq_*() at init and when
+	  configuring per-pin interrupts.
+
+	  Disable this on SoCs/targets where the ECIA block is not present or not
+	  yet enabled (e.g. some FPGA bring-up bitstreams): the driver then skips
+	  all ECIA/NVIC setup and operates in polled (output/input read) mode, and
+	  gpio_pin_interrupt_configure() returns -ENOTSUP.
