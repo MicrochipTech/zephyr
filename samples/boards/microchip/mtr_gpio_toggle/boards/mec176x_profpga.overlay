@@ -1,0 +1,15 @@
+/*
+ * (c) 2026 Microchip Technology Inc. and its subsidiaries.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Enable GPIO bank 0 (gpio_000_036) for the MTR polled-GPIO bring-up. The bank is
+ * defined but status="disabled" in mec176x_common.dtsi. The `interrupts` property
+ * stays (the binding requires it) but is ignored because CONFIG_GPIO_XEC_INTERRUPT=n
+ * (ECIA absent on this bitstream).
+ *
+ * Sample drives GPIO020 (pin index 16), routed to IO-card header J3.3.
+ */
+
+&gpio_000_036 {
+	status = "okay";
+};
