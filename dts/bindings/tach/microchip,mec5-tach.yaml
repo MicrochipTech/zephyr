@@ -45,6 +45,16 @@ properties:
       - "3"
       - "2"
 
+  pulses-per-revolution:
+    type: int
+    default: 2
+    description: |
+      Number of tachometer output pulses the fan produces per revolution.
+      Most brushless DC fans emit two pulses per revolution, which is the
+      default. This is required to convert the captured edge interval into
+      RPM: the capture window is expressed in tach input periods, so the
+      driver must know how many periods make up one revolution.
+
   "#address-cells":
     required: true
     const: 1

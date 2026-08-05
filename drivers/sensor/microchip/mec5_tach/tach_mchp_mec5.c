@@ -31,6 +31,7 @@ struct tach_mec5_dev_cfg {
 #endif
 	uint8_t edges_count;
 	uint8_t read_mode;
+	uint8_t pulses_per_rev;
 };
 
 #define TACH_MEC5_DATA_FLAG_ENABLED BIT(0)
@@ -47,6 +48,20 @@ struct tach_mec5_dev_data {
 #define TACH_MEC5_FAN_STOPPED		0xFFFFU
 #define TACH_MEC5_SEC_PER_MINUTE	60U
 #define TACH_MEC5_POLL_LOOP_COUNT	20U
+#define TACH_MEC5_DEFAULT_PULSES_PER_REV 2U
+
+/* Capture window expressed in half tach-input periods, indexed by
+ * enum mec5_tach_edge_count. The hardware latches the counter after the
+ * programmed number of input edges: 2 edges = 1/2 period, 3 edges = 1 period,
+ * 5 edges = 2 periods, 9 edges = 4 periods. Half periods are used so the
+ * 2-edge case stays an integer.
+ */
+static const uint8_t tach_mec5_half_periods[] = {
+	[MEC_TACH_CNT2_EDGES_HPER] = 1U,
+	[MEC_TACH_CNT3_EDGES_1PER] = 2U,
+	[MEC_TACH_CNT5_EDGES_2PER] = 4U,
+	[MEC_TACH_CNT9_EDGES_4PER] = 8U,
+};
 
 /* If interrupt are used wait timeout on TACH ISR */
 #define TACH_MEC5_SYNC_WAIT_MS		20u
@@ -172,10 +187,33 @@ static int tach_mec5_channel_get(const struct device *dev,
 		return -EIO;
 	}
 
-	/* Convert the count per slow_clock_freq cycles to rpm */
+	/* Convert the captured count to rpm.
+	 *
+	 * The counter accumulates slow-clock ticks over a window of
+	 * window_periods tach input periods, so
+	 *   count   = window_periods * slow_clk / f_tach
+	 *   f_tach  = window_periods * slow_clk / count
+	 *   rpm     = 60 * f_tach / pulses_per_rev
+	 *
+	 * window_periods is half_periods / 2, giving
+	 *   rpm = 60 * slow_clk * half_periods / (2 * count * pulses_per_rev)
+	 *
+	 * The previous implementation used 60 * slow_clk / count, which silently
+	 * assumed the capture window equals exactly one revolution. With the
+	 * default 9-edge window (4 periods) and a typical 2 pulse-per-revolution
+	 * fan that reported half the true speed, and the result did not change
+	 * when edges-count was reprogrammed.
+	 */
 	if ((data->count != TACH_MEC5_FAN_STOPPED) && (data->count != 0U)) {
-		sval->val1 = (TACH_MEC5_SEC_PER_MINUTE * slow_clk_freq) / data->count;
-		sval->val2 = 0U;
+		uint32_t half_periods = tach_mec5_half_periods[devcfg->edges_count];
+		uint32_t pulses_per_rev = devcfg->pulses_per_rev;
+
+		if (pulses_per_rev == 0U) {
+			pulses_per_rev = TACH_MEC5_DEFAULT_PULSES_PER_REV;
+		}
+
+		sval->val1 = (int32_t)((TACH_MEC5_SEC_PER_MINUTE * slow_clk_freq * half_periods) /
+				       (2U * (uint32_t)data->count * pulses_per_rev));
 	} else {
 		sval->val1 =  0U;
 	}
@@ -279,6 +317,31 @@ static const struct sensor_driver_api tach_mec5_driver_api = {
 	.channel_get = tach_mec5_channel_get,
 };
 
+/* Map the devicetree string enums onto the HAL enumerations.
+ *
+ * These were previously read with DT_PROP_OR(i, ...), which takes a node id but
+ * was passed the instance number, so DT_NODE_HAS_PROP() never matched and the
+ * devicetree values were silently discarded in favour of the defaults below.
+ * The properties are strings, so they cannot be assigned to the uint8_t config
+ * fields directly and must go through the enum index.
+ *
+ * edges-count enum order is "9", "5", "3", "2" -- the reverse of
+ * enum mec5_tach_edge_count -- so it is mapped explicitly rather than by
+ * arithmetic. Index 0 ("9") is the default, preserving previous behaviour.
+ *
+ * read-mode enum order is "input rising edge", "internal 100kHz rising edge",
+ * which matches enum mec5_tach_read_mode. Index 1 is the default.
+ */
+#define TACH_MEC5_EDGES_COUNT(i)								\
+	((DT_INST_ENUM_IDX_OR(i, edges_count, 0) == 0) ? MEC_TACH_CNT9_EDGES_4PER :		\
+	 (DT_INST_ENUM_IDX_OR(i, edges_count, 0) == 1) ? MEC_TACH_CNT5_EDGES_2PER :		\
+	 (DT_INST_ENUM_IDX_OR(i, edges_count, 0) == 2) ? MEC_TACH_CNT3_EDGES_1PER :		\
+							MEC_TACH_CNT2_EDGES_HPER)
+
+#define TACH_MEC5_READ_MODE(i)									\
+	((DT_INST_ENUM_IDX_OR(i, read_mode, 1) == 0) ? MEC_TACH_READ_MODE_INPUT_REDGE :		\
+						       MEC_TACH_READ_MODE_100K_CLK_REDGE)
+
 #ifdef CONFIG_TACH_MEC5_INTERRUPT
 #define TACH_MEC5_IRQ_CFG(i)						\
 	static void tach_mec5_irq_cfg_##i(void)				\
@@ -294,8 +357,10 @@ static const struct sensor_driver_api tach_mec5_driver_api = {
 		.regs = (struct mec_tach_regs *)DT_INST_REG_ADDR(i),				\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),					\
 		.irq_config = tach_mec5_irq_cfg_##i,						\
-		.edges_count = DT_PROP_OR(i, edges_count, MEC_TACH_CNT9_EDGES_4PER),		\
-		.read_mode = DT_PROP_OR(i, read_mode, MEC_TACH_READ_MODE_100K_CLK_REDGE),	\
+		.edges_count = TACH_MEC5_EDGES_COUNT(i),						\
+		.read_mode = TACH_MEC5_READ_MODE(i),						\
+		.pulses_per_rev = DT_INST_PROP_OR(i, pulses_per_revolution,			\
+						  TACH_MEC5_DEFAULT_PULSES_PER_REV),		\
 	}
 #else
 #define TACH_MEC5_IRQ_CFG(i)
@@ -303,8 +368,10 @@ static const struct sensor_driver_api tach_mec5_driver_api = {
 	static const struct tach_mec5_dev_cfg tach_mec5_devcfg_##i = {				\
 		.regs = (struct mec_tach_regs *)DT_INST_REG_ADDR(i),				\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(i),					\
-		.edges_count = DT_PROP_OR(i, edges_count, MEC_TACH_CNT9_EDGES_4PER),		\
-		.read_mode = DT_PROP_OR(i, read_mode, MEC_TACH_READ_MODE_100K_CLK_REDGE),	\
+		.edges_count = TACH_MEC5_EDGES_COUNT(i),						\
+		.read_mode = TACH_MEC5_READ_MODE(i),						\
+		.pulses_per_rev = DT_INST_PROP_OR(i, pulses_per_revolution,			\
+						  TACH_MEC5_DEFAULT_PULSES_PER_REV),		\
 	}
 #endif
 
