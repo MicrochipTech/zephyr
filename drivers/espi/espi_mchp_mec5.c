@@ -527,7 +527,13 @@ static bool espi_mec5_get_chan_status(const struct device *dev,
 	if (chan == ESPI_CHANNEL_PERIPHERAL) {
 		ready = mec_hal_espi_pc_is_ready(iob);
 	} else if (chan == ESPI_CHANNEL_VWIRE) {
-		ready = mec_hal_espi_vw_is_ready(iob);
+		/* Report VW ready if the Host has enabled the channel, even when VWRDY
+		 * (EC-side ready) was not re-set. The VW-enable ISR is one-shot and is
+		 * NOT re-armed when the Host re-inits VW after a warm boot / nPCH_RSMRST
+		 * de-assert, so VWRDY can read 0 while the channel is fully functional.
+		 * Without this, espiWaitReset() spuriously times out and the power
+		 * sequence skips BOOT_DONE, deadlocking the SLP_A#/SLP_M# handshake. */
+		ready = mec_hal_espi_vw_is_ready(iob) || mec_hal_espi_vw_is_enabled(iob);
 	} else if (chan == ESPI_CHANNEL_OOB) {
 		ready = mec_hal_espi_oob_is_ready(iob);
 	} else if (chan == ESPI_CHANNEL_FLASH) {
@@ -879,7 +885,11 @@ static void espi_mec5_arm_chan_enables(const struct device *dev)
 	if (!mec_hal_espi_vw_is_enabled(iob)) {
 		mec_hal_espi_vw_en_ien(1);
 	} else {
+		/* Host already has VW enabled (warm boot / re-init): the one-shot
+		 * VW-enable ISR will not fire, so set VWRDY here so the EC reflects a
+		 * ready VW channel to the Host. */
 		mec_hal_espi_vw_en_ien(0);
+		mec_hal_espi_vw_ready_set(iob);
 	}
 #endif
 #ifdef CONFIG_ESPI_OOB_CHANNEL
@@ -1141,6 +1151,32 @@ static int espi_mec5_pc_cfg(const struct device *dev)
 	return 0;
 }
 
+/* Public: force Peripheral Channel configuration + PC Ready.
+ *
+ * The power sequence calls this after it has polled PLTRST# de-asserted (host
+ * out of reset). On a warm boot the PLTRST#-deassert CT-VW ISR (which runs
+ * mec5_pcd_config_access() + pc_ready_set, line ~1093) can be MISSED because
+ * the power sequence's espiWaitVwPltrst() VW read consumes the VW change before
+ * the ISR fires. Then PCRDY stays 0 while the Host has the Peripheral Channel
+ * enabled (PCSTS.PCEN_VAL=1), so the Host's PC accesses (port-80, ACPI EC, KBC,
+ * BIOS<->EC mailbox) get no EC response and BIOS POST stalls / the EC is blind
+ * to it. This re-runs the PC configuration deterministically. Idempotent. */
+int espi_mchp_mec5_pc_ready_recover(const struct device *dev)
+{
+	const struct espi_mec5_dev_config *devcfg = dev->config;
+	struct mec_espi_io_regs *iob = devcfg->iob;
+
+	if (!(mec_hal_espi_pc_en_status(iob) & BIT(0))) {
+		return -EAGAIN; /* Host has not enabled the PC channel yet */
+	}
+	if (mec_hal_espi_pc_is_ready(iob)) {
+		return 0; /* already ready */
+	}
+
+	(void)espi_mec5_pc_cfg(dev);
+	return mec_hal_espi_pc_is_ready(iob) ? 0 : -EIO;
+}
+
 /* ISR for Peripheral Channel events:
  * Channel enable change by Host
  * Bus Master enable change by Host
@@ -1289,6 +1325,34 @@ static int espi_mec5_dev_init(const struct device *dev)
 	if (devcfg->irq_cfg_func) {
 		devcfg->irq_cfg_func(dev);
 	}
+
+#ifdef CONFIG_ESPI_PERIPHERAL_CHANNEL
+	/* Warm-boot / link-already-up recovery.
+	 *
+	 * When the Host eSPI link is already up before this EC boots (EC-only
+	 * reboot, watchdog, or a bench POR that resets only the EC and not the
+	 * host), the ESPI_RESET# de-assert edge happened before this driver armed
+	 * its ISR, so espi_mec5_ereset_isr() never runs and the channels are never
+	 * armed. The MEC5 Peripheral Channel auto-enables on RESET# de-assert
+	 * WITHOUT a PCEN_CHG interrupt, so espi_mec5_pc_isr() never runs either.
+	 * The result is PC enabled (PCSTS.PCEN_VAL=1) but PC Ready never set
+	 * (PCRDY=0). The Host reads PCRDY=0 at GET_CONFIGURATION and stalls,
+	 * blocking SUS_WARN# and SLP_A#/SLP_M#, so the host never leaves S5.
+	 *
+	 * Detect that state and run the same work the PC ISR would: arm the channel
+	 * enables and configure the Peripheral Channel (espi_mec5_pc_cfg() also runs
+	 * mec5_pcd_config_access() and sets PC Ready). PCRDY latches because the
+	 * link is already up, and persists since ESPI_RESET# stays de-asserted.
+	 */
+	if ((mec_hal_espi_pc_en_status(iob) & BIT(0)) && !mec_hal_espi_pc_is_ready(iob)) {
+		struct espi_mec5_data *data = dev->data;
+
+		data->espi_reset_asserted = 0;
+		espi_mec5_arm_chan_enables(dev);
+		(void)espi_mec5_pc_cfg(dev);
+		LOG_WRN("eSPI warm-boot: PC enabled but PCRDY=0 at init; forced PC ready");
+	}
+#endif
 
 	return 0;
 }
