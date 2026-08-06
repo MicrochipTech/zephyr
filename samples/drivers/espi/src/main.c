@@ -461,7 +461,8 @@ int espi_test(void)
 	}
 
 	//ret = espi_saf_test1(SAF_SPI_TEST_ADDRESS);
-	ret = espi_saf_test1(0x1500000);
+	//ret = espi_saf_test1(0x1500000);
+	ret = espi_saf_test1(0x00000);
 	if (ret) {
 		LOG_INF("eSPI SAF test1 returned error %d", ret);
 	}

@@ -40,6 +40,8 @@
 /* W25Q128 1.8V part JEDEC ID */
 #define W25Q128_FW_JEDEC_ID 0x001860efU
 #define W25Q256_JEDEC_ID 0x001940efU
+#define GD25LR256_JEDEC_ID 0x001967c8U
+#define GD25LR512_JEDEC_ID 0x001a60c8U
 
 /* SAF Erase Sizes */
 enum saf_erase_size {

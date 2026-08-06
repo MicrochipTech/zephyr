@@ -47,6 +47,19 @@ static const struct device *const espi_saf_dev = DEVICE_DT_GET(ESPI_TAF_NODE);
 static uint8_t safbuf[SAF_TEST_BUF_SIZE] __aligned(4);
 static uint8_t safbuf2[SAF_TEST_BUF_SIZE] __aligned(4);
 
+#define MCHP_GD25LR256_POLL2_MASK 0xffbbU
+#define GD25LR512M_CM_RD_D1 \
+	(MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+	 MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_DIS | \
+	 MCHP_QMSPI_C_RX_DMA_DIS | MCHP_QMSPI_C_NO_CLOSE | \
+	 MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_XFR_NUNITS(2))
+
+#define GD25LR512M_CM_RD_D2 \
+	(MCHP_QMSPI_C_IFM_4X | MCHP_QMSPI_C_TX_DIS | \
+	 MCHP_QMSPI_C_TX_DMA_DIS | MCHP_QMSPI_C_RX_EN | \
+	 MCHP_QMSPI_C_RX_LDMA_CH0 | MCHP_QMSPI_C_CLOSE | \
+	 MCHP_QMSPI_C_XFR_UNITS_1 | MCHP_QMSPI_C_XFR_NUNITS(0) | \
+	 MCHP_QMSPI_C_DESCR_LAST)
 /*
  * W25Q128 SPI flash SAF configuration.
  * Size is 16Mbytes, it requires no continuous mode prefix, or
@@ -56,12 +69,14 @@ static const struct espi_saf_flash_cfg flash_w25q128 = {
 	.flashsz = 0x2000000U,
 	.opa = MCHP_SAF_OPCODE_REG_VAL(0x06U, 0x75U, 0x7aU, 0x05U),
 	.opb = MCHP_SAF_OPCODE_REG_VAL(0x20U, 0x52U, 0xd8U, 0x02U),
-	.opc = MCHP_SAF_OPCODE_REG_VAL(0xebU, 0xffU, 0xa5U, 0x35U),
-	.poll2_mask = MCHP_W25Q256_POLL2_MASK,
+	.opc = MCHP_SAF_OPCODE_REG_VAL(0xecU, 0xffU, 0xa5U, 0x70U),
+	.poll2_mask = MCHP_GD25LR256_POLL2_MASK,
 	.cont_prefix = 0U,
 	.cs_cfg_descr_ids = MCHP_CS0_CFG_DESCR_IDX_REG_VAL,
 	.flags = MCHP_FLASH_FLAG_ADDR32,
-	.descr = {MCHP_W25Q256_CM_RD_D0, MCHP_W25Q256_CM_RD_D1, MCHP_W25Q256_CM_RD_D2,
+	.descr = {MCHP_W25Q256_CM_RD_D0, GD25LR512M_CM_RD_D1, GD25LR512M_CM_RD_D2,
+	//.descr = {MCHP_W25Q256_CM_RD_D0, MCHP_W25Q256_CM_RD_D1, GD25LR512M_CM_RD_D2,
+//	.descr = {MCHP_W25Q256_CM_RD_D0, MCHP_W25Q256_CM_RD_D1, MCHP_W25Q256_CM_RD_D2,
 		  MCHP_W25Q256_ENTER_CM_D0, MCHP_W25Q256_ENTER_CM_D1, MCHP_W25Q256_ENTER_CM_D2}};
 
 /*
@@ -186,8 +201,8 @@ int spi_cmd_response(const struct device *spi_dev, const struct spi_config *spi_
 int spi_saf_init(void)
 {
 	struct spi_config spi_cfg = {0};
-	uint32_t jedec_id = 0, temp = 0;
-	uint8_t spi_status1 = 0, spi_status2 = 0;
+	uint32_t jedec_id = 0;//, temp = 0;
+//	uint8_t spi_status1 = 0, spi_status2 = 0;
 	int ret = 0;
 
 	/*
@@ -201,21 +216,24 @@ int spi_saf_init(void)
 	spi_cfg.cs.gpio.pin = 0;
 	spi_cfg.cs.gpio.dt_flags = 0;
 	spi_cfg.cs.gpio.port = NULL;
-
 	/* Read JEDEC ID command and fill read buffer */
 	ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg, SPI_READ_JEDEC_ID,
+#if 0
 			       NULL, 0, (uint8_t *)&jedec_id, 3U);
+#else
+			       NULL, 0, (uint8_t *)&jedec_id, 4U); //for gd25lr256
+#endif
 	if (ret) {
 		LOG_ERR("Read JEDEC ID spi_transceive failure: error %d", ret);
 		return ret;
 	}
 
-	if ((jedec_id != W25Q256_JEDEC_ID) && (jedec_id != W25Q128_FW_JEDEC_ID)) {
-		LOG_ERR("JEDIC ID 0x%08x does not match W25Q128(0x%08x) or W25Q128_FW(0x%08x)",
-			jedec_id, W25Q128_JEDEC_ID, W25Q128_FW_JEDEC_ID);
-		return -1;
+	if ((jedec_id != GD25LR256_JEDEC_ID) && (jedec_id != GD25LR512_JEDEC_ID)) {
+		LOG_ERR("JEDIC ID 0x%08x does not match GD25LR256(0x%08x) or GD25LR512(0x%08x)",
+			jedec_id, GD25LR256_JEDEC_ID, GD25LR512_JEDEC_ID);
+	//	return -1;
 	}
-
+#if 0
 	/* Read STATUS2 to get quad enable bit */
 	ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg, SPI_READ_STATUS2,
 			       NULL, 0, (uint8_t *)&spi_status2, 1U);
@@ -279,6 +297,17 @@ int spi_saf_init(void)
 			return -1;
 		}
 	}
+#endif
+	uint8_t addr[4] = {0,0,0,0};
+	uint8_t buf[64] = {0,0,0,0,};
+
+        ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg,0x03,
+                               addr, 3, buf, 64);
+	LOG_HEXDUMP_INF(buf, 64, "Read from 0x0 using 0x03:");
+        if (ret) {
+                LOG_ERR("Read JEDEC ID spi_transceive failure: error %d", ret);
+                return ret;
+        }
 	/* Enter 4Byte mode */
         ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg,0xB7,
                                NULL, 0, NULL, 0);
@@ -287,6 +316,15 @@ int spi_saf_init(void)
                 return ret;
         }
 
+	buf[0] = 0;
+	buf[1] = 0;
+        ret = spi_cmd_response(qspi_dev, (const struct spi_config *)&spi_cfg,0x13,
+                               addr, 4, buf, 64);
+	LOG_HEXDUMP_INF(buf, 64, "Read from 0x0 using 0x13:");
+        if (ret) {
+                LOG_ERR("Read JEDEC ID spi_transceive failure: error %d", ret);
+                return ret;
+        }
 	return 0;
 }
 
@@ -436,7 +474,7 @@ static int saf_read(uint32_t spi_addr, uint8_t *dest, uint32_t reqlen, uint32_t 
 	int rc = 0;
 	uint32_t chunk_len = 0, n = 0, nr = 0;
 	struct espi_saf_packet saf_pkt = {0};
-
+LOG_INF("ENTER saf_read");
 	if (dest == NULL) {
 		return -EINVAL;
 	}
@@ -574,7 +612,9 @@ int espi_saf_test1(uint32_t spi_addr)
 		spi_addr &= ~(4096U - 1U);
 		LOG_INF("%s: Aligned SPI address to 0x%08x", __func__, spi_addr);
 	}
-
+	unsigned char i=0;
+if (i) //Test MANI 
+{
 	memset(safbuf, 0x55, sizeof(safbuf));
 	memset(safbuf2, 0, sizeof(safbuf2));
 
@@ -647,14 +687,15 @@ int espi_saf_test1(uint32_t spi_addr)
 		n += chunksz;
 		src += chunksz;
 	}
-
+}
 	/* read back and check */
 	LOG_INF("%s: Read back 4K sector at 0x%X", __func__, spi_addr);
-
 	num_bytes_read = 0;
-	rc = saf_read(spi_addr, safbuf2, progsz, &num_bytes_read);
+	memset(safbuf, 0xaa, sizeof(safbuf));
+	rc = saf_read(spi_addr, safbuf2, 64, &num_bytes_read);
+	LOG_HEXDUMP_INF(safbuf2, 64, "Read:");
 	if (rc == 0) {
-		rc = memcmp(safbuf, safbuf2, progsz);
+		rc = memcmp(safbuf, safbuf2, 64);
 		if (rc == 0) {
 			LOG_INF("%s: Read back match: PASS", __func__);
 		} else {

@@ -91,7 +91,8 @@
 		reg = <0>;
 		spi-max-frequency = <DT_FREQ_M(24)>;
 		/*jedec-id = [ef 60 18];  W25Q128-FW 1.8V part */
-		jedec-id = [ef 40 19]; /* W25Q256 3.3V part */
+		jedec-id = [c8 67 19]; /*  GD25LR256 1.8V part */
+		/*jedec-id = [c8 60 1a];  GD25LR512 1.8V part */
 		size = <DT_SIZE_M(32)>;
 		page-size = <256>;
 		use-fast-read;
