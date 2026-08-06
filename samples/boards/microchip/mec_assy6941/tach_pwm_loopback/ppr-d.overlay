@@ -1,0 +1,25 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Row D of the pulses-per-round Latin square. Combined with the tach-edges
+ * values fixed in app.overlay this build covers (2, 4), (3, 3), (5, 2), (9, 1).
+ * Apply with EXTRA_DTC_OVERLAY_FILE so that app.overlay still takes effect.
+ */
+
+&tach0 {
+	pulses-per-round = <4>;
+};
+
+&tach1 {
+	pulses-per-round = <3>;
+};
+
+&tach2 {
+	pulses-per-round = <2>;
+};
+
+&tach3 {
+	pulses-per-round = <1>;
+};
