@@ -1,0 +1,66 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * PWM0 emulates a fan tachometer output for all four TACH inputs. Fly-wire
+ * GPIO053 (PWM0 out) to GPIO050, GPIO051, GPIO052 and GPIO033 (TACH0 through
+ * TACH3 in), sharing the board ground. Check the Assy 6941 schematic before
+ * jumpering at a fan header: those pins may carry pull-ups or level shifters
+ * that the tachometer inputs do not need.
+ *
+ * tach-edges is fixed per instance so that one build measures all four
+ * measurement window widths at once. Only pulses-per-round varies between
+ * builds, through the ppr-a..ppr-d overlays.
+ *
+ * The pinctrl labels below are spelled the same way in mec5-common-pinctrl.dtsi
+ * (MEC174x/MEC175x) and mec1653b-b0-pinctrl.dtsi, so this overlay covers every
+ * mec_assy6941 SoC variant.
+ */
+
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+	zephyr,user {
+		/*
+		 * The period in this specifier is unused: main() drives the
+		 * output with pwm_set_cycles() so that it can land on an exact
+		 * number of 100 kHz clocks.
+		 */
+		pwms = <&pwm0 0 PWM_HZ(100) PWM_POLARITY_NORMAL>;
+	};
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_gpio053>;
+	pinctrl-names = "default";
+};
+
+&tach0 {
+	status = "okay";
+	pinctrl-0 = <&ict0_tach0_gpio050>;
+	pinctrl-names = "default";
+	tach-edges = <2>;
+};
+
+&tach1 {
+	status = "okay";
+	pinctrl-0 = <&ict1_tach1_gpio051>;
+	pinctrl-names = "default";
+	tach-edges = <3>;
+};
+
+&tach2 {
+	status = "okay";
+	pinctrl-0 = <&ict2_tach2_gpio052>;
+	pinctrl-names = "default";
+	tach-edges = <5>;
+};
+
+&tach3 {
+	status = "okay";
+	pinctrl-0 = <&tach3_gpio033>;
+	pinctrl-names = "default";
+	tach-edges = <9>;
+};
