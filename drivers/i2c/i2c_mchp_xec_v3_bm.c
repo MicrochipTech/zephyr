@@ -285,6 +285,10 @@ struct xec_i2c_v3_bm_xdat {
 	uint32_t tgt_tx_pos; /* next byte to transmit                            */
 #endif
 #endif
+#ifdef CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+	volatile uint32_t capidx;
+	volatile uint8_t capture[CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE] __aligned(4);
+#endif
 };
 
 struct xec_i2c_v3_bm_port_xcfg {
@@ -309,6 +313,134 @@ static bool xec_i2c_v3_bm_wq_started;
 #endif
 
 /* ---- helpers ------------------------------------------------------------ */
+
+#ifdef CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+static void xec_i2c_bm_cap_init(struct xec_i2c_v3_bm_xdat *xdat)
+{
+	xdat->capidx = 0;
+	memset((void *)xdat->capture, 0, CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE);
+}
+
+static void xec_i2c_bm_cap_update(struct xec_i2c_v3_bm_xdat *xdat, uint8_t capval)
+{
+	if (xdat->capidx >= CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE) {
+		return;
+	}
+
+	xdat->capture[xdat->capidx++] = capval;
+}
+
+int mchp_xec_i2c_bm_clear_capture(const struct device *port)
+{
+	if (port == NULL) {
+		return -EINVAL;
+	}
+
+	const struct xec_i2c_v3_bm_port_xcfg *pc = port->config;
+	const struct device *ctrl = pc->parent;
+	struct xec_i2c_v3_bm_xdat *const xdat = ctrl->data;
+
+	if (xdat->state != BM_STATE_IDLE) {
+		return -EBUSY;
+	}
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+	xec_i2c_bm_cap_init(xdat);
+	k_sem_give(&xdat->lock);
+
+	return 0;
+}
+
+int mchp_xec_i2c_bm_copy_capture(const struct device *port, uint8_t *capdest, size_t capdest_size)
+{
+	if ((port == NULL) || (capdest == NULL)) {
+		return -EINVAL;
+	}
+
+	if (capdest_size == 0) {
+		return 0;
+	}
+
+	const struct xec_i2c_v3_bm_port_xcfg *pc = port->config;
+	const struct device *ctrl = pc->parent;
+	struct xec_i2c_v3_bm_xdat *const xdat = ctrl->data;
+
+	if (xdat->state != BM_STATE_IDLE) {
+		return -EBUSY;
+	}
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+
+	size_t n = (capdest_size < CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE)
+			   ? capdest_size
+			   : CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE;
+
+	memcpy(capdest, (const void *)xdat->capture, n);
+
+	k_sem_give(&xdat->lock);
+
+	return 0;
+}
+#else
+static void xec_i2c_bm_cap_init(struct xec_i2c_v3_bm_xdat *xdat)
+{
+}
+
+static void xec_i2c_bm_cap_update(struct xec_i2c_v3_bm_xdat *xdat, uint8_t capval)
+{
+}
+
+int mchp_xec_i2c_bm_clear_capture(const struct device *port)
+{
+	return -ENOSYS;
+}
+
+int mchp_xec_i2c_bm_copy_capture(const struct device *port, uint8_t *capdest, size_t capdest_size)
+{
+	return -ENOSYS;
+}
+#endif /* CONFIG_I2C_MCHP_XEC_V3_BM_STATE_CAPTURE */
+
+/* Mark both the controller and the active port busy for the lifetime of a
+ * controller-role transfer. Under CONFIG_PM_DEVICE_SYSTEM_MANAGED the system
+ * idle path calls pm_suspend_devices() the instant every thread blocks -- which
+ * is precisely what a transfer does while waiting on data->sync. That would
+ * suspend the controller (clearing CFG.ENAB) and switch the port pads to their
+ * sleep state, tearing the transfer down mid-flight. pm_suspend_devices() skips
+ * any device flagged busy, so both must be marked: the controller owns
+ * CFG.ENAB, the port owns pinctrl. Target mode is deliberately NOT bracketed --
+ * it must be allowed to suspend so the pm_action can arm START-detect wake.
+ * The calls compile to nothing without CONFIG_PM_DEVICE.
+ */
+#ifdef CONFIG_PM_DEVICE
+static inline void xec_i2c_v3_bm_pm_busy_set(const struct device *port_dev,
+					     const struct device *ctrl)
+{
+	pm_device_busy_set(ctrl);
+	pm_device_busy_set(port_dev);
+}
+
+static inline void xec_i2c_v3_bm_pm_busy_clear(const struct device *port_dev,
+					       const struct device *ctrl)
+{
+	pm_device_busy_clear(port_dev);
+	pm_device_busy_clear(ctrl);
+}
+#else
+static inline void xec_i2c_v3_bm_pm_busy_set(const struct device *port_dev,
+					     const struct device *ctrl)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(ctrl);
+}
+
+static inline void xec_i2c_v3_bm_pm_busy_clear(const struct device *port_dev,
+					       const struct device *ctrl)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(ctrl);
+}
+#endif
 
 static inline uint8_t bm_addr_byte(uint16_t addr, bool read)
 {
@@ -886,10 +1018,14 @@ static void bm_tgt_rx(const struct device *ctrl)
 	uintptr_t base = cfg->base;
 	uint8_t val = sys_read8(base + XEC_I2C_DATA_OFS);
 
+	xec_i2c_bm_cap_update(xdat, 0xB8U);
+
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	if (xdat->tgt_rx_pos < cfg->tgt_rx_buf_size) {
+		xec_i2c_bm_cap_update(xdat, 0xB9U);
 		cfg->tgt_rx_buf[xdat->tgt_rx_pos++] = val;
 	} else {
+		xec_i2c_bm_cap_update(xdat, 0xBAU);
 		bm_tgt_nack_next(base);
 	}
 #else
@@ -897,6 +1033,7 @@ static void bm_tgt_rx(const struct device *ctrl)
 	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
 
 	if (cbs == NULL || cbs->write_received == NULL || cbs->write_received(tcfg, val) != 0) {
+		xec_i2c_bm_cap_update(xdat, 0xBAU);
 		bm_tgt_nack_next(base);
 	}
 #endif
@@ -914,6 +1051,8 @@ static void bm_tgt_tx(const struct device *ctrl)
 	uintptr_t base = cfg->base;
 	uint8_t val = BM_TGT_DFLT_DATA;
 
+	xec_i2c_bm_cap_update(xdat, 0xB0U);
+
 	if ((sys_read8(base + XEC_I2C_SR_OFS) & BM_SR_LRB) != 0U) {
 		/* Host NACKed the final read byte and will now issue STOP. Clear
 		 * any stale CMPL.IDLE latch before arming IDLE_IEN: IDLE latches
@@ -926,14 +1065,18 @@ static void bm_tgt_tx(const struct device *ctrl)
 		 * NACKed (STOP not yet issued, NBB still 0), so any latch here is
 		 * stale by definition -- clearing it cannot drop a real STOP.
 		 */
+		xec_i2c_bm_cap_update(xdat, 0xB1U);
 		bm_cmpl_clear(base, BM_CMPL_IDLE);
 		sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		sys_write8(BM_TGT_DFLT_DATA, base + XEC_I2C_DATA_OFS);
 		return;
 	}
 
+	xec_i2c_bm_cap_update(xdat, 0xB2U);
+
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 	if (xdat->tgt_tx_buf != NULL && xdat->tgt_tx_pos < xdat->tgt_tx_len) {
+		xec_i2c_bm_cap_update(xdat, 0xB3U);
 		val = xdat->tgt_tx_buf[xdat->tgt_tx_pos++];
 	}
 #else
@@ -941,10 +1084,12 @@ static void bm_tgt_tx(const struct device *ctrl)
 	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
 
 	if (cbs != NULL && cbs->read_processed != NULL) {
+		xec_i2c_bm_cap_update(xdat, 0xB3U);
 		(void)cbs->read_processed(tcfg, &val);
 	}
 #endif
 	sys_write8(val, base + XEC_I2C_DATA_OFS);
+	xec_i2c_bm_cap_update(xdat, 0xB4U);
 }
 
 /* Target-mode interrupt service. Dispatched from the top of the controller
@@ -962,11 +1107,15 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 	struct i2c_target_config *tcfg = xdat->targets[xdat->active_slot];
 	const struct i2c_target_callbacks *cbs = (tcfg != NULL) ? tcfg->callbacks : NULL;
 
+	xec_i2c_bm_cap_update(xdat, 0xA0U);
+
 	/* Target-transmit external STOP: after the host NACKs the final read
 	 * byte and issues STOP, NBB goes 0->1 and CMPL.IDLE latches (IDLE_IEN
 	 * was armed in bm_tgt_tx). Deliver the stop and re-arm.
 	 */
 	if ((cfgr & BM_CFG_IDLE_IEN) != 0U && (cmpl & BM_CMPL_IDLE) != 0U) {
+		xec_i2c_bm_cap_update(xdat, 0xA1U);
+		xdat->state = BM_STATE_IDLE;
 		sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		bm_cmpl_clear(base, BM_CMPL_IDLE);
 		/* IDLE latches on NBB 0->1 after the host's STOP releases the
@@ -975,47 +1124,61 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 		 * clear it and let the transfer continue.
 		 */
 		if ((sr & BM_SR_NBB) != 0U) {
+			xec_i2c_bm_cap_update(xdat, 0xA2U);
 			if (cbs != NULL && cbs->stop != NULL) {
+				xec_i2c_bm_cap_update(xdat, 0xA3U);
 				cbs->stop(tcfg);
 			}
 			bm_tgt_restart(base);
+			/* Transaction over -- allow suspend/wake-arm again. */
+			xec_i2c_v3_bm_pm_busy_clear(xdat->target_port, ctrl);
 		}
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		return;
 	}
 
 	/* External STOP after a write, or a bus error: end the transaction. */
 	if ((sr & (BM_SR_BER | BM_SR_STO)) != 0U) {
+		xec_i2c_bm_cap_update(xdat, 0xA4U);
+		xdat->state = BM_STATE_IDLE;
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 		if (!xdat->target_read && xdat->tgt_rx_pos > 0U && cbs != NULL &&
 		    cbs->buf_write_received != NULL) {
+			xec_i2c_bm_cap_update(xdat, 0xA5U);
 			cbs->buf_write_received(tcfg, cfg->tgt_rx_buf, xdat->tgt_rx_pos);
 		}
 		xdat->tgt_rx_pos = 0U;
 #endif
 		if (cbs != NULL && cbs->stop != NULL) {
+			xec_i2c_bm_cap_update(xdat, 0xA6U);
 			cbs->stop(tcfg);
 		}
 		bm_cmpl_clear(base, cmpl);
 		bm_tgt_restart(base);
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+		/* Transaction over (STOP or bus error) -- allow suspend/wake-arm. */
+		xec_i2c_v3_bm_pm_busy_clear(xdat->target_port, ctrl);
 		return;
 	}
 
 	/* Address phase: AAT set with PIN clear (byte complete, addressed). */
 	if ((sr & (BM_SR_AAT | BM_SR_PIN)) == BM_SR_AAT) {
+		xec_i2c_bm_cap_update(xdat, 0xA7U);
+		xdat->state = BM_STATE_START;
+		xec_i2c_v3_bm_pm_busy_set(xdat->target_port, ctrl);
 		bm_tgt_addr(ctrl);
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		return;
 	}
 
 	/* Data phase. */
 	if (xdat->target_read) {
+		xdat->state = BM_STATE_READ;
 		bm_tgt_tx(ctrl);
 	} else {
+		xdat->state = BM_STATE_WRITE;
 		bm_tgt_rx(ctrl);
 	}
+
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+	xec_i2c_bm_cap_update(xdat, 0xAFU);
 }
 #endif /* CONFIG_I2C_TARGET */
 
@@ -1028,6 +1191,8 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	uintptr_t base = cfg->base;
 	uint8_t sr;
 
+	xec_i2c_bm_cap_update(xdat, 0x80U);
+
 #ifdef CONFIG_I2C_TARGET
 	/* While a target is attached the controller runs as a peripheral: master
 	 * entry points are -EBUSY, so the state machine below is dormant and this
@@ -1035,7 +1200,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	 */
 	if (xdat->target_attached) {
 		xec_i2c_v3_bm_isr_target(ctrl_dev);
-		return;
+		goto out;
 	}
 #endif
 
@@ -1045,13 +1210,14 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	 * transfer complete. Any other interrupt in this state is spurious.
 	 */
 	if (xdat->state == BM_STATE_STOP) {
+		xec_i2c_bm_cap_update(xdat, 0x81U);
 		if ((sys_read32(base + XEC_I2C_CMPL_OFS) & BM_CMPL_IDLE) != 0U) {
+			xec_i2c_bm_cap_update(xdat, 0x82U);
 			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 			bm_cmpl_clear(base, BM_CMPL_IDLE);
 			xec_i2c_v3_bm_finish(ctrl_dev);
 		}
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
-		return;
+		goto out;
 	}
 
 	/* No transfer in flight: quiesce and drop any spurious interrupt so a
@@ -1059,9 +1225,9 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	 */
 	if (xdat->state != BM_STATE_START && xdat->state != BM_STATE_WRITE &&
 	    xdat->state != BM_STATE_READ) {
+		xec_i2c_bm_cap_update(xdat, 0x84U);
 		sys_write8(BM_CR_DFLT, base + XEC_I2C_CR_OFS);
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
-		return;
+		goto out;
 	}
 
 	sr = sys_read8(base + XEC_I2C_SR_OFS);
@@ -1071,26 +1237,31 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	 * next transfer's recovery); LAB means another host won the bus.
 	 */
 	if ((sr & BM_SR_BER) != 0U) {
+		xec_i2c_bm_cap_update(xdat, 0x85U);
 		xec_i2c_v3_bm_error(ctrl_dev, -EIO);
 		goto out;
 	}
 	if ((sr & BM_SR_LAB) != 0U) {
+		xec_i2c_bm_cap_update(xdat, 0x86U);
 		xec_i2c_v3_bm_error(ctrl_dev, -EAGAIN);
 		goto out;
 	}
 
 	switch (xdat->state) {
 	case BM_STATE_START:
+		xec_i2c_bm_cap_update(xdat, 0x87U);
 		/* Address phase complete. LRB carries the target's ACK of the
 		 * address byte (0 = ACK, 1 = NACK).
 		 */
 		if ((sr & BM_SR_LRB) != 0U) {
+			xec_i2c_bm_cap_update(xdat, 0x88U);
 			/* Target did not ACK its address: no such device. */
 			xec_i2c_v3_bm_fail(ctrl_dev, -ENXIO);
 			break;
 		}
 
 		if (xdat->dir_read) {
+			xec_i2c_bm_cap_update(xdat, 0x89U);
 			xdat->rx_total = bm_run_read_total(xdat);
 			xdat->rx_done = 0;
 
@@ -1123,6 +1294,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 			(void)sys_read8(base + XEC_I2C_DATA_OFS);
 			xdat->state = BM_STATE_READ;
 		} else {
+			xec_i2c_bm_cap_update(xdat, 0x8AU);
 			if (xdat->blen == 0U) {
 				/* Address-only write (e.g. bus scan): no data to
 				 * send, so resolve the group boundary directly.
@@ -1137,16 +1309,19 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		break;
 
 	case BM_STATE_WRITE:
+		xec_i2c_bm_cap_update(xdat, 0x8BU);
 		/* Byte xdat->bpos has been clocked out; LRB is the target's
 		 * ACK for it.
 		 */
 		if ((sr & BM_SR_LRB) != 0U) {
+			xec_i2c_bm_cap_update(xdat, 0x8CU);
 			/* Target NACKed a data byte: abort the write. */
 			xec_i2c_v3_bm_fail(ctrl_dev, -ENXIO);
 			break;
 		}
 
 		if ((xdat->bpos + 1U) < xdat->blen) {
+			xec_i2c_bm_cap_update(xdat, 0x90U);
 			xdat->bpos++;
 			sys_write8(xdat->buf[xdat->bpos], base + XEC_I2C_DATA_OFS);
 			break;
@@ -1159,6 +1334,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		break;
 
 	case BM_STATE_READ:
+		xec_i2c_bm_cap_update(xdat, 0x8DU);
 		/* Byte rx_done of the read run is now in the shadow register.
 		 * Reading the Data Register retrieves it and clocks the next
 		 * byte (unless we STOP first). The last byte was NACKed by an
@@ -1166,6 +1342,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		 */
 		if (xdat->rx_done == (xdat->rx_total - 1U)) {
 			if (bm_stop_here(xdat)) {
+				xec_i2c_bm_cap_update(xdat, 0x91U);
 				/* Table 6-7 steps 9-10: STOP first (so the read
 				 * does not clock another byte), then read the
 				 * final byte out, then await the IDLE interrupt.
@@ -1174,6 +1351,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 				xdat->buf[xdat->bpos] = (uint8_t)sys_read8(base + XEC_I2C_DATA_OFS);
 				xec_i2c_v3_bm_wait_idle(ctrl_dev);
 			} else {
+				xec_i2c_bm_cap_update(xdat, 0x92U);
 				xdat->buf[xdat->bpos] = (uint8_t)sys_read8(base + XEC_I2C_DATA_OFS);
 				xec_i2c_v3_bm_restart_next(ctrl_dev);
 			}
@@ -1184,6 +1362,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		 * run's final byte.
 		 */
 		if ((xdat->rx_done + 2U) == xdat->rx_total) {
+			xec_i2c_bm_cap_update(xdat, 0x93U);
 			sys_write8(BM_CR_NACK, base + XEC_I2C_CR_OFS);
 		}
 
@@ -1196,6 +1375,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		 * non-empty buffer remains in the run.
 		 */
 		if (xdat->bpos == xdat->blen) {
+			xec_i2c_bm_cap_update(xdat, 0x94U);
 			do {
 				xdat->msg_idx++;
 				xdat->buf = xdat->msgs[xdat->msg_idx].buf;
@@ -1206,6 +1386,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		break;
 
 	default:
+		xec_i2c_bm_cap_update(xdat, 0x8EU);
 		/* Spurious interrupt outside a transfer: quiesce. */
 		sys_write8(BM_CR_DFLT, base + XEC_I2C_CR_OFS);
 		break;
@@ -1213,6 +1394,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 
 out:
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
+	xec_i2c_bm_cap_update(xdat, 0x8FU);
 }
 
 /* ---- transfer entry ----------------------------------------------------- */
@@ -1319,6 +1501,14 @@ static int xec_i2c_v3_bm_vport_transfer(const struct device *port_dev, struct i2
 	}
 #endif
 
+	xec_i2c_bm_cap_init(xdat);
+	xec_i2c_bm_cap_update(xdat, 1U);
+
+	/* Keep the controller and this port out of system-managed suspend for
+	 * the whole (blocking) transfer -- see xec_i2c_v3_bm_pm_busy_set().
+	 */
+	xec_i2c_v3_bm_pm_busy_set(port_dev, ctrl);
+
 	rc = xec_i2c_v3_bm_start(port_dev, msgs, num_msgs, address, NULL, NULL);
 
 	/* One iteration per STOP-delimited group: wait for the group to
@@ -1343,6 +1533,7 @@ static int xec_i2c_v3_bm_vport_transfer(const struct device *port_dev, struct i2
 		bm_arm_group(ctrl);
 	}
 
+	xec_i2c_v3_bm_pm_busy_clear(port_dev, ctrl);
 	k_sem_give(&xdat->lock);
 	return rc;
 }
@@ -1392,6 +1583,14 @@ static int xec_i2c_v3_bm_vport_transfer_cb(const struct device *port_dev, struct
 	}
 #endif
 
+	xec_i2c_bm_cap_init(xdat);
+	xec_i2c_bm_cap_update(xdat, 0x10U);
+
+	/* Block system-managed suspend for the controller and this port until
+	 * async_deliver reports completion -- see xec_i2c_v3_bm_pm_busy_set().
+	 */
+	xec_i2c_v3_bm_pm_busy_set(port_dev, ctrl);
+
 	/* Open the completion claim and arm the watchdog BEFORE issuing the
 	 * START inside start(): if the transfer completes immediately, the
 	 * work handler's async_deliver then finds a scheduled watchdog to
@@ -1404,6 +1603,7 @@ static int xec_i2c_v3_bm_vport_transfer_cb(const struct device *port_dev, struct
 	if (rc != 0) {
 		(void)k_work_cancel_delayable(&xdat->timeout_dwork);
 		atomic_set(&xdat->async_done, 1);
+		xec_i2c_v3_bm_pm_busy_clear(port_dev, ctrl);
 		k_sem_give(&xdat->lock);
 		return rc;
 	}
@@ -1634,6 +1834,7 @@ static int xec_i2c_v3_bm_target_unregister(const struct device *port_dev,
 		sys_write32(0U, cfg->base + XEC_I2C_OA_OFS);
 		xdat->target_attached = false;
 		xdat->target_port = NULL;
+		xdat->state = BM_STATE_IDLE;
 	} else {
 		bm_tgt_program_oa(ctrl);
 	}
@@ -1663,6 +1864,11 @@ static void xec_i2c_v3_bm_async_deliver(const struct device *ctrl, int result)
 	const struct device *dev = xdat->cb_dev;
 
 	(void)k_work_cancel_delayable(&xdat->timeout_dwork);
+
+	/* Release the suspend hold taken in vport_transfer_cb. dev == cb_dev is
+	 * the active port; ctrl is its parent controller.
+	 */
+	xec_i2c_v3_bm_pm_busy_clear(dev, ctrl);
 
 	k_sem_give(&xdat->lock);
 
@@ -1933,6 +2139,52 @@ static int xec_i2c_v3_bm_port_init(const struct device *port_dev)
 	}
 
 	return 0;
+}
+
+/* Custom mchp_xec_i2c.h API for runtime port query/select */
+
+int mchp_xec_i2c_bm_port_get(const struct device *i2c_port_dev, uint8_t *port)
+{
+	const struct xec_i2c_v3_bm_port_xcfg *pc = NULL;
+
+	if (i2c_port_dev == NULL || port == NULL) {
+		return -EINVAL;
+	}
+
+	pc = i2c_port_dev->config;
+	*port = pc->port_id;
+	return 0;
+}
+
+int mchp_xec_i2c_bm_port_set(const struct device *i2c_port_dev, uint8_t port)
+{
+	if (i2c_port_dev == NULL || port >= XEC_I2C_CFG_MAX_PORT) {
+		return -EINVAL;
+	}
+
+	const struct xec_i2c_v3_bm_port_xcfg *pc = NULL;
+	const struct xec_i2c_v3_bm_xcfg *cfg = NULL;
+	struct xec_i2c_v3_bm_xdat *const xdat = NULL;
+	uint32_t freq = 0;
+	int rc = 0;
+
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->target_attached) {
+		return -EBUSY;
+	}
+#endif
+
+	k_sem_take(&xdat->lock, K_FOREVER);
+	if (xdat->active_port == port) {
+		k_sem_give(&xdat->lock);
+		return 0;
+	}
+
+	freq = (xdat->active_freq != 0U) ? xdat->active_freq : cfg->dflt_freq;
+	rc = xec_i2c_v3_bm_program_ctrl(pc->parent, freq, port);
+	k_sem_give(&xdat->lock);
+
+	return rc;
 }
 
 static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
