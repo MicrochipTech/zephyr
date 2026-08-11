@@ -53,6 +53,20 @@ config I2C_MCHP_XEC_V3_BM_KWQ_PRIORITY
 	  Custom kernel work queue priority. Default is 10. Higher
 	  positive numbers are lower priority.
 
+config I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+	bool "Microchip XEC I2Cv3 byte mode driver state capture feature"
+	default n
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Record driver flow in a per-instance byte array.
+
+config I2C_MCHP_XEC_V3_BM_STATE_CAPTURE_SIZE
+	int "Microchip XEC I2Cv3-BM state capture buffer size in bytes"
+	default 256
+	depends on I2C_MCHP_XEC_V3_BM_STATE_CAPTURE
+	help
+	  Size of the state capture buffer in bytes. Default is 256.
+
 config I2C_MCHP_XEC_V3_NL
 	bool "Microchip XEC I2Cv3 network layer driver"
 	default y
