@@ -260,6 +260,24 @@ void sys_clock_disable(void)
 
 #ifdef CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT
 
+uint8_t mchp_xec_rtimer_busy_wait_off(void)
+{
+	uint32_t cr = sys_read32(BTMR_BASE + BTMR_CR_OFS);
+
+	sys_write32((cr & ~BIT(BTMR_CR_ACTV_POS)), BTMR_BASE + BTMR_CR_OFS);
+
+	return (cr >> BTMR_CR_ACTV_POS) & BIT(0);
+}
+
+uint8_t mchp_xec_rtimer_busy_wait_on(void)
+{
+	uint32_t cr = sys_read32(BTMR_BASE + BTMR_CR_OFS);
+
+	sys_write32((cr | BIT(BTMR_CR_ACTV_POS)), BTMR_BASE + BTMR_CR_OFS);
+
+	return (cr >> BTMR_CR_ACTV_POS) & BIT(0);
+}
+
 /*
  * We implement custom busy wait using a MEC1501 basic timer running on
  * the 48MHz clock domain. This code is here for future power management
