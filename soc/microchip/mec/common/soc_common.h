@@ -43,5 +43,6 @@
 #include <soc_mmcr.h>
 #include <soc_pcr.h>
 #include <soc_pins.h>
+#include <soc_pm.h>
 
 #endif /* _ZEPHYR_SOC_MICROCHIP_MEC_COMMON_SOC_COMMON_H_ */

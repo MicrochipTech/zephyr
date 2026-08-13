@@ -10,8 +10,6 @@
 #include <zephyr/pm/pm.h>
 #include <zephyr/sys/sys_io.h>
 
-#include "soc_pm_periph.h"
-
 #define XEC_PM_DEBUG_GPIO_MARKER
 #define XEC_PM_DEBUG_CLK_REQ_VBAT
 
@@ -87,82 +85,38 @@ static void soc_pm_dbg_clk_req_save_to_vbat(void)
 #define XEC_PM_DEBUG_CLK_REQ_VBAT_SAVE()
 #endif
 
-static uint8_t basic_timer_cr_save[XEC_BASIC_TIMER_INSTANCES];
-static uint8_t uart_actv_save[XEC_UART_INSTANCES];
-
-static void save_basic_timers(void)
-{
-	uintptr_t rb = (uintptr_t)(XEC_BASIC_TIMER0_REG_BASE);
-
-	for (uint32_t n = 0; n < XEC_BASIC_TIMER_INSTANCES; n++) {
-		uint32_t temp = sys_read32(rb + XEC_BASIC_TIMER_CR_OFS);
-
-		sys_write32(temp & ~BIT(XEC_BASIC_TIMER_CR_EN_POS), rb + XEC_BASIC_TIMER_CR_OFS);
-		basic_timer_cr_save[n] = (uint8_t)(temp & BIT(XEC_BASIC_TIMER_CR_EN_POS));
-		rb += XEC_BASIC_TIMER_SPACING;
-	}
-}
-
-static void restore_basic_timers(void)
-{
-	uintptr_t rb = (uintptr_t)(XEC_BASIC_TIMER0_REG_BASE);
-
-	for (uint32_t n = 0; n < XEC_BASIC_TIMER_INSTANCES; n++) {
-		if (basic_timer_cr_save[n] != 0) {
-			sys_set_bit(rb + XEC_BASIC_TIMER_CR_OFS, XEC_BASIC_TIMER_CR_EN_POS);
-		}
-		rb += XEC_BASIC_TIMER_SPACING;
-	}
-}
-
-static void save_uarts(void)
-{
-	uintptr_t rb = (uintptr_t)(XEC_UART0_REG_BASE);
-
-	for (uint32_t n = 0; n < XEC_UART_INSTANCES; n++) {
-		uart_actv_save[n] = sys_read8(rb + XEC_UART_LD_ACT_OFS);
-		sys_write8(0, rb + XEC_UART_LD_ACT_OFS);
-		rb += XEC_UART_SPACING;
-	}
-}
-
-static void restore_uarts(void)
-{
-	uintptr_t rb = (uintptr_t)(XEC_UART0_REG_BASE);
-
-	for (uint32_t n = 0; n < XEC_UART_INSTANCES; n++) {
-		sys_write8(uart_actv_save[n], rb + XEC_UART_LD_ACT_OFS);
-		rb += XEC_UART_SPACING;
-	}
-}
-
-/* Enable peripherals capable of waking from deep sleep when a packet is received from
- * and external source: I2C, I3C, eSPI, and SPI target.
- * GIRQ22 is used to turn the PLL on long enough to decide if the packet is meant for this
- * SoC. If it is, the peripheral will asserts its specific GIRQx interrupt which wakes the
- * SoC CPU. If the packet is not for this device, HW will turn the PLL back off not waking
- * the SoC CPU.
+/* If the build is using the kernel timer supplied by Microchip XEC RTOS timer with
+ * CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT then we must save/restore the enable bit of the
+ * basic timer used to implement custom k_busy_wait. XEC basic timers will keep their
+ * CLK_REQ signal active while enabled. We do this in deep sleep entry path here because
+ * no other code can be running.
  */
-static void prepare_wake_devices(void)
+#define XEC_RTMR_COMPAT microchip_xec_rtos_timer
+#define XEC_RTMR_NODE   DT_NODELABEL(rtimer0)
+
+#if DT_HAS_COMPAT_STATUS_OKAY(XEC_RTMR_COMPAT) && defined(CONFIG_ARCH_HAS_CUSTOM_BUSY_WAIT)
+
+static uint8_t rt_custom_busy_wait_en;
+
+static void rt_custom_busy_wait_save(void)
 {
-	soc_ecia_girq_status_clear_bm(MCHP_MEC_ECIA_GIRQ22, UINT32_MAX);
-	soc_ecia_girq_ctrl_bm(MCHP_MEC_ECIA_GIRQ22, UINT32_MAX, MCHP_MEC_ECIA_GIRQ_EN);
+	rt_custom_busy_wait_en = mchp_xec_rtimer_busy_wait_off();
 }
 
-/* Peripheral's that don't obey PCR sleep signals
- * Basic timers, and more ...
- */
-static void soc_deep_sleep_periph_save(void)
+static void rt_custom_busy_wait_restore(void)
 {
-	save_basic_timers();
-	save_uarts();
+	if (rt_custom_busy_wait_en != 0) {
+		(void)mchp_xec_rtimer_busy_wait_on();
+	}
 }
 
-static void soc_deep_sleep_periph_restore(void)
-{
-	restore_basic_timers();
-	restore_uarts();
-}
+#define XEC_RTMR_CUSTOM_BUSY_WAIT_SAVE    rt_custom_busy_wait_save()
+#define XEC_RTMR_CUSTOM_BUSY_WAIT_RESTORE rt_custom_busy_wait_restore()
+
+#else
+#define XEC_RTMR_CUSTOM_BUSY_WAIT_SAVE
+#define XEC_RTMR_CUSTOM_BUSY_WAIT_RESTORE
+#endif
 
 /*
  * Enable deep sleep mode in CM4 and XEC PCR.
@@ -208,10 +162,7 @@ static void z_power_soc_deep_sleep(void)
 
 	XEC_PM_DBG_DS_ENTER();
 
-	XEC_DBG_PM_DEEP_SLP_ASSERT;
-
-	soc_deep_sleep_periph_save();
-	prepare_wake_devices();
+	XEC_RTMR_CUSTOM_BUSY_WAIT_SAVE;
 
 	/* Enable Cortex-M4 to assert SLEEP_DEEP signal on WFI */
 	SCB->SCR |= BIT(SCB_SCR_SLEEPDEEP_Pos);
@@ -239,11 +190,8 @@ static void z_power_soc_deep_sleep(void)
 		__NOP();
 	}
 
-	soc_deep_sleep_periph_restore();
-
-	XEC_DBG_PM_DEEP_SLP_DEASSERT;
+	XEC_RTMR_CUSTOM_BUSY_WAIT_RESTORE;
 }
-#endif
 
 /* NOTE: Zephyr kernel does not block all interrupts.
  * We use compiler instrisic to disable all interrupts except unmaskable
@@ -260,14 +208,18 @@ static void z_power_soc_sleep(void)
 	uint32_t msk = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
 	uint32_t val = BIT(XEC_PCR_SLP_CR_ALL_POS);
 
-	__disable_irq();
+	/* Cortex-Mx wake sequence recommended by ARM */
+	__disable_irq(); /* Prevent immediate ISR entry via PRIMASK */
+	irq_unlock(0); /* Set BASEPRI to 0 */
+	__DSB();
+	__ISB();
 
 	SCB->SCR &= ~BIT(SCB_SCR_SLEEPDEEP_Pos);
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
-	__set_BASEPRI(0);
 	__DSB();
+	__ISB();
 	__WFI(); /* triggers sleep hardware */
 	__NOP();
 	__NOP();
