@@ -3312,8 +3312,8 @@ static int xec_i2c_nl_port_pm_action(const struct device *port_dev, enum pm_devi
 
 #define DT_DRV_COMPAT microchip_xec_i2c_v3_nl
 
-#define XEC_I2C_NL_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP(inst, girqs))
-#define XEC_I2C_NL_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP(inst, girqs))
+#define XEC_I2C_NL_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define XEC_I2C_NL_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 
 /* The controller binding does not carry clock-frequency — it lives on the
  * port nodes. The controller's default frequency is only the value the
