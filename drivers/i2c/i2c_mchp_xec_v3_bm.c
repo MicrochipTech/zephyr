@@ -2209,8 +2209,8 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 
 #define XEC_I2C_V3_DFLT_FREQ(inst) I2C_BITRATE_STANDARD
 
-#define XEC_I2C_V3_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP(inst, girqs))
-#define XEC_I2C_V3_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP(inst, girqs))
+#define XEC_I2C_V3_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define XEC_I2C_V3_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 0))
 
 /* Buffer-mode target RX staging: one static per-controller buffer sized from
  * the optional target-buffer-size DT property (default 256). Compiled out

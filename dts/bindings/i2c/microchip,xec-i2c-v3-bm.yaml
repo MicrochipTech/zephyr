@@ -18,7 +18,7 @@ properties:
     description: Hardware interrupt vector assignment.
 
   girqs:
-    type: int
+    type: array
     required: true
     description: |
       Hardware GIRQ encoded interrupt routing. Each peripheral
@@ -26,7 +26,9 @@ properties:
       The GIRQ result bits which are bitwise AND of GIRQ enable
       and status are routed to the peripheral's NVIC input.
       The value is the encoded GIRQ number and bit position
-      for this peripheral instance.
+      for this peripheral instance. The array has a maximum of
+      two entrie. The first is the runtime GIRQ and the second is
+      the wake GIRQ.
 
   pcr-scr:
     type: int
