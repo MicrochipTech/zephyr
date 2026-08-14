@@ -322,6 +322,19 @@ struct xec_i2c_nl_xfer {
 			     */
 };
 
+#ifdef CONFIG_I2C_CALLBACK
+/* Async (transfer_cb) work step: what the shared work handler should do the
+ * next time it runs for this controller. Advanced by the ISR/DMA callbacks
+ * (which submit data->kw) as each hardware event lands. See
+ * i2c_mchp_xec_v3_nl_callback_design.md.
+ */
+enum xec_i2c_nl_astep {
+	XEC_I2C_NL_ASTEP_KICK,  /* apply port, health-check, launch first group */
+	XEC_I2C_NL_ASTEP_PAUSE, /* write->read direction switch (reprogram RX)  */
+	XEC_I2C_NL_ASTEP_DONE,  /* post-STOP: finish group, advance or complete */
+};
+#endif
+
 struct xec_i2c_nl_data {
 	const struct device *ctrl;
 	struct k_sem lock;
@@ -333,6 +346,27 @@ struct xec_i2c_nl_data {
 
 	uint8_t active_port; /* XEC_I2C_NL_INVALID_PORT until programmed */
 	uint32_t active_freq;
+
+#ifdef CONFIG_I2C_CALLBACK
+	/* Async (transfer_cb) state. async_active steers the ISR/DMA callbacks
+	 * between the synchronous semaphores and the shared work queue; the
+	 * rest is the in-flight request and its STOP-delimited group cursor.
+	 */
+	struct k_work kw;                      /* completion/step dispatch     */
+	struct k_work_delayable timeout_dwork; /* async completion watchdog    */
+	atomic_t async_done;                   /* claim: work vs watchdog      */
+	volatile enum xec_i2c_nl_astep astep;
+	bool async_active;
+	i2c_callback_t cb;
+	void *cb_userdata;
+	const struct device *cb_port_dev;
+	struct i2c_msg *cb_msgs;
+	uint8_t cb_num_msgs;
+	uint16_t cb_addr;
+	uint8_t grp_start;
+	uint8_t grp_end;
+	struct xec_i2c_nl_xfer cur_xfer;
+#endif
 
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	volatile uint32_t capidx;
@@ -347,6 +381,20 @@ struct xec_i2c_nl_port_config {
 	uint8_t port_id;
 	bool is_default;
 };
+
+#ifdef CONFIG_I2C_CALLBACK
+/* One kernel work queue shared by every controller instance; each instance
+ * owns its own k_work item (data->kw) and delayable watchdog. The async
+ * (transfer_cb) path is event-driven: each work step does one short,
+ * non-blocking piece of the transaction and returns, and the ISR re-submits
+ * kw on the next hardware event. Because no step blocks, one thread serves
+ * all five controllers with cross-controller concurrency. Compiled out when
+ * CONFIG_I2C_CALLBACK is disabled — the synchronous path uses the semaphores.
+ */
+K_THREAD_STACK_DEFINE(xec_i2c_nl_q_stack, CONFIG_I2C_MCHP_XEC_V3_NL_KWQ_STACK_SIZE);
+static struct k_work_q xec_i2c_nl_work_q;
+static bool xec_i2c_nl_wq_started;
+#endif
 
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 static void xec_i2c_nl_cap_init(struct xec_i2c_nl_data *xdat)
@@ -725,16 +773,36 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
  */
 static inline void xec_i2c_nl_signal_pause(struct xec_i2c_nl_data *data)
 {
+#ifdef CONFIG_I2C_CALLBACK
+	if (data->async_active) {
+		data->astep = XEC_I2C_NL_ASTEP_PAUSE;
+		k_work_submit_to_queue(&xec_i2c_nl_work_q, &data->kw);
+		return;
+	}
+#endif
 	k_sem_give(&data->pause_sem);
 }
 
 static inline void xec_i2c_nl_signal_done(struct xec_i2c_nl_data *data)
 {
+#ifdef CONFIG_I2C_CALLBACK
+	if (data->async_active) {
+		data->astep = XEC_I2C_NL_ASTEP_DONE;
+		k_work_submit_to_queue(&xec_i2c_nl_work_q, &data->kw);
+		return;
+	}
+#endif
 	k_sem_give(&data->done_sem);
 }
 
 static inline void xec_i2c_nl_signal_error(struct xec_i2c_nl_data *data)
 {
+#ifdef CONFIG_I2C_CALLBACK
+	if (data->async_active) {
+		k_work_submit_to_queue(&xec_i2c_nl_work_q, &data->kw);
+		return;
+	}
+#endif
 	k_sem_give(&data->pause_sem);
 	k_sem_give(&data->done_sem);
 }
@@ -1554,11 +1622,274 @@ static int xec_i2c_nl_vport_recover_bus(const struct device *port_dev)
 	return rc;
 }
 
+#ifdef CONFIG_I2C_CALLBACK
+/* Async completion dispatch. Runs on the shared work-queue thread; the
+ * CALLER must already have won the async_done claim so this runs exactly
+ * once per transfer. On error the controller is reset (mirrors the sync
+ * path's xec_i2c_nl_abort on xfer_err); on success finish_group already
+ * returned the controller to IDLE. The lock is released BEFORE the callback
+ * so the callback may issue the next transfer, and cb/userdata/dev are
+ * snapshotted first because a new transfer can reuse those fields at once.
+ */
+static void xec_i2c_nl_async_deliver(const struct device *ctrl, int result)
+{
+	struct xec_i2c_nl_data *data = ctrl->data;
+	i2c_callback_t cb = data->cb;
+	void *ud = data->cb_userdata;
+	const struct device *dev = data->cb_port_dev;
+
+	(void)k_work_cancel_delayable(&data->timeout_dwork);
+
+	if (result != 0) {
+		xec_i2c_nl_abort(ctrl);
+	}
+	data->state = XEC_I2C_NL_IDLE;
+	data->async_active = false;
+
+	k_sem_give(&data->lock);
+
+	if (cb != NULL) {
+		cb(dev, result, ud);
+	}
+}
+
+/* Parse the STOP-delimited group beginning at grp_start and launch its front
+ * half. Sets grp_end. Returns 0 when hardware was kicked (await PAUSE/DONE),
+ * or a negative error (nothing pending — caller delivers the failure). Mirrors
+ * the group-splitting loop body in xec_i2c_nl_vport_transfer.
+ */
+static int xec_i2c_nl_async_kick_group(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	struct i2c_msg *msgs = data->cb_msgs;
+	uint8_t num_msgs = data->cb_num_msgs;
+	uint8_t ge = data->grp_start;
+	uint8_t group_len;
+	int rc;
+
+	while (ge < (uint8_t)(num_msgs - 1U) && (msgs[ge].flags & I2C_MSG_STOP) == 0U) {
+		ge++;
+	}
+	data->grp_end = ge;
+	group_len = (uint8_t)((ge - data->grp_start) + 1U);
+
+	rc = xec_i2c_nl_parse(cfg, &msgs[data->grp_start], group_len, &data->cur_xfer);
+	if (rc != 0) {
+		return rc;
+	}
+
+	return xec_i2c_nl_start_group(ctrl, data->cb_addr, &data->cur_xfer);
+}
+
+/* Async work handler — the KICK/PAUSE/DONE state machine. Each invocation
+ * runs one non-blocking step for whichever controller submitted its kw, then
+ * returns to await the next ISR event (or delivers on completion/error). All
+ * five controllers share this handler on one thread.
+ */
+static void xec_i2c_nl_work_handler(struct k_work *work)
+{
+	struct xec_i2c_nl_data *data = CONTAINER_OF(work, struct xec_i2c_nl_data, kw);
+	const struct device *ctrl = data->ctrl;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	int rc = 0;
+
+	/* The watchdog already delivered this transfer (and released the lock):
+	 * do not touch hardware, the lock, or the watchdog.
+	 */
+	if (atomic_get(&data->async_done) != 0) {
+		return;
+	}
+
+	/* An error latched by the ISR or a DMA callback at any step ends the
+	 * transfer immediately, regardless of the pending astep.
+	 */
+	if (data->xfer_err != 0) {
+		if (atomic_cas(&data->async_done, 0, 1)) {
+			xec_i2c_nl_async_deliver(ctrl, data->xfer_err);
+		}
+		return;
+	}
+
+	switch (data->astep) {
+	case XEC_I2C_NL_ASTEP_KICK: {
+		const struct xec_i2c_nl_port_config *pc = data->cb_port_dev->config;
+
+		/* Deferred from transfer_cb: apply_port and bus recovery can
+		 * busy-wait, so they run here on the work thread rather than in
+		 * the (ISR-callable) submit path.
+		 */
+		rc = xec_i2c_nl_apply_port(data->cb_port_dev);
+		if (rc != 0) {
+			break;
+		}
+		if (sys_read8(cfg->base + XEC_I2C_SR_OFS) != SR_IDLE) {
+			uint32_t freq =
+				(data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+
+			rc = xec_i2c_nl_bus_recover(ctrl, freq, pc->port_id);
+			if (rc != 0) {
+				break;
+			}
+		}
+		rc = xec_i2c_nl_async_kick_group(ctrl);
+		break;
+	}
+	case XEC_I2C_NL_ASTEP_PAUSE:
+		rc = xec_i2c_nl_begin_read_phase(ctrl, &data->cur_xfer);
+		break;
+	case XEC_I2C_NL_ASTEP_DONE:
+		xec_i2c_nl_finish_group(ctrl, &data->cur_xfer);
+		data->grp_start = (uint8_t)(data->grp_end + 1U);
+		if (data->grp_start < data->cb_num_msgs) {
+			/* More STOP-delimited groups: refresh the watchdog and
+			 * arm the next one on the now-idle bus.
+			 */
+			k_work_reschedule_for_queue(&xec_i2c_nl_work_q, &data->timeout_dwork,
+						    XEC_I2C_NL_TIMEOUT);
+			rc = xec_i2c_nl_async_kick_group(ctrl);
+		} else {
+			if (atomic_cas(&data->async_done, 0, 1)) {
+				xec_i2c_nl_async_deliver(ctrl, 0);
+			}
+			return;
+		}
+		break;
+	default:
+		rc = -EIO;
+		break;
+	}
+
+	if (rc != 0) {
+		if (atomic_cas(&data->async_done, 0, 1)) {
+			xec_i2c_nl_async_deliver(ctrl, rc);
+		}
+	}
+	/* rc == 0: hardware kicked — await the next PAUSE/DONE/error event. */
+}
+
+/* Async completion watchdog. Fires XEC_I2C_NL_TIMEOUT after a group was armed
+ * if that group has not completed. Claims delivery FIRST (so the work handler
+ * can never also deliver), then resets the wedged controller and reports
+ * -ETIMEDOUT. Refreshed per group by the work handler.
+ */
+static void xec_i2c_nl_timeout_handler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct xec_i2c_nl_data *data = CONTAINER_OF(dwork, struct xec_i2c_nl_data, timeout_dwork);
+	const struct device *ctrl = data->ctrl;
+
+	if (!atomic_cas(&data->async_done, 0, 1)) {
+		return; /* the completion path already delivered this transfer */
+	}
+
+	LOG_ERR("i2c async xfer timeout (%s)", ctrl->name);
+	xec_i2c_nl_async_deliver(ctrl, -ETIMEDOUT);
+}
+
+static int xec_i2c_nl_vport_transfer_cb(const struct device *port_dev, struct i2c_msg *msgs,
+					uint8_t num_msgs, uint16_t addr, i2c_callback_t cb,
+					void *userdata)
+{
+	const struct xec_i2c_nl_port_config *pc = port_dev->config;
+	const struct device *ctrl = pc->parent;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+
+	if (cb == NULL) {
+		/* No callback: behave exactly like the synchronous entry. */
+		return xec_i2c_nl_vport_transfer(port_dev, msgs, num_msgs, addr);
+	}
+	if (num_msgs == 0U) {
+		cb(port_dev, 0, userdata);
+		return 0;
+	}
+	if (msgs == NULL) {
+		return -EINVAL;
+	}
+	if ((addr & ~0x7FU) != 0U) {
+		return -EINVAL; /* 7-bit only */
+	}
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		return -EBUSY;
+	}
+#endif
+
+	/* Fail fast, synchronously, like the sync path: pre-parse every
+	 * STOP-delimited group so unsupported or oversized transfers
+	 * (-ENOTSUP / -ENOSPC / -EMSGSIZE / -EINVAL) are reported by the return
+	 * value here rather than surfacing only via the callback. parse() is
+	 * pure computation and writes only the scratch xfer, so the work handler
+	 * re-parses each group cleanly when it actually runs. Mirrors the group
+	 * splitting in xec_i2c_nl_async_kick_group / xec_i2c_nl_vport_transfer.
+	 */
+	{
+		struct xec_i2c_nl_xfer scratch;
+		uint8_t gs = 0;
+
+		while (gs < num_msgs) {
+			uint8_t ge = gs;
+			uint8_t glen;
+			int prc;
+
+			while (ge < (uint8_t)(num_msgs - 1U) &&
+			       (msgs[ge].flags & I2C_MSG_STOP) == 0U) {
+				ge++;
+			}
+			glen = (uint8_t)((ge - gs) + 1U);
+
+			prc = xec_i2c_nl_parse(cfg, &msgs[gs], glen, &scratch);
+			if (prc != 0) {
+				return prc;
+			}
+			gs = (uint8_t)(ge + 1U);
+		}
+	}
+
+	/* Non-blocking / ISR-callable: never wait for the lock. apply_port and
+	 * bus recovery are deferred to the KICK work step because they can
+	 * busy-wait.
+	 */
+	if (k_sem_take(&data->lock, K_NO_WAIT) != 0) {
+		return -EWOULDBLOCK;
+	}
+
+	xec_i2c_nl_cap_init(data);
+	xec_i2c_nl_cap_update(data, 0x10U);
+
+	data->cb = cb;
+	data->cb_userdata = userdata;
+	data->cb_port_dev = port_dev;
+	data->cb_msgs = msgs;
+	data->cb_num_msgs = num_msgs;
+	data->cb_addr = addr;
+	data->grp_start = 0U;
+	data->xfer_err = 0;
+	data->astep = XEC_I2C_NL_ASTEP_KICK;
+	data->async_active = true;
+
+	/* Open the completion claim and arm the watchdog BEFORE submitting the
+	 * first step, so an immediate completion finds a scheduled watchdog to
+	 * cancel rather than racing an as-yet-unscheduled one.
+	 */
+	atomic_set(&data->async_done, 0);
+	k_work_reschedule_for_queue(&xec_i2c_nl_work_q, &data->timeout_dwork, XEC_I2C_NL_TIMEOUT);
+	k_work_submit_to_queue(&xec_i2c_nl_work_q, &data->kw);
+
+	return 0;
+}
+#endif /* CONFIG_I2C_CALLBACK */
+
 static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 	.configure = xec_i2c_nl_vport_configure,
 	.get_config = xec_i2c_nl_vport_get_config,
 	.transfer = xec_i2c_nl_vport_transfer,
 	.recover_bus = xec_i2c_nl_vport_recover_bus,
+#ifdef CONFIG_I2C_CALLBACK
+	.transfer_cb = xec_i2c_nl_vport_transfer_cb,
+#endif
 #ifdef CONFIG_I2C_RTIO
 	/* RTIO submissions use the default work queue, which dispatches each SQE
 	 * as a synchronous i2c_transfer. (Native async is provided via
@@ -1624,6 +1955,21 @@ static int xec_i2c_nl_ctrl_init(const struct device *ctrl)
 	k_sem_init(&data->lock, 1, 1);
 	k_sem_init(&data->pause_sem, 0, 1);
 	k_sem_init(&data->done_sem, 0, 1);
+
+#ifdef CONFIG_I2C_CALLBACK
+	k_work_init(&data->kw, xec_i2c_nl_work_handler);
+	k_work_init_delayable(&data->timeout_dwork, xec_i2c_nl_timeout_handler);
+	atomic_set(&data->async_done, 1); /* no async transfer in flight yet */
+	data->async_active = false;
+
+	/* The work queue exists only for the async (transfer_cb) path. */
+	if (!xec_i2c_nl_wq_started) {
+		k_work_queue_start(&xec_i2c_nl_work_q, xec_i2c_nl_q_stack,
+				   K_THREAD_STACK_SIZEOF(xec_i2c_nl_q_stack),
+				   K_PRIO_PREEMPT(CONFIG_I2C_MCHP_XEC_V3_NL_KWQ_PRIORITY), NULL);
+		xec_i2c_nl_wq_started = true;
+	}
+#endif
 
 	if (!device_is_ready(cfg->dma_dev)) {
 		LOG_ERR("dma %s not ready", cfg->dma_dev->name);
