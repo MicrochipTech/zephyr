@@ -17,6 +17,9 @@
 #include <zephyr/random/random.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <zephyr/pm/pm.h>
+#include <zephyr/pm/state.h>
+
 LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* #define APP_TEST_LTC2489 */
@@ -151,6 +154,14 @@ int main(void)
 #else
 	LOG_INF("I2C Ctrl0 does not have a compatible!");
 #endif
+
+	/* param1 = CPU_ID = 0, param2 = PM state, param3 = PM substate = 0 */
+	const struct pm_state_info *susp_pm_info = pm_state_get(0, PM_STATE_SUSPEND_TO_IDLE, 0);
+	if (susp_pm_info != NULL) {
+		LOG_INF("PM Suspend min-residency-us = %u", susp_pm_info->min_residency_us);
+	} else {
+		LOG_ERR("Error getting suspend PM state info");
+	}
 	log_flush();
 
 	k_timer_init(&minute_timer, minute_timer_cb, NULL);
