@@ -96,6 +96,10 @@ struct counter_alarm_cfg alarm_cfg;
 #define SAMPLE_TIMER DT_ALIAS(counter)
 #elif defined(CONFIG_COUNTER_ITE_IT51XXX)
 #define SAMPLE_TIMER DT_NODELABEL(counter0)
+#elif defined(CONFIG_SOC_SERIES_MEC172X)
+#define SAMPLE_TIMER DT_NODELABEL(timer4)
+#elif defined(CONFIG_SOC_MEC1753_QSZ)
+#define SAMPLE_TIMER DT_NODELABEL(timer4)
 #else
 #error Unable to find a counter device node in devicetree
 #endif
@@ -127,7 +131,7 @@ static void test_counter_interrupt_fn(const struct device *counter_dev,
 	printk("Now: %u\n", now_sec);
 
 	/* Set a new alarm with a double length duration */
-	config->ticks = config->ticks * 2U;
+	config->ticks = config->ticks;// * 2U;
 
 	printk("Set alarm in %u sec (%u ticks)\n",
 	       (uint32_t)(counter_ticks_to_us(counter_dev,
@@ -156,16 +160,17 @@ int main(void)
 	counter_start(counter_dev);
 
 	alarm_cfg.flags = ALARM_FLAGS;
-	alarm_cfg.ticks = counter_us_to_ticks(counter_dev, DELAY);
+	alarm_cfg.ticks = counter_us_to_ticks(counter_dev, DELAY*15);
 	alarm_cfg.callback = test_counter_interrupt_fn;
 	alarm_cfg.user_data = &alarm_cfg;
 
-	err = counter_set_channel_alarm(counter_dev, ALARM_CHANNEL_ID,
-					&alarm_cfg);
 	printk("Set alarm in %u sec (%u ticks)\n",
 	       (uint32_t)(counter_ticks_to_us(counter_dev,
 					   alarm_cfg.ticks) / USEC_PER_SEC),
 	       alarm_cfg.ticks);
+
+	err = counter_set_channel_alarm(counter_dev, ALARM_CHANNEL_ID,
+					&alarm_cfg);
 
 	if (-EINVAL == err) {
 		printk("Alarm settings invalid\n");

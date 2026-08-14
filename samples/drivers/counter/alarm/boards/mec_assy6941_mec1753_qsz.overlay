@@ -1,0 +1,19 @@
+&timer4 {
+	status = "okay";
+};
+
+&uart1 {
+	wakerx-gpios = <&gpio_140_176 25 GPIO_ACTIVE_HIGH>;
+	wakeup-source;
+};
+
+&pcr {
+	/* 48MHz test clock output on GPIO060 via tst_clk_out pinmux.
+	 * Clock is active in normal operation and suspend-to-idle (PLL ON).
+	 * Clock stops only in suspend-to-ram (DEEP_SLP+SLEEP_ALL, PLL OFF).
+	 * Use a scope on GPIO060 to observe deep sleep entry and exit.
+	 */
+	pinctrl-0 = <&tst_clk_out_gpio060>;
+	pinctrl-names = "default";
+	status = "okay";
+};
