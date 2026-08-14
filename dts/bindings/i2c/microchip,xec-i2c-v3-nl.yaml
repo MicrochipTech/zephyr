@@ -37,6 +37,25 @@ properties:
       reset bits in the PCR block. The value is the encoded PCR register
       index and bit position for the peripheral instance.
 
+  default-port:
+    type: phandle
+    # The port node already points back here via its "controller" phandle, so
+    # a normal dependency edge from this reference would form a cycle that
+    # gen_defines.py rejects. "ignore" drops the edge: this is a pure
+    # boot-routing hint consumed via DT macros at the port node, not a device
+    # handle, so it implies no init-order dependency. Controller-before-port
+    # ordering is still guaranteed by init priorities and the port's own
+    # "controller" edge.
+    dependency-mode: "ignore"
+    description: |
+      Phandle to one of this controller's port nodes whose pin routing is
+      applied at boot, before the first transfer. Optional: if omitted, no
+      port is pre-routed and the first transfer lazily applies its own
+      port's routing. The referenced port's "controller" phandle must point
+      back to this node (enforced by a build assertion). Replaces the former
+      per-port "default-port" boolean, so exactly one boot port per
+      controller can be named, unambiguously.
+
   dmas:
     required: true
     description: |

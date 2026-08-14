@@ -22,7 +22,3 @@ properties:
     type: int
     required: true
     description: The physical channel/port index (e.g., 0 through 15) on the controller.
-
-  default-port:
-    type: boolean
-    description: Optional flag signifying this is the boot/default physical channel routing.

@@ -48,6 +48,7 @@
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
@@ -86,8 +87,9 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
 #define CMPL_TNAKR_STS BIT(XEC_I2C_CMPL_TNAKR_STS_POS)
 #define CMPL_DTS_STS   BIT(XEC_I2C_CMPL_DTS_STS_POS)
 
-#define CFG_TD_IEN BIT(XEC_I2C_CFG_TD_IEN_POS)
-#define CFG_HD_IEN BIT(XEC_I2C_CFG_HD_IEN_POS)
+#define CFG_TD_IEN  BIT(XEC_I2C_CFG_TD_IEN_POS)
+#define CFG_HD_IEN  BIT(XEC_I2C_CFG_HD_IEN_POS)
+#define CFG_AAT_IEN BIT(XEC_I2C_CFG_AAT_IEN_POS)
 
 /* Bit 0 of the matched target address byte is the bus R/W bit:
  * 0 -> host wrote to us (we deliver data via buf_write_received),
@@ -106,13 +108,25 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
  *
  * Target mode is different: a host-write that fills the target buffer
  * never fires TDONE (the FSM stalls after the post-RCL=0 NAK and never
- * asserts TDONE on the host's STOP), so IDLE_IEN MUST be on across the
- * full lifetime of the armed target -- not just inside the read-pause
- * branch -- otherwise the target wedges with AAT=1, RUN=1, PROC=1 and
- * holds the bus. target_arm therefore enables IDLE_IEN itself, and
- * target_handle_stop carries a DMA-progress guard so the one-shot
- * spurious IRQ that the IEN-enable-while-NBB==1 bug may produce is a
- * no-op (consumed bytes == 0 -> early return).
+ * asserts TDONE on the host's STOP), so IDLE_IEN MUST be on before the
+ * host's STOP for every write shape -- otherwise the target wedges with
+ * AAT=1, RUN=1, PROC=1 and holds the bus. But arming IDLE_IEN while the
+ * bus is idle (as target_arm would have to, between transactions) trips
+ * the NBB==1 bug and fires a spurious IRQ on every (re-)arm.
+ *
+ * The fix mirrors controller mode's HDONE trick: gate IDLE_IEN on the
+ * address-match interrupt. target_arm enables CFG.AAT_IEN (bit 28) and
+ * leaves IDLE_IEN OFF. AAT_IEN only fires when a host actually matches
+ * one of our OWN addresses (~7 clocks in), so it never fires at idle.
+ * The address-match ISR runs with NBB==0 (transaction open, before any
+ * STOP) and there enables IDLE_IEN -- the exact NBB==0 window the bug
+ * requires -- then disables AAT_IEN so a repeated START within the same
+ * transaction does not re-fire it. IDLE_IEN then stays on until the
+ * closing STOP's IDLE, where handle_stop re-arms via target_arm
+ * (AAT_IEN back on, IDLE_IEN off). AAT_IEN carries no address identity
+ * (DATA/IAS are not updated until the 8th clock) -- it is used ONLY as
+ * the "a transaction is opening" edge to arm IDLE_IEN. The DMA-progress
+ * guard in target_handle_stop is retained as a backstop.
  */
 #define CMPL_IDLE    BIT(XEC_I2C_CMPL_IDLE_POS)
 #define CFG_IDLE_IEN BIT(XEC_I2C_CFG_IDLE_IEN_POS)
@@ -285,6 +299,18 @@ struct xec_i2c_nl_config {
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint16_t enc_pcr;
+#if defined(CONFIG_PM)
+	/* GIRQ22 (peripheral-clock wake) source position for this controller.
+	 * Needed under plain CONFIG_PM to scrub our own START-detect residue
+	 * after each transfer (xec_i2c_nl_pm_clr_start_det); under
+	 * CONFIG_PM_DEVICE it additionally arms START-detect wake in target
+	 * mode with wakeup-source.
+	 */
+	uint8_t wk_girq_pos;
+#endif
+#ifdef CONFIG_PM_DEVICE
+	bool wakeup_source;
+#endif
 	uint8_t dma_chan;     /* host-mode channel  */
 	uint8_t dma_slot;     /* host-mode trigsrc  */
 	uint8_t tgt_dma_chan; /* target-mode channel; valid if tgt_rx_buf != NULL */
@@ -363,6 +389,12 @@ struct xec_i2c_nl_data {
 
 #ifdef CONFIG_I2C_TARGET
 	enum xec_i2c_nl_mode mode;
+	/* Port device the registered target(s) listen on (the port the
+	 * controller is muxed to in target mode). Captured at target_register,
+	 * cleared when the last target unregisters. Used by the target-mode
+	 * suspend hold to mark the port busy alongside the controller.
+	 */
+	const struct device *tgt_port_dev;
 	struct xec_i2c_nl_target_slot tgt_slots[XEC_I2C_OA_NUM_TARGETS];
 	uint8_t tgt_count; /* number of populated slots */
 	enum xec_i2c_nl_target_phase tgt_phase;
@@ -809,6 +841,66 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
 	return 0;
 }
 
+/* Target-mode suspend hold. Marks BOTH the controller and the port the target
+ * listens on busy for the duration of a target transaction. pm_suspend_devices()
+ * is a per-device skip (it suspends every device NOT flagged busy), not a global
+ * veto, so each device that must survive the transaction has to be marked. The
+ * port's own pm_action keeps its pads live across suspend ONLY for a wake-capable
+ * target (wakeup_source + target mode); a plain registered target has no such
+ * self-guard, so without holding its port busy an idle window mid-transaction
+ * would let the port suspend and drop the pads. The controller owns CFG.ENAB and
+ * the START-detect wake arm. Set on a START-detect wake and at the address-match
+ * IRQ, cleared at the transaction's STOP/error -- mirrors the controller-role
+ * bracket (xec_i2c_nl_pm_busy_set). tgt_port_dev is set at target_register; the
+ * NULL guard covers the (unreached-in-target-mode) case where it is not yet set.
+ *
+ * Deliberately placed OUTSIDE the CONFIG_I2C_TARGET block below and guarded on
+ * CONFIG_PM_DEVICE alone: it is called from xec_i2c_nl_ctrl_pm_action's RESUME
+ * wake path (compiled whenever CONFIG_PM_DEVICE=y, even with CONFIG_I2C_TARGET=n),
+ * so its definition must exist in that combo too. The inner CONFIG_I2C_TARGET
+ * guards drop the tgt_port_dev access when target support is absent, leaving a
+ * controller-only hold. Compiles to nothing without CONFIG_PM_DEVICE.
+ */
+#ifdef CONFIG_PM_DEVICE
+static inline void xec_i2c_nl_pm_tgt_busy_set(const struct device *ctrl)
+{
+	pm_device_busy_set(ctrl);
+#ifdef CONFIG_I2C_TARGET
+	{
+		struct xec_i2c_nl_data *data = ctrl->data;
+
+		if (data->tgt_port_dev != NULL) {
+			pm_device_busy_set(data->tgt_port_dev);
+		}
+	}
+#endif
+}
+
+static inline void xec_i2c_nl_pm_tgt_busy_clear(const struct device *ctrl)
+{
+#ifdef CONFIG_I2C_TARGET
+	{
+		struct xec_i2c_nl_data *data = ctrl->data;
+
+		if (data->tgt_port_dev != NULL) {
+			pm_device_busy_clear(data->tgt_port_dev);
+		}
+	}
+#endif
+	pm_device_busy_clear(ctrl);
+}
+#else
+static inline void xec_i2c_nl_pm_tgt_busy_set(const struct device *ctrl)
+{
+	ARG_UNUSED(ctrl);
+}
+
+static inline void xec_i2c_nl_pm_tgt_busy_clear(const struct device *ctrl)
+{
+	ARG_UNUSED(ctrl);
+}
+#endif
+
 #ifdef CONFIG_I2C_TARGET
 /* Target mode
  *
@@ -1164,27 +1256,23 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 		TCMD_PROCEED);
 	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
 
-	/* Enable IDLE_IEN now -- end-of-transaction must be observable
-	 * for every host-write shape, not just the read-pause path. The
-	 * NL FSM does NOT assert TDONE when a host-write fills the
-	 * target buffer (RCL hits 0, the next byte is NAK'd via
-	 * TNAKR_STS, and the FSM stays in transaction state until the
-	 * host's STOP). Without IDLE_IEN that STOP latches CMPL.IDLE
-	 * silently and the target wedges with AAT=1, RUN=1, PROC=1.
-	 * With IDLE_IEN on, the NBB 0->1 transition at host STOP fires
-	 * the IRQ for every shape -- short writes, buffer-fill writes,
-	 * and reads alike.
+	/* Arm the address-match interrupt and leave IDLE_IEN OFF. IDLE_IEN
+	 * cannot be enabled here (the bus is idle, NBB==1) without tripping
+	 * the v3.8 spurious-IDLE bug on every (re-)arm. Instead AAT_IEN gates
+	 * it: the address-match ISR enables IDLE_IEN with NBB==0 once a host
+	 * opens a transaction -- see the CFG_IDLE_IEN commentary above. This
+	 * still covers the buffer-fill write shape (which never fires TDONE),
+	 * because AAT fires at the address phase of EVERY transaction, before
+	 * any data or STOP.
 	 *
-	 * The v3.8 silicon has a documented quirk: setting IDLE_IEN
-	 * while NBB==1 can immediately fire a one-shot spurious IRQ.
-	 * We dampen the risk by clearing CMPL.IDLE on both sides of the
-	 * IEN write; if the bug still latches a spurious IDLE between
-	 * the two clears, handle_stop's DMA-progress guard treats the
-	 * resulting ISR run as a no-op.
+	 * AAT_IEN is level-safe to enable while idle: it asserts only on a
+	 * 7-bit match against our OWN address register, which cannot happen
+	 * on an idle bus. Clear CMPL.IDLE (from the prior transaction's STOP)
+	 * first so no stale latch is standing when the ISR later enables
+	 * IDLE_IEN.
 	 */
 	sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
-	sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
-	sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
+	soc_mmcr_mask_set(base + XEC_I2C_CFG_OFS, CFG_AAT_IEN, CFG_AAT_IEN | CFG_IDLE_IEN);
 
 	data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
 
@@ -1438,14 +1526,14 @@ static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
 
 		consumed = (cfg->tgt_rx_buf_size > rcl_now) ? (cfg->tgt_rx_buf_size - rcl_now) : 0U;
 
-		/* Spurious-IDLE guard. target_arm enables IDLE_IEN while
-		 * NBB may still be 1, which on v3.8 silicon can latch a
-		 * one-shot spurious IRQ. If the channel is still in RX
-		 * configuration AND no bytes were consumed, no external
-		 * transaction took place: skip the callbacks and the
-		 * re-arm, leaving the channel and TCMD in their already-
-		 * armed state. CMPL.IDLE was cleared by the ISR before
-		 * this call.
+		/* Spurious-IDLE backstop. With AAT-gated IDLE_IEN a STOP
+		 * IDLE should only reach here after a real address-matched
+		 * transaction, but this guard is retained defensively: if
+		 * the channel is still in RX configuration AND no bytes
+		 * were consumed, no external transaction moved data, so
+		 * skip the callbacks and the re-arm, leaving the channel
+		 * and TCMD in their already-armed state. CMPL.IDLE was
+		 * cleared by the ISR before this call.
 		 */
 		if (consumed == 0U) {
 			xec_i2c_nl_cap_update(data, 0xEFU);
@@ -1511,7 +1599,61 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 		sys_write32(CMPL_ERR | CMPL_TGT_CLEAR, base + XEC_I2C_CMPL_OFS);
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		xec_i2c_nl_target_handle_error(ctrl);
+		/* Transaction ended (error) -- release the suspend hold. */
+		xec_i2c_nl_pm_tgt_busy_clear(ctrl);
 		return;
+	}
+
+	/* Address-match: a host has opened a transaction against one of our
+	 * OWN addresses. AAT_IEN fires ~7 clocks in, with NBB==0 (bus busy,
+	 * before any data or STOP) -- the exact window the v3.8 IDLE bug
+	 * needs. Enable IDLE_IEN here so the closing STOP is observable for
+	 * every shape (short write, buffer-fill write that never fires TDONE,
+	 * and read), then disable AAT_IEN so a repeated START (Sr) inside a
+	 * combined write-then-read does NOT re-fire this branch. AAT carries
+	 * no address identity (DATA/IAS update only at the 8th clock), so it
+	 * is used purely as the "transaction opening" edge. Gating on the
+	 * live AAT_IEN bit -- rather than SR.AAT, which the RX DMA clears when
+	 * it reads DATA -- makes this a one-shot per transaction regardless of
+	 * ISR latency. handle_stop/target_arm re-arm AAT_IEN for the next one.
+	 *
+	 * Do NOT return here -- FALL THROUGH to the TDONE/IDLE branches. If
+	 * this ISR is delayed enough that the transaction's completion latched
+	 * before we ran (e.g. wake-from-deep-sleep, where PLL-lock latency can
+	 * exceed a 1-byte transfer, so CMPL.IDLE is already standing; or a
+	 * fast read-pause with NBB==0 where no spurious-IDLE re-fire exists to
+	 * re-enter the ISR), the address-match and the completion arrive in
+	 * the same cmpl snapshot. Arming IDLE_IEN and returning would strand
+	 * that completion behind the edge-cleared GIRQ latch -> missed STOP,
+	 * leaked PM-busy, no re-arm. Falling through processes the coincident
+	 * TDONE/IDLE in this same invocation; in the normal address-phase
+	 * entry cmpl carries neither bit, so the fall-through is a no-op. This
+	 * mirrors the controller-mode HDONE->IDLE fall-through.
+	 */
+	{
+		uint32_t cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
+
+		if ((cfgr & CFG_AAT_IEN) != 0U) {
+			xec_i2c_nl_cap_update(data, 0x96U);
+			cfgr |= CFG_IDLE_IEN;
+			cfgr &= ~CFG_AAT_IEN;
+			sys_write32(cfgr, base + XEC_I2C_CFG_OFS);
+
+			/* Hold the controller AND the listening port out of
+			 * system-managed suspend for this transaction. The RESUME
+			 * pm_action sets this only on a START-detect WAKE; a
+			 * transaction that opens while the system is already awake
+			 * would otherwise carry no hold, letting an idle window
+			 * mid-transaction suspend the port (dropping the pads on a
+			 * plain, non-wake target) or re-arm START-detect on a busy
+			 * bus. Setting here covers both cases -- pm_device_busy_set
+			 * is an idempotent atomic bit-set, so the wake path's earlier
+			 * set is harmless, and the single clear at the STOP/ERR
+			 * branch balances either number of sets. Cleared in the
+			 * IDLE/ERR branch.
+			 */
+			xec_i2c_nl_pm_tgt_busy_set(ctrl);
+		}
 	}
 
 	if ((cmpl & CMPL_TDONE) != 0U) {
@@ -1528,7 +1670,8 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 			 * carries R-bit=1 and the FSM has cleared
 			 * PROCEED while leaving RUN set, waiting for SW
 			 * to provide a TX buffer via buf_read_requested.
-			 * IDLE_IEN is already on (target_arm enables it)
+			 * IDLE_IEN is already on (the address-match branch
+			 * above enabled it at the start of this transaction)
 			 * so the host's STOP at end-of-read will fire
 			 * CMPL.IDLE -> handle_stop directly.
 			 */
@@ -1569,16 +1712,22 @@ static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
 	 * externally-generated STOP, and the NL FSM does not assert
 	 * TDONE when a host-write fills the target buffer (RCL exhausts
 	 * to 0, the next byte is NAK'd, and the FSM stalls in
-	 * transaction state until the host's STOP). IDLE_IEN is enabled
-	 * by target_arm and stays on for the lifetime of the armed
-	 * target; we leave it on across handle_stop and target_arm
-	 * picks up the next transaction. CMPL.IDLE is W1C-cleared here
+	 * transaction state until the host's STOP). IDLE_IEN was enabled
+	 * by the address-match branch above at the start of THIS
+	 * transaction (target_arm leaves it off to avoid the NBB==1 bug);
+	 * handle_stop -> target_arm then clears IDLE_IEN and re-arms
+	 * AAT_IEN for the next transaction. CMPL.IDLE is W1C-cleared here
 	 * (and again by target_arm at re-arm time).
 	 */
 	if ((cmpl & CMPL_IDLE) != 0U) {
 		xec_i2c_nl_cap_update(data, 0x95U);
 		sys_write32(CMPL_IDLE, base + XEC_I2C_CMPL_OFS);
 		xec_i2c_nl_target_handle_stop(ctrl);
+		/* Bus returned to idle at the host's STOP -- release the suspend
+		 * hold on the controller and port so the next idle can suspend
+		 * (and re-arm wake on a wake-capable target).
+		 */
+		xec_i2c_nl_pm_tgt_busy_clear(ctrl);
 	}
 
 	xec_i2c_nl_cap_update(data, 0x9FU);
@@ -1682,6 +1831,12 @@ static int xec_i2c_nl_target_register(const struct device *port_dev, struct i2c_
 		}
 
 		data->mode = XEC_I2C_NL_MODE_TARGET;
+		/* Remember the port the controller now listens on so the
+		 * target-mode suspend hold can mark it busy (a plain target
+		 * has no wake-armed port self-guard). All registered targets
+		 * share this one physical port.
+		 */
+		data->tgt_port_dev = port_dev;
 	}
 
 out:
@@ -1722,20 +1877,22 @@ static int xec_i2c_nl_target_unregister(const struct device *port_dev,
 
 	if (data->tgt_count == 0U) {
 		/* Last slot - flip back to controller mode. Make sure
-		 * IDLE_IEN is also off (the target read-pause path
-		 * enables it transiently); a stale enable here would
-		 * trip the v3.8 HW bug the moment a controller-mode
-		 * transfer fires the next program_ctrl.
+		 * both IDLE_IEN and AAT_IEN are off: the address-match ISR
+		 * enables IDLE_IEN transiently, and either a stale IDLE_IEN
+		 * (trips the v3.8 NBB==1 bug on the next program_ctrl) or a
+		 * stale AAT_IEN (would fire on a controller-mode START) must
+		 * not survive into controller mode.
 		 */
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		sys_write32(0, cfg->base + XEC_I2C_TCMD_OFS);
 
 		soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_HD_IEN,
-				  CFG_TD_IEN | CFG_HD_IEN | CFG_IDLE_IEN);
+				  CFG_TD_IEN | CFG_HD_IEN | CFG_IDLE_IEN | CFG_AAT_IEN);
 		sys_write32(CMPL_TGT_CLEAR, cfg->base + XEC_I2C_CMPL_OFS);
 
 		data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
 		data->mode = XEC_I2C_NL_MODE_CONTROLLER;
+		data->tgt_port_dev = NULL;
 	}
 
 out:
@@ -2413,6 +2570,82 @@ static int xec_i2c_nl_run(const struct device *ctrl, uint16_t addr,
 	return 0;
 }
 
+/* Mark both the controller and the active port busy for the lifetime of a
+ * controller-role transfer. Under CONFIG_PM_DEVICE_SYSTEM_MANAGED the system
+ * idle path calls pm_suspend_devices() the instant every thread blocks -- which
+ * is precisely what a transfer does while waiting on pause_sem/done_sem in
+ * xec_i2c_nl_run(). That would suspend the controller (clearing CFG.ENAB) and
+ * switch the port pads to their sleep state, tearing the DMA transfer down
+ * mid-flight. pm_suspend_devices() skips any device flagged busy, so both must
+ * be marked: the controller owns CFG.ENAB, the port owns pinctrl. Target mode
+ * is deliberately NOT bracketed -- it must be allowed to suspend so the
+ * pm_action can arm START-detect wake. Compiles to nothing without
+ * CONFIG_PM_DEVICE.
+ */
+#ifdef CONFIG_PM_DEVICE
+static inline void xec_i2c_nl_pm_busy_set(const struct device *port_dev, const struct device *ctrl)
+{
+	pm_device_busy_set(ctrl);
+	pm_device_busy_set(port_dev);
+}
+
+static inline void xec_i2c_nl_pm_busy_clear(const struct device *port_dev,
+					    const struct device *ctrl)
+{
+	pm_device_busy_clear(port_dev);
+	pm_device_busy_clear(ctrl);
+}
+#else
+static inline void xec_i2c_nl_pm_busy_set(const struct device *port_dev, const struct device *ctrl)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(ctrl);
+}
+
+static inline void xec_i2c_nl_pm_busy_clear(const struct device *port_dev,
+					    const struct device *ctrl)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(ctrl);
+}
+#endif
+
+/* Clear this controller's START-detect wake residue (WKSR.SB + its GIRQ22
+ * aggregator bit) at the end of every controller-mode transfer.
+ *
+ * The silicon sets WKSR.SB on ANY START edge -- including the STARTs this
+ * controller generates itself as an initiator. Left uncleared, that stale bit
+ * (and its latched GIRQ22 source) looks like a pending START-detect wake the
+ * next time the SoC enters a low-power state. The pre-sleep clear normally
+ * lives in the controller pm_action SUSPEND path, but pm_action exists only
+ * under CONFIG_PM_DEVICE (and, in controller mode, that path clears CFG.ENAB,
+ * not WKSR). Clearing here -- wherever the initiator suspend hold is dropped,
+ * where the controller is the sole START source -- keeps the bit clean going
+ * into any sleep under plain CONFIG_PM (PM_DEVICE=n) too, with no reliance on
+ * catching the sleep-entry instant. Order matters: clear the WKSR source
+ * BEFORE the GIRQ22 R/W1C latch, or the still-asserted source re-latches the
+ * aggregator.
+ *
+ * Safe for a wake-capable target: this fires only on the initiator completion
+ * paths, and a controller cannot run an initiator transfer while in target
+ * mode (vport_transfer rejects it with -EBUSY), so it never races or clears a
+ * legitimately-pending external START meant to wake a target.
+ */
+#if defined(CONFIG_PM)
+static inline void xec_i2c_nl_pm_clr_start_det(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+
+	sys_write32(BIT(XEC_I2C_WKSR_SB_POS), cfg->base + XEC_I2C_WKSR_OFS);
+	soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+}
+#else
+static inline void xec_i2c_nl_pm_clr_start_det(const struct device *ctrl)
+{
+	ARG_UNUSED(ctrl);
+}
+#endif
+
 /* Zephyr i2c_driver_api */
 
 static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_msg *msgs,
@@ -2446,6 +2679,11 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 
 	k_sem_take(&data->lock, K_FOREVER);
 
+	/* Keep the controller and this port out of system-managed suspend for
+	 * the whole (blocking) transfer -- see xec_i2c_nl_pm_busy_set().
+	 */
+	xec_i2c_nl_pm_busy_set(port_dev, ctrl);
+
 	xec_i2c_nl_cap_init(data);
 
 	xec_i2c_nl_cap_update(data, 1U);
@@ -2453,6 +2691,8 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 	rc = xec_i2c_nl_apply_port(port_dev);
 	if (rc != 0) {
 		xec_i2c_nl_cap_update(data, 2U);
+		xec_i2c_nl_pm_clr_start_det(ctrl);
+		xec_i2c_nl_pm_busy_clear(port_dev, ctrl);
 		k_sem_give(&data->lock);
 		return rc;
 	}
@@ -2471,6 +2711,8 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 		rc = xec_i2c_nl_bus_recover(ctrl, freq, pc->port_id);
 		if (rc != 0) {
 			xec_i2c_nl_cap_update(data, 4U);
+			xec_i2c_nl_pm_clr_start_det(ctrl);
+			xec_i2c_nl_pm_busy_clear(port_dev, ctrl);
 			k_sem_give(&data->lock);
 			return rc;
 		}
@@ -2528,6 +2770,8 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 
 	xec_i2c_nl_cap_update(data, 8U);
 
+	xec_i2c_nl_pm_clr_start_det(ctrl);
+	xec_i2c_nl_pm_busy_clear(port_dev, ctrl);
 	k_sem_give(&data->lock);
 
 	return rc;
@@ -2656,6 +2900,12 @@ static void xec_i2c_nl_async_deliver(const struct device *ctrl, int result)
 	}
 	data->state = XEC_I2C_NL_IDLE;
 	data->async_active = false;
+
+	/* Release the suspend hold taken in vport_transfer_cb. dev == cb_port_dev
+	 * is the active port; ctrl is its parent controller.
+	 */
+	xec_i2c_nl_pm_clr_start_det(ctrl);
+	xec_i2c_nl_pm_busy_clear(dev, ctrl);
 
 	k_sem_give(&data->lock);
 
@@ -2867,6 +3117,11 @@ static int xec_i2c_nl_vport_transfer_cb(const struct device *port_dev, struct i2
 		return -EWOULDBLOCK;
 	}
 
+	/* Block system-managed suspend for the controller and this port until
+	 * async_deliver reports completion -- see xec_i2c_nl_pm_busy_set().
+	 */
+	xec_i2c_nl_pm_busy_set(port_dev, ctrl);
+
 	xec_i2c_nl_cap_init(data);
 	xec_i2c_nl_cap_update(data, 0x10U);
 
@@ -3036,6 +3291,136 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 	return 0;
 }
 
+/* ---- power management ---------------------------------------------------- */
+
+#ifdef CONFIG_PM_DEVICE
+/* A controller is armed for START-detect wake only when it is in target mode
+ * AND its DT node carries wakeup-source. In controller mode the block cannot
+ * wake the SoC, so suspend just disables it.
+ */
+static inline bool nl_ctrl_wake_armed(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+
+#ifdef CONFIG_I2C_TARGET
+	const struct xec_i2c_nl_data *data = ctrl->data;
+
+	return cfg->wakeup_source && (data->mode == XEC_I2C_NL_MODE_TARGET);
+#else
+	ARG_UNUSED(cfg);
+	return false;
+#endif
+}
+
+/* Controller node PM: owns CFG.ENAB and the START-detect wake arm/disarm.
+ * Pin state is handled by the port node's callback.
+ */
+static int xec_i2c_nl_ctrl_pm_action(const struct device *ctrl, enum pm_device_action action)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	mm_reg_t base = cfg->base;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		if (nl_ctrl_wake_armed(ctrl)) {
+			/* Target mode + wakeup-source: arm START-detect wake and
+			 * leave the controller (and GIRQ13) enabled. The silicon
+			 * requires this exact order: clear the wake status, clear
+			 * and enable the GIRQ22 (peripheral-clock/PLL) source, then
+			 * enable start-bit detection. GIRQ22 re-enables the PLL on a
+			 * START; the CPU still wakes via GIRQ13 on own-address match.
+			 */
+			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
+			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+					   MCHP_MEC_ECIA_GIRQ_EN);
+			sys_set_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+		} else {
+			/* Controller mode: cannot wake the SoC, so just clear the
+			 * enable bit. The port callback turns the pads off.
+			 */
+			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+		}
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		if (nl_ctrl_wake_armed(ctrl)) {
+			/* If WKSR.SB is latched, this resume was triggered by a
+			 * START-detect wake: an external host is opening a target
+			 * transaction. Hold the controller and listening port out of
+			 * system-managed suspend until the closing STOP (cleared in
+			 * xec_i2c_nl_isr_target) so an idle window mid-transaction
+			 * cannot re-run this SUSPEND path and re-arm START-detect
+			 * on a bus that is still busy. Read SB before it is cleared
+			 * just below.
+			 */
+			if (sys_test_bit(base + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS) != 0) {
+				xec_i2c_nl_pm_tgt_busy_set(ctrl);
+			}
+			/* Disarm START-detect wake; the controller stayed enabled. */
+			sys_clear_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+					   MCHP_MEC_ECIA_GIRQ_DIS);
+			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
+			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+		} else {
+			/* Controller mode: full PCR reset + re-arm on the last
+			 * active (freq, port), restoring timing and the enable bit.
+			 */
+			uint32_t freq =
+				(data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
+			uint8_t port = (data->active_port == XEC_I2C_NL_INVALID_PORT)
+					       ? 0U
+					       : data->active_port;
+
+			(void)xec_i2c_nl_program_ctrl(ctrl, freq, port);
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
+/* Port node PM: owns pinctrl for its own pads. Turning the pads off drops the
+ * SCL/SDA function inputs to logic-high internally (idle bus), so ordering
+ * against the controller's enable bit cannot latch a bus error.
+ */
+static int xec_i2c_nl_port_pm_action(const struct device *port_dev, enum pm_device_action action)
+{
+	const struct xec_i2c_nl_port_config *pc = port_dev->config;
+	int ret;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+#ifdef CONFIG_I2C_TARGET
+		/* Keep the pads live on the port a wake-armed target listens on
+		 * (the port the controller is currently muxed to); an external
+		 * START must still reach the controller.
+		 */
+		if (nl_ctrl_wake_armed(pc->parent)) {
+			const struct xec_i2c_nl_data *pdata = pc->parent->data;
+
+			if (pc->port_id == pdata->active_port) {
+				return 0;
+			}
+		}
+#endif
+		ret = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_SLEEP);
+		if (ret == -ENOENT) {
+			/* No "sleep" pinctrl state on this port -> nothing to do. */
+			ret = 0;
+		}
+		return ret;
+	case PM_DEVICE_ACTION_RESUME:
+		return pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_DEFAULT);
+	default:
+		return -ENOTSUP;
+	}
+}
+#endif /* CONFIG_PM_DEVICE */
+
 /* Devicetree instantiation */
 
 #define DT_DRV_COMPAT microchip_xec_i2c_v3_nl
@@ -3049,6 +3434,23 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
  * port-device.
  */
 #define XEC_I2C_NL_DFLT_FREQ(inst) I2C_BITRATE_STANDARD
+
+/* GIRQ13 (runtime IRQ) source position equals the SMB hardware instance
+ * (SMB0->0 .. SMB4->4), so the GIRQ22 wake source position is instance + 1.
+ */
+#if defined(CONFIG_PM)
+#define XEC_I2C_NL_WK_POS_INIT(inst)                                                               \
+	.wk_girq_pos = XEC_I2C_SMB_WK_GIRQ_POS(XEC_I2C_NL_GIRQ_POS(inst)),
+#else
+#define XEC_I2C_NL_WK_POS_INIT(inst)
+#endif
+
+#ifdef CONFIG_PM_DEVICE
+#define XEC_I2C_NL_PM_INIT(inst)                                                                   \
+	XEC_I2C_NL_WK_POS_INIT(inst).wakeup_source = DT_INST_PROP_OR(inst, wakeup_source, 0),
+#else
+#define XEC_I2C_NL_PM_INIT(inst) XEC_I2C_NL_WK_POS_INIT(inst)
+#endif
 
 /* Target-mode buffer + DMA cells, only allocated/initialised when the
  * DT instance carries a target-buffer-size property and the dmas list
@@ -3104,7 +3506,18 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		 .tgt_dma_chan = 0,							\
 		 .tgt_dma_slot = 0,))
 
+/* Build-time guard: if the controller names a default-port, that port's
+ * "controller" phandle must point back to this controller node. Expands to
+ * nothing for controllers that omit default-port.
+ */
+#define XEC_I2C_NL_DEFPORT_ASSERT(inst)                                                            \
+	IF_ENABLED(DT_INST_NODE_HAS_PROP(inst, default_port),                                      \
+		   (BUILD_ASSERT(DT_SAME_NODE(DT_DRV_INST(inst),                                   \
+			DT_PHANDLE(DT_INST_PHANDLE(inst, default_port), controller)),              \
+			"default-port must reference a port on this controller");))
+
 #define XEC_I2C_NL_CTRL_INIT(inst)                                                                 \
+	XEC_I2C_NL_DEFPORT_ASSERT(inst)                                                            \
 	static uint8_t                                                                             \
 		__aligned(4) xec_i2c_nl_bounce_##inst[DT_INST_PROP(inst, bounce_buffer_size)];     \
 	XEC_I2C_NL_TGT_BUF_DEF(inst)                                                               \
@@ -3124,18 +3537,30 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		.girq = XEC_I2C_NL_GIRQ(inst),                                                     \
 		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst),                                             \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
-		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                        \
+		XEC_I2C_NL_PM_INIT(inst).dma_chan =                                                \
+			DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                            \
 		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc),                        \
 		XEC_I2C_NL_TGT_FIELDS(inst)};                                                      \
 	static struct xec_i2c_nl_data xec_i2c_nl_data_##inst;                                      \
-	DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_init, NULL, &xec_i2c_nl_data_##inst,           \
-			      &xec_i2c_nl_cfg_##inst, POST_KERNEL, CONFIG_I2C_INIT_PRIORITY,       \
-			      NULL);
+	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_pm_action);                                 \
+	DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_init, PM_DEVICE_DT_INST_GET(inst),             \
+			      &xec_i2c_nl_data_##inst, &xec_i2c_nl_cfg_##inst, POST_KERNEL,        \
+			      CONFIG_I2C_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 
 #undef DT_DRV_COMPAT
 #define DT_DRV_COMPAT microchip_xec_i2c_v3_nl_port
+
+/* A port is the boot/default routing iff its controller's default-port
+ * phandle names this port node. Controllers without a default-port yield 0
+ * (no boot pre-routing; the first transfer applies its own port lazily).
+ */
+#define XEC_I2C_NL_PORT_IS_DEFAULT(inst)                                                           \
+	COND_CODE_1(DT_NODE_HAS_PROP(DT_INST_PHANDLE(inst, controller), default_port),             \
+		    (DT_SAME_NODE(DT_DRV_INST(inst),                                               \
+				  DT_PHANDLE(DT_INST_PHANDLE(inst, controller), default_port))),   \
+		    (0))
 
 #define XEC_I2C_NL_PORT_INIT(inst)                                                                 \
 	PINCTRL_DT_INST_DEFINE(inst);                                                              \
@@ -3144,10 +3569,12 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                      \
 		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD),           \
 		.port_id = (uint8_t)(DT_INST_PROP(inst, port) & 0x0FU),                            \
-		.is_default = DT_INST_PROP(inst, default_port),                                    \
+		.is_default = XEC_I2C_NL_PORT_IS_DEFAULT(inst),                                    \
 	};                                                                                         \
-	I2C_DEVICE_DT_INST_DEFINE(                                                                 \
-		inst, xec_i2c_nl_port_init, NULL, NULL, &xec_i2c_nl_port_cfg_##inst, POST_KERNEL,  \
-		CONFIG_I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY, &xec_i2c_nl_port_api);
+	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_port_pm_action);                                 \
+	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_port_init, PM_DEVICE_DT_INST_GET(inst), NULL,   \
+				  &xec_i2c_nl_port_cfg_##inst, POST_KERNEL,                        \
+				  CONFIG_I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY,                    \
+				  &xec_i2c_nl_port_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_PORT_INIT)
