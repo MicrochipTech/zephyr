@@ -368,6 +368,14 @@ struct xec_i2c_nl_data {
 	struct xec_i2c_nl_xfer cur_xfer;
 #endif
 
+#ifdef CONFIG_I2C_TARGET
+	enum xec_i2c_nl_mode mode;
+	struct xec_i2c_nl_target_slot tgt_slots[XEC_I2C_OA_NUM_TARGETS];
+	uint8_t tgt_count; /* number of populated slots */
+	enum xec_i2c_nl_target_phase tgt_phase;
+	uint16_t cur_rx_chunk;
+	bool first_rx_chunk_done;
+#endif
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
 	volatile uint32_t capidx;
 	volatile uint8_t capture[CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE_SIZE] __aligned(4);
@@ -421,10 +429,21 @@ int mchp_xec_i2c_nl_clear_capture(const struct device *port_dev)
 	const struct xec_i2c_nl_port_config *pc = port_dev->config;
 	struct xec_i2c_nl_data *const xdat = pc->parent->data;
 
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->mode == XEC_I2C_NL_MODE_TARGET) {
+		if (xdat->tgt_phase != XEC_I2C_NL_TGT_IDLE) {
+			return -EBUSY;
+		}
+	} else {
+		if (xdat->state != XEC_I2C_NL_IDLE) {
+			return -EBUSY;
+		}
+	}
+#else
 	if (xdat->state != XEC_I2C_NL_IDLE) {
 		return -EBUSY;
 	}
-
+#endif
 	k_sem_take(&xdat->lock, K_FOREVER);
 	xec_i2c_nl_cap_init(xdat);
 	k_sem_give(&xdat->lock);
@@ -446,9 +465,21 @@ int mchp_xec_i2c_nl_copy_capture(const struct device *port_dev, uint8_t *capdest
 	const struct xec_i2c_nl_port_config *pc = port_dev->config;
 	struct xec_i2c_nl_data *const xdat = pc->parent->data;
 
+#ifdef CONFIG_I2C_TARGET
+	if (xdat->mode == XEC_I2C_NL_MODE_TARGET) {
+		if (xdat->tgt_phase != XEC_I2C_NL_TGT_IDLE) {
+			return -EBUSY;
+		}
+	} else {
+		if (xdat->state != XEC_I2C_NL_IDLE) {
+			return -EBUSY;
+		}
+	}
+#else
 	if (xdat->state != XEC_I2C_NL_IDLE) {
 		return -EBUSY;
 	}
+#endif
 
 	k_sem_take(&xdat->lock, K_FOREVER);
 
@@ -764,6 +795,979 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
 	return 0;
 }
 
+#ifdef CONFIG_I2C_TARGET
+/* Target mode
+ *
+ * Target mode uses the controller's TCMD register and its TTX/TRX
+ * registers, fed by a separate DMA channel (different trigger source
+ * from the host-mode channel). The hardware places the matched
+ * address byte at offset 0 of the target RX buffer; the driver
+ * strips it before invoking buf_write_received and inspects its
+ * R/W bit to identify a host-read vs host-write.
+ *
+ * Event flow on v3.8 silicon:
+ *   - CMPL.TDONE with TCMD.RUN=1, TCMD.PROCEED=0, AND IAS.R-bit=1
+ *     -> host-read pause. HW received target-addr | R-bit, paused
+ *     for SW to provide data via buf_read_requested. After handling
+ *     the pause the ISR enables CFG.IDLE_IEN -- NBB is 0 here, so
+ *     the v3.8 IDLE-IEN HW bug is avoided -- to catch the host's
+ *     eventual STOP via CMPL.IDLE.
+ *   - CMPL.TDONE with TCMD.RUN=0, TCMD.PROCEED=0  -> host-write
+ *     transaction completed normally at the host's STOP.
+ *   - CMPL.TDONE with TCMD.RUN=1, TCMD.PROCEED=0, IAS.R-bit=0
+ *     -> host-write BUFFER FILL. TCMD.RCL hit 0; the HW NAK'd the
+ *     over-the-line byte but left RUN set until the host's STOP.
+ *     This signature is otherwise indistinguishable from a
+ *     read-pause -- the IAS.R-bit gate is what tells them apart.
+ *     The IDLE branch below carries this to handle_stop.
+ *
+ *     For all the write-side TDONE shapes, CMPL.IDLE is also
+ *     latched (the host STOPs after seeing the FSM's signal) and
+ *     the IDLE branch dispatches handle_stop in the same ISR
+ *     invocation.
+ *   - CMPL.IDLE                                   -> external STOP
+ *     (host has driven STOP, NBB transitioned 0->1). For host
+ *     writes this rides into the ISR alongside TDONE; for host
+ *     reads only IDLE_IEN fires the ISR because TDONE does not
+ *     re-assert after the host pulls the last byte. CFG.STD_NL_IEN
+ *     (bit 27) is NOT used: on this silicon it does not cause
+ *     SR.STO or CMPL.DTS_STS to fire on an externally-generated
+ *     STOP.
+ *   - CMPL.{HNAK,LAB,BER}                         -> bus error.
+ *
+ * The driver pre-arms TCMD.WCL with 1 (a placeholder) at every
+ * (re-)arm. The HW samples WCL the moment a host-read address
+ * matches and asserts CMPL.TPROT (target protocol error) if WCL == 0
+ * at that instant -- it interprets a zero TX budget as "SW didn't
+ * preconfigure for a read." The placeholder defers the real WCL
+ * until the read-pause handler writes it from buf_read_requested's
+ * length, before the FSM is released via PROCEED, so the placeholder
+ * value never reaches the bus.
+ */
+
+static int xec_i2c_nl_target_arm(const struct device *ctrl);
+
+/* The IAS shadow register at offset 0x6C captures the address byte
+ * (7-bit address + R/W bit) every time the HW generates or receives a
+ * START or Sr, and the value persists until the next START/Sr. It is
+ * the canonical HW-truth source for "which address just landed on the
+ * bus" and is independent of how far the target RX DMA has drained
+ * TRX into memory.
+ */
+static inline uint8_t xec_i2c_nl_target_addr_byte(const struct xec_i2c_nl_config *cfg)
+{
+	return sys_read8(cfg->base + XEC_I2C_IAS_OFS);
+}
+
+/* Match an inbound address byte against the OA slots and return the
+ * corresponding i2c_target_config, or NULL if no slot owns it.
+ */
+static struct i2c_target_config *xec_i2c_nl_target_lookup(struct xec_i2c_nl_data *data,
+							  uint8_t addr_byte)
+{
+	uint8_t addr = (addr_byte >> 1) & 0x7FU;
+
+	for (uint32_t i = 0; i < XEC_I2C_OA_NUM_TARGETS; i++) {
+		struct i2c_target_config *tcfg = data->tgt_slots[i].cfg;
+
+		if (tcfg != NULL && tcfg->address == addr) {
+			return tcfg;
+		}
+	}
+	return NULL;
+}
+
+/* Look the slot up by reading IAS directly. Used in every target ISR
+ * dispatch path -- IAS is stable across the transaction so all event
+ * handlers (read-pause, stop, error) reach the same slot without
+ * depending on the target RX DMA having drained TRX into memory by
+ * the time the ISR runs.
+ */
+static struct i2c_target_config *xec_i2c_nl_target_active(const struct xec_i2c_nl_config *cfg,
+							  struct xec_i2c_nl_data *data)
+{
+	return xec_i2c_nl_target_lookup(data, xec_i2c_nl_target_addr_byte(cfg));
+}
+
+/* Deliver one chunk of streaming-RX data to the application.
+ *
+ * Identifies the active target slot via IAS, slices `len` bytes of the
+ * bounce buffer at offset `chunk_off`, strips the leading address byte
+ * for the very first chunk of the transaction, and invokes the slot's
+ * buf_write_received callback. Both the DMA per-chunk DONE callback
+ * and the I2C ISR's handle_stop final-partial path use this helper so
+ * every chunk -- full or partial -- goes out the same door.
+ */
+static void xec_i2c_nl_target_dispatch_chunk(const struct device *ctrl, uint32_t chunk_off,
+					     uint32_t len)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	struct i2c_target_config *tcfg;
+	uint8_t *payload;
+
+	if (len == 0U) {
+		return;
+	}
+
+	tcfg = xec_i2c_nl_target_active(cfg, data);
+	if (tcfg == NULL || tcfg->callbacks->buf_write_received == NULL) {
+		return;
+	}
+
+	payload = &cfg->tgt_rx_buf[chunk_off];
+
+	/* The very first chunk of a transaction carries the matched
+	 * address byte at its [0] slot; strip it before dispatch. Every
+	 * subsequent chunk -- including chunk 0 of subsequent cycles
+	 * once the bounce buffer has wrapped -- carries pure data.
+	 */
+	if (!data->first_rx_chunk_done) {
+		data->first_rx_chunk_done = true;
+		if (len <= 1U) {
+			return;
+		}
+		payload++;
+		len--;
+	}
+
+	tcfg->callbacks->buf_write_received(tcfg, payload, len);
+}
+
+static void xec_i2c_nl_tgt_rx_dma_cb(const struct device *dma_dev, void *user_data,
+				     uint32_t channel, int status)
+{
+	struct xec_i2c_nl_data *data = user_data;
+	const struct device *ctrl;
+	const struct xec_i2c_nl_config *cfg;
+	uint32_t off;
+
+	ARG_UNUSED(dma_dev);
+	ARG_UNUSED(channel);
+
+	if (status == DMA_STATUS_BLOCK) {
+		/* Streaming RX: one of the cyclic chunks just filled. The
+		 * just-completed chunk index is data->cur_rx_chunk; advance
+		 * it modulo chunk_count to track the chunk the DMA is now
+		 * pointed at. cur_rx_chunk + 1 wrap to 0 closes the cycle.
+		 */
+		ctrl = data->ctrl;
+		cfg = ctrl->config;
+		off = (uint32_t)data->cur_rx_chunk * (uint32_t)cfg->tgt_rx_chunk_size;
+
+		xec_i2c_nl_cap_update(data, 0xC0U);
+		xec_i2c_nl_target_dispatch_chunk(ctrl, off, cfg->tgt_rx_chunk_size);
+
+		data->cur_rx_chunk++;
+		if (data->cur_rx_chunk >= cfg->tgt_rx_chunk_count) {
+			data->cur_rx_chunk = 0U;
+		}
+		return;
+	}
+
+	if (status < 0) {
+		/* Errors are dispatched authoritatively from the I2C ISR's
+		 * CMPL.ERR branch, which reads IAS and fires the slot's
+		 * error callback there. Nothing to do here.
+		 */
+	}
+}
+
+static void xec_i2c_nl_tgt_tx_dma_cb(const struct device *dma_dev, void *user_data,
+				     uint32_t channel, int status)
+{
+	struct xec_i2c_nl_data *data = user_data;
+
+	ARG_UNUSED(dma_dev);
+	ARG_UNUSED(channel);
+	ARG_UNUSED(data);
+
+	if (status < 0) {
+		/* Same as the RX cb: the I2C ISR's error path handles
+		 * dispatch via IAS lookup.
+		 */
+	}
+}
+
+static int xec_i2c_nl_setup_tgt_rx_dma(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	struct dma_block_config blocks[CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN];
+	struct dma_config dcfg = {
+		.dma_slot = cfg->tgt_dma_slot,
+		.channel_direction = PERIPHERAL_TO_MEMORY,
+		.source_data_size = 1,
+		.dest_data_size = 1,
+		.source_burst_length = 1,
+		.dest_burst_length = 1,
+		.head_block = &blocks[0],
+		.dma_callback = xec_i2c_nl_tgt_rx_dma_cb,
+		.user_data = data,
+		.error_callback_dis = 0,
+	};
+	uint32_t i;
+
+	memset(blocks, 0, sizeof(blocks));
+
+	/* Streaming mode: tgt_rx_chunk_count > 1 splits the bounce buffer
+	 * into N equal chunks and asks the DMA driver to walk them as a
+	 * cyclic chain. A complete-callback fires for every chunk DONE so
+	 * tgt_rx_dma_cb can hand each chunk to the application via
+	 * buf_write_received; the chain wraps when the last chunk
+	 * completes, reusing the bounce buffer for arbitrarily large
+	 * host-write transactions.
+	 *
+	 * Single-block mode (chunk_count == 1) preserves the historical
+	 * shape: one buf_write_received per transaction, dispatched from
+	 * handle_stop on the host's STOP. complete_callback_en stays off
+	 * so DMA_STATUS_COMPLETE is the only callback path -- and even
+	 * that one is a no-op because handle_stop drives delivery.
+	 */
+	for (i = 0; i < cfg->tgt_rx_chunk_count; i++) {
+		blocks[i].source_address = cfg->base + XEC_I2C_TRX_OFS;
+		blocks[i].dest_address = (uint32_t)&cfg->tgt_rx_buf[i * cfg->tgt_rx_chunk_size];
+		blocks[i].source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+		blocks[i].dest_addr_adj = DMA_ADDR_ADJ_INCREMENT;
+		blocks[i].block_size = cfg->tgt_rx_chunk_size;
+		if ((i + 1U) < cfg->tgt_rx_chunk_count) {
+			blocks[i].next_block = &blocks[i + 1];
+		}
+	}
+
+	dcfg.block_count = cfg->tgt_rx_chunk_count;
+	if (cfg->tgt_rx_chunk_count > 1U) {
+		dcfg.cyclic = 1;
+		dcfg.complete_callback_en = 1;
+	}
+
+	return dma_config(cfg->dma_dev, cfg->tgt_dma_chan, &dcfg);
+}
+
+static int xec_i2c_nl_setup_tgt_tx_dma(const struct device *ctrl, const uint8_t *buf, size_t len)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	struct dma_block_config block = {
+		.source_address = (uint32_t)buf,
+		.dest_address = cfg->base + XEC_I2C_TTX_OFS,
+		.source_addr_adj = DMA_ADDR_ADJ_INCREMENT,
+		.dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE,
+		.block_size = len,
+	};
+	struct dma_config dcfg = {
+		.dma_slot = cfg->tgt_dma_slot,
+		.channel_direction = MEMORY_TO_PERIPHERAL,
+		.source_data_size = 1,
+		.dest_data_size = 1,
+		.source_burst_length = 1,
+		.dest_burst_length = 1,
+		.block_count = 1,
+		.head_block = &block,
+		.dma_callback = xec_i2c_nl_tgt_tx_dma_cb,
+		.user_data = data,
+		.complete_callback_en = 1,
+		.error_callback_dis = 0,
+	};
+
+	return dma_config(cfg->dma_dev, cfg->tgt_dma_chan, &dcfg);
+}
+
+/* (Re-)arm the target side. Called at registration time and after every
+ * completed transaction (STOP, fill, error). Resets DMA position and
+ * TCMD count so the HW is ready for the next address match.
+ */
+static int xec_i2c_nl_target_arm(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t base = cfg->base;
+	uint32_t rval = 0;
+	int rc;
+
+	xec_i2c_nl_cap_update(data, 0xD0U);
+
+	dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
+
+	/* Streaming-RX runtime state resets at every (re-)arm, so the
+	 * first chunk of every transaction strips its leading address
+	 * byte and the cyclic chain index starts at chunk 0.
+	 */
+	data->cur_rx_chunk = 0;
+	data->first_rx_chunk_done = false;
+
+	rc = xec_i2c_nl_setup_tgt_rx_dma(ctrl);
+	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xD1U);
+		LOG_ERR("tgt rx dma_config: %d", rc);
+		return rc;
+	}
+	rc = dma_start(cfg->dma_dev, cfg->tgt_dma_chan);
+	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xD2U);
+		LOG_ERR("tgt rx dma_start: %d", rc);
+		return rc;
+	}
+
+	/* Clear all RW1C target-mode latches so the next transaction
+	 * starts with a clean CMPL. CMPL.IDLE in particular carries the
+	 * latch from the previous transaction's STOP; CMPL.TPROT /
+	 * CMPL.RPT_RD / CMPL.RPT_WR are status bits the HW asserts
+	 * during certain shapes but does not auto-clear.
+	 */
+	xec_i2c_v3_cmpl_clear(base, CMPL_TGT_CLEAR);
+
+	/* TCMD: target reads (host writes to us). WCL is preset to 1 --
+	 * the HW checks WCL the moment a host-read address matches and
+	 * asserts CMPL.TPROT (target protocol error) if WCL == 0 at that
+	 * instant, on the assumption that SW left no TX budget. Pre-
+	 * arming with a non-zero WCL suppresses the false TPROT; the
+	 * actual host-read byte count is written into WCL by the
+	 * read-pause handler from buf_read_requested's return, before
+	 * SW sets PROCEED to release the FSM, so the value of 1 here
+	 * never reaches the bus. ELEN.TRD carries the upper byte of
+	 * RCL; ELEN.TWR stays 0 (the WCL low byte covers our placeholder).
+	 *
+	 * RCL pre-arm value depends on mode. Single-block mode caps RCL
+	 * at tgt_rx_buf_size so the FSM NAKs once the bounce overflows
+	 * and handle_stop dispatches one buf_write_received per
+	 * transaction. Streaming mode pins RCL at the 16-bit max so the
+	 * FSM ACKs every byte the host sends -- the cyclic DMA chain
+	 * recycles the bounce buffer every chunk_count chunks, and the
+	 * application drains each chunk via buf_write_received in the
+	 * DMA per-block callback.
+	 */
+	xec_i2c_nl_cap_update(data, 0xD3U);
+	uint16_t rcl = (cfg->tgt_rx_chunk_count > 1U) ? XEC_I2C_NL_LEN_MAX
+						      : (uint16_t)cfg->tgt_rx_buf_size;
+
+	rval = sys_read32(base + XEC_I2C_ELEN_OFS);
+	rval &= (uint32_t)~(XEC_I2C_ELEN_TRD_MSK | XEC_I2C_ELEN_TWR_MSK);
+	rval |= XEC_I2C_ELEN_TRD_SET((uint32_t)rcl >> 8);
+	sys_write32(rval, base + XEC_I2C_ELEN_OFS);
+
+	xec_i2c_nl_cap_update(data, 0xD4U);
+
+	rval = (XEC_I2C_TCMD_RCL_SET((uint32_t)rcl & 0xFFU) | XEC_I2C_TCMD_WCL_SET(1) | TCMD_RUN |
+		TCMD_PROCEED);
+	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
+
+	/* Arm the address-match interrupt and leave IDLE_IEN OFF. IDLE_IEN
+	 * cannot be enabled here (the bus is idle, NBB==1) without tripping
+	 * the v3.8 spurious-IDLE bug on every (re-)arm. Instead AAT_IEN gates
+	 * it: the address-match ISR enables IDLE_IEN with NBB==0 once a host
+	 * opens a transaction -- see the CFG_IDLE_IEN commentary above. This
+	 * still covers the buffer-fill write shape (which never fires TDONE),
+	 * because AAT fires at the address phase of EVERY transaction, before
+	 * any data or STOP.
+	 *
+	 * AAT_IEN is level-safe to enable while idle: it asserts only on a
+	 * 7-bit match against our OWN address register, which cannot happen
+	 * on an idle bus. Clear CMPL.IDLE (from the prior transaction's STOP)
+	 * first so no stale latch is standing when the ISR later enables
+	 * IDLE_IEN.
+	 */
+	xec_i2c_v3_cmpl_clear(base, CMPL_IDLE);
+	soc_mmcr_mask_set(base + XEC_I2C_CFG_OFS, CFG_AAT_IEN, CFG_AAT_IEN | CFG_IDLE_IEN);
+
+	data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
+
+	xec_i2c_nl_cap_update(data, 0xD9U);
+
+	return 0;
+}
+
+/* The HW just paused for a host-read. Read the matched address byte
+ * from the IAS shadow register (HW-truth, captured at the Sr edge);
+ * ask the matching slot's buf_read_requested for a TX buffer,
+ * reprogram the DMA channel for MEM->PERIPH, set TCMD.WCL, and resume
+ * by setting PROCEED.
+ *
+ * If buf_read_requested fails or no slot matches, drive a single zero
+ * byte from a tiny driver-internal buffer; the host's NAK and STOP
+ * then complete the transaction cleanly.
+ */
+static void xec_i2c_nl_target_handle_read_pause(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t base = cfg->base;
+	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
+	uint8_t *buf = NULL;
+	uint32_t len = 0, rval = 0;
+	size_t consumed;
+	static const uint8_t zero_byte;
+	int rc = -ENOENT;
+
+	xec_i2c_nl_cap_update(data, 0xA0U);
+
+	/* Combined write-then-Sr-read transaction handling. When the host
+	 * issues a write followed by Sr+R on a single START-to-STOP
+	 * transaction, the FSM ACKs (and DMAs) every byte it receives
+	 * into the bounce buffer -- the first W address at
+	 * tgt_rx_buf[0], the write payload at [1..N-2], and the second
+	 * (R) address at [N-1] -- before pausing for SW to provide a
+	 * TX buffer. The outer ISR already determined this is a
+	 * host-read pause via the IAS R-bit gate; if more than one byte
+	 * reached the FSM before the pause, the leading bytes are a
+	 * host-write delivery that has to be dispatched BEFORE the read
+	 * side gets reconfigured -- handle_stop's IAS-driven was_write
+	 * check sees the trailing R address and would skip the write
+	 * delivery entirely.
+	 *
+	 * Source the byte count from TCMD.RCL + ELEN.TRD, not from
+	 * dma_get_status.pending_length. In target receive mode the HW
+	 * triggers DMA to read one extra byte to clear PIN status (an
+	 * artifact of how the NL FSM rides on top of the legacy
+	 * byte-mode HW -- the byte-mode logic needs a dummy DATA read
+	 * after every receive end so SW would normally clear PIN, and
+	 * the NL HW emits that read as a DMA cycle instead). The
+	 * dummy byte is NOT counted in RCL or WCL and only the DMA
+	 * channel sees it; pending_length therefore reports one more
+	 * byte transferred than RCL admits. If we trust pending_length,
+	 * the dummy + the trailing R address both end up in the
+	 * buf_write_received payload and the application's targ buffer
+	 * is corrupted at the position the subsequent host-read pulls
+	 * from. RCL is the authoritative ACK count.
+	 *
+	 * Look up the writer slot from tgt_rx_buf[0] (R-bit==0) so the
+	 * delivery hits the correct slot even if the host's Sr changes
+	 * target address between the write and the read halves.
+	 */
+	uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+	uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+	uint16_t rcl_now =
+		(uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) | (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+	/* RCL pre-arm matches target_arm: streaming pins RCL at the
+	 * 16-bit max so the FSM never NAKs at chunk boundaries; non-
+	 * streaming caps at the bounce-buffer size. Use the same base
+	 * here when computing how many bytes the FSM has ACKed so far.
+	 */
+	uint16_t rcl_initial = (cfg->tgt_rx_chunk_count > 1U) ? XEC_I2C_NL_LEN_MAX
+							      : (uint16_t)cfg->tgt_rx_buf_size;
+
+	consumed = (rcl_initial >= rcl_now) ? (uint32_t)(rcl_initial - rcl_now) : 0U;
+
+	if (consumed > 2U && (cfg->tgt_rx_buf[0] & XEC_I2C_NL_TGT_RBIT) == 0U) {
+		struct i2c_target_config *wtcfg =
+			xec_i2c_nl_target_lookup(data, cfg->tgt_rx_buf[0]);
+		if (wtcfg != NULL && wtcfg->callbacks->buf_write_received != NULL) {
+			xec_i2c_nl_cap_update(data, 0xA7U);
+			wtcfg->callbacks->buf_write_received(wtcfg, &cfg->tgt_rx_buf[1],
+							     (uint32_t)(consumed - 2U));
+		}
+	}
+
+	if (tcfg != NULL && tcfg->callbacks->buf_read_requested != NULL) {
+		xec_i2c_nl_cap_update(data, 0xA1U);
+		rc = tcfg->callbacks->buf_read_requested(tcfg, &buf, &len);
+	}
+
+	if (rc != 0 || buf == NULL || len == 0U) {
+		xec_i2c_nl_cap_update(data, 0xA2U);
+		/* Fall back to a single zero byte clocked out repeatedly.
+		 * The DMA's source-increment is enabled, so we'd run off
+		 * the end after one byte; instead use a length of 1 and
+		 * let the HW NAK after the host pulls one byte. The host
+		 * will see one zero and either continue (NAK), at which
+		 * point the bus completes via STOP-detect.
+		 */
+		buf = (uint8_t *)&zero_byte;
+		len = 1U;
+	}
+
+	/* The HW transmit-byte counter is split across TCMD.WCL (low 8
+	 * bits) and ELEN.TWR (high 8 bits), giving a 16-bit field. The
+	 * Zephyr buf_read_requested API hands back a uint32_t length, so
+	 * clamp anything bigger than XEC_I2C_NL_LEN_MAX -- otherwise both
+	 * register writes silently mask down to their 8-bit fields and
+	 * the HW would clock out only `len & 0xFFFF` bytes while the
+	 * application believes the full buffer was delivered.
+	 */
+	if (len > XEC_I2C_NL_LEN_MAX) {
+		LOG_WRN("tgt read: app requested %u bytes; clamping to %u (HW max)", len,
+			XEC_I2C_NL_LEN_MAX);
+		len = XEC_I2C_NL_LEN_MAX;
+	}
+
+	dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
+
+	rc = xec_i2c_nl_setup_tgt_tx_dma(ctrl, buf, len);
+	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xA3U);
+		LOG_ERR("tgt tx dma_config: %d", rc);
+		/* Leave PROCEED unset; the bus will time out on the host
+		 * side and we'll re-arm on the next event.
+		 */
+		return;
+	}
+	rc = dma_start(cfg->dma_dev, cfg->tgt_dma_chan);
+	if (rc != 0) {
+		xec_i2c_nl_cap_update(data, 0xA4U);
+		LOG_ERR("tgt tx dma_start: %d", rc);
+		return;
+	}
+
+	/* Update TCMD.WCL with the byte count; resume by setting PROCEED.
+	 * RCL is left as-is (it's only meaningful for the inbound side
+	 * which we've already finished).
+	 */
+	xec_i2c_nl_cap_update(data, 0xA5U);
+
+	rval = sys_read32(base + XEC_I2C_ELEN_OFS);
+	rval &= (uint32_t)~XEC_I2C_ELEN_TWR_MSK;
+	rval |= XEC_I2C_ELEN_TWR_SET((uint32_t)len >> 8);
+	sys_write32(rval, base + XEC_I2C_ELEN_OFS);
+
+	rval = sys_read32(base + XEC_I2C_TCMD_OFS);
+	rval &= (uint32_t)~XEC_I2C_TCMD_WCL_MSK;
+	rval |= XEC_I2C_TCMD_WCL_SET((uint32_t)len & 0xffU);
+	rval |= BIT(XEC_I2C_TCMD_PROC_POS);
+
+	sys_write32(rval, base + XEC_I2C_TCMD_OFS);
+
+	data->tgt_phase = XEC_I2C_NL_TGT_TX;
+
+	xec_i2c_nl_cap_update(data, 0xA6U);
+}
+
+/* End-of-transaction. Identify the slot from the (already-buffered)
+ * address byte, deliver any received write payload, fire the stop
+ * callback, and re-arm.
+ */
+static void xec_i2c_nl_target_handle_stop(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t base = cfg->base;
+	struct i2c_target_config *tcfg;
+	size_t consumed = 0;
+	uint8_t addr_byte;
+	bool was_write;
+	bool streaming = (cfg->tgt_rx_chunk_count > 1U);
+
+	xec_i2c_nl_cap_update(data, 0xE0);
+
+	addr_byte = xec_i2c_nl_target_addr_byte(cfg);
+	tcfg = xec_i2c_nl_target_lookup(data, addr_byte);
+	/* Use the HW-truth R/W bit in the matched address byte (read
+	 * directly from IAS) to decide whether to deliver inbound data.
+	 * IAS persists across the transaction so the slot lookup and the
+	 * direction gate both reach the same target_config that
+	 * handle_read_pause saw.
+	 */
+	was_write = ((addr_byte & XEC_I2C_NL_TGT_RBIT) == 0U);
+
+	/* Streaming RX: every full chunk has already been dispatched by
+	 * the DMA per-block callback. The trailing partial chunk -- the
+	 * bytes the FSM ACKed into the current chunk between the last
+	 * DMA-DONE and the host's STOP -- still needs delivery.
+	 *
+	 * Source the byte count from RCL, NOT from dma_get_status. With
+	 * a cyclic DMA chain the get_status pending_length sums the live
+	 * MEA-MSA of the current block plus the cached size of every
+	 * chain block past cur_block, which over-reports by ~3 chunks
+	 * worth of bytes; partial_len = chunk_size - pending then
+	 * collapses to 0 and the dispatch is silently skipped. RCL is
+	 * the FSM's authoritative tally of ACK'd bytes, ignores the
+	 * STOP-detect dummy DMA byte, and works for both cyclic and
+	 * non-cyclic chains.
+	 */
+	if (streaming && data->tgt_phase == XEC_I2C_NL_TGT_IDLE) {
+		uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+		uint16_t rcl_now = (uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) |
+					      (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+		uint32_t bytes_acked = (XEC_I2C_NL_LEN_MAX >= rcl_now)
+					       ? (uint32_t)(XEC_I2C_NL_LEN_MAX - rcl_now)
+					       : 0U;
+		uint32_t partial_len = bytes_acked % (uint32_t)cfg->tgt_rx_chunk_size;
+		uint32_t chunk_off =
+			(uint32_t)data->cur_rx_chunk * (uint32_t)cfg->tgt_rx_chunk_size;
+
+		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
+
+		if (was_write && partial_len > 0U) {
+			xec_i2c_nl_cap_update(data, 0xC1U);
+			xec_i2c_nl_target_dispatch_chunk(ctrl, chunk_off, partial_len);
+		}
+
+		if (tcfg != NULL && tcfg->callbacks->stop != NULL) {
+			xec_i2c_nl_cap_update(data, 0xE3U);
+			(void)tcfg->callbacks->stop(tcfg);
+		}
+
+		(void)xec_i2c_nl_target_arm(ctrl);
+		xec_i2c_nl_cap_update(data, 0xE4U);
+		return;
+	}
+
+	/* Non-streaming (single-block) path. Compute consumed from
+	 * TCMD.RCL + ELEN.TRD only when the channel is still in RX
+	 * configuration -- handle_read_pause flips tgt_phase to TGT_TX
+	 * once it reconfigures the channel for outbound, and a host-read
+	 * transaction completes through here without any inbound payload
+	 * to deliver. Sourcing from the RCL counters (rather than
+	 * dma_get_status) avoids the dummy-byte over-count: in target
+	 * receive mode the HW triggers DMA to read one extra byte on the
+	 * external STOP to clear PIN status, so the DMA channel always
+	 * reports one more byte transferred than the FSM admits. RCL is
+	 * the authoritative tally of ACK'd bytes.
+	 */
+	if (data->tgt_phase == XEC_I2C_NL_TGT_IDLE) {
+		uint32_t tcmd_now = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint32_t elen_now = sys_read32(base + XEC_I2C_ELEN_OFS);
+		uint16_t rcl_now = (uint16_t)(XEC_I2C_TCMD_RCL_GET(tcmd_now) |
+					      (XEC_I2C_ELEN_TRD_GET(elen_now) << 8));
+
+		consumed = (cfg->tgt_rx_buf_size > rcl_now) ? (cfg->tgt_rx_buf_size - rcl_now) : 0U;
+
+		/* Spurious-IDLE backstop. With AAT-gated IDLE_IEN a STOP
+		 * IDLE should only reach here after a real address-matched
+		 * transaction, but this guard is retained defensively: if
+		 * the channel is still in RX configuration AND no bytes
+		 * were consumed, no external transaction moved data, so
+		 * skip the callbacks and the re-arm, leaving the channel
+		 * and TCMD in their already-armed state. CMPL.IDLE was
+		 * cleared by the ISR before this call.
+		 */
+		if (consumed == 0U) {
+			xec_i2c_nl_cap_update(data, 0xEFU);
+			return;
+		}
+	}
+
+	if (tcfg != NULL && was_write && tcfg->callbacks->buf_write_received != NULL) {
+		xec_i2c_nl_cap_update(data, 0xE1);
+		/* The first byte of the bounce buffer is the matched
+		 * target address; data starts at offset 1.
+		 */
+		if (consumed > 1U) {
+			xec_i2c_nl_cap_update(data, 0xE2U);
+			tcfg->callbacks->buf_write_received(tcfg, &cfg->tgt_rx_buf[1],
+							    (uint32_t)(consumed - 1U));
+		}
+	}
+
+	if (tcfg != NULL && tcfg->callbacks->stop != NULL) {
+		xec_i2c_nl_cap_update(data, 0xE3U);
+		(void)tcfg->callbacks->stop(tcfg);
+	}
+
+	(void)xec_i2c_nl_target_arm(ctrl);
+
+	xec_i2c_nl_cap_update(data, 0xE4U);
+}
+
+static void xec_i2c_nl_target_handle_error(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	struct i2c_target_config *tcfg = xec_i2c_nl_target_active(cfg, data);
+
+	xec_i2c_nl_cap_update(data, 0xE8U);
+
+	if (tcfg != NULL && tcfg->callbacks->error != NULL) {
+		xec_i2c_nl_cap_update(data, 0xE9U);
+		tcfg->callbacks->error(tcfg, I2C_ERROR_GENERIC);
+	}
+
+	(void)xec_i2c_nl_target_arm(ctrl);
+
+	xec_i2c_nl_cap_update(data, 0xEAU);
+}
+
+/* Target-side of the main ISR. Called from xec_i2c_nl_isr when the
+ * driver is in target mode. Returns having cleared the latched CMPL
+ * bits it acted on; the caller is responsible for clearing the GIRQ
+ * status latch on its way out (same as the controller-mode path).
+ */
+static void xec_i2c_nl_isr_target(const struct device *ctrl, uint32_t cmpl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t base = cfg->base;
+
+	xec_i2c_nl_cap_update(data, 0x90U);
+
+	if ((cmpl & CMPL_ERR) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x91U);
+		xec_i2c_v3_cmpl_clear(base, CMPL_ERR | CMPL_TGT_CLEAR);
+		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
+		xec_i2c_nl_target_handle_error(ctrl);
+		return;
+	}
+
+	/* Address-match: a host has opened a transaction against one of our
+	 * OWN addresses. AAT_IEN fires ~7 clocks in, with NBB==0 (bus busy,
+	 * before any data or STOP) -- the exact window the v3.8 IDLE bug
+	 * needs. Enable IDLE_IEN here so the closing STOP is observable for
+	 * every shape (short write, buffer-fill write that never fires TDONE,
+	 * and read), then disable AAT_IEN so a repeated START (Sr) inside a
+	 * combined write-then-read does NOT re-fire this branch. AAT carries
+	 * no address identity (DATA/IAS update only at the 8th clock), so it
+	 * is used purely as the "transaction opening" edge. Gating on the
+	 * live AAT_IEN bit -- rather than SR.AAT, which the RX DMA clears when
+	 * it reads DATA -- makes this a one-shot per transaction regardless of
+	 * ISR latency. handle_stop/target_arm re-arm AAT_IEN for the next one.
+	 *
+	 * Do NOT return here -- FALL THROUGH to the TDONE/IDLE branches. If
+	 * this ISR is delayed enough that the transaction's completion latched
+	 * before we ran (e.g. wake-from-deep-sleep, where PLL-lock latency can
+	 * exceed a 1-byte transfer, so CMPL.IDLE is already standing; or a
+	 * fast read-pause with NBB==0 where no spurious-IDLE re-fire exists to
+	 * re-enter the ISR), the address-match and the completion arrive in
+	 * the same cmpl snapshot. Arming IDLE_IEN and returning would strand
+	 * that completion behind the edge-cleared GIRQ latch -> missed STOP,
+	 * leaked PM-busy, no re-arm. Falling through processes the coincident
+	 * TDONE/IDLE in this same invocation; in the normal address-phase
+	 * entry cmpl carries neither bit, so the fall-through is a no-op. This
+	 * mirrors the controller-mode HDONE->IDLE fall-through.
+	 */
+	{
+		uint32_t cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
+
+		if ((cfgr & CFG_AAT_IEN) != 0U) {
+			xec_i2c_nl_cap_update(data, 0x96U);
+			cfgr |= CFG_IDLE_IEN;
+			cfgr &= ~CFG_AAT_IEN;
+			sys_write32(cfgr, base + XEC_I2C_CFG_OFS);
+		}
+	}
+
+	if ((cmpl & CMPL_TDONE) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x92U);
+		xec_i2c_v3_cmpl_clear(base, CMPL_TDONE);
+
+		uint32_t tcmd = sys_read32(base + XEC_I2C_TCMD_OFS);
+		uint8_t addr_byte = xec_i2c_nl_target_addr_byte(cfg);
+		bool host_read = ((addr_byte & XEC_I2C_NL_TGT_RBIT) != 0U);
+		bool fsm_paused = ((tcmd & TCMD_RUN) != 0U) && ((tcmd & TCMD_PROCEED) == 0U);
+
+		if (host_read && fsm_paused) {
+			/* Host-read pause: the matched address (from IAS)
+			 * carries R-bit=1 and the FSM has cleared
+			 * PROCEED while leaving RUN set, waiting for SW
+			 * to provide a TX buffer via buf_read_requested.
+			 * IDLE_IEN is already on (the address-match branch
+			 * above enabled it at the start of this transaction)
+			 * so the host's STOP at end-of-read will fire
+			 * CMPL.IDLE -> handle_stop directly.
+			 */
+			xec_i2c_nl_cap_update(data, 0x93U);
+			xec_i2c_nl_target_handle_read_pause(ctrl);
+		} else {
+			/* Other TDONE shapes -- either a normal
+			 * write-then-STOP completion (RUN==0, PROCEED==0)
+			 * or a buffer-fill NAK (host-write, RUN==1,
+			 * PROCEED==0 because RCL hit 0 and the HW NAK'd
+			 * but left the FSM in transaction state until
+			 * the host's STOP). The crucial point is that
+			 * the buffer-fill TDONE signature is
+			 * indistinguishable from a read-pause TDONE on
+			 * TCMD bits alone -- both have RUN=1, PROCEED=0.
+			 * The host_read gate (IAS R-bit) is the only way
+			 * to tell them apart: a host-write transaction
+			 * cannot produce a read-pause regardless of how
+			 * the FSM ends. Without that gate, the driver
+			 * would mistakenly invoke buf_read_requested on
+			 * a buffer-fill, reconfigure the target DMA for
+			 * outbound TX, and leave the FSM wedged with
+			 * PROCEED=1 after the host has already STOPped.
+			 *
+			 * For either of these write-side cases, the IDLE
+			 * branch below dispatches handle_stop in the
+			 * same ISR snapshot (CMPL.IDLE is latched by HW
+			 * when the host's STOP returns NBB to 1).
+			 */
+			xec_i2c_nl_cap_update(data, 0x94U);
+		}
+	}
+
+	/* CMPL.IDLE latches on every NBB 0->1 transition, with or without
+	 * IDLE_IEN. On v3.8 silicon it is the only reliable
+	 * end-of-transaction signal in target mode -- CFG.STD_NL_IEN
+	 * (bit 27) does NOT cause CMPL.DTS_STS or SR.STO to fire on an
+	 * externally-generated STOP, and the NL FSM does not assert
+	 * TDONE when a host-write fills the target buffer (RCL exhausts
+	 * to 0, the next byte is NAK'd, and the FSM stalls in
+	 * transaction state until the host's STOP). IDLE_IEN was enabled
+	 * by the address-match branch above at the start of THIS
+	 * transaction (target_arm leaves it off to avoid the NBB==1 bug);
+	 * handle_stop -> target_arm then clears IDLE_IEN and re-arms
+	 * AAT_IEN for the next transaction. CMPL.IDLE is W1C-cleared here
+	 * (and again by target_arm at re-arm time).
+	 */
+	if ((cmpl & CMPL_IDLE) != 0U) {
+		xec_i2c_nl_cap_update(data, 0x95U);
+		xec_i2c_v3_cmpl_clear(base, CMPL_IDLE);
+		xec_i2c_nl_target_handle_stop(ctrl);
+	}
+
+	xec_i2c_nl_cap_update(data, 0x9FU);
+}
+
+/* Switch the controller into target mode (from the application's
+ * perspective: register a new target callback set against an address).
+ * Up to two simultaneously-registered targets are supported.
+ */
+static int xec_i2c_nl_target_register(const struct device *port_dev, struct i2c_target_config *tcfg)
+{
+	const struct xec_i2c_nl_port_config *pc = port_dev->config;
+	const struct device *ctrl = pc->parent;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	int free_slot = -1;
+	int rc = 0;
+
+	if (tcfg == NULL || tcfg->callbacks == NULL) {
+		return -EINVAL;
+	}
+	if (((tcfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0U) ||
+	    ((tcfg->address & ~0x7FU) != 0U)) {
+		LOG_ERR("HW supports 7-bit I2C addresses only");
+		return -ENOTSUP;
+	}
+	if (tcfg->callbacks->buf_write_received == NULL ||
+	    tcfg->callbacks->buf_read_requested == NULL) {
+		/* This driver supports buffer-mode callbacks only. */
+		LOG_ERR("Driver supports buffer-mode callbacks only");
+		return -ENOSYS;
+	}
+	if (cfg->tgt_rx_buf == NULL || cfg->tgt_rx_buf_size == 0U) {
+		/* DT didn't supply target-buffer-size and a "target" entry
+		 * in dmas; this controller instance is controller-only.
+		 */
+		LOG_ERR("Ctrl DT did not specify target buf size or DMA");
+		return -ENOSYS;
+	}
+
+	k_sem_take(&data->lock, K_FOREVER);
+
+	for (uint32_t i = 0; i < XEC_I2C_OA_NUM_TARGETS; i++) {
+		if (data->tgt_slots[i].cfg == tcfg) {
+			rc = -EALREADY;
+			goto out;
+		}
+		if (data->tgt_slots[i].cfg != NULL &&
+		    data->tgt_slots[i].cfg->address == tcfg->address) {
+			rc = -EADDRINUSE;
+			goto out;
+		}
+		if (data->tgt_slots[i].cfg == NULL && free_slot < 0) {
+			free_slot = (int)i;
+		}
+	}
+	if (free_slot < 0) {
+		rc = -ENOSPC;
+		goto out;
+	}
+
+	/* Program the OA register slot with the address. */
+	soc_mmcr_mask_set(cfg->base + XEC_I2C_OA_OFS,
+			  XEC_I2C_OA_SET((uint32_t)free_slot, tcfg->address),
+			  XEC_I2C_OA_MSK((uint32_t)free_slot));
+	data->tgt_slots[free_slot].cfg = tcfg;
+	data->tgt_count++;
+
+	if (data->mode != XEC_I2C_NL_MODE_TARGET) {
+		/* First slot — flip the controller into target mode.
+		 * Quiesce the host-side DMA defensively (no transfer is
+		 * in flight because we hold the lock and the controller
+		 * mode rejects -EBUSY for new ones, but the channel may
+		 * still be configured).
+		 */
+		dma_stop(cfg->dma_dev, cfg->dma_chan);
+
+		/* Swap CFG IENs: drop HD_IEN, enable TD_IEN. IDLE_IEN
+		 * stays off here -- target_arm turns it on at the end of
+		 * its sequence (immediately after writing TCMD with
+		 * RUN=1, PROC=1) so the host's STOP at end-of-transaction
+		 * is observable for every shape, including buffer-fill
+		 * writes where TDONE does not fire. CFG.STD_NL_IEN (bit
+		 * 27) is NOT enabled -- on this silicon it does not
+		 * cause SR.STO / CMPL.DTS_STS to fire on an externally-
+		 * generated STOP, so it would just take up an interrupt
+		 * source we don't act on.
+		 */
+		soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_TD_IEN, CFG_TD_IEN | CFG_HD_IEN);
+
+		rc = xec_i2c_nl_target_arm(ctrl);
+		if (rc != 0) {
+			/* Roll back. */
+			data->tgt_slots[free_slot].cfg = NULL;
+			data->tgt_count--;
+			soc_mmcr_mask_set(cfg->base + XEC_I2C_OA_OFS, 0,
+					  XEC_I2C_OA_MSK((uint32_t)free_slot));
+			soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_HD_IEN,
+					  CFG_TD_IEN | CFG_HD_IEN);
+			goto out;
+		}
+
+		data->mode = XEC_I2C_NL_MODE_TARGET;
+	}
+
+out:
+	k_sem_give(&data->lock);
+	return rc;
+}
+
+static int xec_i2c_nl_target_unregister(const struct device *port_dev,
+					struct i2c_target_config *tcfg)
+{
+	const struct xec_i2c_nl_port_config *pc = port_dev->config;
+	const struct device *ctrl = pc->parent;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	int slot = -1;
+	int rc = 0;
+
+	if (tcfg == NULL) {
+		return -EINVAL;
+	}
+
+	k_sem_take(&data->lock, K_FOREVER);
+
+	for (uint32_t i = 0; i < XEC_I2C_OA_NUM_TARGETS; i++) {
+		if (data->tgt_slots[i].cfg == tcfg) {
+			slot = (int)i;
+			break;
+		}
+	}
+	if (slot < 0) {
+		rc = -EINVAL;
+		goto out;
+	}
+
+	soc_mmcr_mask_set(cfg->base + XEC_I2C_OA_OFS, 0, XEC_I2C_OA_MSK((uint32_t)slot));
+	data->tgt_slots[slot].cfg = NULL;
+	data->tgt_count--;
+
+	if (data->tgt_count == 0U) {
+		/* Last slot - flip back to controller mode. Make sure
+		 * both IDLE_IEN and AAT_IEN are off: the address-match ISR
+		 * enables IDLE_IEN transiently, and either a stale IDLE_IEN
+		 * (trips the v3.8 NBB==1 bug on the next program_ctrl) or a
+		 * stale AAT_IEN (would fire on a controller-mode START) must
+		 * not survive into controller mode.
+		 */
+		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
+		sys_write32(0, cfg->base + XEC_I2C_TCMD_OFS);
+
+		soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_HD_IEN,
+				  CFG_TD_IEN | CFG_HD_IEN | CFG_IDLE_IEN | CFG_AAT_IEN);
+		xec_i2c_v3_cmpl_clear(cfg->base, CMPL_TGT_CLEAR);
+
+		data->tgt_phase = XEC_I2C_NL_TGT_IDLE;
+		data->mode = XEC_I2C_NL_MODE_CONTROLLER;
+	}
+
+out:
+	k_sem_give(&data->lock);
+	return rc;
+}
+#endif /* CONFIG_I2C_TARGET */
+
 /* Completion signaling. In synchronous mode the ISR/DMA callbacks release
  * the calling thread via pause_sem/done_sem; in async mode (async_active)
  * they instead advance data->astep and submit the controller's work item so
@@ -866,6 +1870,13 @@ static void xec_i2c_nl_isr(const struct device *ctrl)
 	uint32_t cfgr = 0, hcmd = 0;
 
 	xec_i2c_nl_cap_update(data, 0x80U);
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		xec_i2c_nl_isr_target(ctrl, cmpl);
+		goto out;
+	}
+#endif
 
 	if ((cmpl & CMPL_ERR) != 0U) {
 		xec_i2c_nl_cap_update(data, 0x81U);
@@ -1445,6 +2456,12 @@ static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_m
 		return -EINVAL; /* 7-bit only */
 	}
 
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		return -EBUSY;
+	}
+#endif
+
 	k_sem_take(&data->lock, K_FOREVER);
 
 	xec_i2c_nl_cap_init(data);
@@ -1547,6 +2564,12 @@ static int xec_i2c_nl_vport_configure(const struct device *port_dev, uint32_t de
 		return -ENOTSUP;
 	}
 
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		return -EBUSY;
+	}
+#endif
+
 	switch (I2C_SPEED_GET(dev_config)) {
 	case I2C_SPEED_STANDARD:
 		freq = KHZ(100);
@@ -1607,6 +2630,12 @@ static int xec_i2c_nl_vport_recover_bus(const struct device *port_dev)
 	struct xec_i2c_nl_data *data = ctrl->data;
 	uint32_t freq = (data->active_freq != 0U) ? data->active_freq : cfg->dflt_freq;
 	int rc;
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		return -EBUSY;
+	}
+#endif
 
 	k_sem_take(&data->lock, K_FOREVER);
 
@@ -1890,6 +2919,10 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 #ifdef CONFIG_I2C_CALLBACK
 	.transfer_cb = xec_i2c_nl_vport_transfer_cb,
 #endif
+#ifdef CONFIG_I2C_TARGET
+	.target_register = xec_i2c_nl_target_register,
+	.target_unregister = xec_i2c_nl_target_unregister,
+#endif
 #ifdef CONFIG_I2C_RTIO
 	/* RTIO submissions use the default work queue, which dispatches each SQE
 	 * as a synchronous i2c_transfer. (Native async is provided via
@@ -1925,6 +2958,12 @@ int mchp_xec_i2c_nl_port_set(const struct device *i2c_port_dev, uint8_t port)
 	struct xec_i2c_nl_data *const data = pc->parent->data;
 	uint32_t freq = 0;
 	int rc = 0;
+
+#ifdef CONFIG_I2C_TARGET
+	if (data->mode == XEC_I2C_NL_MODE_TARGET) {
+		return -EBUSY;
+	}
+#endif
 
 	k_sem_take(&data->lock, K_FOREVER);
 	if (data->active_port == port) {
@@ -2025,6 +3064,60 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
  */
 #define XEC_I2C_NL_DFLT_FREQ(inst) I2C_BITRATE_STANDARD
 
+/* Target-mode buffer + DMA cells, only allocated/initialised when the
+ * DT instance carries a target-buffer-size property and the dmas list
+ * has a "target" entry. When absent, the driver compiles with
+ * tgt_rx_buf == NULL and target_register() returns -ENOSYS at runtime.
+ */
+#define XEC_I2C_NL_HAS_TARGET(inst)                                                                \
+	UTIL_AND(DT_INST_NODE_HAS_PROP(inst, target_buffer_size),                                  \
+		 DT_INST_DMAS_HAS_NAME(inst, target))
+
+/* The HW target receive-byte counter is the same 16-bit field as the
+ * transmit counter (TCMD.RCL low + ELEN.TRD high), so target-buffer-size
+ * is bounded at build time. The runtime path in xec_i2c_nl_target_arm
+ * casts cfg->tgt_rx_buf_size to uint16_t for RCL; without this assert
+ * a future DT instance with a too-large value would silently wrap.
+ *
+ * target-rx-chunk-count must (a) be >= 1, (b) divide target-buffer-size
+ * evenly so every chunk is the same size, and (c) not exceed the DMA
+ * driver's per-channel cached-block cap (the cyclic chain is built from
+ * those cached blocks). Asserts catch each case at build time.
+ */
+#define XEC_I2C_NL_TGT_BUF_DEF(inst)                                                               \
+	COND_CODE_1(XEC_I2C_NL_HAS_TARGET(inst),					\
+		(BUILD_ASSERT(DT_INST_PROP(inst, target_buffer_size) <=			\
+			      XEC_I2C_NL_LEN_MAX,					\
+			      "target-buffer-size exceeds 16-bit HW count");		\
+		 BUILD_ASSERT(DT_INST_PROP(inst, target_rx_chunk_count) >= 1,		\
+			      "target-rx-chunk-count must be >= 1");			\
+		 BUILD_ASSERT(DT_INST_PROP(inst, target_rx_chunk_count) <=		\
+			      CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN,			\
+			      "target-rx-chunk-count exceeds "				\
+			      "CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN");		\
+		 BUILD_ASSERT((DT_INST_PROP(inst, target_buffer_size) %			\
+			       DT_INST_PROP(inst, target_rx_chunk_count)) == 0,		\
+			      "target-buffer-size must divide evenly by "		\
+			      "target-rx-chunk-count");					\
+		 static uint8_t __aligned(4) xec_i2c_nl_tgt_buf_##inst			\
+			[DT_INST_PROP(inst, target_buffer_size)];), ())
+
+#define XEC_I2C_NL_TGT_FIELDS(inst)                                                                \
+	COND_CODE_1(XEC_I2C_NL_HAS_TARGET(inst),					\
+		(.tgt_rx_buf = xec_i2c_nl_tgt_buf_##inst,				\
+		 .tgt_rx_buf_size = DT_INST_PROP(inst, target_buffer_size),		\
+		 .tgt_rx_chunk_count = DT_INST_PROP(inst, target_rx_chunk_count),	\
+		 .tgt_rx_chunk_size = DT_INST_PROP(inst, target_buffer_size) /		\
+				      DT_INST_PROP(inst, target_rx_chunk_count),	\
+		 .tgt_dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, target, channel),	\
+		 .tgt_dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, target, trigsrc),),	\
+		(.tgt_rx_buf = NULL,							\
+		 .tgt_rx_buf_size = 0,							\
+		 .tgt_rx_chunk_count = 0,						\
+		 .tgt_rx_chunk_size = 0,						\
+		 .tgt_dma_chan = 0,							\
+		 .tgt_dma_slot = 0,))
+
 /* Build-time guard: if the controller names a default-port, that port's
  * "controller" phandle must point back to this controller node. Expands to
  * nothing for controllers that omit default-port.
@@ -2039,6 +3132,7 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 	XEC_I2C_NL_DEFPORT_ASSERT(inst)                                                            \
 	static uint8_t                                                                             \
 		__aligned(4) xec_i2c_nl_bounce_##inst[DT_INST_PROP(inst, bounce_buffer_size)];     \
+	XEC_I2C_NL_TGT_BUF_DEF(inst)                                                               \
 	static void xec_i2c_nl_irq_connect_##inst(void)                                            \
 	{                                                                                          \
 		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), xec_i2c_nl_isr,       \
@@ -2057,7 +3151,7 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
 		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                        \
 		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc),                        \
-	};                                                                                         \
+		XEC_I2C_NL_TGT_FIELDS(inst)};                                                      \
 	static struct xec_i2c_nl_data xec_i2c_nl_data_##inst;                                      \
 	DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_init, NULL,                                    \
 			      &xec_i2c_nl_data_##inst, &xec_i2c_nl_cfg_##inst, POST_KERNEL,        \
