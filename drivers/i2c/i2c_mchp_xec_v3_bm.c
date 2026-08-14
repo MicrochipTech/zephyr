@@ -218,12 +218,14 @@ struct xec_i2c_v3_bm_xcfg {
 	uint8_t girq_pos;
 	void (*irq_connect)(void);
 #if defined(CONFIG_PM)
-	/* GIRQ22 (peripheral-clock wake) source position for this controller.
-	 * Needed under plain CONFIG_PM to scrub our own START-detect residue
-	 * after each transfer (xec_i2c_v3_bm_pm_clr_start_det); under
-	 * CONFIG_PM_DEVICE it additionally arms START-detect wake when the
-	 * controller is in target mode AND the DT node carries wakeup-source.
+	/* GIRQ22 (peripheral-clock wake) GIRQ number and source position for
+	 * this controller, both decoded from girqs index 1. Needed under plain
+	 * CONFIG_PM to scrub our own START-detect residue after each transfer
+	 * (xec_i2c_v3_bm_pm_clr_start_det); under CONFIG_PM_DEVICE it
+	 * additionally arms START-detect wake when the controller is in target
+	 * mode AND the DT node carries wakeup-source.
 	 */
+	uint8_t wk_girq;
 	uint8_t wk_girq_pos;
 #endif
 #ifdef CONFIG_PM_DEVICE
@@ -815,7 +817,7 @@ static inline void xec_i2c_v3_bm_pm_clr_start_det(const struct device *ctrl)
 	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
 
 	sys_write32(BIT(XEC_I2C_WKSR_SB_POS), cfg->base + XEC_I2C_WKSR_OFS);
-	soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+	soc_ecia_girq_status_clear(cfg->wk_girq, cfg->wk_girq_pos);
 }
 #else
 static inline void xec_i2c_v3_bm_pm_clr_start_det(const struct device *ctrl)
@@ -1921,8 +1923,8 @@ static int xec_i2c_v3_bm_ctrl_pm_action(const struct device *ctrl, enum pm_devic
 			 * START; the CPU still wakes via GIRQ13 on own-address match.
 			 */
 			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
-			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
-			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+			soc_ecia_girq_status_clear(cfg->wk_girq, cfg->wk_girq_pos);
+			soc_ecia_girq_ctrl(cfg->wk_girq, cfg->wk_girq_pos,
 					   MCHP_MEC_ECIA_GIRQ_EN);
 			sys_set_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
 		} else {
@@ -1951,10 +1953,10 @@ static int xec_i2c_v3_bm_ctrl_pm_action(const struct device *ctrl, enum pm_devic
 #endif
 			/* Disarm START-detect wake; the controller stayed enabled. */
 			sys_clear_bit(base + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
-			soc_ecia_girq_ctrl(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos,
+			soc_ecia_girq_ctrl(cfg->wk_girq, cfg->wk_girq_pos,
 					   MCHP_MEC_ECIA_GIRQ_DIS);
 			sys_write32(BIT(XEC_I2C_WKSR_SB_POS), base + XEC_I2C_WKSR_OFS);
-			soc_ecia_girq_status_clear(XEC_I2C_SMB_WK_GIRQ, cfg->wk_girq_pos);
+			soc_ecia_girq_status_clear(cfg->wk_girq, cfg->wk_girq_pos);
 		} else {
 			/* Controller mode: full PCR reset + re-arm on the last
 			 * active (freq, port), restoring timing and the enable bit.
@@ -2100,8 +2102,13 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 
 #define XEC_I2C_V3_DFLT_FREQ(inst) I2C_BITRATE_STANDARD
 
-#define XEC_I2C_V3_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP(inst, girqs))
-#define XEC_I2C_V3_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP(inst, girqs))
+/* girqs index 0: runtime interrupt GIRQ (GIRQ13); index 1: START-detect wake
+ * GIRQ (GIRQ22). Each entry is a MCHP_XEC_ECIA_GIRQ_ENC(girq, bit_pos) value.
+ */
+#define XEC_I2C_V3_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define XEC_I2C_V3_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 0))
+#define XEC_I2C_V3_WK_GIRQ(inst)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, 1))
+#define XEC_I2C_V3_WK_GIRQ_POS(inst) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, 1))
 
 /* Buffer-mode target RX staging: one static per-controller buffer sized from
  * the optional target-buffer-size DT property (default 256). Compiled out
@@ -2119,12 +2126,12 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 #define XEC_I2C_V3_BM_TGT_BUF_INIT(inst)
 #endif
 
-/* GIRQ13 (runtime IRQ) source position equals the SMB hardware instance
- * (SMB0->0 .. SMB4->4), so the GIRQ22 wake source position is instance + 1.
+/* The START-detect wake GIRQ (number and source position) comes straight from
+ * girqs index 1; historically it was derived as GIRQ22 / (runtime pos + 1).
  */
 #if defined(CONFIG_PM)
 #define XEC_I2C_V3_BM_WK_POS_INIT(inst)                                                            \
-	.wk_girq_pos = XEC_I2C_SMB_WK_GIRQ_POS(XEC_I2C_V3_GIRQ_POS(inst)),
+	.wk_girq = XEC_I2C_V3_WK_GIRQ(inst), .wk_girq_pos = XEC_I2C_V3_WK_GIRQ_POS(inst),
 #else
 #define XEC_I2C_V3_BM_WK_POS_INIT(inst)
 #endif
