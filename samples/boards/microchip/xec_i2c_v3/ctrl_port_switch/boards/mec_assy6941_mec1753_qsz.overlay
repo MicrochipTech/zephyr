@@ -68,6 +68,8 @@
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
+	/* Port routed at boot, before the first transfer. */
+	default-port = <&i2c0_p0>;
 };
 
 &i2c_smb_4 {
@@ -75,6 +77,8 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 	status = "okay";
+	/* Port routed at boot, before the first transfer. */
+	default-port = <&i2c4_p3>;
 };
 
 /* Port 0 pins */
@@ -128,7 +132,6 @@
 		clock-frequency = <I2C_BITRATE_STANDARD>;
 		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
 		pinctrl-names = "default";
-		default-port;
 		status = "okay";
 
 		pca9555_evb: pca9555@26 {
@@ -174,7 +177,6 @@
 		clock-frequency = <I2C_BITRATE_STANDARD>;
 		pinctrl-0 = <&i2c03_sda_gpio007 &i2c03_scl_gpio010>;
 		pinctrl-names = "default";
-		default-port;
 		status = "okay";
 	};
 };
