@@ -16,6 +16,30 @@
  * The pinctrl labels below are spelled the same way in mec5-common-pinctrl.dtsi
  * (MEC174x/MEC175x) and mec1653b-b0-pinctrl.dtsi, so this overlay covers every
  * mec_assy6941 SoC variant.
+ *
+ * PWM0 output is GPIO053 connected to:
+ * JP76-1.  If jumper installed connects 100K pull-up to VTR2
+ *
+ * JP79 2x12 No jumper
+ * Pin 1 = GPIO053/PWM0
+ *
+ * J26 2x8 No jumpers
+ * Pin 1 = GPIO050 |
+ * Pin 3 = GPIO051 |
+ * Pin 5 = GPIO052 |<-- PWM0
+ * Pin 7 = GPIO053 |
+ *
+ * J30 2x8 No jumpers
+ * 
+ * FAN0: No jumpers on JP78 1x3 and P3 1x3
+ * FAN1: No jumpers on JP81 1x3 and P5 1x3
+ * FAN2: No jumpers on JP82 1x3 and P7 1x3
+ *
+ * RC-ID detect MUX JP10 3x3
+ * 8-9 ON select TACH3 on GPIO033
+ *
+ * UART3 signal MUX JP29 3x8
+ * 22-23 select TACH3
  */
 
 #include <zephyr/dt-bindings/pwm/pwm.h>
