@@ -24,8 +24,9 @@ single machine-checkable line.
 A second mode, ``CONFIG_APP_RAW_COUNT_MODE``, replaces the sweep with a direct
 measurement of the count the block latches, driven from an external generator
 instead of the on-chip PWM. It answers a question the loopback structurally
-cannot: whether the latched count really is the number of clocks the measurement
-window took. See `Measuring the latched count offset`_.
+cannot - whether the latched count really is the number of clocks the measurement
+window took, which it is not - and is how the ``count + 1`` correction in the
+driver was established. See `Measuring the latched count offset`_.
 
 Wiring
 ******
@@ -102,11 +103,11 @@ The four builds together cover all 16 combinations, and any single build already
 covers every edge setting and every divisor.
 
 The reference does not assume the mapping under test. With a period of ``k``
-clocks and a window of ``whp`` half TACH periods the latched count is
-``whp * k / 2``, so the RPM the driver must report is
+clocks and a window of ``whp`` half TACH periods the window spans ``whp * k / 2``
+clocks, so the RPM the driver must report is
 ``60 * 100000 / (pulses_per_round * k)`` - the window width cancels. A driver
 that mis-maps ``tach-edges`` to a window width therefore shows up as a factor of
-two or four, which is far outside the 0.8 % worst-case tolerance, rather than
+two or four, which is far outside the 0.4 % worst-case tolerance, rather than
 cancelling out of both sides.
 
 The sweep runs at 200, 125, 100, 62.5, 25 and 12.5 Hz, which is 6000 down to
@@ -187,25 +188,26 @@ Measuring the latched count offset
 
 The RPM the driver reports is only as accurate as the assumption behind it: that
 the latched count is the number of 100 kHz clocks the measurement window took.
-Every reading taken on hardware so far has instead come out one count short of
-the window it measured - the same deficit at every edge setting, every frequency
-and every divisor, with no scatter at all. It is inside the tolerance above, so
-the self test passes, but it biases every reported RPM high by one part in
-``count - 1``: 0.4 % at 2 edges and 200 Hz, 31 ppm at 9 edges and 12.5 Hz.
+It is not - the block latches one less, so the driver converts ``count + 1``.
+This mode is the measurement that established that, and is the way to confirm it
+still holds on a part or a series it has not run on.
 
-The loopback cannot say whether that is a property of the block. PWM0 is derived
-from the same 100 kHz clock the tachometer counts, so every emulated edge
-arrives on a counter clock edge, and an off-by-one at that coincidence is
-indistinguishable from an off-by-one at any phase. ``CONFIG_APP_RAW_COUNT_MODE``
-replaces the sweep with a direct measurement of the offset ``c`` in
+The loopback cannot establish it. PWM0 is derived from the same 100 kHz clock the
+tachometer counts, so every emulated edge arrives on a counter clock edge, and an
+off-by-one at that coincidence is indistinguishable from an off-by-one at any
+phase - which is why the loopback saw the deficit in all 360 of its readings
+without being able to attribute it. ``CONFIG_APP_RAW_COUNT_MODE`` replaces the
+sweep with a direct measurement of the residual offset ``c`` in
 
 .. code-block:: none
 
-   count = whp * M / 2 + c
+   count as converted by the driver = whp * M / 2 + c
 
 driven from a source that is not locked to the SoC clock, where ``M`` is the
 input period in 100 kHz clocks and ``whp`` the window width in half TACH
-periods. Two instances whose windows are in a 1:2 ratio give
+periods. The count is recovered from the RPM the driver reported, so ``c`` covers
+the whole path and a correct driver reports **0**. Two instances whose windows
+are in a 1:2 ratio give
 
 .. code-block:: none
 
@@ -241,7 +243,7 @@ generator, sharing the board ground:
    * - Level
      - 0 to 3.3 V, i.e. 3.3 Vpp with a 1.65 V offset
    * - Frequency
-     - 99.95 Hz, or anything else whose period is not a whole number of 10 µs
+     - 120 Hz, or anything else whose period is not a whole number of 10 µs
 
 .. caution::
 
@@ -251,13 +253,22 @@ generator, sharing the board ground:
    VTR2 bank, which may be powered at 1.8 V. A 100 Ω series resistor costs
    nothing and limits the damage if the amplitude is wrong.
 
-99.95 Hz is 1000.5 clocks, which puts the 3-edge window on a half clock and
-leaves the counter alternating between two adjacent values - the case that
-distinguishes the two answers. At 200 Hz exactly, every window would end on the
-same clock edge and the measurement would say nothing that the loopback has not
-already said. Keep the half period above 20 µs, which the driver's input filter
-discards, and the widest window - eight half periods, four input periods - below
-the 655 ms counter saturation: between about 7 Hz and 25 kHz.
+120 Hz is 833.33 clocks, which leaves every one of the four windows a third of a
+clock from an integer, so every instance's counter alternates between adjacent
+values - the case that distinguishes the two answers. At 200 Hz exactly, every
+window would end on the same clock edge and the measurement would say nothing
+the loopback has not already said. Prefer a frequency whose fractional part is
+robust rather than one that has to be exact: the counting clock is nominally
+100 kHz but is specified only to a few percent, so a dial computed against
+100000 is already off by more than the fraction it was chosen for.
+
+Keep the half period above 20 µs, which the driver's input filter discards, and
+the widest window - eight half periods, four input periods - below the 655 ms
+counter saturation: between about 7 Hz and 25 kHz.
+
+Both hardware runs used ``CONFIG_APP_RAW_COUNT_READINGS=200``. At the default of
+50 the pair estimates can straddle the quarter-count agreement window and the
+result comes back inconclusive.
 
 .. important::
 
@@ -287,44 +298,64 @@ Reading the result
 
 .. code-block:: console
 
-   --- latched counts, 50 readings per instance ---
+   --- latched counts, 200 readings per instance ---
    instance       edges  half periods  readings    min    max  mean count
-   tach@40006000      2             1        50    499    500     499.240
-   tach@40006010      3             2        50    999   1000     999.500
-   tach@40006020      5             4        50   2000   2000    2000.000
-   tach@40006030      9             8        50   4001   4001    4001.000
+   tach@40006000      2             1       200    416    417     416.245
+   tach@40006010      3             2       200    832    833     832.520
+   tach@40006020      5             4       200   1664   1666    1665.020
+   tach@40006030      9             8       200   3329   3331    3330.225
 
    --- offset implied by each pair of windows in a 1:2 ratio ---
    instance a     instance b      whp a  whp b   offset c
-   tach@40006000  tach@40006010       1      2   -1.020
-   tach@40006010  tach@40006020       2      4   -1.000
-   tach@40006020  tach@40006030       4      8   -1.000
+   tach@40006000  tach@40006010       1      2   -0.030
+   tach@40006010  tach@40006020       2      4    0.020
+   tach@40006020  tach@40006030       4      8   -0.185
 
    --- input implied by each instance at that offset ---
    instance      period clocks  frequency Hz
-   tach@40006000      1000.494        99.951
-   tach@40006010      1000.507        99.949
-   tach@40006020      1000.504        99.950
-   tach@40006030      1000.502        99.950
+   tach@40006000       832.620       120.103
+   tach@40006010       832.585       120.108
+   tach@40006020       832.543       120.114
+   tach@40006030       832.573       120.110
 
-   offset c = -1.007 counts from 3 pairs, spread 0.020
+   offset c = -0.065 counts from 3 pairs, spread 0.205
 
-   Every latch is one clock short of the window it measured, so the
-   reported RPM is high by one part in (count - 1): 0.4 % at 2 edges
-   and 200 Hz. The driver should convert count + 1.
-   TACH XEC latched count offset: -1.007 counts
+   The count the driver converts is the number of 100 kHz clocks the
+   measurement window took, so the conversion is correct as it stands.
+   TACH XEC latched count offset: 0.000 counts
 
-An offset of 0 means the latched count is the elapsed window and the conversion
-needs no correction; -1 means it is one clock short at every phase, and the
-driver should convert ``count + 1``. Anything else, or pair estimates that
-disagree by more than a quarter of a count, is a measurement problem rather than
-an answer.
+An offset of 0 is the expected result: the count the driver converts is the
+elapsed window. A result of -1 means the ``count + 1`` correction in
+``tach_xec_channel_get()`` has been lost, or that the block on the part under
+test does not apply the offset the correction assumes. Anything else, or pair
+estimates that disagree by more than a quarter of a count, is a measurement
+problem rather than an answer.
 
 Two results are refusals rather than answers. If no instance ever latched two
 different counts the input is locked to the tachometer clock, which is the
 ambiguity this mode exists to break, and the offset is reported as inconclusive.
 The implied period table is a wiring check: all four instances must agree, and
 must agree with the generator, or one of them is not connected to it.
+
+What the offset was measured to be
+==================================
+
+Two runs on an Assy 6941 ``mec1753_qlj``, 200 readings on each of the four
+instances, with the 48 MHz PLL referenced first to the internal silicon
+oscillator and then to a 32.768 kHz crystal - a 1 % change in the counting clock
+between them - put the raw latched count at ``whp * M / 2 - 1.0``, which is what
+the driver now corrects. The strongest form of the evidence is not the pair
+estimate but the consistency of the four windows: taking the counts at face value
+makes the input period implied by the four instances disagree by 1.8 clocks in a
+monotonic ramp whose deviations are ``2 / whp`` to three digits, while adding one
+count collapses them to a spread of 80 ppm across windows spanning 8:1. No
+multiplicative error - clock rate, generator calibration, a mis-mapped
+``tach-edges`` - can produce that shape.
+
+The datasheet does not document the offset. §29.9.1 says only that the internal
+counter is reset to zero after being copied into the register, which is
+consistent with the latch and the reset landing in the same clock and that clock
+not incrementing the counter.
 
 Limitations
 ***********
