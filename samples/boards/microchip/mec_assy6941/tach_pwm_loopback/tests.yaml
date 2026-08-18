@@ -38,3 +38,11 @@ tests:
     extra_args: EXTRA_DTC_OVERLAY_FILE=ppr-c.overlay
   sample.boards.mec_assy6941.tach_pwm_loopback.ppr_d:
     extra_args: EXTRA_DTC_OVERLAY_FILE=ppr-d.overlay
+  # A bench measurement, not a self test: it needs an external generator on the
+  # TACH inputs and its result is the offset it prints, so there is nothing for
+  # a harness to match on and twister only build checks it.
+  sample.boards.mec_assy6941.tach_pwm_loopback.raw_count:
+    build_only: true
+    extra_args:
+      - EXTRA_CONF_FILE=raw-count.conf
+      - EXTRA_DTC_OVERLAY_FILE=raw-count.overlay

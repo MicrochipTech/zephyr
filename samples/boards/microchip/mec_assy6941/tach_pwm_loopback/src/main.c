@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <errno.h>
+
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/pwm.h>
@@ -15,11 +17,389 @@
 
 /* The clock the tachometer counts in reading mode 1, datasheet section 29.9.1 */
 #define TACH_CLOCK_HZ		100000U
+
+/* Readings discarded before the first one that is used */
+#define TACH_SETTLE_READINGS	2U
+
+/*
+ * Half TACH periods the block measures over for each TACH_EDGES setting. The
+ * edge count and the periods spanned are different numbers: a TACH period is
+ * three edges and the settings share endpoints, so 2, 3, 5 and 9 edges span
+ * 1, 2, 4 and 8 half periods.
+ */
+#define TACH_WINDOW_HALF_PERIODS(edges)						\
+	(((edges) == 2) ? 1U : ((edges) == 3) ? 2U : ((edges) == 5) ? 4U : 8U)
+
+#define TACH_ASSERT_EDGES(node_id)						\
+	BUILD_ASSERT((DT_PROP(node_id, tach_edges) == 2) ||			\
+		     (DT_PROP(node_id, tach_edges) == 3) ||			\
+		     (DT_PROP(node_id, tach_edges) == 5) ||			\
+		     (DT_PROP(node_id, tach_edges) == 9),			\
+		     "tach-edges must be 2, 3, 5 or 9");
+
+DT_FOREACH_STATUS_OKAY(microchip_xec_tach, TACH_ASSERT_EDGES)
+
+struct tach_info {
+	const struct device *dev;
+	/* TACH edges the hardware counts 100 kHz clocks over */
+	uint8_t edges;
+	/* Half TACH periods that many edges span */
+	uint8_t window_half_periods;
+	/* TACH periods the emulated fan produces per revolution */
+	uint8_t pulses_per_round;
+};
+
+#define TACH_INFO_ENTRY(node_id)						\
+	{									\
+		.dev = DEVICE_DT_GET(node_id),					\
+		.edges = DT_PROP(node_id, tach_edges),				\
+		.window_half_periods =						\
+			TACH_WINDOW_HALF_PERIODS(DT_PROP(node_id, tach_edges)),	\
+		.pulses_per_round = DT_PROP(node_id, pulses_per_round),		\
+	},
+
+/* Every enabled microchip,xec-tach node, in devicetree order */
+static const struct tach_info tachs[] = {
+	DT_FOREACH_STATUS_OKAY(microchip_xec_tach, TACH_INFO_ENTRY)
+};
+
+BUILD_ASSERT(ARRAY_SIZE(tachs) > 0,
+	     "This sample needs at least one enabled microchip,xec-tach node");
+
+static int tach_read_micro_rpm(const struct tach_info *tach, int64_t *micro_rpm)
+{
+	struct sensor_value rpm;
+	int ret;
+
+	ret = sensor_sample_fetch_chan(tach->dev, SENSOR_CHAN_RPM);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ret = sensor_channel_get(tach->dev, SENSOR_CHAN_RPM, &rpm);
+	if (ret != 0) {
+		return ret;
+	}
+
+	*micro_rpm = ((int64_t)rpm.val1 * (int64_t)USEC_PER_SEC) + (int64_t)rpm.val2;
+
+	return 0;
+}
+
+static bool tachs_are_ready(void)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
+		if (!device_is_ready(tachs[i].dev)) {
+			printk("%s: device not ready\n", tachs[i].dev->name);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+#if defined(CONFIG_APP_RAW_COUNT_MODE)
+
+/* Latched counts averaged per instance */
+#define RAW_READINGS	((unsigned int)CONFIG_APP_RAW_COUNT_READINGS)
+
+/* Averages and offsets are carried in thousandths of a count */
+#define MILLI		1000
+
+/* Estimates must agree to a quarter of a count for the result to be reported */
+#define RAW_AGREEMENT	(MILLI / 4)
+
+/*
+ * Numerator of the driver's conversion before the window width is applied,
+ * 60 * 100000 * 1000000 / 2. tach_xec_channel_get() reports
+ *
+ *   micro_rpm = round(TACH_MICRO_RPM_NUM * whp / (pulses_per_round * count))
+ *
+ * so the count the block latched is recoverable from the value it returned.
+ */
+#define TACH_MICRO_RPM_NUM	((uint64_t)TACH_CLOCK_HZ * SEC_PER_MIN * USEC_PER_SEC / 2U)
+
+struct raw_stats {
+	/* Sum of the latched counts and their extremes */
+	uint64_t sum;
+	uint32_t min;
+	uint32_t max;
+	/* Mean latched count, in thousandths of a count */
+	uint32_t mean_milli;
+};
+
+static struct raw_stats stats[ARRAY_SIZE(tachs)];
+
+/*
+ * Recover the latched count from the RPM the driver reported. Rounding to the
+ * nearest micro-RPM displaces the result by at most count / (2 * micro_rpm).
+ * The count cannot exceed 0xfffe, and the micro-RPM that corresponds to such a
+ * count cannot be smaller than about 1.1e7, so the displacement stays below
+ * 0.003 counts and the value below is the latched count exactly.
+ */
+static uint32_t raw_count(const struct tach_info *tach, int64_t micro_rpm)
+{
+	uint64_t numerator = TACH_MICRO_RPM_NUM * tach->window_half_periods;
+	uint64_t denominator = (uint64_t)tach->pulses_per_round * (uint64_t)micro_rpm;
+
+	/* Round to nearest, matching the driver */
+	return (uint32_t)((numerator + (denominator / 2U)) / denominator);
+}
+
+static void print_signed_milli(int64_t milli)
+{
+	uint32_t magnitude = (uint32_t)((milli < 0) ? -milli : milli);
+
+	printk("%s%u.%03u", (milli < 0) ? "-" : "", magnitude / MILLI, magnitude % MILLI);
+}
+
+/* Signed divide, rounding to nearest rather than toward zero */
+static int64_t div_round(int64_t numerator, int64_t denominator)
+{
+	if (numerator < 0) {
+		return -(((-numerator) + (denominator / 2)) / denominator);
+	}
+
+	return (numerator + (denominator / 2)) / denominator;
+}
+
+static int measure_one(const struct tach_info *tach, struct raw_stats *st)
+{
+	st->sum = 0U;
+	st->min = UINT32_MAX;
+	st->max = 0U;
+
+	for (unsigned int i = 0; i < TACH_SETTLE_READINGS; i++) {
+		int64_t discard;
+
+		/* The block may already have a count latched from before boot */
+		(void)tach_read_micro_rpm(tach, &discard);
+	}
+
+	for (unsigned int i = 0; i < RAW_READINGS; i++) {
+		int64_t micro_rpm;
+		uint32_t count;
+		int ret;
+
+		ret = tach_read_micro_rpm(tach, &micro_rpm);
+		if (ret != 0) {
+			printk("%s: reading %u failed (%d)\n", tach->dev->name, i, ret);
+			return ret;
+		}
+
+		/*
+		 * The driver reports zero for a saturated count, which here
+		 * means the input is not reaching this instance at all.
+		 */
+		if (micro_rpm <= 0) {
+			printk("%s: no signal on reading %u\n", tach->dev->name, i);
+			return -ENODATA;
+		}
+
+		count = raw_count(tach, micro_rpm);
+		st->sum += count;
+		st->min = MIN(st->min, count);
+		st->max = MAX(st->max, count);
+	}
+
+	st->mean_milli = (uint32_t)(((st->sum * MILLI) + (RAW_READINGS / 2U)) / RAW_READINGS);
+
+	return 0;
+}
+
+/*
+ * The measurement window of an instance spans whp half periods of the input, so
+ * for an input period of M clocks of 100 kHz the block ought to latch
+ * whp * M / 2. Every count observed on hardware so far has instead been one
+ * less, which is either an artefact of the loopback - a PWM output derived from
+ * the same 100 kHz clock places every input edge on a counter clock edge - or a
+ * genuine per latch offset in the block. This mode separates the two by
+ * measuring the offset c in
+ *
+ *   count = whp * M / 2 + c
+ *
+ * from an input that is not locked to the SoC clock. Two instances whose window
+ * widths are in a 1:2 ratio give
+ *
+ *   c = 2 * mean(count for whp) - mean(count for 2 * whp)
+ *
+ * in which M cancels, so the accuracy of the generator does not enter the
+ * result and its frequency does not even have to be known. What the generator
+ * must do is drift: the mean of a truncating counter is only the true window
+ * width if the phase between the input and the 100 kHz clock is spread over the
+ * readings, which is why the frequency should not be a round number of clocks.
+ */
+static void report(void)
+{
+	int64_t c_sum = 0;
+	int64_t c_min = 0;
+	int64_t c_max = 0;
+	int64_t c_milli;
+	int64_t c_whole;
+	int64_t residual;
+	unsigned int pairs = 0U;
+	bool dithered = false;
+
+	printk("\n--- latched counts, %u readings per instance ---\n", RAW_READINGS);
+	printk("instance       edges  half periods  readings    min    max  mean count\n");
+
+	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
+		printk("%-14s %5u  %12u  %8u  %5u  %5u  %6u.%03u\n", tachs[i].dev->name,
+		       tachs[i].edges, tachs[i].window_half_periods, RAW_READINGS,
+		       stats[i].min, stats[i].max, stats[i].mean_milli / MILLI,
+		       stats[i].mean_milli % MILLI);
+
+		if (stats[i].min != stats[i].max) {
+			dithered = true;
+		}
+	}
+
+	printk("\n--- offset implied by each pair of windows in a 1:2 ratio ---\n");
+	printk("instance a     instance b      whp a  whp b   offset c\n");
+
+	for (size_t a = 0; a < ARRAY_SIZE(tachs); a++) {
+		for (size_t b = 0; b < ARRAY_SIZE(tachs); b++) {
+			int64_t offset;
+
+			if (tachs[b].window_half_periods !=
+			    (2U * tachs[a].window_half_periods)) {
+				continue;
+			}
+
+			offset = (2 * (int64_t)stats[a].mean_milli) -
+				 (int64_t)stats[b].mean_milli;
+
+			printk("%-14s %-14s %6u %6u   ", tachs[a].dev->name,
+			       tachs[b].dev->name, tachs[a].window_half_periods,
+			       tachs[b].window_half_periods);
+			print_signed_milli(offset);
+			printk("\n");
+
+			if (pairs == 0U) {
+				c_min = offset;
+				c_max = offset;
+			}
+
+			c_min = MIN(c_min, offset);
+			c_max = MAX(c_max, offset);
+			c_sum += offset;
+			pairs++;
+		}
+	}
+
+	if (pairs == 0U) {
+		printk("(none)\n\n"
+		       "No two enabled instances have measurement windows in a 1:2 ratio, so\n"
+		       "the offset cannot be separated from the input period. Give two\n"
+		       "instances adjacent tach-edges values out of 2, 3, 5 and 9.\n");
+		printk("TACH XEC latched count offset: not measurable\n");
+		return;
+	}
+
+	c_milli = div_round(c_sum, (int64_t)pairs);
+	c_whole = div_round(c_milli, MILLI);
+	residual = c_milli - (c_whole * MILLI);
+
+	printk("\n--- input implied by each instance at that offset ---\n");
+	printk("instance      period clocks  frequency Hz\n");
+
+	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
+		int64_t whp = (int64_t)tachs[i].window_half_periods;
+		int64_t period;
+		uint64_t period_milli;
+		uint64_t freq_milli;
+
+		/* M = 2 * (count - c) / whp, and 100000 / M is the frequency */
+		period = div_round(2 * ((int64_t)stats[i].mean_milli - c_milli), whp);
+		if (period <= 0) {
+			continue;
+		}
+
+		period_milli = (uint64_t)period;
+
+		freq_milli = (((uint64_t)TACH_CLOCK_HZ * MILLI * MILLI) + (period_milli / 2U)) /
+			     period_milli;
+
+		printk("%-14s %8u.%03u  %8u.%03u\n", tachs[i].dev->name,
+		       (uint32_t)(period_milli / MILLI), (uint32_t)(period_milli % MILLI),
+		       (uint32_t)(freq_milli / MILLI), (uint32_t)(freq_milli % MILLI));
+	}
+
+	printk("\noffset c = ");
+	print_signed_milli(c_milli);
+	printk(" counts from %u pair%s, spread ", pairs, (pairs == 1U) ? "" : "s");
+	print_signed_milli(c_max - c_min);
+	printk("\n\n");
+
+	if (!dithered) {
+		printk("Every reading of every instance latched the same count, so the input\n"
+		       "is phase locked to the tachometer clock and each window ends on the\n"
+		       "same counter clock edge. An offset measured this way cannot be told\n"
+		       "apart from that coincidence: drive the inputs from a free running\n"
+		       "generator, at a frequency that is not a round number of 100 kHz\n"
+		       "clocks.\n");
+		printk("TACH XEC latched count offset: inconclusive\n");
+		return;
+	}
+
+	if (((c_max - c_min) > RAW_AGREEMENT) || (residual > RAW_AGREEMENT) ||
+	    (residual < -RAW_AGREEMENT)) {
+		printk("The pair estimates do not agree on a whole number of counts. Either\n"
+		       "the input frequency moved during the run, the instances are not all\n"
+		       "driven from the same source, or more readings are needed.\n");
+		printk("TACH XEC latched count offset: inconclusive\n");
+		return;
+	}
+
+	if (c_whole == 0) {
+		printk("The latched count is the number of 100 kHz clocks the measurement\n"
+		       "window took, with no offset, so the driver conversion needs no\n"
+		       "correction.\n");
+	} else if (c_whole == -1) {
+		printk("Every latch is one clock short of the window it measured, so the\n"
+		       "reported RPM is high by one part in (count - 1): 0.4 %% at 2 edges\n"
+		       "and 200 Hz. The driver should convert count + 1.\n");
+	} else {
+		printk("That offset is neither 0 nor -1, which no reading of the datasheet\n"
+		       "predicts. Check the wiring and the generator before believing it.\n");
+	}
+
+	printk("TACH XEC latched count offset: ");
+	print_signed_milli(c_milli);
+	printk(" counts\n");
+}
+
+int main(void)
+{
+	printk("Microchip XEC tachometer latched count measurement\n\n");
+	printk("Remove the PWM0 fly-wire, then drive GPIO050, GPIO051, GPIO052 and\n");
+	printk("GPIO033 from one free running generator sharing the board ground: a\n");
+	printk("0 to 3.3 V square wave, 50 %% duty, at a frequency that is not a round\n");
+	printk("number of 100 kHz clocks, such as 99.95 Hz. Do not exceed 3.3 V - two\n");
+	printk("of those pins have no over-voltage protection.\n\n");
+
+	if (!tachs_are_ready()) {
+		return 0;
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
+		if (measure_one(&tachs[i], &stats[i]) != 0) {
+			printk("TACH XEC latched count offset: not measured\n");
+			return 0;
+		}
+	}
+
+	report();
+
+	return 0;
+}
+
+#else /* CONFIG_APP_RAW_COUNT_MODE */
+
 /* pwm_xec_get_cycles_per_sec() always reports the 48 MHz PWM input clock */
 #define PWM_XEC_INPUT_HZ	48000000U
 
-/* Readings discarded after a frequency change, then readings compared */
-#define TACH_SETTLE_READINGS	2U
+/* Readings compared after the settling readings at each frequency */
 #define TACH_TEST_READINGS	3U
 /* Time for the PWM output to restart before the first window is armed */
 #define TACH_PWM_SETTLE		K_MSEC(20)
@@ -74,51 +454,6 @@
 
 FOR_EACH(ASSERT_PERIOD_CLOCKS, (;), TACH_PWM_PERIOD_LIST);
 
-/*
- * Half TACH periods the block measures over for each TACH_EDGES setting. The
- * edge count and the periods spanned are different numbers: a TACH period is
- * three edges and the settings share endpoints, so 2, 3, 5 and 9 edges span
- * 1, 2, 4 and 8 half periods.
- */
-#define TACH_WINDOW_HALF_PERIODS(edges)						\
-	(((edges) == 2) ? 1U : ((edges) == 3) ? 2U : ((edges) == 5) ? 4U : 8U)
-
-#define TACH_ASSERT_EDGES(node_id)						\
-	BUILD_ASSERT((DT_PROP(node_id, tach_edges) == 2) ||			\
-		     (DT_PROP(node_id, tach_edges) == 3) ||			\
-		     (DT_PROP(node_id, tach_edges) == 5) ||			\
-		     (DT_PROP(node_id, tach_edges) == 9),			\
-		     "tach-edges must be 2, 3, 5 or 9");
-
-DT_FOREACH_STATUS_OKAY(microchip_xec_tach, TACH_ASSERT_EDGES)
-
-struct tach_info {
-	const struct device *dev;
-	/* TACH edges the hardware counts 100 kHz clocks over */
-	uint8_t edges;
-	/* Half TACH periods that many edges span */
-	uint8_t window_half_periods;
-	/* TACH periods the emulated fan produces per revolution */
-	uint8_t pulses_per_round;
-};
-
-#define TACH_INFO_ENTRY(node_id)						\
-	{									\
-		.dev = DEVICE_DT_GET(node_id),					\
-		.edges = DT_PROP(node_id, tach_edges),				\
-		.window_half_periods =						\
-			TACH_WINDOW_HALF_PERIODS(DT_PROP(node_id, tach_edges)),	\
-		.pulses_per_round = DT_PROP(node_id, pulses_per_round),		\
-	},
-
-/* Every enabled microchip,xec-tach node, in devicetree order */
-static const struct tach_info tachs[] = {
-	DT_FOREACH_STATUS_OKAY(microchip_xec_tach, TACH_INFO_ENTRY)
-};
-
-BUILD_ASSERT(ARRAY_SIZE(tachs) > 0,
-	     "This sample needs at least one enabled microchip,xec-tach node");
-
 static const uint32_t pwm_period_clocks[] = { TACH_PWM_PERIOD_LIST };
 
 static const struct pwm_dt_spec fan = PWM_DT_SPEC_GET_BY_IDX(DT_PATH(zephyr_user), 0);
@@ -151,6 +486,11 @@ static uint64_t expected_micro_rpm(const struct tach_info *tach, uint32_t period
  * of rounding. RPM is inversely proportional to the count, so the count is what
  * sets the resolution: 0.8 % at 2 edges and 200 Hz, 0.006 % at 9 edges and
  * 12.5 Hz. A mis-scaled window would be off by 100 % or 300 %.
+ *
+ * Two counts is also what accommodates the one count deficit every reading
+ * taken on hardware so far has shown. CONFIG_APP_RAW_COUNT_MODE measures that
+ * offset directly; if it proves to be a property of the block rather than of
+ * this loopback, the driver gains a correction and this can come down to one.
  */
 static uint64_t micro_rpm_tolerance(const struct tach_info *tach, uint32_t period_clocks,
 				    uint64_t expected)
@@ -158,26 +498,6 @@ static uint64_t micro_rpm_tolerance(const struct tach_info *tach, uint32_t perio
 	uint32_t count = (uint32_t)tach->window_half_periods * period_clocks / 2U;
 
 	return DIV_ROUND_UP(2U * expected, count) + 1U;
-}
-
-static int tach_read_micro_rpm(const struct tach_info *tach, int64_t *micro_rpm)
-{
-	struct sensor_value rpm;
-	int ret;
-
-	ret = sensor_sample_fetch_chan(tach->dev, SENSOR_CHAN_RPM);
-	if (ret != 0) {
-		return ret;
-	}
-
-	ret = sensor_channel_get(tach->dev, SENSOR_CHAN_RPM, &rpm);
-	if (ret != 0) {
-		return ret;
-	}
-
-	*micro_rpm = ((int64_t)rpm.val1 * (int64_t)USEC_PER_SEC) + (int64_t)rpm.val2;
-
-	return 0;
 }
 
 static void print_micro_rpm(int64_t micro_rpm)
@@ -332,13 +652,12 @@ int main(void)
 	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
 		const struct tach_info *tach = &tachs[i];
 
-		if (!device_is_ready(tach->dev)) {
-			printk("%s: device not ready\n", tach->dev->name);
-			return 0;
-		}
-
 		printk("%-14s %5u  %12u  %10u\n", tach->dev->name, tach->edges,
 		       tach->window_half_periods, tach->pulses_per_round);
+	}
+
+	if (!tachs_are_ready()) {
+		return 0;
 	}
 
 	if (sweep() != 0) {
@@ -365,3 +684,5 @@ int main(void)
 
 	return 0;
 }
+
+#endif /* CONFIG_APP_RAW_COUNT_MODE */

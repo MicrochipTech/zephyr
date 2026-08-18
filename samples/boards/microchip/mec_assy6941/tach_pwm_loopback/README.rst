@@ -21,6 +21,12 @@ It sweeps six emulated fan frequencies, measures every enabled tachometer at
 each one, prints the expected and measured RPM side by side, and finishes with a
 single machine-checkable line.
 
+A second mode, ``CONFIG_APP_RAW_COUNT_MODE``, replaces the sweep with a direct
+measurement of the count the block latches, driven from an external generator
+instead of the on-chip PWM. It answers a question the loopback structurally
+cannot: whether the latched count really is the number of clocks the measurement
+window took. See `Measuring the latched count offset`_.
+
 Wiring
 ******
 
@@ -175,6 +181,150 @@ CI and only executes them when the wiring is present:
    west twister -T samples/boards/microchip/mec_assy6941/tach_pwm_loopback \
      --device-testing --fixture tach_xec_pwm_loopback \
      -p mec_assy6941/mec1753_qsz --device-serial /dev/ttyUSB0
+
+Measuring the latched count offset
+**********************************
+
+The RPM the driver reports is only as accurate as the assumption behind it: that
+the latched count is the number of 100 kHz clocks the measurement window took.
+Every reading taken on hardware so far has instead come out one count short of
+the window it measured - the same deficit at every edge setting, every frequency
+and every divisor, with no scatter at all. It is inside the tolerance above, so
+the self test passes, but it biases every reported RPM high by one part in
+``count - 1``: 0.4 % at 2 edges and 200 Hz, 31 ppm at 9 edges and 12.5 Hz.
+
+The loopback cannot say whether that is a property of the block. PWM0 is derived
+from the same 100 kHz clock the tachometer counts, so every emulated edge
+arrives on a counter clock edge, and an off-by-one at that coincidence is
+indistinguishable from an off-by-one at any phase. ``CONFIG_APP_RAW_COUNT_MODE``
+replaces the sweep with a direct measurement of the offset ``c`` in
+
+.. code-block:: none
+
+   count = whp * M / 2 + c
+
+driven from a source that is not locked to the SoC clock, where ``M`` is the
+input period in 100 kHz clocks and ``whp`` the window width in half TACH
+periods. Two instances whose windows are in a 1:2 ratio give
+
+.. code-block:: none
+
+   c = 2 * mean(count at whp) - mean(count at 2 * whp)
+
+in which ``M`` cancels. The accuracy of the generator therefore never enters the
+result and its frequency does not even have to be known - which is what makes
+this measurable on the bench rather than only against a calibrated reference.
+``app.overlay`` sets ``tach-edges`` to 2, 3, 5 and 9, so the windows are 1, 2, 4
+and 8 half periods and three such pairs are available. ``pulses-per-round``
+cancels when the count is recovered from the reported RPM, so the ``ppr-*``
+overlays make no difference here.
+
+Averaging is what recovers the fraction: the counter truncates, so a single
+reading is only ever within one count of the true window width, and the mean is
+the true width only if the phase between the input and the 100 kHz clock is
+spread across the readings. Hence the generator, and hence a frequency that is
+**not** a round number of 100 kHz clocks.
+
+Set-up
+======
+
+Remove the PWM0 fly-wire, then drive all four tachometer inputs from one
+generator, sharing the board ground:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Setting
+     - Value
+   * - Waveform
+     - square, 50 % duty
+   * - Level
+     - 0 to 3.3 V, i.e. 3.3 Vpp with a 1.65 V offset
+   * - Frequency
+     - 99.95 Hz, or anything else whose period is not a whole number of 10 µs
+
+.. caution::
+
+   Set the amplitude and offset before connecting anything. A generator left at
+   its default drives about ±5 V into a high impedance load, and of these four
+   pins only GPIO050 and GPIO051 are over-voltage protected; GPIO052 sits on the
+   VTR2 bank, which may be powered at 1.8 V. A 100 Ω series resistor costs
+   nothing and limits the damage if the amplitude is wrong.
+
+99.95 Hz is 1000.5 clocks, which puts the 3-edge window on a half clock and
+leaves the counter alternating between two adjacent values - the case that
+distinguishes the two answers. At 200 Hz exactly, every window would end on the
+same clock edge and the measurement would say nothing that the loopback has not
+already said. Keep the half period above 20 µs, which the driver's input filter
+discards, and the widest window - eight half periods, four input periods - below
+the 655 ms counter saturation: between about 7 Hz and 25 kHz.
+
+.. important::
+
+   Too fast an input does not fail loudly. Driving one input with a 91 kHz square
+   wave, whose 5.5 µs half period is well under the filter's 20 µs floor, latched
+   counts of 13 and 14 at 3 edges rather than the 1 the period calls for: the
+   filter emits a subharmonic, one window per 12 or 13 input periods, and the
+   driver reports a plausible RPM derived from it. That also makes the offset
+   unmeasurable there, because at 91 kHz one input period is 1.1 clocks, so an
+   unknown divide ratio shifts the count by the same one count the measurement is
+   looking for. The frequency the instances imply, printed below, is the check:
+   it must agree with the dial.
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/boards/microchip/mec_assy6941/tach_pwm_loopback
+   :board: mec_assy6941/mec1753_qsz
+   :gen-args: -DEXTRA_CONF_FILE=raw-count.conf -DEXTRA_DTC_OVERLAY_FILE=raw-count.overlay
+   :goals: build flash
+   :compact:
+
+``raw-count.overlay`` disables PWM0. A disabled PWM still drives its pin, so
+leaving it enabled would put the generator into an output driver if the fly-wire
+were still fitted.
+
+Reading the result
+==================
+
+.. code-block:: console
+
+   --- latched counts, 50 readings per instance ---
+   instance       edges  half periods  readings    min    max  mean count
+   tach@40006000      2             1        50    499    500     499.240
+   tach@40006010      3             2        50    999   1000     999.500
+   tach@40006020      5             4        50   2000   2000    2000.000
+   tach@40006030      9             8        50   4001   4001    4001.000
+
+   --- offset implied by each pair of windows in a 1:2 ratio ---
+   instance a     instance b      whp a  whp b   offset c
+   tach@40006000  tach@40006010       1      2   -1.020
+   tach@40006010  tach@40006020       2      4   -1.000
+   tach@40006020  tach@40006030       4      8   -1.000
+
+   --- input implied by each instance at that offset ---
+   instance      period clocks  frequency Hz
+   tach@40006000      1000.494        99.951
+   tach@40006010      1000.507        99.949
+   tach@40006020      1000.504        99.950
+   tach@40006030      1000.502        99.950
+
+   offset c = -1.007 counts from 3 pairs, spread 0.020
+
+   Every latch is one clock short of the window it measured, so the
+   reported RPM is high by one part in (count - 1): 0.4 % at 2 edges
+   and 200 Hz. The driver should convert count + 1.
+   TACH XEC latched count offset: -1.007 counts
+
+An offset of 0 means the latched count is the elapsed window and the conversion
+needs no correction; -1 means it is one clock short at every phase, and the
+driver should convert ``count + 1``. Anything else, or pair estimates that
+disagree by more than a quarter of a count, is a measurement problem rather than
+an answer.
+
+Two results are refusals rather than answers. If no instance ever latched two
+different counts the input is locked to the tachometer clock, which is the
+ambiguity this mode exists to break, and the offset is reported as inconclusive.
+The implied period table is a wiring check: all four instances must agree, and
+must agree with the generator, or one of them is not connected to it.
 
 Limitations
 ***********

@@ -1,0 +1,21 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Companion to raw-count.conf. The latched count measurement is driven by an
+ * external generator, not by PWM0, so the PWM is disabled here: its pinctrl
+ * state would otherwise mux GPIO053 to the PWM output, and a disabled PWM still
+ * drives that pin. With the fly-wire in place that would put the generator into
+ * an output driver.
+ *
+ * Applied after app.overlay, whose tach-edges of 2, 3, 5 and 9 give measurement
+ * windows of 1, 2, 4 and 8 half periods - three pairs in a 1:2 ratio, which is
+ * what the offset is derived from. pulses-per-round does not matter here: it
+ * cancels when the count is recovered from the reported RPM, so the ppr-*
+ * overlays are neither needed nor harmful.
+ */
+
+&pwm0 {
+	status = "disabled";
+};

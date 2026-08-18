@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "Microchip XEC tachometer PWM loopback"
+
+config APP_RAW_COUNT_MODE
+	bool "Measure the latched count instead of sweeping the PWM"
+	help
+	  Replace the PWM loopback self test with a measurement of the count the
+	  tachometer latches, averaged over many readings, and of the per latch
+	  offset between that count and the number of 100 kHz clocks the
+	  measurement window took.
+
+	  This needs an external generator driving the tachometer inputs rather
+	  than the on-chip PWM: a PWM output derived from the same 100 kHz clock
+	  the tachometer counts places every input edge on a counter clock edge,
+	  which is exactly the coincidence the measurement has to avoid. Select
+	  it through raw-count.conf, which comes with the overlay that keeps the
+	  PWM off the shared pin.
+
+config APP_RAW_COUNT_READINGS
+	int "Latched counts averaged per instance"
+	default 50
+	range 4 1000
+	depends on APP_RAW_COUNT_MODE
+	help
+	  The counter truncates, so a single reading is only ever within one
+	  count of the true window width. Averaging over readings taken at
+	  different phases of the 100 kHz clock recovers the fraction: the
+	  default of 50 puts the standard error of the derived offset near 0.09
+	  counts, a ten times margin on a decision between 0 and -1.
+
+source "Kconfig.zephyr"
