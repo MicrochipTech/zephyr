@@ -15,10 +15,12 @@
 
 struct tach_info {
 	const struct device *dev;
-	/* TACH edges the hardware counts 100 kHz clocks over */
+	/* TACH edges the hardware counts clocks over */
 	uint8_t edges;
 	/* TACH periods the fan produces per revolution */
 	uint8_t pulses_per_round;
+	/* Frequency in Hz of the clock the driver converts with */
+	uint32_t clock_hz;
 };
 
 #define TACH_INFO_ENTRY(node_id)						\
@@ -26,6 +28,7 @@ struct tach_info {
 		.dev = DEVICE_DT_GET(node_id),					\
 		.edges = DT_PROP(node_id, tach_edges),				\
 		.pulses_per_round = DT_PROP(node_id, pulses_per_round),		\
+		.clock_hz = DT_PROP(node_id, clock_frequency),			\
 	},
 
 /* Every enabled microchip,xec-tach node, in devicetree order */
@@ -81,8 +84,9 @@ int main(void)
 			return 0;
 		}
 
-		printk("%s: %u TACH edges per measurement, %u TACH periods per revolution\n",
-		       tach->dev->name, tach->edges, tach->pulses_per_round);
+		printk("%s: %u TACH edges per measurement, %u TACH periods per "
+		       "revolution, %u Hz counting clock\n", tach->dev->name, tach->edges,
+		       tach->pulses_per_round, tach->clock_hz);
 	}
 
 	while (1) {
