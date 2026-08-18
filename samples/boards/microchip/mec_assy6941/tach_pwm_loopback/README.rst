@@ -75,8 +75,16 @@ reference is the accuracy of every RPM the driver reports. Referenced to the
 silicon oscillator the PLL is specified only to 46.56 to 49.44 MHz, and the part
 this sample was run on measured 99042 Hz on the divided clock, 0.96 % low;
 referenced to a crystal it is specified to 47.5 to 48.5 MHz, and the same part
-measured 100100 Hz. The driver takes the nominal 100 kHz as exact, so whatever
-the reference is off by appears directly in the reading.
+measured 100100 Hz. The driver takes the ``clock-frequency`` property of the node
+as exact, and that property defaults to the nominal 100 kHz, so whatever the
+reference is off by appears directly in the reading until a board that has
+measured its own clock sets it.
+
+Setting it changes nothing here. This sample derives the RPM it expects from the
+same property, so a calibrated instance still passes: the number the sample
+checks is the conversion, not the clock. The configuration table it prints on
+startup shows the value each instance is using, which is worth a glance if the
+readings look uniformly shifted.
 
 .. note::
 
@@ -134,10 +142,10 @@ covers every edge setting and every divisor.
 The reference does not assume the mapping under test. With a period of ``k``
 clocks and a window of ``whp`` half TACH periods the window spans ``whp * k / 2``
 clocks, so the RPM the driver must report is
-``60 * 100000 / (pulses_per_round * k)`` - the window width cancels. A driver
-that mis-maps ``tach-edges`` to a window width therefore shows up as a factor of
-two or four, which is far outside the 0.4 % worst-case tolerance, rather than
-cancelling out of both sides.
+``60 * clock_frequency / (pulses_per_round * k)`` - the window width cancels. A
+driver that mis-maps ``tach-edges`` to a window width therefore shows up as a
+factor of two or four, which is far outside the 0.4 % worst-case tolerance,
+rather than cancelling out of both sides.
 
 The sweep runs at 200, 125, 100, 62.5, 25 and 12.5 Hz, which is 6000 down to
 375 RPM at two TACH periods per revolution. It ends by disabling the PWM output
@@ -176,11 +184,11 @@ Sample output
    Fly-wire pwm@40005800 (PWM0, GPIO053) to the TACH inputs GPIO050, GPIO051,
    GPIO052 and GPIO033, sharing the board ground.
 
-   instance       edges  half periods  pulses/rev
-   tach@40006000      2             1           1
-   tach@40006010      3             2           2
-   tach@40006020      5             4           3
-   tach@40006030      9             8           4
+   instance       edges  half periods  pulses/rev  clock Hz
+   tach@40006000      2             1           1    100000
+   tach@40006010      3             2           2    100000
+   tach@40006020      5             4           3    100000
+   tach@40006030      9             8           4    100000
 
    --- 200.0 Hz, period 500 clocks of 100 kHz ---
    instance         expected RPM   measured RPM       error  result
@@ -341,11 +349,11 @@ Reading the result
    tach@40006020  tach@40006030       4      8   -0.185
 
    --- input implied by each instance at that offset ---
-   instance      period clocks  frequency Hz
-   tach@40006000       832.620       120.103
-   tach@40006010       832.585       120.108
-   tach@40006020       832.543       120.114
-   tach@40006030       832.573       120.110
+   instance      period clocks  clock Hz  frequency Hz
+   tach@40006000       832.620    100000       120.103
+   tach@40006010       832.585    100000       120.108
+   tach@40006020       832.543    100000       120.114
+   tach@40006030       832.573    100000       120.110
 
    offset c = -0.065 counts from 3 pairs, spread 0.205
 
