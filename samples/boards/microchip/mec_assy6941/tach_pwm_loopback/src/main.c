@@ -15,8 +15,15 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
 
-/* The clock the tachometer counts in reading mode 1, datasheet section 29.9.1 */
-#define TACH_CLOCK_HZ		100000U
+/*
+ * Nominal frequency of the divided clock the tachometer counts in reading mode
+ * 1, datasheet section 29.9.1, and of the PWM low clock the sweep programs its
+ * period in. What the driver converts with is the clock-frequency property of
+ * each instance, which a board that has measured its own clock may set a little
+ * either side of this, so every expectation below comes from that property and
+ * only the programmed period is expressed in nominal clocks.
+ */
+#define TACH_NOMINAL_CLOCK_HZ	100000U
 
 /* Readings discarded before the first one that is used */
 #define TACH_SETTLE_READINGS	2U
@@ -41,12 +48,14 @@ DT_FOREACH_STATUS_OKAY(microchip_xec_tach, TACH_ASSERT_EDGES)
 
 struct tach_info {
 	const struct device *dev;
-	/* TACH edges the hardware counts 100 kHz clocks over */
+	/* TACH edges the hardware counts clocks over */
 	uint8_t edges;
 	/* Half TACH periods that many edges span */
 	uint8_t window_half_periods;
 	/* TACH periods the emulated fan produces per revolution */
 	uint8_t pulses_per_round;
+	/* Frequency in Hz of the clock the driver converts with */
+	uint32_t clock_hz;
 };
 
 #define TACH_INFO_ENTRY(node_id)						\
@@ -56,6 +65,7 @@ struct tach_info {
 		.window_half_periods =						\
 			TACH_WINDOW_HALF_PERIODS(DT_PROP(node_id, tach_edges)),	\
 		.pulses_per_round = DT_PROP(node_id, pulses_per_round),		\
+		.clock_hz = DT_PROP(node_id, clock_frequency),			\
 	},
 
 /* Every enabled microchip,xec-tach node, in devicetree order */
@@ -111,13 +121,16 @@ static bool tachs_are_ready(void)
 
 /*
  * Numerator of the driver's conversion before the window width is applied,
- * 60 * 100000 * 1000000 / 2. tach_xec_channel_get() reports
+ * 60 * clock_frequency * 1000000 / 2. tach_xec_channel_get() reports
  *
- *   micro_rpm = round(TACH_MICRO_RPM_NUM * whp / (pulses_per_round * count))
+ *   micro_rpm = round(TACH_MICRO_RPM_NUM(hz) * whp / (pulses_per_round * count))
  *
- * so the count the block latched is recoverable from the value it returned.
+ * so the count the block latched is recoverable from the value it returned. The
+ * frequency is whatever devicetree gave the driver, so the recovery stays exact
+ * on a board that has calibrated it, and it cancels out of the pair estimate
+ * below in any case.
  */
-#define TACH_MICRO_RPM_NUM	((uint64_t)TACH_CLOCK_HZ * SEC_PER_MIN * USEC_PER_SEC / 2U)
+#define TACH_MICRO_RPM_NUM(hz)	((uint64_t)(hz) * SEC_PER_MIN * USEC_PER_SEC / 2U)
 
 struct raw_stats {
 	/* Sum of the latched counts and their extremes */
@@ -140,7 +153,7 @@ static struct raw_stats stats[ARRAY_SIZE(tachs)];
  */
 static uint32_t raw_count(const struct tach_info *tach, int64_t micro_rpm)
 {
-	uint64_t numerator = TACH_MICRO_RPM_NUM * tach->window_half_periods;
+	uint64_t numerator = TACH_MICRO_RPM_NUM(tach->clock_hz) * tach->window_half_periods;
 	uint64_t denominator = (uint64_t)tach->pulses_per_round * (uint64_t)micro_rpm;
 
 	/* Round to nearest, matching the driver */
@@ -303,7 +316,7 @@ static void report(void)
 	residual = c_milli - (c_whole * MILLI);
 
 	printk("\n--- input implied by each instance at that offset ---\n");
-	printk("instance      period clocks  frequency Hz\n");
+	printk("instance      period clocks  clock Hz  frequency Hz\n");
 
 	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
 		int64_t whp = (int64_t)tachs[i].window_half_periods;
@@ -311,7 +324,7 @@ static void report(void)
 		uint64_t period_milli;
 		uint64_t freq_milli;
 
-		/* M = 2 * (count - c) / whp, and 100000 / M is the frequency */
+		/* M = 2 * (count - c) / whp, and the clock over M is the frequency */
 		period = div_round(2 * ((int64_t)stats[i].mean_milli - c_milli), whp);
 		if (period <= 0) {
 			continue;
@@ -319,12 +332,13 @@ static void report(void)
 
 		period_milli = (uint64_t)period;
 
-		freq_milli = (((uint64_t)TACH_CLOCK_HZ * MILLI * MILLI) + (period_milli / 2U)) /
-			     period_milli;
+		freq_milli = (((uint64_t)tachs[i].clock_hz * MILLI * MILLI) +
+			      (period_milli / 2U)) / period_milli;
 
-		printk("%-14s %8u.%03u  %8u.%03u\n", tachs[i].dev->name,
+		printk("%-14s %8u.%03u  %8u  %8u.%03u\n", tachs[i].dev->name,
 		       (uint32_t)(period_milli / MILLI), (uint32_t)(period_milli % MILLI),
-		       (uint32_t)(freq_milli / MILLI), (uint32_t)(freq_milli % MILLI));
+		       tachs[i].clock_hz, (uint32_t)(freq_milli / MILLI),
+		       (uint32_t)(freq_milli % MILLI));
 	}
 
 	printk("\noffset c = ");
@@ -468,16 +482,24 @@ static unsigned int failures;
  * The RPM the driver has to report for a period of k clocks. With a window of
  * whp half periods the latched count is whp * k / 2, so
  *
- *   RPM = 60 * 100000 * whp / (2 * pulses_per_round * count)
- *       = 60 * 100000 / (pulses_per_round * k)
+ *   RPM = 60 * clock_frequency * whp / (2 * pulses_per_round * count)
+ *       = 60 * clock_frequency / (pulses_per_round * k)
  *
  * and whp cancels. The expectation therefore never depends on the
  * edges-to-half-periods mapping under test: a driver that mis-maps tach-edges
  * shows up here as a factor of two or four, not as a wash.
+ *
+ * The frequency here is the clock-frequency property, not the nominal 100 kHz,
+ * because the emulated period k is a number of clocks rather than a time: the
+ * PWM divides the same clock the tachometer counts, so a clock that is off by a
+ * percent stretches the fan period and the measurement window alike and the
+ * comparison is blind to it either way. Calibrating the property scales what the
+ * driver reports, and the expectation has to scale with it or a calibrated board
+ * would fail every row by the calibration factor.
  */
 static uint64_t expected_micro_rpm(const struct tach_info *tach, uint32_t period_clocks)
 {
-	uint64_t numerator = (uint64_t)SEC_PER_MIN * TACH_CLOCK_HZ * USEC_PER_SEC;
+	uint64_t numerator = (uint64_t)SEC_PER_MIN * tach->clock_hz * USEC_PER_SEC;
 	uint64_t denominator = (uint64_t)tach->pulses_per_round * period_clocks;
 
 	/* Round to nearest, matching the driver */
@@ -594,7 +616,7 @@ static int sweep(void)
 	for (size_t p = 0; p < ARRAY_SIZE(pwm_period_clocks); p++) {
 		uint32_t k = pwm_period_clocks[p];
 		/* Emulated fan frequency in units of 0.1 Hz */
-		uint32_t dhz = TACH_CLOCK_HZ * 10U / k;
+		uint32_t dhz = TACH_NOMINAL_CLOCK_HZ * 10U / k;
 		int ret;
 
 		ret = pwm_set_cycles(fan.dev, fan.channel, XEC_PWM_PERIOD_CYCLES(k),
@@ -649,13 +671,13 @@ int main(void)
 		return 0;
 	}
 
-	printk("instance       edges  half periods  pulses/rev\n");
+	printk("instance       edges  half periods  pulses/rev  clock Hz\n");
 
 	for (size_t i = 0; i < ARRAY_SIZE(tachs); i++) {
 		const struct tach_info *tach = &tachs[i];
 
-		printk("%-14s %5u  %12u  %10u\n", tach->dev->name, tach->edges,
-		       tach->window_half_periods, tach->pulses_per_round);
+		printk("%-14s %5u  %12u  %10u  %8u\n", tach->dev->name, tach->edges,
+		       tach->window_half_periods, tach->pulses_per_round, tach->clock_hz);
 	}
 
 	if (!tachs_are_ready()) {
