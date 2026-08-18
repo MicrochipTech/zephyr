@@ -62,6 +62,35 @@ Connect the PWM0 output to all four TACH inputs and share the board ground:
    fan, none of which the tachometer inputs need here, and one of which may load
    the PWM output enough to matter.
 
+Clock reference
+***************
+
+``app.overlay`` points the 48 MHz PLL at the 32.768 kHz crystal rather than at
+the internal silicon oscillator, and ``prj.conf`` enables
+:kconfig:option:`CONFIG_CLOCK_CONTROL` so that the PCR driver applies it. On an
+Assembly 6949 CPU daughter card this needs jumpers on JP1 1-2 and JP2 1-2.
+
+The tachometer counts the 48 MHz clock divided by 480, so the accuracy of that
+reference is the accuracy of every RPM the driver reports. Referenced to the
+silicon oscillator the PLL is specified only to 46.56 to 49.44 MHz, and the part
+this sample was run on measured 99042 Hz on the divided clock, 0.96 % low;
+referenced to a crystal it is specified to 47.5 to 48.5 MHz, and the same part
+measured 100100 Hz. The driver takes the nominal 100 kHz as exact, so whatever
+the reference is off by appears directly in the reading.
+
+.. note::
+
+   If the crystal does not start - no daughter card, missing jumpers, unpopulated
+   parts - the PCR driver falls back to the silicon oscillator and carries on
+   without reporting anything, so the only symptom is a reading that is off by up
+   to a few percent. The raw count mode's implied input frequency, compared
+   against what the generator is set to, is the check for that.
+
+The loopback sweep is blind to this, because PWM0 is divided from the same clock:
+a slow clock stretches the emulated fan period and the measurement window by the
+same factor and the comparison still passes. It is the raw count mode, and any
+comparison against a real fan or an external generator, that sees it.
+
 What is measured
 ****************
 

@@ -42,6 +42,7 @@
  * 22-23 select TACH3
  */
 
+#include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
 
 / {
@@ -53,6 +54,24 @@
 		 */
 		pwms = <&pwm0 0 PWM_HZ(100) PWM_POLARITY_NORMAL>;
 	};
+};
+
+/*
+ * The tachometer counts a 100 kHz clock divided down from the 48 MHz PLL, and
+ * the accuracy of that clock is the accuracy of the reported RPM. Referenced
+ * to the internal silicon oscillator the PLL is only specified to 46.56 to
+ * 49.44 MHz, and one part measured 99042 Hz, 0.96 % low; referenced to a
+ * crystal it is specified to 47.5 to 48.5 MHz, and the same part measured
+ * 100100 Hz. Take the crystal, so that what the sample reports is the
+ * conversion rather than the reference.
+ *
+ * Assembly 6949 CPU daughter card requires jumpers on JP1 1-2 and JP2 1-2
+ */
+&pcr {
+	core-clock-div = <1>;
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_XTAL>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_XTAL_XTAL>;
+	status = "okay";
 };
 
 &pwm0 {
