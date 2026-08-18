@@ -131,7 +131,8 @@ struct raw_stats {
 static struct raw_stats stats[ARRAY_SIZE(tachs)];
 
 /*
- * Recover the latched count from the RPM the driver reported. Rounding to the
+ * Recover the count the driver converted from the RPM it reported, which is the
+ * latched count plus the offset the driver corrects for. Rounding to the
  * nearest micro-RPM displaces the result by at most count / (2 * micro_rpm).
  * The count cannot exceed 0xfffe, and the micro-RPM that corresponds to such a
  * count cannot be smaller than about 1.1e7, so the displacement stays below
@@ -209,17 +210,18 @@ static int measure_one(const struct tach_info *tach, struct raw_stats *st)
 
 /*
  * The measurement window of an instance spans whp half periods of the input, so
- * for an input period of M clocks of 100 kHz the block ought to latch
- * whp * M / 2. Every count observed on hardware so far has instead been one
- * less, which is either an artefact of the loopback - a PWM output derived from
- * the same 100 kHz clock places every input edge on a counter clock edge - or a
- * genuine per latch offset in the block. This mode separates the two by
- * measuring the offset c in
+ * for an input period of M clocks of 100 kHz the block latches whp * M / 2 less
+ * the offset the driver corrects for. This mode measures the residual offset c
+ * in
  *
- *   count = whp * M / 2 + c
+ *   count as converted by the driver = whp * M / 2 + c
  *
- * from an input that is not locked to the SoC clock. Two instances whose window
- * widths are in a 1:2 ratio give
+ * from an input that is not locked to the SoC clock, so a correct driver reports
+ * 0 here. The count is recovered from the driver's own output, which means what
+ * is measured is the whole path: an offset the block applies and the driver does
+ * not correct shows up, and so does the reverse.
+ *
+ * Two instances whose window widths are in a 1:2 ratio give
  *
  *   c = 2 * mean(count for whp) - mean(count for 2 * whp)
  *
@@ -352,13 +354,14 @@ static void report(void)
 	}
 
 	if (c_whole == 0) {
-		printk("The latched count is the number of 100 kHz clocks the measurement\n"
-		       "window took, with no offset, so the driver conversion needs no\n"
-		       "correction.\n");
+		printk("The count the driver converts is the number of 100 kHz clocks the\n"
+		       "measurement window took, so the conversion is correct as it stands.\n");
 	} else if (c_whole == -1) {
-		printk("Every latch is one clock short of the window it measured, so the\n"
-		       "reported RPM is high by one part in (count - 1): 0.4 %% at 2 edges\n"
-		       "and 200 Hz. The driver should convert count + 1.\n");
+		printk("The count the driver converts is one clock short of the window it\n"
+		       "measured, so the reported RPM is high by one part in that count: 0.4 %%\n"
+		       "at 2 edges and 200 Hz. The block latches one less than the window\n"
+		       "width and the driver is expected to add it back, so seeing this means\n"
+		       "the correction in tach_xec_channel_get() has been lost.\n");
 	} else {
 		printk("That offset is neither 0 nor -1, which no reading of the datasheet\n"
 		       "predicts. Check the wiring and the generator before believing it.\n");
@@ -375,7 +378,7 @@ int main(void)
 	printk("Remove the PWM0 fly-wire, then drive GPIO050, GPIO051, GPIO052 and\n");
 	printk("GPIO033 from one free running generator sharing the board ground: a\n");
 	printk("0 to 3.3 V square wave, 50 %% duty, at a frequency that is not a round\n");
-	printk("number of 100 kHz clocks, such as 99.95 Hz. Do not exceed 3.3 V - two\n");
+	printk("number of 100 kHz clocks, such as 120 Hz. Do not exceed 3.3 V - two\n");
 	printk("of those pins have no over-voltage protection.\n\n");
 
 	if (!tachs_are_ready()) {
@@ -482,22 +485,21 @@ static uint64_t expected_micro_rpm(const struct tach_info *tach, uint32_t period
 }
 
 /*
- * Plus or minus two counts of latch and clock domain skew, plus one micro-RPM
- * of rounding. RPM is inversely proportional to the count, so the count is what
- * sets the resolution: 0.8 % at 2 edges and 200 Hz, 0.006 % at 9 edges and
+ * Plus or minus one count of latch and clock domain skew, plus one micro-RPM of
+ * rounding. RPM is inversely proportional to the count, so the count is what
+ * sets the resolution: 0.4 % at 2 edges and 200 Hz, 0.003 % at 9 edges and
  * 12.5 Hz. A mis-scaled window would be off by 100 % or 300 %.
  *
- * Two counts is also what accommodates the one count deficit every reading
- * taken on hardware so far has shown. CONFIG_APP_RAW_COUNT_MODE measures that
- * offset directly; if it proves to be a property of the block rather than of
- * this loopback, the driver gains a correction and this can come down to one.
+ * This was two counts while the block's one count latch offset was unexplained.
+ * CONFIG_APP_RAW_COUNT_MODE measured it, the driver corrects for it, and the
+ * error columns below should now read a few ppm rather than most of a count.
  */
 static uint64_t micro_rpm_tolerance(const struct tach_info *tach, uint32_t period_clocks,
 				    uint64_t expected)
 {
 	uint32_t count = (uint32_t)tach->window_half_periods * period_clocks / 2U;
 
-	return DIV_ROUND_UP(2U * expected, count) + 1U;
+	return DIV_ROUND_UP(expected, count) + 1U;
 }
 
 static void print_micro_rpm(int64_t micro_rpm)

@@ -20,14 +20,19 @@ config APP_RAW_COUNT_MODE
 
 config APP_RAW_COUNT_READINGS
 	int "Latched counts averaged per instance"
-	default 50
+	default 200
 	range 4 1000
 	depends on APP_RAW_COUNT_MODE
 	help
 	  The counter truncates, so a single reading is only ever within one
 	  count of the true window width. Averaging over readings taken at
-	  different phases of the 100 kHz clock recovers the fraction: the
-	  default of 50 puts the standard error of the derived offset near 0.09
-	  counts, a ten times margin on a decision between 0 and -1.
+	  different phases of the 100 kHz clock recovers the fraction.
+
+	  The default of 200 is what the two runs this measurement was made
+	  with used, and they returned the three pair estimates spread over
+	  0.13 and 0.21 counts against the quarter count the sample requires
+	  them to agree to. 50 leaves too little margin: the estimator is
+	  differencing two averages, so its error is larger than that of
+	  either.
 
 source "Kconfig.zephyr"
