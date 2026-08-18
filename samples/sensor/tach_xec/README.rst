@@ -12,9 +12,9 @@ enabled :dtcompatible:`microchip,xec-tach` node and prints the result. The nodes
 are enumerated at build time, so a board overlay that enables two tachometers
 gets two lines of output per second without any change to the application.
 
-The TACH block measures how many 100 kHz clocks elapse while a configured number
-of tachometer edges arrive, so the driver needs to know two things to turn that
-count into RPM. Both come from devicetree:
+The TACH block measures how many clocks of a nominally 100 kHz reference elapse
+while a configured number of tachometer edges arrive, so the driver needs to know
+three things to turn that count into RPM. All come from devicetree:
 
 * ``tach-edges`` - the number of edges the hardware counts over, one of 2, 3, 5
   or 9. This sets the width of the measurement window and therefore the
@@ -22,8 +22,14 @@ count into RPM. Both come from devicetree:
 * ``pulses-per-round`` - the number of tachometer periods the fan produces per
   revolution. This is a property of the fan, not of the SoC; two is by far the
   most common value for a DC brushless fan.
+* ``clock-frequency`` - the frequency in Hz of the clock the hardware counts. It
+  defaults to the nominal 100 kHz, which is the 48 MHz PLL divided by 480, and
+  that PLL is only specified to 46.56 to 49.44 MHz when it is referenced to the
+  internal silicon oscillator. The driver takes the value as exact, so a board
+  that has measured the divided clock on the part can set it and cancel what is
+  otherwise a flat multiplicative bias on every reading.
 
-The sample prints both values at start-up so that the reported RPM can be
+The sample prints all three values at start-up so that the reported RPM can be
 checked against the configuration that produced it.
 
 Requirements
@@ -56,7 +62,8 @@ Sample Output
 
    *** Booting Zephyr OS build v4.3.0 ***
    Microchip XEC tachometer sample
-   tach@40006000: 5 TACH edges per measurement, 2 TACH periods per revolution
+   tach@40006000: 5 TACH edges per measurement, 2 TACH periods per revolution,
+   100000 Hz counting clock
    tach@40006000: 3245.312500 RPM
    tach@40006000: 3244.187500 RPM
    tach@40006000: 3245.312500 RPM
@@ -67,6 +74,7 @@ With no fan connected:
 
    *** Booting Zephyr OS build v4.3.0 ***
    Microchip XEC tachometer sample
-   tach@40006000: 5 TACH edges per measurement, 2 TACH periods per revolution
+   tach@40006000: 5 TACH edges per measurement, 2 TACH periods per revolution,
+   100000 Hz counting clock
    tach@40006000: fan stopped
    tach@40006000: fan stopped
