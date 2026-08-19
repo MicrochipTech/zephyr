@@ -1,0 +1,21 @@
+sample:
+  description: Microchip XEC EVB I2C V3 deep-sleep wake-on-I2C-target sample
+  name: mec_assy6941_xec_i2c_v3_deep_sleep_wake
+tests:
+  sample.board.microchip.evb.i2c_v3.deep_sleep_wake:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qlj
+    tags: i2c pm
+    depends_on:
+      - dma
+      - i2c
+      - gpio
+  sample.board.microchip.evb.i2c_v3.deep_sleep_wake.bm:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qsz
+    tags: i2c pm
+    depends_on:
+      - i2c
+      - gpio
