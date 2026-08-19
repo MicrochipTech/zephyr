@@ -239,6 +239,7 @@ static int loopback_self_test(void)
 	return 0;
 }
 
+#if 0
 static void pr_pcr_clk_req_from_vbat(void)
 {
 	uintptr_t vbmem_addr = (uintptr_t)DT_REG_ADDR(DT_NODELABEL(bbram));
@@ -248,6 +249,7 @@ static void pr_pcr_clk_req_from_vbat(void)
 		vbmem_addr += 4U;
 	}
 }
+#endif
 
 #if 0
 extern uint32_t soc_pcr_clk_req[5];
@@ -260,12 +262,10 @@ static void pr_pcr_clk_req_wait(void)
 }
 #endif
 
-volatile uint8_t dbg_i2c_v3_pm_susp[5];
-
 int main(void)
 {
 	const struct pinctrl_dev_config *zu_pcfg = PINCTRL_DT_DEV_CONFIG_GET(ZEPHYR_USER_NODE);
-	uint32_t r = 0, loop_count = 0;
+	uint32_t r = 0;
 	int rc;
 
 	LOG_INF("I2Cv3 deep-sleep wake sample; driver: %s", DRV_LABEL);
@@ -276,7 +276,6 @@ int main(void)
 	LOG_INF("Board: %s", CONFIG_BOARD);
 #endif
 
-	memset((void *)dbg_i2c_v3_pm_susp, 0x55U, sizeof(dbg_i2c_v3_pm_susp));
 	memset(i2c_state_cap_buf, 0, sizeof(i2c_state_cap_buf));
 
 	if (!gpio_is_ready_dt(&pm_gpio_pin)) {
@@ -321,6 +320,7 @@ int main(void)
 		LOG_WRN("loopback self-test FAILED (%d); continuing to deep-sleep demo", rc);
 	}
 
+<<<<<<< HEAD
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(i2c_targ_038))
 #if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
 	while (1) {
@@ -365,14 +365,8 @@ int main(void)
 		}
 
 		LOG_INF("PCR CLK_REQ captured just before WFI");
-		pr_pcr_clk_req_from_vbat();
+		/* pr_pcr_clk_req_from_vbat(); */
 		/* pr_pcr_clk_req_wait(); */
-
-		LOG_INF("Suspend I2C.SR   = 0x%02x", dbg_i2c_v3_pm_susp[0]);
-		LOG_INF("Suspend I2C.WKSR = 0x%02x", dbg_i2c_v3_pm_susp[1]);
-		LOG_INF("Suspend I2C.WKCR = 0x%02x", dbg_i2c_v3_pm_susp[2]);
-		LOG_INF("Suspend GIRQ22 Source = 0x%02x", dbg_i2c_v3_pm_susp[3]);
-		LOG_INF("Suspend GIRQ22 EnSet  = 0x%02x", dbg_i2c_v3_pm_susp[4]);
 
 #if DT_NODE_HAS_COMPAT(DT_NODELABEL(i2c_smb_4), microchip_xec_i2c_v3_nl)
 		rc = mchp_xec_i2c_nl_copy_capture(targ038.bus, i2c_state_cap_buf, 256U);
@@ -387,7 +381,6 @@ int main(void)
 	} /* end while (1) */
 #endif
 #endif
-
 	LOG_INF("Deep-sleep I2C wake demo complete; halting.");
 	log_flush();
 
