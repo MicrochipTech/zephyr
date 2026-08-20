@@ -1,5 +1,6 @@
-&timer4 {
+&timer3 {
 	status = "okay";
+	prescaler = <32767>;
 };
 
 &uart1 {

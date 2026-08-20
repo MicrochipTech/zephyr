@@ -99,9 +99,9 @@ struct counter_alarm_cfg alarm_cfg;
 #elif defined(CONFIG_SOC_SERIES_MEC15XX)
 #define SAMPLE_TIMER DT_NODELABEL(timer4)
 #elif defined(CONFIG_SOC_SERIES_MEC172X)
-#define SAMPLE_TIMER DT_NODELABEL(timer4)
+#define SAMPLE_TIMER DT_NODELABEL(timer3)
 #elif defined(CONFIG_SOC_MEC1753_QSZ)
-#define SAMPLE_TIMER DT_NODELABEL(timer1)
+#define SAMPLE_TIMER DT_NODELABEL(timer3)
 #else
 #error Unable to find a counter device node in devicetree
 #endif
@@ -152,7 +152,7 @@ int main(void)
 	const struct device *const counter_dev = DEVICE_DT_GET(SAMPLE_TIMER);
 	int err;
 
-	printk("Counter1 alarm sample\n\n");
+	printk("Counter3 alarm sample\n\n");
 
 	if (!device_is_ready(counter_dev)) {
 		printk("device not ready.\n");

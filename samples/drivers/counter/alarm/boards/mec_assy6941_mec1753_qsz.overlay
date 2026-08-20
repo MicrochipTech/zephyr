@@ -1,4 +1,4 @@
-&timer1 {
+&timer3 {
 	status = "okay";
 	prescaler = <32767>;
 };
