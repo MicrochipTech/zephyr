@@ -84,8 +84,11 @@ static void restore_uarts(void)
 	}
 }
 
-/* Peripheral's that don't obey PCR sleep signals
- * Basic timers, and more ...
+/* Peripheral's that don't obey PCR sleep signals and can't be disabled until just
+ * before WFI: basic timers and UARTs.
+ * NOTE: UARTs should be handled at the app/driver level.
+ * PM=y PM_DEVICE=n app/driver should use PM notifier for UARTs
+ * PM_DEVICE=y UART driver set/clear busy bit and implements PM action callback.
  */
 static void soc_deep_sleep_periph_save(void)
 {
@@ -117,7 +120,10 @@ static void z_power_soc_deep_sleep(void)
 	uint32_t msk = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
 	uint32_t val = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
 
-	__disable_irq();
+	__disable_irq(); /* Set PRIMASK=1 */
+	irq_unlock(0); /* Set BASEPRI=0 */
+	__DSB();
+	__ISB();
 
 	soc_deep_sleep_periph_save();
 
@@ -125,9 +131,9 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
-	__set_BASEPRI(0);
 	__DSB();
-	__WFI(); /* triggers sleep hardware */
+	__ISB();
+	__WFI();
 	__NOP();
 	__NOP();
 
@@ -213,7 +219,7 @@ void pm_state_set(enum pm_state state, uint8_t substate_id)
  */
 void pm_state_exit_post_ops(enum pm_state state, uint8_t substate_id)
 {
-	__enable_irq();
+	__DSB();
 	__ISB();
-	irq_unlock(0);
+	__enable_irq(); /* Clear PRIMASK */
 }
