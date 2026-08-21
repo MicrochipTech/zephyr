@@ -52,6 +52,11 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_bm, CONFIG_I2C_LOG_LEVEL);
 
 #include "i2c_mchp_xec_regs.h"
 
+/* Handle PM=y only by enabling wake in target register if the controller
+ * has wakeup-source property.
+ */
+#define XEC_I2C_V3_BM_WAKE_EN_TARGET_MODE
+
 /* Control-register byte constants.
  *
  * CR is write-only at offset 0. The byte-mode datasheet gives these as
@@ -862,6 +867,15 @@ static void bm_write_advance(const struct device *ctrl)
 	}
 }
 
+static void xec_i2c_v3_bm_sleep_clr_status(const struct device *ctrl_dev)
+{
+	const struct xec_i2c_v3_bm_xcfg *xcfg = ctrl_dev->config;
+	uintptr_t rb = xcfg->base;
+
+	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
+	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
+}
+
 #ifdef CONFIG_I2C_TARGET
 /* ---- target (peripheral) mode ------------------------------------------- */
 
@@ -1117,6 +1131,7 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 			bm_tgt_restart(base);
 			xec_i2c_v3_bm_pm_busy_clear(xdat->target_port, ctrl);
 		}
+		xec_i2c_v3_bm_sleep_clr_status(ctrl);
 		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		return;
 	}
@@ -1139,6 +1154,7 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 		bm_cmpl_clear(base, cmpl);
 		bm_tgt_restart(base);
 		xec_i2c_v3_bm_pm_busy_clear(xdat->target_port, ctrl);
+		xec_i2c_v3_bm_sleep_clr_status(ctrl);
 		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		xec_i2c_bm_cap_update(xdat, 0xB7U);
 		return;
@@ -1149,6 +1165,7 @@ static void xec_i2c_v3_bm_isr_target(const struct device *ctrl)
 		xec_i2c_bm_cap_update(xdat, 0xB8U);
 		xec_i2c_v3_bm_pm_busy_set(xdat->target_port, ctrl);
 		bm_tgt_addr(ctrl);
+		xec_i2c_v3_bm_sleep_clr_status(ctrl);
 		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 		return;
 	}
@@ -1201,9 +1218,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 			bm_cmpl_clear(base, BM_CMPL_IDLE);
 			xec_i2c_v3_bm_finish(ctrl_dev);
 		}
-		xec_i2c_bm_cap_update(xdat, 0x83U);
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
-		return;
+		goto isr_out;
 	}
 
 	/* No transfer in flight: quiesce and drop any spurious interrupt so a
@@ -1213,8 +1228,7 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	    xdat->state != BM_STATE_READ) {
 		xec_i2c_bm_cap_update(xdat, 0x84U);
 		sys_write8(BM_CR_DFLT, base + XEC_I2C_CR_OFS);
-		soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
-		return;
+		goto isr_out;
 	}
 
 	xec_i2c_bm_cap_update(xdat, 0x85U);
@@ -1227,12 +1241,12 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 	if ((sr & BM_SR_BER) != 0U) {
 		xec_i2c_bm_cap_update(xdat, 0x86U);
 		xec_i2c_v3_bm_error(ctrl_dev, -EIO);
-		goto out;
+		goto isr_out;
 	}
 	if ((sr & BM_SR_LAB) != 0U) {
 		xec_i2c_bm_cap_update(xdat, 0x87U);
 		xec_i2c_v3_bm_error(ctrl_dev, -EAGAIN);
-		goto out;
+		goto isr_out;
 	}
 
 	switch (xdat->state) {
@@ -1391,7 +1405,8 @@ static void xec_i2c_v3_bm_isr(const struct device *ctrl_dev)
 		break;
 	}
 
-out:
+isr_out:
+	xec_i2c_v3_bm_sleep_clr_status(ctrl_dev);
 	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 	xec_i2c_bm_cap_update(xdat, 0x8FU);
 }
@@ -1511,6 +1526,7 @@ static int xec_i2c_v3_bm_vport_transfer(const struct device *port_dev, struct i2
 	xec_i2c_bm_cap_init(xdat);
 
 	xec_i2c_v3_bm_pm_busy_set(port_dev, ctrl);
+	xec_i2c_v3_bm_sleep_clr_status(ctrl);
 
 	rc = xec_i2c_v3_bm_start(port_dev, msgs, num_msgs, address, NULL, NULL);
 
@@ -1537,10 +1553,12 @@ static int xec_i2c_v3_bm_vport_transfer(const struct device *port_dev, struct i2
 		 * is idle (NBB=1) and the next group can START immediately.
 		 */
 		xdat->msg_idx++;
+		xec_i2c_v3_bm_sleep_clr_status(ctrl);
 		bm_arm_group(ctrl);
 	}
 
 	xec_i2c_bm_cap_update(xdat, 13U);
+	xec_i2c_v3_bm_sleep_clr_status(ctrl);
 	xec_i2c_v3_bm_pm_busy_clear(port_dev, ctrl);
 	k_sem_give(&xdat->lock);
 	return rc;
@@ -1605,6 +1623,7 @@ static int xec_i2c_v3_bm_vport_transfer_cb(const struct device *port_dev, struct
 	if (rc != 0) {
 		(void)k_work_cancel_delayable(&xdat->timeout_dwork);
 		atomic_set(&xdat->async_done, 1);
+		xec_i2c_v3_bm_sleep_clr_status(ctrl);
 		xec_i2c_v3_bm_pm_busy_clear(port_dev, ctrl);
 		k_sem_give(&xdat->lock);
 		return rc;
@@ -1711,6 +1730,23 @@ static int xec_i2c_v3_bm_vport_recover_bus(const struct device *port_dev)
 }
 
 #ifdef CONFIG_I2C_TARGET
+
+static void xec_i2c_v3_bm_sleep_ctrl(const struct device *ctrl_dev, bool sleep_enable)
+{
+	const struct xec_i2c_v3_bm_xcfg *xcfg = ctrl_dev->config;
+	uintptr_t rb = xcfg->base;
+
+	soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_DIS);
+	sys_clear_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
+	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
+
+	if (sleep_enable) {
+		sys_set_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+		soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_EN);
+	}
+}
+
 /* Register a target (peripheral) on this port. The first target switches the
  * controller onto the port and locks it: while any target is attached the
  * master entry points return -EBUSY and runtime port switching is frozen.
@@ -1779,6 +1815,11 @@ static int xec_i2c_v3_bm_target_register(const struct device *port_dev,
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
 		xdat->tgt_rx_pos = 0U;
 #endif
+#ifdef XEC_I2C_V3_BM_WAKE_EN_TARGET_MODE
+		if (cfg->wakeup_source) {
+			xec_i2c_v3_bm_sleep_ctrl(ctrl, true);
+		}
+#endif
 		bm_tgt_program_oa(ctrl);
 		bm_tgt_restart(cfg->base);
 		xdat->target_port = port_dev;
@@ -1832,6 +1873,9 @@ static int xec_i2c_v3_bm_target_unregister(const struct device *port_dev,
 
 	key = irq_lock();
 	if (remaining == 0) {
+#ifdef XEC_I2C_V3_BM_WAKE_EN_TARGET_MODE
+		xec_i2c_v3_bm_sleep_ctrl(ctrl, false);
+#endif
 		sys_write8(BM_CR_DFLT, cfg->base + XEC_I2C_CR_OFS);
 		sys_write32(0U, cfg->base + XEC_I2C_OA_OFS);
 		xdat->target_attached = false;
@@ -1969,26 +2013,6 @@ static void xec_i2c_v3_bm_ctrl_enable(const struct device *ctrl_dev, bool enable
 	}
 }
 
-#ifdef CONFIG_I2C_TARGET
-static void xec_i2c_v3_bm_sleep_ctrl(const struct device *ctrl_dev, bool sleep_enable)
-{
-	const struct xec_i2c_v3_bm_xcfg *xcfg = ctrl_dev->config;
-	uintptr_t rb = xcfg->base;
-
-	soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_DIS);
-	sys_clear_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
-	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
-	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
-
-	if (sleep_enable) {
-		sys_set_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
-		soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_EN);
-	}
-}
-#endif
-#endif
-
-#if defined(CONFIG_PM_DEVICE)
 static int xec_i2c_v3_bm_ctrl_pm_action_cb(const struct device *ctrl_dev,
 					   enum pm_device_action action)
 {
@@ -2052,9 +2076,8 @@ static int xec_i2c_v3_bm_vport_pm_action_cb(const struct device *port_dev,
 
 	return ret;
 }
-#endif
+#endif /* defined(CONFIG_PM_DEVICE) */
 
->>>>>>> d50f845d2f0 (drivers: i2c: microchip: XEC I2Cv3 add power management)
 /* ---- device init ---- */
 
 static int xec_i2c_v3_bm_ctrl_init(const struct device *ctrl)
@@ -2115,12 +2138,6 @@ static int xec_i2c_v3_bm_port_init(const struct device *port_dev)
 		return -ENODEV;
 	}
 
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE)
-	struct xec_i2c_v3_bm_port_xdat *const port_xdat = port_dev->data;
-
-	pm_notifier_register(&port_xdat->pm_handles);
-#endif
-
 	if (pc->is_default) {
 		return xec_i2c_v3_bm_apply_port(port_dev);
 	}
@@ -2176,7 +2193,7 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 #define XEC_I2C_V3_BM_PM_DEVICE_DT_INST_DEFINE(inst)
 #endif
 
-#if defined(PM) || defined(PM_DEVICE)
+#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
 #define XEC_I2C_V3_BM_WAKE_GIRQ(inst)                                                              \
 	.girq_wake = XEC_I2C_V3_GIRQ(inst, 1),                                                     \
 	.girq_wake_pos = XEC_I2C_V3_GIRQ_POS(inst, 1),
@@ -2253,7 +2270,7 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_V3_BM_CTRL_INIT)
 	};                                                                                         \
 	XEC_I2C_V3_BM_VPORT_PM_DEVICE_DT_INST_DEFINE(inst)                                         \
 	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_v3_bm_port_init, PM_DEVICE_DT_INST_GET(inst),      \
-				  XEC_I2C_V3_BM_XDAT_GET(inst), &xec_i2c_v3_bm_port_xcfg_##inst,   \
+				  NULL, &xec_i2c_v3_bm_port_xcfg_##inst,                           \
 				  POST_KERNEL, CONFIG_I2C_MCHP_XEC_V3_BM_PORT_INIT_PRIORITY,       \
 				  &xec_i2c_v3_bm_port_api);
 
