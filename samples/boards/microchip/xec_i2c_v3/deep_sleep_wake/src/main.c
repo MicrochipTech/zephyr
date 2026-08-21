@@ -260,10 +260,12 @@ static void pr_pcr_clk_req_wait(void)
 }
 #endif
 
+volatile uint8_t dbg_i2c_v3_pm_susp[5];
+
 int main(void)
 {
 	const struct pinctrl_dev_config *zu_pcfg = PINCTRL_DT_DEV_CONFIG_GET(ZEPHYR_USER_NODE);
-	uint32_t r = 0;
+	uint32_t r = 0, loop_count = 0;
 	int rc;
 
 	LOG_INF("I2Cv3 deep-sleep wake sample; driver: %s", DRV_LABEL);
@@ -274,6 +276,7 @@ int main(void)
 	LOG_INF("Board: %s", CONFIG_BOARD);
 #endif
 
+	memset((void *)dbg_i2c_v3_pm_susp, 0x55U, sizeof(dbg_i2c_v3_pm_susp));
 	memset(i2c_state_cap_buf, 0, sizeof(i2c_state_cap_buf));
 
 	if (!gpio_is_ready_dt(&pm_gpio_pin)) {
@@ -318,61 +321,73 @@ int main(void)
 		LOG_WRN("loopback self-test FAILED (%d); continuing to deep-sleep demo", rc);
 	}
 
-	mchp_vci_in_input_enable(BIT(MEC_VCI_IN1_POS));
-	mchp_vci_in_latch_enable(BIT(MEC_VCI_IN1_POS));
-	mchp_vci_edge_detect_clr_all();
-	mchp_vci_in_latch_reset(BIT(MEC_VCI_IN1_POS));
-
-	printk("Disconnect Debugger and press switch S4 when ready");
-	r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
-	while ((r & BIT(MEC_VCI_IN1_POS)) == 0) {
-		r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
-	}
-
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(i2c_targ_038))
 #if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
-	/* Phase 2: force deep sleep and wait for an external wake on 0x38. */
-	reset_target(&t038);
+	while (1) {
+		loop_count++;
+		LOG_INF("Deep sleep loop %u", loop_count);
 
-	LOG_INF("Forcing deep sleep (PM_STATE_SUSPEND_TO_RAM).");
-	LOG_INF("Wake it: drive START + address 0x%02x from an external I2C", targ038.addr);
-	LOG_INF("controller on port 3 (SDA=GPIO007, SCL=GPIO010).");
+		mchp_vci_in_input_enable(BIT(MEC_VCI_IN1_POS));
+		mchp_vci_in_latch_enable(BIT(MEC_VCI_IN1_POS));
+		mchp_vci_edge_detect_clr_all();
+		mchp_vci_in_latch_reset(BIT(MEC_VCI_IN1_POS));
 
-	/* Force the deepest state on next idle. Blocking on the wake semaphore
-	 * lets the idle thread run and enter suspend-to-RAM; the external write
-	 * to 0x38 wakes the CPU (own-address match, GIRQ13), the driver runs the
-	 * target callbacks, and app_stop() gives the semaphore below.
-	 */
-	if (!pm_state_force(0U, &(struct pm_state_info){PM_STATE_SUSPEND_TO_RAM, 0, 0})) {
-		LOG_ERR("pm_state_force(SUSPEND_TO_RAM) rejected");
-		return 0;
-	}
+		LOG_INF("Disconnect Debugger and press switch S4 when ready");
+		r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
+		while ((r & BIT(MEC_VCI_IN1_POS)) == 0) {
+			r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
+		}
 
-	k_sem_take(&t038.stop_sem, K_FOREVER);
+		/* Phase 2: force deep sleep and wait for an external wake on 0x38. */
+		reset_target(&t038);
 
-	/* Woke. */
-	LOG_INF("WOKE from deep sleep via target 0x%02x: wr_cnt=%u rd_cnt=%u rx_len=%u",
-		targ038.addr, t038.wr_cnt, t038.rd_cnt, (unsigned int)t038.rx_len);
-	if (t038.rx_len > 0U) {
-		LOG_HEXDUMP_INF(t038.buf, t038.rx_len, "bytes received from external controller:");
-	}
+		LOG_INF("Forcing deep sleep (PM_STATE_SUSPEND_TO_RAM).");
+		LOG_INF("Wake it: drive START + address 0x%02x from an external I2C", targ038.addr);
+		LOG_INF("controller on port 3 (SDA=GPIO007, SCL=GPIO010).");
 
-	LOG_INF("PCR CLK_REQ captured just before WFI");
-	pr_pcr_clk_req_from_vbat();
-	/* pr_pcr_clk_req_wait(); */
+		/* Force the deepest state on next idle. Blocking on the wake semaphore
+		 * lets the idle thread run and enter suspend-to-RAM; the external write
+		 * to 0x38 wakes the CPU (own-address match, GIRQ13), the driver runs the
+		 * target callbacks, and app_stop() gives the semaphore below.
+		 */
+		if (!pm_state_force(0U, &(struct pm_state_info){PM_STATE_SUSPEND_TO_RAM, 0, 0})) {
+			LOG_ERR("pm_state_force(SUSPEND_TO_RAM) rejected");
+			return 0;
+		}
+
+		k_sem_take(&t038.stop_sem, K_FOREVER);
+
+		/* Woke. */
+		LOG_INF("WOKE from deep sleep via target 0x%02x: wr_cnt=%u rd_cnt=%u rx_len=%u",
+			targ038.addr, t038.wr_cnt, t038.rd_cnt, (unsigned int)t038.rx_len);
+		if (t038.rx_len > 0U) {
+			LOG_HEXDUMP_INF(t038.buf, t038.rx_len, "bytes received from external controller:");
+		}
+
+		LOG_INF("PCR CLK_REQ captured just before WFI");
+		pr_pcr_clk_req_from_vbat();
+		/* pr_pcr_clk_req_wait(); */
+
+		LOG_INF("Suspend I2C.SR   = 0x%02x", dbg_i2c_v3_pm_susp[0]);
+		LOG_INF("Suspend I2C.WKSR = 0x%02x", dbg_i2c_v3_pm_susp[1]);
+		LOG_INF("Suspend I2C.WKCR = 0x%02x", dbg_i2c_v3_pm_susp[2]);
+		LOG_INF("Suspend GIRQ22 Source = 0x%02x", dbg_i2c_v3_pm_susp[3]);
+		LOG_INF("Suspend GIRQ22 EnSet  = 0x%02x", dbg_i2c_v3_pm_susp[4]);
 
 #if DT_NODE_HAS_COMPAT(DT_NODELABEL(i2c_smb_4), microchip_xec_i2c_v3_nl)
-	rc = mchp_xec_i2c_nl_copy_capture(targ038.bus, i2c_state_cap_buf, 256U);
+		rc = mchp_xec_i2c_nl_copy_capture(targ038.bus, i2c_state_cap_buf, 256U);
 #else
-	rc = mchp_xec_i2c_bm_copy_capture(targ038.bus, i2c_state_cap_buf, 256U);
+		rc = mchp_xec_i2c_bm_copy_capture(targ038.bus, i2c_state_cap_buf, 256U);
 #endif
-	if (rc == 0) {
-		LOG_HEXDUMP_INF(i2c_state_cap_buf, 256U, "targ038.bus states");
-	} else {
-		LOG_ERR("I2C BM state capture copy error (%d)", rc);
-	}
+		if (rc == 0) {
+			LOG_HEXDUMP_INF(i2c_state_cap_buf, 256U, "targ038.bus states");
+		} else {
+			LOG_ERR("I2C BM state capture copy error (%d)", rc);
+		}
+	} /* end while (1) */
 #endif
 #endif
+
 	LOG_INF("Deep-sleep I2C wake demo complete; halting.");
 	log_flush();
 
