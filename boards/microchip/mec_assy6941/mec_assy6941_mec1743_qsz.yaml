@@ -18,6 +18,7 @@ supported:
   - pinctrl
   - i2c
   - spi
+  - dma
 testing:
   binaries:
     - spi_image.bin

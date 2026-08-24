@@ -26,6 +26,10 @@ tests:
       - xg24_rb4187c
       - kg100s_rb4332a
       - pic32cz_ca80_cult
+      - mec172xevb_assy6906
+      - mec_assy6941/mec1753_qsz
+      - mec_assy6941/mec1743_qsz
+      - mec_assy6941/mec1653b_nsz
     filter: dt_nodelabel_enabled("tst_dma0")
     integration_platforms:
       - intel_adsp/cavs25

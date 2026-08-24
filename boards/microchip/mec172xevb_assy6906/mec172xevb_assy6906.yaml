@@ -20,6 +20,7 @@ supported:
   - pwm
   - counter
   - spi
+  - dma
 testing:
   binaries:
     - spi_image.bin

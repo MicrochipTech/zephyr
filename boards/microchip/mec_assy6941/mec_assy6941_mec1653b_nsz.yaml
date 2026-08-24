@@ -16,6 +16,7 @@ flash: 352
 supported:
   - gpio
   - pinctrl
+  - dma
 testing:
   binaries:
     - spi_image.bin
