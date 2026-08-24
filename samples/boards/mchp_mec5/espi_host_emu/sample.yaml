@@ -1,0 +1,9 @@
+sample:
+  name: Exercise eSPI driver with an emulated eSPI host
+tests:
+  sample.boards.mchp_mec.espi_host_emu:
+    build_only: true
+    platform_allow:
+      - mec172xevb_assy6906
+      - mec_assy6941/mec1753_qsz
+    tags: drivers espi
