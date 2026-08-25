@@ -15,6 +15,7 @@
 #include <cmsis_core.h>
 #include <zephyr/drivers/timer/system_timer.h>
 #include <zephyr/drivers/timer/system_timer_lpm.h>
+#include <zephyr/sys/clock.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
@@ -90,6 +91,10 @@
  * The TCLK divider field value is also the power-of-two shift, so the CCT
  * free-running counter frequency is input-clock >> divider (48 MHz / 4 =
  * 12 MHz for DIV4). The kernel's HW cycle rate must match this.
+ *
+ * Because it does match, the generic timer core is left on its default
+ * TIMER_CORE_CYCLES_PER_SEC (the kernel rate) and emits sys_clock_cycle_get_32/64()
+ * for us: the counter is already in the unit the kernel expects to read.
  */
 #define XEC_CCT_INPUT_CLOCK DT_INST_PROP(0, input_clock)
 #define XEC_CCT_FREQ_HZ     (XEC_CCT_INPUT_CLOCK >> XEC_CCT_DIVIDER)
@@ -97,9 +102,11 @@
 BUILD_ASSERT(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC == XEC_CCT_FREQ_HZ,
 	     "CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC must equal the CCT TCLK frequency "
 	     "(input-clock >> divider)");
-/* CYC_PER_TICK must be exact: a non-integer ratio makes each announced tick
+/* Cycles per tick must be exact: a non-integer ratio makes each announced tick
  * correspond to a truncated cycle count, so kernel time drifts against real
- * time and the error accumulates without bound.
+ * time and the error accumulates without bound. The core checks that the ratio
+ * is non-zero and that a tick fits the counter; that it divides evenly is this
+ * driver's own requirement.
  */
 BUILD_ASSERT(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC % CONFIG_SYS_CLOCK_TICKS_PER_SEC == 0,
 	     "CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC must be an integer multiple of "
@@ -110,193 +117,87 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_SMP), "XEC CCT kernel timer does not support SMP
 #define XEC_CCT_COMP0_IRQ_NUM  DT_INST_IRQ_BY_NAME(0, comp0, irq)
 #define XEC_CCT_COMP0_IRQ_PRIO DT_INST_IRQ_BY_NAME(0, comp0, priority)
 
-#define CYC_PER_TICK                                                                               \
-	((uint32_t)(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / CONFIG_SYS_CLOCK_TICKS_PER_SEC))
-
-/*
- * Largest cycle span we ever program ahead in one shot. Bounded by both the
- * INT32_MAX-tick limit of sys_clock_announce() and the 32-bit counter range,
- * then kept to 3/4 of that for IRQ-latency headroom. Staying below 2^32 keeps
- * the unsigned (now - last_cycle) deltas wrap-correct between announcements.
- */
-#define CYCLES_MAX_TICKS ((uint64_t)INT32_MAX * (uint64_t)CYC_PER_TICK)
-#define CYCLES_MAX_RANGE ((uint64_t)UINT32_MAX)
-#define CYCLES_MAX                                                                                 \
-	((uint32_t)((MIN(CYCLES_MAX_TICKS, CYCLES_MAX_RANGE) / 2) +                                \
-		    (MIN(CYCLES_MAX_TICKS, CYCLES_MAX_RANGE) / 4)))
-#define MAX_TICKS (CYCLES_MAX / CYC_PER_TICK)
-
-/* Floor on how close to "now" we arm Compare0, so the counter cannot pass the
- * value before the write lands (which would cost a full 32-bit wrap to refire).
- */
-#define MIN_DELAY 200U /* 1000U */
-
-/*
- * last_cycle is the free-running counter value at the most recently announced
- * tick boundary; everything is tracked relative to it in 32-bit cycle space so
- * counter wrap is handled by unsigned subtraction. The spinlock protects
- * last_cycle/last_elapsed and serializes Compare0 programming.
- */
-static struct k_spinlock lock;
-static uint32_t last_cycle;
-static uint32_t last_elapsed;
-
-static inline uint32_t xec_cct_count(void)
-{
-	return sys_read32(XEC_CCT_BASE + XEC_CCT_FRT_CNT_OFS);
-}
-
-static inline void xec_cct_set_comp0(uint32_t cycle)
-{
-	sys_write32(cycle, XEC_CCT_BASE + XEC_CCT_COMP0_OFS);
-}
-
 #if !defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
 /* Set while the system is idle with an armed LPM companion. */
 static bool timeout_idle;
-/* CCT count captured at idle entry, to measure cycles the CCT itself advanced
- * (nonzero only if its clock survived the low-power state).
+/* Cycle count captured at idle entry, to measure how far the CCT itself
+ * advanced (nonzero only if its clock survived the low-power state).
  */
 static uint32_t cycle_pre_idle;
 #endif
 
-/* Free running up counter which wraps.
- * CCT has two independent comparator registers which set status and fire and interrupt
- * on an exact match of the counter.
+/*
+ * Software extension of the free-running counter, in cycles.
+ *
+ * The CCT counter is the cycle time base, but it is clocked from the PLL and so
+ * stops in the deep-sleep states this driver targets: it freezes and resumes,
+ * having lost the sleep. Time recovered from the always-on companion is folded
+ * in here (see sys_clock_idle_exit()), which keeps the cycle domain the core
+ * accounts in continuous with real time even though the hardware register is
+ * not. Outside a low-power window this is a constant and the count is the raw
+ * register.
+ *
+ * It is written only from sys_clock_idle_exit(), on the CPU's way out of idle
+ * with the clock lock held. Nothing else on this (UP-only, see the SMP assert
+ * above) CPU can observe the read below mid-update: no ISR and no reprogram
+ * path touches it, which is what TIMER_CORE_COUNTER_NONATOMIC would be for. So
+ * the cycle getter stays a lock-free pair of loads, which matters because it is
+ * on the thread-usage timestamp hot path.
+ */
+static uint32_t cct_cycle_offset;
+
+/*
+ * A free-running 32-bit counter matched by a 32-bit comparator that fires on
+ * equality only, so the core wraps the compare write in its verify loop and
+ * this driver needs no minimum-delay floor of its own (the MIN_DELAY that
+ * predated the core, and the tuning that went with it, are gone).
  */
 #define TIMER_CORE_BACKEND_COMPARE_EXACT
 #define TIMER_CORE_COUNTER_WIDTH 32
 
+/*
+ * Cycles a compare must lead the counter by to be caught. The comparator lives
+ * in the TCLK domain (input clock >> divider) while the write arrives on the
+ * AHB clock, so a match programmed at the default lead of one cycle can be
+ * crossed before it lands. Four TCLK cycles (333 ns at 12 MHz) covers a
+ * multi-flop synchroniser. Getting this too low costs only extra iterations of
+ * the core's verify loop, never a lost interrupt; it is the one number here
+ * worth re-checking against silicon.
+ */
+#define TIMER_CORE_ALARM_LEAD_CYCLES 4
+
 static inline uint32_t timer_driver_cycle_get(void)
 {
-	return xec_cct_count();
+	return sys_read32(XEC_CCT_BASE + XEC_CCT_FRT_CNT_OFS) + cct_cycle_offset;
 }
 
 static inline void timer_driver_set_compare(uint32_t cycles)
 {
-	xec_cct_set_comp0(cycles);
+	/* Back out of the extended cycle domain into the counter's own. */
+	sys_write32(cycles - cct_cycle_offset, XEC_CCT_BASE + XEC_CCT_COMP0_OFS);
 }
+
+#include "system_timer_generic.h"
 
 static void xec_cct_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 
-	/* Clear CCT comparator 0 GIRQ status bit. No need to touch CCT control */
-	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
-
-#if !defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
-	if (timeout_idle) {
-		/* Woke from an LPM window: defer all timekeeping to
-		 * sys_clock_idle_exit(), which reconciles CCT vs companion.
-		 */
-		return;
-	}
-#endif
-
-	timer_core_announce();
-
-#if 0
-	k_spinlock_key_t key = k_spin_lock(&lock);
+	k_spinlock_key_t key = sys_clock_lock();
 
 	/* Clearing the GIRQ18 source bit alone acks the compare interrupt
 	 * (per README: CCT control bits 16/17/24/25 can be ignored).
 	 */
 	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
 
-#if !defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
-	if (timeout_idle) {
-		/* Woke from an LPM window: defer all timekeeping to
-		 * sys_clock_idle_exit(), which reconciles CCT vs companion.
-		 */
-		k_spin_unlock(&lock, key);
-		return;
-	}
-#endif
-
-	if (IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
-		uint32_t now = xec_cct_count();
-		uint32_t delta_ticks = (now - last_cycle) / CYC_PER_TICK;
-
-		last_cycle += delta_ticks * CYC_PER_TICK;
-		last_elapsed = 0;
-
-		/* Park Compare0 far out; sys_clock_set_timeout() reprograms it
-		 * for the next real deadline right after this announce.
-		 */
-		xec_cct_set_comp0(last_cycle + CYCLES_MAX);
-
-		k_spin_unlock(&lock, key);
-		sys_clock_announce((int32_t)delta_ticks);
-	} else {
-		last_cycle += CYC_PER_TICK;
-		xec_cct_set_comp0(last_cycle + CYC_PER_TICK);
-
-		k_spin_unlock(&lock, key);
-		sys_clock_announce(1);
-	}
-#endif /* 0 */
-}
-
-/* New */
-void sys_clock_no_timeout(void)
-{
-	__ASSERT(sys_clock_is_locked(), "system clock lock not held");
-
-	if (!IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
-		return;
-	}
-
-	sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_COMP0_EN_POS);
-}
-
-/* New
- * NOTE: our SoC layer chooses SYSTEM_TIMER_LPM_COMPANION_HOOKS
- */
-void sys_clock_idle_enter(uint32_t ticks)
-{
-	uint32_t reg;
-
-#if defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
-	if (ticks != SYS_CLOCK_IDLE_FOREVER) {
-		return;
-	}
-
-	/* Nothing to wake up for and the uptime may drift, so stop the counter
-	 * outright rather than let a fast CPU and a 24-bit LOAD wake this CPU
-	 * several times a second for nothing. sys_clock_idle_exit() starts it
-	 * again on the way back.
+	/*
+	 * Announce whatever the counter says elapsed, even on the compare that
+	 * ends a low-power window. That span is the time the CCT measured
+	 * itself; the span it slept through is recovered separately by
+	 * sys_clock_idle_exit(), so the two are disjoint and neither is counted
+	 * twice. Which of the two runs first does not matter.
 	 */
-	SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
-	last_load = TIMER_STOPPED;
-#else
-	/* TODO */
-
-#endif
-
-	if (!IS_ENABLED(CONFIG_TICKLESS_KERNEL) || ticks != SYS_CLOCK_IDLE_FOREVER) {
-		sys_clock_set_timeout(ticks, false);
-		return;
-	}
-
-	/* Nothing to wake up for and the uptime may drift: stop the main
-	 * counter. There is one CPU here, so nothing else can observe it
-	 * standing still. sys_clock_idle_exit() starts it again and it resumes
-	 * where it stopped, so the comparator stays coherent and only real time
-	 * is lost.
-	 */
-#if 0
-	sys_clear_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_EN_POS);
-#else
-	sys_clear_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
-#endif
-	/* LPM stuff */
-	
-}
-
-/* New */
-void sys_clock_idle_exit(void)
-{
-	sys_set_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
+	timer_core_announce_from(key);
 }
 
 /*
@@ -332,7 +233,7 @@ void sys_clock_idle_exit(void)
  * or the rtimer Counter driver, or the IRQ_CONNECT below would conflict).
  */
 #define XEC_RTMR_NODE     DT_NODELABEL(rtimer)
-#define XEC_RTMR_BASE     (mm_reg_t) DT_REG_ADDR(XEC_RTMR_NODE)
+#define XEC_RTMR_BASE     (uintptr_t)DT_REG_ADDR(XEC_RTMR_NODE)
 #define XEC_RTMR_IRQ_NUM  DT_IRQN(XEC_RTMR_NODE)
 #define XEC_RTMR_IRQ_PRIO DT_IRQ(XEC_RTMR_NODE, priority)
 #define XEC_RTMR_FREQ_HZ  DT_PROP(XEC_RTMR_NODE, clock_frequency)
@@ -461,6 +362,81 @@ uint64_t z_sys_clock_lpm_exit(void)
 
 #endif /* CONFIG_SYSTEM_TIMER_LPM_COMPANION_HOOKS */
 
+#if !defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
+
+void sys_clock_idle_enter(uint32_t ticks)
+{
+	__ASSERT(sys_clock_is_locked(), "system clock lock not held");
+
+	/* SYS_CLOCK_IDLE_FOREVER converts to a wakeup days out, which is the
+	 * intent: the companion may wake earlier, never later. Its own range cap
+	 * turns that into an early wake the kernel simply re-arms from.
+	 */
+	uint64_t timeout_us = k_ticks_to_us_ceil64(ticks);
+
+	timeout_idle = true;
+	cycle_pre_idle = timer_driver_cycle_get();
+
+	/* Arm the always-on companion to guarantee wake even if the CCT clock
+	 * (PLL) stops in the upcoming low-power state. Compare0 stays armed at
+	 * the deadline the core last programmed, so if the CCT keeps running it
+	 * wakes us itself.
+	 */
+	z_sys_clock_lpm_enter(timeout_us);
+}
+
+void sys_clock_idle_exit(void)
+{
+	if (!timeout_idle) {
+		return;
+	}
+
+	k_spinlock_key_t key = sys_clock_lock();
+
+	/*
+	 * How long the CCT itself measured, against how long the companion says
+	 * the system was away. The difference is the span the CCT lost with its
+	 * clock, which is nothing at all if the clock survived.
+	 *
+	 * This assumes the counter *freezes* and resumes across PLL-off. If it
+	 * is instead reset, the delta below is garbage and this needs
+	 * CONFIG_SYSTEM_TIMER_RESET_BY_LPM handling, which is not implemented.
+	 */
+	uint32_t cct_cycles = timer_driver_cycle_get() - cycle_pre_idle;
+	uint64_t cct_us = k_cyc_to_us_floor64(cct_cycles);
+	uint64_t companion_us = z_sys_clock_lpm_exit();
+	uint64_t missed_cycles = 0;
+
+	if (companion_us > cct_us) {
+		missed_cycles = k_us_to_cyc_floor64(companion_us - cct_us);
+	}
+
+	/*
+	 * Fold the lost span into the cycle domain so the counter and the
+	 * core's announce baseline stay in step, then hand the same span to the
+	 * core directly rather than routing it through the counter: a sleep can
+	 * outrun what 32 bits express, and only this path pays for the wider
+	 * arithmetic.
+	 *
+	 * The sleep alone: what was already un-announced when the CPU went idle
+	 * stays in the counter, as does the sub-tick remainder of the span
+	 * above, and the next announce picks both up.
+	 */
+	cct_cycle_offset += (uint32_t)missed_cycles;
+	timeout_idle = false;
+
+	timer_core_announce_cycles64_from(key, missed_cycles);
+}
+
+#endif /* !CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE */
+
+void sys_clock_disable(void)
+{
+	/* Stop the free-running timer. */
+	sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_EN_POS);
+	soc_ecia_girq_ctrl(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS, 0);
+}
+
 static int sys_clock_driver_init(void)
 {
 	mm_reg_t regbase = XEC_CCT_BASE;
@@ -486,22 +462,17 @@ static int sys_clock_driver_init(void)
 	IRQ_CONNECT(XEC_CCT_COMP0_IRQ_NUM, XEC_CCT_COMP0_IRQ_PRIO, xec_cct_isr, NULL, 0);
 	irq_enable(XEC_CCT_COMP0_IRQ_NUM);
 
-	/* Start the free-running timer, then seed the time base from it and arm
-	 * the first tick deadline on Compare0.
-	 */
+	/* Start the free-running timer before seeding the baseline from it. */
 	sys_set_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_EN_POS);
 
-	last_cycle = (xec_cct_count() / CYC_PER_TICK) * CYC_PER_TICK;
-	xec_cct_set_comp0(last_cycle + CYC_PER_TICK);
+	/* Seed the announce baseline from the counter and arm the first tick. */
+	timer_core_init();
 
 	soc_ecia_girq_ctrl(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS, 1U);
 
 #ifdef CONFIG_SYSTEM_TIMER_LPM_COMPANION_HOOKS
 	xec_lpm_companion_init();
 #endif
-
-	/* Seed the announce baseline and arm the first tick. */
-	timer_core_init();
 
 	return 0;
 }
