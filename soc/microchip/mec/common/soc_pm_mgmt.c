@@ -6,6 +6,7 @@
 
 #include <soc.h>
 #include <zephyr/arch/cpu.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/sys/sys_io.h>
@@ -34,6 +35,58 @@
 #endif
 
 #define XEC_UART0_REG_BASE DT_REG_ADDR(DT_NODELABEL(uart0))
+
+#define XEC_PINCTRL_BASE DT_REG_ADDR(DT_NODELABEL(pinctrl))
+
+/* #define XEC_SOC_PM_DS_MARKER */
+
+#define XEC_SOC_PM_GPIO_DRV_LO 0x0240U
+#define XEC_SOC_PM_GPIO_DRV_HI 0x10240U
+
+#ifdef XEC_SOC_PM_DS_MARKER
+#define XEC_SOC_PM_DS_MARKER_GPIO 0241
+#define XEC_SOC_PM_DS_GPIO_CR1_BA MEC_GPIO_CR1_ADDR(XEC_PINCTRL_BASE, XEC_SOC_PM_DS_MARKER_GPIO)
+
+#define XEC_SOC_PM_DS_MARKER_ENTRY() sys_write32(XEC_SOC_PM_GPIO_DRV_LO, XEC_SOC_PM_DS_GPIO_CR1_BA);
+#define XEC_SOC_PM_DS_MARKER_EXIT()  sys_write32(XEC_SOC_PM_GPIO_DRV_HI, XEC_SOC_PM_DS_GPIO_CR1_BA);
+#else
+#define XEC_SOC_PM_DS_MARKER_ENTRY()
+#define XEC_SOC_PM_DS_MARKER_EXIT()
+#endif
+
+#ifdef XEC_SOC_PM_LS_MARKER
+#define XEC_SOC_PM_LS_MARKER_GPIO 0244
+#define XEC_SOC_PM_LS_GPIO_CR1_BA MEC_GPIO_CR1_ADDR(XEC_PINCTRL_BASE, XEC_SOC_PM_LS_MARKER_GPIO)
+
+#define XEC_SOC_PM_LS_MARKER_ENTRY() sys_write32(XEC_SOC_PM_GPIO_DRV_LO, XEC_SOC_PM_LS_GPIO_CR1_BA);
+#define XEC_SOC_PM_LS_MARKER_EXIT()  sys_write32(XEC_SOC_PM_GPIO_DRV_HI, XEC_SOC_PM_LS_GPIO_CR1_BA);
+#else
+#define XEC_SOC_PM_LS_MARKER_ENTRY()
+#define XEC_SOC_PM_LS_MARKER_EXIT()
+#endif
+
+/* #define XEC_SOC_PM_CLK_REQ_DEBUG */
+
+#ifdef XEC_SOC_PM_CLK_REQ_DEBUG
+#define XEC_SOC_PM_CLK_REQ_VBM_OFS 0
+
+static void xec_soc_pm_clk_req_save_to_vbat(void)
+{
+	uintptr_t vbat_mem_addr = DT_REG_ADDR(DT_NODELABEL(bbram)) + XEC_SOC_PM_CLK_REQ_VBM_OFS;
+	uintptr_t clk_req_addr = XEC_PCR_REG_BASE + XEC_CC_CLK_REQ_OFS(0);
+
+	for (uint32_t n = 0; n < XEC_CC_PCR_MAX_SCR; n++) {
+		uint32_t clk_req = sys_read32(clk_req_addr);
+
+		sys_write32(clk_req, vbat_mem_addr);
+		clk_req_addr += 4U;
+		vbat_mem_addr += 4U;
+	}
+}
+#define XEC_SOC_PM_CLK_REQ_DBG() xec_soc_pm_clk_req_save_to_vbat()
+#else
+#define XEC_SOC_PM_CLK_REQ_DBG()
+#endif
 
 static uint8_t basic_timer_cr_save[XEC_BASIC_TIMER_INSTANCES];
 static uint8_t uart_actv_save[MEC165XB_UART_INSTANCES];
@@ -131,6 +184,8 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
+	XEC_SOC_PM_CLK_REQ_DBG();
+
 	__DSB();
 	__ISB();
 	__WFI();
@@ -165,13 +220,16 @@ static void z_power_soc_sleep(void)
 	uint32_t val = BIT(XEC_PCR_SLP_CR_ALL_POS);
 
 	__disable_irq();
+	irq_unlock(0);
+	__DSB();
+	__ISB();
 
 	SCB->SCR &= ~BIT(SCB_SCR_SLEEPDEEP_Pos);
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
-	__set_BASEPRI(0);
 	__DSB();
+	__ISB();
 	__WFI(); /* triggers sleep hardware */
 	__NOP();
 	__NOP();
@@ -199,9 +257,11 @@ void pm_state_set(enum pm_state state, uint8_t substate_id)
 
 	switch (state) {
 	case PM_STATE_SUSPEND_TO_IDLE:
+		XEC_SOC_PM_LS_MARKER_ENTRY();
 		z_power_soc_sleep();
 		break;
 	case PM_STATE_SUSPEND_TO_RAM:
+		XEC_SOC_PM_DS_MARKER_ENTRY();
 		z_power_soc_deep_sleep();
 		break;
 	default:
@@ -219,6 +279,17 @@ void pm_state_set(enum pm_state state, uint8_t substate_id)
  */
 void pm_state_exit_post_ops(enum pm_state state, uint8_t substate_id)
 {
+	switch (state) {
+	case PM_STATE_SUSPEND_TO_IDLE:
+		XEC_SOC_PM_LS_MARKER_EXIT();
+		break;
+	case PM_STATE_SUSPEND_TO_RAM:
+		XEC_SOC_PM_DS_MARKER_EXIT();
+		break;
+	default:
+		break;
+	}
+
 	__DSB();
 	__ISB();
 	__enable_irq(); /* Clear PRIMASK */
