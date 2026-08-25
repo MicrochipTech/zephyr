@@ -32,9 +32,21 @@
 		 * properties -- required for PINCTRL_DT_DEFINE() in main.c to compile.
 		 */
 		compatible = "microchip,app-pins";
-		pinctrl-0 = <&tst_clk_out_gpio060 &vci_in1_n_gpio162>;
+		pinctrl-0 = <&tst_clk_out_gpio060 &clk_32khz_out_gpio221 &vci_in1_n_gpio162>;
 		pinctrl-names = "default";
 	};
+
+	zephyr,user {
+		pm-mchp-deep-sleep-marker-gpios = <MCHP_GPIO_DECODE_241 GPIO_ACTIVE_HIGH>;
+		pm-mchp-lite-sleep-marker-gpios = <MCHP_GPIO_DECODE_244 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&pcr {
+	core-clock-div = <1>;
+	pll-32k-src = <MCHP_XEC_PLL_CLK32K_SRC_XTAL>;
+	periph-32k-src = <MCHP_XEC_PERIPH_CLK32K_SRC_XTAL_XTAL>;
+	status = "okay";
 };
 
 &rtimer {
