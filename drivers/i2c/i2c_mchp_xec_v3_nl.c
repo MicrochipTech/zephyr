@@ -301,10 +301,8 @@ struct xec_i2c_nl_config {
 	uint32_t dflt_freq;
 	uint8_t girq;
 	uint8_t girq_pos;
-#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
 	uint8_t girq_wake;
 	uint8_t girq_wake_pos;
-#endif
 	uint16_t enc_pcr;
 	uint8_t dma_chan;     /* host-mode channel  */
 	uint8_t dma_slot;     /* host-mode trigsrc  */
@@ -355,10 +353,6 @@ struct xec_i2c_nl_data {
 	uint8_t active_port; /* XEC_I2C_NL_INVALID_PORT until programmed */
 	uint32_t active_freq;
 
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE)
-	bool pm_policy_state_lock;
-#endif
-
 #ifdef CONFIG_I2C_CALLBACK
 	/* Async (transfer_cb) state. async_active steers the ISR/DMA callbacks
 	 * between the synchronous semaphores and the shared work queue; the
@@ -401,12 +395,6 @@ struct xec_i2c_nl_port_config {
 	uint8_t port_id;
 	bool is_default;
 };
-
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE)
-struct xec_i2c_v3_nl_port_xdat {
-	struct pm_notifier pm_handles;
-};
-#endif
 
 #ifdef CONFIG_I2C_CALLBACK
 /* One kernel work queue shared by every controller instance; each instance
@@ -532,7 +520,7 @@ int mchp_xec_i2c_nl_copy_capture(const struct device *i2c_nl_dev, uint8_t *capde
 }
 #endif
 
-#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
+#if defined(CONFIG_PM_DEVICE)
 /*
  * state <= PM_STATE_SUSPEND_TO_IDLE is light sleep and ON
  * Decrements the PM counting semaphore, when count == 0 the power state is available again
@@ -546,33 +534,15 @@ int mchp_xec_i2c_nl_copy_capture(const struct device *i2c_nl_dev, uint8_t *capde
 static inline void xec_i2c_v3_nl_pm_busy_set(const struct device *port_dev,
 					     const struct device *ctrl_dev)
 {
-#if defined(CONFIG_PM_DEVICE)
 	pm_device_busy_set(ctrl_dev);
 	pm_device_busy_set(port_dev);
-#else
-	struct xec_i2c_nl_data *const xdat = ctrl_dev->data;
-
-	if (!xdat->pm_policy_state_lock) {
-		xdat->pm_policy_state_lock = true;
-		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
-	}
-#endif
 }
 
 static inline void xec_i2c_v3_nl_pm_busy_clear(const struct device *port_dev,
 					       const struct device *ctrl_dev)
 {
-#if defined(CONFIG_PM_DEVICE)
 	pm_device_busy_clear(ctrl_dev);
 	pm_device_busy_clear(port_dev);
-#else
-	struct xec_i2c_nl_data *const xdat = ctrl_dev->data;
-
-	if (xdat->pm_policy_state_lock) {
-		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
-		xdat->pm_policy_state_lock = false;
-	}
-#endif
 }
 #else
 static inline void xec_i2c_v3_nl_pm_busy_set(const struct device *port_dev,
@@ -588,7 +558,7 @@ static inline void xec_i2c_v3_nl_pm_busy_clear(const struct device *port_dev,
 	ARG_UNUSED(port_dev);
 	ARG_UNUSED(ctrl_dev);
 }
-#endif /* defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE) */
+#endif /* defined(CONFIG_PM_DEVICE) */
 
 static const struct xec_i2c_nl_timing *xec_i2c_nl_timing_for(uint32_t freqhz)
 {
@@ -870,6 +840,33 @@ static int xec_i2c_nl_bus_recover(const struct device *ctrl, uint32_t freq, uint
 
 	return 0;
 }
+
+static void xec_i2c_v3_bm_sleep_clr_status(const struct device *ctrl_dev)
+{
+	const struct xec_i2c_nl_config *xcfg = ctrl_dev->config;
+	uintptr_t rb = xcfg->base;
+
+	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
+	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
+}
+
+#if defined(CONFIG_I2C_TARGET)
+static void xec_i2c_v3_nl_sleep_ctrl(const struct device *ctrl_dev, bool sleep_enable)
+{
+	const struct xec_i2c_nl_config *xcfg = ctrl_dev->config;
+	uintptr_t rb = xcfg->base;
+
+	soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_DIS);
+	sys_clear_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
+	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
+
+	if (sleep_enable) {
+		sys_set_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
+		soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_EN);
+	}
+}
+#endif
 
 #ifdef CONFIG_I2C_TARGET
 /* Target mode
@@ -1192,6 +1189,10 @@ static int xec_i2c_nl_target_arm(const struct device *ctrl)
 	 * during certain shapes but does not auto-clear.
 	 */
 	xec_i2c_v3_cmpl_clear(base, CMPL_TGT_CLEAR);
+
+	if (cfg->wakeup_source) {
+		xec_i2c_v3_nl_sleep_ctrl(ctrl, true);
+	}
 
 	/* TCMD: target reads (host writes to us). WCL is preset to 1 --
 	 * the HW checks WCL the moment a host-read address matches and
@@ -1830,6 +1831,8 @@ static int xec_i2c_nl_target_unregister(const struct device *port_dev,
 		dma_stop(cfg->dma_dev, cfg->tgt_dma_chan);
 		sys_write32(0, cfg->base + XEC_I2C_TCMD_OFS);
 
+		xec_i2c_v3_nl_sleep_ctrl(ctrl, false);
+
 		soc_mmcr_mask_set(cfg->base + XEC_I2C_CFG_OFS, CFG_HD_IEN,
 				  CFG_TD_IEN | CFG_HD_IEN | CFG_IDLE_IEN | CFG_AAT_IEN);
 		xec_i2c_v3_cmpl_clear(cfg->base, CMPL_TGT_CLEAR);
@@ -2335,6 +2338,8 @@ static int xec_i2c_nl_start_group(const struct device *ctrl, uint16_t addr,
 
 	xec_i2c_nl_cap_update(data, 0x20U);
 
+	xec_i2c_v3_bm_sleep_clr_status(ctrl);
+
 	xec_i2c_nl_fill_tx_bounce(cfg, addr, xfer);
 
 	data->xfer_err = 0;
@@ -2436,6 +2441,8 @@ static void xec_i2c_nl_finish_group(const struct device *ctrl, const struct xec_
 		xec_i2c_nl_cap_update(data, 0x2EU);
 		xec_i2c_nl_scatter_rx(cfg, xfer);
 	}
+
+	xec_i2c_v3_bm_sleep_clr_status(ctrl);
 
 	data->state = XEC_I2C_NL_IDLE;
 
@@ -3063,7 +3070,7 @@ int mchp_xec_i2c_nl_port_set(const struct device *i2c_port_dev, uint8_t port)
 }
 
 /* Driver PM */
-#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
+#if defined(CONFIG_PM_DEVICE)
 static void xec_i2c_v3_nl_ctrl_enable(const struct device *ctrl_dev, bool enable)
 {
 	const struct xec_i2c_nl_config *xcfg = ctrl_dev->config;
@@ -3076,74 +3083,6 @@ static void xec_i2c_v3_nl_ctrl_enable(const struct device *ctrl_dev, bool enable
 	}
 }
 
-#ifdef CONFIG_I2C_TARGET
-static void xec_i2c_v3_nl_sleep_ctrl(const struct device *ctrl_dev, bool sleep_enable)
-{
-	const struct xec_i2c_nl_config *xcfg = ctrl_dev->config;
-	uintptr_t rb = xcfg->base;
-
-	soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_DIS);
-	sys_clear_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
-	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
-	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
-
-	if (sleep_enable) {
-		sys_set_bit(rb + XEC_I2C_WKCR_OFS, XEC_I2C_WKCR_SBEN_POS);
-		soc_ecia_girq_ctrl(xcfg->girq_wake, xcfg->girq_wake_pos, MCHP_MEC_ECIA_GIRQ_EN);
-	}
-}
-#endif
-#endif
-
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE)
-static void xec_i2c_v3_nl_vport_pm_state_entry(const struct device *port_dev, enum pm_state state)
-{
-	const struct xec_i2c_nl_port_config *pc = port_dev->config;
-	int rc = 0;
-
-	if (state >= PM_STATE_SUSPEND_TO_RAM) {
-#ifdef CONFIG_I2C_TARGET
-		const struct xec_i2c_nl_config *ctrl_xcfg = pc->parent->config;
-		struct xec_i2c_nl_data *const ctrl_xdat = pc->parent->data;
-
-		if (ctrl_xcfg->wakeup_source && (ctrl_xdat->tgt_count != 0)) {
-			xec_i2c_v3_nl_sleep_ctrl(pc->parent, true);
-			return;
-		}
-#endif
-		xec_i2c_v3_nl_ctrl_enable(pc->parent, false);
-		rc = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_SLEEP);
-		if ((rc != 0) || (rc != -ENOENT)) {
-			LOG_ERR("Suspend pinctrl sleep error (%d)", rc);
-		}
-	}
-}
-
-static void xec_i2c_v3_nl_vport_pm_state_exit(const struct device *port_dev, enum pm_state state)
-{
-	const struct xec_i2c_nl_port_config *pc = port_dev->config;
-	int rc = 0;
-
-	if (state == PM_STATE_ACTIVE) { /* should we do state <= PM_STATE_SUSPEND_TO_RAM ? */
-#ifdef CONFIG_I2C_TARGET
-		const struct xec_i2c_nl_config *ctrl_xcfg = pc->parent->config;
-		struct xec_i2c_nl_data *const ctrl_xdat = pc->parent->data;
-
-		if (ctrl_xcfg->wakeup_source && (ctrl_xdat->tgt_count != 0)) {
-			xec_i2c_v3_nl_sleep_ctrl(pc->parent, true);
-			return;
-		}
-#endif
-		xec_i2c_v3_nl_ctrl_enable(pc->parent, true);
-		rc = pinctrl_apply_state(pc->pcfg, PINCTRL_STATE_DEFAULT);
-		if ((rc != 0) || (rc != -ENOENT)) {
-			LOG_ERR("Suspend pinctrl default error (%d)", rc);
-		}
-	}
-}
-#endif /* defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE) */
-
-#if defined(CONFIG_PM_DEVICE)
 static int xec_i2c_v3_nl_ctrl_pm_action_cb(const struct device *ctrl_dev,
 					   enum pm_device_action action)
 {
@@ -3208,7 +3147,7 @@ static int xec_i2c_v3_nl_vport_pm_action_cb(const struct device *port_dev,
 
 	return ret;
 }
-#endif
+#endif /* CONFIG_PM_DEVICE */
 
 /* Driver initialization */
 
@@ -3270,12 +3209,6 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 	if (!device_is_ready(pc->parent)) {
 		return -ENODEV;
 	}
-
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE)
-	struct xec_i2c_v3_nl_port_xdat *const port_xdat = port_dev->data;
-
-	pm_notifier_register(&port_xdat->pm_handles);
-#endif
 
 	if (pc->is_default) {
 		int rc = xec_i2c_nl_apply_port(port_dev);
@@ -3363,14 +3296,6 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 #define XEC_I2C_V3_NL_PM_DEVICE_DT_INST_DEFINE(inst)
 #endif
 
-#if defined(PM) || defined(PM_DEVICE)
-#define XEC_I2C_V3_NL_WAKE_GIRQ(inst)                                                              \
-	.girq_wake = XEC_I2C_NL_GIRQ(inst, 1),                                                     \
-	.girq_wake_pos = XEC_I2C_NL_GIRQ_POS(inst, 1),
-#else
-#define XEC_I2C_V3_NL_WAKE_GIRQ(inst)
-#endif
-
 /* Build-time guard: if the controller names a default-port, that port's
  * "controller" phandle must point back to this controller node. Expands to
  * nothing for controllers that omit default-port.
@@ -3401,7 +3326,8 @@ static int xec_i2c_nl_port_init(const struct device *port_dev)
 		.dflt_freq = XEC_I2C_NL_DFLT_FREQ(inst),                                           \
 		.girq = XEC_I2C_NL_GIRQ(inst, 0),                                                  \
 		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst, 0),                                          \
-		XEC_I2C_V3_NL_WAKE_GIRQ(inst)                                                      \
+		.girq_wake = XEC_I2C_NL_GIRQ(inst, 1),                                             \
+		.girq_wake_pos = XEC_I2C_NL_GIRQ_POS(inst, 1),                                     \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
 		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                        \
 		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc),                        \
@@ -3417,31 +3343,6 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 
 #undef DT_DRV_COMPAT
 #define DT_DRV_COMPAT microchip_xec_i2c_v3_nl_port
-
-#if defined(CONFIG_PM) && !defined(CONFIG_PM_DEVICE) 
-#define XEC_I2C_V3_NL_PM_HANDLES_DEFINE(inst)                                                      \
-	static void xec_i2c_v3_nl_vport_##inst##_pm_entry(enum pm_state state)                     \
-	{                                                                                          \
-		xec_i2c_v3_nl_vport_pm_state_entry(DEVICE_DT_INST_GET(inst), state);               \
-	}                                                                                          \
-                                                                                                   \
-	static void xec_i2c_v3_nl_vport_##inst##_pm_exit(enum pm_state state)                      \
-	{                                                                                          \
-		xec_i2c_v3_nl_vport_pm_state_exit(DEVICE_DT_INST_GET(inst), state);                \
-	}
-#define XEC_I2C_V3_NL_XDAT_DEFINE(inst)                                                            \
-	static struct xec_i2c_v3_nl_port_xdat xec_i2c_v3_nl_vport_xdat_##inst = {                  \
-		.pm_handles = {                                                                    \
-			.state_entry = xec_i2c_v3_nl_vport_##inst##_pm_entry,                      \
-			.state_exit = xec_i2c_v3_nl_vport_##inst##_pm_exit,                        \
-		},                                                                                 \
-	};
-#define XEC_I2C_V3_NL_XDAT_GET(inst) &xec_i2c_v3_nl_vport_xdat_##inst
-#else
-#define XEC_I2C_V3_NL_PM_HANDLES_DEFINE(inst)
-#define XEC_I2C_V3_NL_XDAT_DEFINE(inst)
-#define XEC_I2C_V3_NL_XDAT_GET(inst) NULL
-#endif
 
 #if defined(CONFIG_PM_DEVICE)
 #define XEC_I2C_V3_NL_VPORT_PM_DEVICE_DT_INST_DEFINE(inst) \
@@ -3461,8 +3362,6 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 
 #define XEC_I2C_NL_PORT_INIT(inst)                                                                 \
 	PINCTRL_DT_INST_DEFINE(inst);                                                              \
-	XEC_I2C_V3_NL_PM_HANDLES_DEFINE(inst)                                                      \
-	XEC_I2C_V3_NL_XDAT_DEFINE(inst)                                                            \
 	static const struct xec_i2c_nl_port_config xec_i2c_nl_port_cfg_##inst = {                  \
 		.parent = DEVICE_DT_GET(DT_INST_PHANDLE(inst, controller)),                        \
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                      \
@@ -3472,7 +3371,7 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INIT)
 	};                                                                                         \
 	XEC_I2C_V3_NL_VPORT_PM_DEVICE_DT_INST_DEFINE(inst)                                         \
 	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_port_init, PM_DEVICE_DT_INST_GET(inst),         \
-				  XEC_I2C_V3_NL_XDAT_GET(inst), &xec_i2c_nl_port_cfg_##inst,       \
+				  NULL, &xec_i2c_nl_port_cfg_##inst,                               \
 				  POST_KERNEL, CONFIG_I2C_MCHP_XEC_V3_NL_PORT_INIT_PRIORITY,       \
 				  &xec_i2c_nl_port_api);
 
