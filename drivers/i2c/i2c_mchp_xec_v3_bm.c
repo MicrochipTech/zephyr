@@ -224,10 +224,8 @@ struct xec_i2c_v3_bm_xcfg {
 	uint16_t enc_pcr;
 	uint8_t girq;
 	uint8_t girq_pos;
-#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
 	uint8_t girq_wake;
 	uint8_t girq_wake_pos;
-#endif
 	void (*irq_connect)(void);
 	bool wakeup_source;
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
@@ -792,6 +790,15 @@ static void xec_i2c_v3_bm_restart_next(const struct device *ctrl)
 	sys_write8(bm_addr_byte(xdat->addr, xdat->dir_read), base + XEC_I2C_DATA_OFS);
 }
 
+static void xec_i2c_v3_bm_sleep_clr_status(const struct device *ctrl_dev)
+{
+	const struct xec_i2c_v3_bm_xcfg *xcfg = ctrl_dev->config;
+	uintptr_t rb = xcfg->base;
+
+	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
+	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
+}
+
 /* Arm the initial START for the STOP-delimited group beginning at the
  * current xdat->msg_idx. The port must already be applied and the bus
  * idle (guaranteed by the caller: the pre-transfer SR check for the first
@@ -814,6 +821,8 @@ static void bm_arm_group(const struct device *ctrl)
 	xdat->dir_read = bm_msg_is_read(m);
 	xdat->err = 0;
 	xdat->state = BM_STATE_START;
+
+	xec_i2c_v3_bm_sleep_clr_status(ctrl);
 
 	/* Clear any stale IDLE latch (e.g. from a prior error path that
 	 * STOPped without waiting for IDLE) so it cannot fire the instant
@@ -865,15 +874,6 @@ static void bm_write_advance(const struct device *ctrl)
 		}
 		/* Zero-length continuation: re-evaluate from the new message. */
 	}
-}
-
-static void xec_i2c_v3_bm_sleep_clr_status(const struct device *ctrl_dev)
-{
-	const struct xec_i2c_v3_bm_xcfg *xcfg = ctrl_dev->config;
-	uintptr_t rb = xcfg->base;
-
-	sys_set_bit(rb + XEC_I2C_WKSR_OFS, XEC_I2C_WKSR_SB_POS);
-	soc_ecia_girq_status_clear(xcfg->girq_wake, xcfg->girq_wake_pos);
 }
 
 #ifdef CONFIG_I2C_TARGET
@@ -2226,7 +2226,8 @@ static DEVICE_API(i2c, xec_i2c_v3_bm_port_api) = {
 		.dflt_freq = XEC_I2C_V3_DFLT_FREQ(inst),                                           \
 		.girq = XEC_I2C_V3_GIRQ(inst, 0),                                                  \
 		.girq_pos = XEC_I2C_V3_GIRQ_POS(inst, 0),                                          \
-		XEC_I2C_V3_BM_WAKE_GIRQ(inst)                                                      \
+		.girq_wake = XEC_I2C_V3_GIRQ(inst, 1),                                             \
+		.girq_wake_pos = XEC_I2C_V3_GIRQ_POS(inst, 1),                                     \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
 		.wakeup_source = DT_INST_PROP(inst, wakeup_source),                                \
 		XEC_I2C_V3_BM_TGT_BUF_INIT(inst)};                                                 \
