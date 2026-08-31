@@ -225,7 +225,25 @@ enum espi_virtual_peripheral {
 	 */
 	ESPI_PERIPHERAL_EC_HOST_CMD,
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+	/** Maximum value of this enum. */
+	ESPI_PERIPHERAL_MAX,
 };
+
+/**
+ * @brief Starting value for vendor-specific eSPI peripheral identifiers.
+ *
+ * If a peripheral is specific to one vendor's hardware and does not need its
+ * own value in @ref espi_virtual_peripheral, that vendor's extension header
+ * (e.g. mchp_xec_espi.h) can define its own identifier at or above this
+ * value instead, for use in @ref espi_event::evt_details. Being a fixed
+ * value keeps it clear of @ref espi_virtual_peripheral even as that enum
+ * grows.
+ *
+ * Not partitioned per vendor: two vendors may pick the same identifier.
+ * That is fine, since only one vendor's eSPI target driver is ever built
+ * into a given image.
+ */
+#define ESPI_PERIPHERAL_VENDOR_START 0x100U
 
 /**
  * @brief eSPI interrupt flags.
