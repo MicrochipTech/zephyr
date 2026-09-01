@@ -109,4 +109,11 @@ enum xec_espi_girq_idx {
 	max_girq_idx,
 };
 
+/* Deliver an eSPI event to the applications that registered a callback on the
+ * eSPI controller device. Peripheral channel logical device drivers are
+ * separate devices but applications keep registering their callbacks on the
+ * controller, so the peripheral drivers route their notifications through here.
+ */
+void mchp_xec_espi_v3_send_callbacks(const struct device *espi_dev, struct espi_event evt);
+
 #endif /* ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_V3_H_ */
