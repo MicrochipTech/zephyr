@@ -11,3 +11,33 @@ description: |
 compatible: "microchip,xec-espi-pc-acpi-ec"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  peripheral-type:
+    type: string
+    required: true
+    enum:
+      - "host-io"
+      - "host-io-pvt"
+      - "host-io-pvt2"
+      - "host-io-pvt3"
+      - "ec-host-cmd"
+    description: |
+      Role this ACPI EC instance plays for the Host, selecting the
+      enum espi_virtual_peripheral value reported in the evt_details field of
+      the eSPI event the driver generates. The V2 driver picks this per
+      instance at build time from the CONFIG_ESPI_PERIPHERAL_HOST_IO,
+      CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT and
+      CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD symbols.
+
+      Exactly one instance may be "host-io". That instance answers the
+      EACPI_* opcode range of espi_read_lpc_request() and
+      espi_write_lpc_request().
+
+  shared-memory-size:
+    type: int
+    description: |
+      Size in bytes of a driver owned, eight byte aligned region of SoC data
+      memory the Host reads ACPI response data from. When present the driver
+      answers the EACPI_GET_SHARED_MEMORY opcode with the base address of this
+      region. Omit it on instances that have no shared memory region.
