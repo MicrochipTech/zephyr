@@ -23,6 +23,7 @@ config ESPI_XEC_V3
 	bool "XEC Microchip eSPI V3 driver"
 	default y
 	depends on DT_HAS_MICROCHIP_XEC_ESPI_V3_ENABLED && !SOC_SERIES_MEC15XX
+	depends on !ESPI_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC eSPI V3 driver for MEC172x/4x/5x series.
