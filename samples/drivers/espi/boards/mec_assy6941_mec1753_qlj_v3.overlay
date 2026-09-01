@@ -1,0 +1,219 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * eSPI V3 variant of mec_assy6941_mec1753_qlj.overlay.
+ *
+ * This overlay replaces the board overlay rather than adding to it, so build
+ * with DTC_OVERLAY_FILE pointing at it:
+ *
+ *   west build -p always -b mec_assy6941/mec1753_qlj zephyr/samples/drivers/espi \
+ *     -DDTC_OVERLAY_FILE=boards/mec_assy6941_mec1753_qlj_v3.overlay
+ *
+ * The difference from the V2 overlay is that each peripheral (logical) channel
+ * device binds to its own driver, and the Host I/O BAR, Host memory BAR and
+ * Serial-IRQ slot values that the V2 build takes from CONFIG_ESPI_PERIPHERAL_*
+ * Kconfig defaults are described here instead. The eSPI controller reads them
+ * from these nodes and owns the registers, because MEC hardware holds the BAR
+ * and Serial-IRQ registers in reset while eSPI Reset or PLTRST is asserted.
+ */
+
+#include <zephyr/dt-bindings/espi/mchp-xec-espi-v3.h>
+
+/ {
+	aliases {
+		spi0 = &qspi0;
+	};
+
+	board_power: resources {
+		compatible = "intel-rvp,board-power";
+		pwrg-gpios = <MCHP_GPIO_DECODE_012 GPIO_ACTIVE_HIGH>;
+		rsm-gpios = <MCHP_GPIO_DECODE_054 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&espi0 {
+	compatible = "microchip,xec-espi-v3";
+	pinctrl-0 = <&espi_reset_n_gpio061 &espi_alert_n_gpio063
+		     &espi_clk_gpio065 &espi_cs_n_gpio066
+		     &espi_io0_gpio070 &espi_io1_gpio071
+		     &espi_io2_gpio072 &espi_io3_gpio073>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	/* The Host reaches one of the EC UARTs as a legacy serial port. The UART
+	 * block itself stays owned by drivers/serial, so this node exists only to
+	 * name the Host I/O decoder and Serial IRQ slot for the controller to
+	 * program. It replaces CONFIG_ESPI_PERIPHERAL_UART_SOC_MAPPING: enabling
+	 * the node for a different UART is what picks the SoC port, rather than a
+	 * Kconfig integer the device tree cannot see.
+	 *
+	 * The address and slot are the ones the V2 build programs by default. A
+	 * board presenting this as COM1 uses 0x3f8 and Host IRQ 4.
+	 */
+	espi_host_uart1: host-uart1 {
+		compatible = "microchip,xec-espi-pc-bar-cfg";
+		ldn = <10>;
+		io-bars = <MCHP_XEC_ESPI_IOB_UART1 0x3f0>;
+		sirqs = <MCHP_XEC_ESPI_SIRQ_UART1 4>;
+		status = "okay";
+	};
+};
+
+&espi_taf0 {
+	compatible = "microchip,xec-espi-saf-v2";
+	status = "okay";
+};
+
+/* eSPI peripheral channel logical devices. Each one binds to its own driver.
+ * io-bars and mem-bars entries are <register-index host-address> pairs, sirqs
+ * entries are <register-index slot> pairs.
+ */
+/* Both mailbox Serial-IRQs start disabled, which is what the V2 build gets from
+ * the CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX_*_SIRQ_SLOT defaults. A board that
+ * assigns real slots here is also what lets an application turn them on at run
+ * time through mchp_xec_espi_pc_mailbox_ictrl().
+ */
+&mbox0 {
+	compatible = "microchip,xec-espi-pc-mbox";
+	io-bars = <MCHP_XEC_ESPI_IOB_MBOX 0x360>;
+	sirqs = <MCHP_XEC_ESPI_SIRQ_MBOX MCHP_XEC_ESPI_SIRQ_SLOT_DISABLED>,
+		<MCHP_XEC_ESPI_SIRQ_MBOX_SMI MCHP_XEC_ESPI_SIRQ_SLOT_DISABLED>;
+	status = "okay";
+};
+
+&kbc0 {
+	compatible = "microchip,xec-espi-pc-kbc";
+	io-bars = <MCHP_XEC_ESPI_IOB_KBC 0x60>;
+	sirqs = <MCHP_XEC_ESPI_SIRQ_KBC_KIRQ 1>,
+		<MCHP_XEC_ESPI_SIRQ_KBC_MIRQ 12>;
+	status = "okay";
+};
+
+/* The shared memory region is driver owned SoC data memory that the ACPI EC
+ * driver reports to the application through EACPI_GET_SHARED_MEMORY. No mem-bars
+ * pair is given, which matches what the V2 build programs: the region is not
+ * decoded into Host memory space on this board. A board that wants the Host to
+ * read it directly adds a <MCHP_XEC_ESPI_MEMB_ACPI_EC0 host-address> pair here.
+ */
+&acpi_ec0 {
+	compatible = "microchip,xec-espi-pc-acpi-ec";
+	peripheral-type = "host-io";
+	shared-memory-size = <256>;
+	io-bars = <MCHP_XEC_ESPI_IOB_ACPI_EC0 0x62>;
+	sirqs = <MCHP_XEC_ESPI_SIRQ_ACPI_EC0_OBF MCHP_XEC_ESPI_SIRQ_SLOT_DISABLED>;
+	status = "okay";
+};
+
+&acpi_ec1 {
+	compatible = "microchip,xec-espi-pc-acpi-ec";
+	peripheral-type = "host-io-pvt";
+	io-bars = <MCHP_XEC_ESPI_IOB_ACPI_EC1 0x200>;
+	sirqs = <MCHP_XEC_ESPI_SIRQ_ACPI_EC1_OBF MCHP_XEC_ESPI_SIRQ_SLOT_DISABLED>;
+	status = "okay";
+};
+
+&acpi_pm1 {
+	compatible = "microchip,xec-espi-pc-acpi-pm1";
+	io-bars = <MCHP_XEC_ESPI_IOB_ACPI_PM1 0x1800>;
+	status = "okay";
+};
+
+&port92 {
+	compatible = "microchip,xec-espi-pc-port92";
+	io-bars = <MCHP_XEC_ESPI_IOB_PORT92 0x92>;
+	status = "okay";
+};
+
+&emi0 {
+	compatible = "microchip,xec-espi-pc-emi";
+	io-bars = <MCHP_XEC_ESPI_IOB_EMI0 0x800>;
+	status = "okay";
+};
+
+/* The Port80 block decodes two Host I/O ranges into one capture FIFO. The
+ * second range is a node of its own so the controller programs its BAR like any
+ * other, and the phandle is what lets the Port80 driver arm it. The byte lane
+ * the alias address maps to comes from host-io-addr-mask in mec5.dtsi.
+ */
+&p80bd0 {
+	compatible = "microchip,xec-espi-pc-p80bd";
+	io-bars = <MCHP_XEC_ESPI_IOB_P80BD 0x80>;
+	alias-decoder = <&p80bd0_alias>;
+	status = "okay";
+};
+
+&p80bd0_alias {
+	compatible = "microchip,xec-espi-pc-bar-cfg";
+	/* The V2 host-io property is replaced by an io-bars pair, which also
+	 * names the BAR register the address goes in.
+	 */
+	/delete-property/ host-io;
+	io-bars = <MCHP_XEC_ESPI_IOB_P80BD_ALIAS 0x90>;
+	status = "okay";
+};
+
+/* The glue logic block derives the power good signal the Host chipset sees. How
+ * the SLP_S0# and CPU_C10 inputs are wired is a board question, so this node is
+ * left at the hardware defaults: S0ix detection off, which makes VCC_PWRGD2
+ * follow the VCC_PWRGD pin exactly as it does on a build without the block
+ * enabled. A board that routes those inputs sets s0ix-detect-source and the
+ * matching polarity and source properties here.
+ *
+ * No io-bars pair is given. The one Host visible register in the block is the
+ * S0ix detection enable, and nothing on this board needs BIOS to reach it.
+ */
+&glue {
+	compatible = "microchip,xec-espi-pc-glue";
+	status = "okay";
+};
+
+/* Enable Target to Controller Virtual Wires GPIO 0 - 3 */
+&vw_t2c_gpio_0 {
+	status = "okay";
+	reset-state = "1";
+	reset-source = "ESPI_RESET";
+};
+
+&vw_t2c_gpio_1 {
+	status = "okay";
+	reset-state = "1";
+	reset-source = "ESPI_RESET";
+};
+
+&vw_t2c_gpio_2 {
+	status = "okay";
+	reset-state = "1";
+	reset-source = "ESPI_RESET";
+};
+
+&vw_t2c_gpio_3 {
+	status = "okay";
+	reset-state = "1";
+	reset-source = "ESPI_RESET";
+};
+
+&qspi0 {
+	compatible = "microchip,xec-qmspi-ldma";
+	status = "okay";
+	clock-frequency = <24000000>;
+	pinctrl-0 = <&qspi_shd_cs0_n_gpio055 &qspi_shd_clk_gpio056
+		     &qspi_shd_io0_gpio223 &qspi_shd_io1_gpio224
+		     &qspi_shd_io2_gpio227 &qspi_shd_io3_gpio016>;
+	pinctrl-names = "default";
+
+	spi_flash0: spi_flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(24)>;
+		jedec-id = [ef 60 18]; /* W25Q128-FW 1.8V part */
+		size = <DT_SIZE_M(16)>;
+		page-size = <256>;
+		use-fast-read;
+		quad-enable-requirements = "S2B1v4";
+	};
+};
