@@ -419,5 +419,80 @@ int mchp_xec_espi_pc_emi_host_swi_set(const struct device *dev, uint16_t swi_bit
 
 #endif /* CONFIG_ESPI_XEC_V3_PC_EMI */
 
+#ifdef CONFIG_ESPI_XEC_V3_PC_GLUE
+
+/** @brief Vendor peripheral identifier reported in struct espi_event evt_details
+ *         for a glue logic signal monitor event.
+ *
+ * The generic enum espi_virtual_peripheral has no power good generation entry,
+ * so this follows the other vendor identifiers above the highest generic value.
+ */
+#define MCHP_XEC_ESPI_PERIPHERAL_GLUE 0x103U
+
+/** Derived VCC_PWRGD2 power good signal presented to the Host chipset */
+#define MCHP_XEC_ESPI_PC_GLUE_SIG_PWRGD 0x01U
+/** Derived S0ix connected standby state */
+#define MCHP_XEC_ESPI_PC_GLUE_SIG_S0IX 0x02U
+
+/** @brief Event data reported for a glue logic signal monitor event
+ *
+ * Placed in struct espi_event evt_data when evt_details is
+ * MCHP_XEC_ESPI_PERIPHERAL_GLUE. Hardware detects both edges, so a handler that
+ * needs the direction of a change reads it from the state field rather than
+ * inferring it.
+ */
+struct mchp_xec_espi_pc_glue_evt {
+	/** Signal states after the change, as MCHP_XEC_ESPI_PC_GLUE_SIG_* bits */
+	uint32_t state: 8;
+	/** Signals that changed, as MCHP_XEC_ESPI_PC_GLUE_SIG_* bits */
+	uint32_t edges: 8;
+	/** Reserved for future use */
+	uint32_t reserved: 16;
+};
+
+/** @brief Read the glue logic signal monitor state
+ *
+ * @param dev glue logic peripheral channel device
+ * @param state destination for the MCHP_XEC_ESPI_PC_GLUE_SIG_* bits
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev or state is NULL
+ */
+int mchp_xec_espi_pc_glue_state_get(const struct device *dev, uint8_t *state);
+
+/** @brief Enable or disable glue logic signal monitor interrupts
+ *
+ * Selects which signals raise an event when they change. Any signal not named
+ * in @p sig_mask keeps its current setting. Pending edges on a signal being
+ * enabled are dropped, so enabling reports the next change rather than one that
+ * happened while the signal was masked.
+ *
+ * @param dev glue logic peripheral channel device
+ * @param sig_mask MCHP_XEC_ESPI_PC_GLUE_SIG_* bits to act on
+ * @param enable non-zero to enable, zero to disable
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL or sig_mask names no known signal
+ */
+int mchp_xec_espi_pc_glue_ictrl(const struct device *dev, uint8_t sig_mask, uint8_t enable);
+
+/** @brief Enable or disable S0ix state detection
+ *
+ * While detection is disabled the S0ix state is a constant zero, so VCC_PWRGD2
+ * follows the VCC_PWRGD pin whatever the pwrgd-source device tree property
+ * says. Hardware clears the enable on every PLTRST; the driver re-applies the
+ * last value asked for here once the eSPI controller reports the Host facing
+ * hardware usable again, so a caller does not have to watch for the reset
+ * itself.
+ *
+ * @param dev glue logic peripheral channel device
+ * @param enable non-zero to enable detection, zero to disable it
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL
+ */
+int mchp_xec_espi_pc_glue_s0ix_detect_enable(const struct device *dev, uint8_t enable);
+
+#endif /* CONFIG_ESPI_XEC_V3_PC_GLUE */
 
 #endif /* INCLUDE_ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_H_ */
