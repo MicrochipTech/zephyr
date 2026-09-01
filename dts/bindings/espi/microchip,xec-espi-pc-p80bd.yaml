@@ -5,10 +5,23 @@ description: |
   Microchip XEC eSPI peripheral channel Port80 BIOS debug port.
 
   Captures Host writes to the BIOS POST code I/O port into a FIFO readable by
-  the EC. The hardware implements a second, alias, I/O decoder which is
-  described by its own node using microchip,xec-espi-pc-bar-cfg because it
-  needs BAR configuration only and has no registers of its own.
+  the EC. The hardware implements a second, alias, I/O decoder that feeds the
+  same FIFO. The alias is described by its own node using
+  microchip,xec-espi-pc-bar-cfg so the eSPI controller programs its Host I/O
+  BAR, and is pointed at from here so this driver can arm it.
 
 compatible: "microchip,xec-espi-pc-p80bd"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  alias-decoder:
+    type: phandle
+    description: |
+      The microchip,xec-espi-pc-bar-cfg node describing the second Port80 I/O
+      decoder this block implements. Its register window holds the alias
+      activate and byte lane registers, which this driver programs whenever the
+      eSPI controller reports the Host facing hardware is usable. The
+      host-io-addr-mask property on that node selects which byte lane of the
+      80h to 83h capture range the alias Host I/O address maps to. Leave the
+      phandle out to keep the alias decoder inactive.
