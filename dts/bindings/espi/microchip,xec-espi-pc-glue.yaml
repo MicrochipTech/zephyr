@@ -28,6 +28,9 @@ compatible: "microchip,xec-espi-pc-glue"
 include: ["microchip,xec-espi-pc-base.yaml"]
 
 properties:
+  reg:
+    required: true
+
   pwrgd-source:
     type: string
     default: "vcc-pwrgd"

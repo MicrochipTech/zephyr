@@ -13,6 +13,9 @@ compatible: "microchip,xec-espi-pc-acpi-ec"
 include: ["microchip,xec-espi-pc-base.yaml"]
 
 properties:
+  reg:
+    required: true
+
   peripheral-type:
     type: string
     required: true

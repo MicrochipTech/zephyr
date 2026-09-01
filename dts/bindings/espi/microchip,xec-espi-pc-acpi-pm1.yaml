@@ -11,3 +11,7 @@ description: |
 compatible: "microchip,xec-espi-pc-acpi-pm1"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  reg:
+    required: true

@@ -13,6 +13,9 @@ compatible: "microchip,xec-espi-pc-emi"
 include: ["microchip,xec-espi-pc-base.yaml"]
 
 properties:
+  reg:
+    required: true
+
   emi-mems:
     type: array
     description: |
