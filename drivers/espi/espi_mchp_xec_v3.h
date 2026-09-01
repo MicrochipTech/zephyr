@@ -116,4 +116,13 @@ enum xec_espi_girq_idx {
  */
 void mchp_xec_espi_v3_send_callbacks(const struct device *espi_dev, struct espi_event evt);
 
+/* Enable or disable one Host Serial-IRQ at run time on behalf of the peripheral
+ * channel logical device that owns it. Enabling restores the slot the device
+ * tree assigned to that Serial-IRQ index; disabling writes the value hardware
+ * reads as no Serial-IRQ. The controller owns the Serial-IRQ register bank
+ * because hardware holds it in reset while eSPI Reset or PLTRST is asserted, so
+ * a peripheral driver asks for the change instead of making it.
+ */
+int mchp_xec_espi_v3_sirq_enable(const struct device *espi_dev, uint8_t sirq_idx, uint8_t enable);
+
 #endif /* ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_V3_H_ */

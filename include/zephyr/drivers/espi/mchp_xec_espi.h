@@ -50,12 +50,15 @@ enum mchp_xec_espi_pc_mbox_isrc {
 /** @brief Read peripheral channel mailbox data
  *
  * @param dev Pointer to the device structure for the driver instance
- * @param mbox_idx
- * @param num_mboxes
- * @param dest
+ * @param mbox_idx index of the first mailbox data byte to read
+ * @param num_mboxes number of mailbox data bytes to read, starting at mbox_idx.
+ *                   The V2 driver instead treats this as an exclusive end index
+ *                   and reads nothing when it is not above mbox_idx.
+ * @param dest buffer of at least num_mboxes bytes
  *
  * @retval 0 success
- * @retval -EINVAL if dev is NULL or mbox_idx > 32 or dest is NULL
+ * @retval -EINVAL if dev is NULL or dest is NULL or the run leaves the 32 byte
+ *                 block
  */
 int mchp_xec_espi_pc_mailbox_get(const struct device *dev, uint8_t mbox_idx, uint8_t num_mboxes,
 				 uint8_t *dest);
@@ -63,12 +66,15 @@ int mchp_xec_espi_pc_mailbox_get(const struct device *dev, uint8_t mbox_idx, uin
 /** @brief Write peripheral channel mailbox data
  *
  * @param dev Pointer to the device structure for the driver instance
- * @param mbox_idx
- * @param num_mboxes
- * @param src
+ * @param mbox_idx index of the first mailbox data byte to write
+ * @param num_mboxes number of mailbox data bytes to write, starting at
+ *                   mbox_idx. The V2 driver instead treats this as an exclusive
+ *                   end index and writes nothing when it is not above mbox_idx.
+ * @param src buffer of at least num_mboxes bytes
  *
  * @retval 0 success
- * @retval -EINVAL if dev is NULL or mbox_idx > 32 or dest is NULL
+ * @retval -EINVAL if dev is NULL or src is NULL or the run leaves the 32 byte
+ *                 block
  */
 int mchp_xec_espi_pc_mailbox_set(const struct device *dev, uint8_t mbox_idx, uint8_t num_mboxes,
 				 const uint8_t *src);
