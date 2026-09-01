@@ -316,5 +316,102 @@ int mchp_xec_espi_pc_acpi_pm1_set(const struct device *dev,
 
 #endif /* CONFIG_ESPI_XEC_V3_PC_ACPI_PM1 */
 
+#ifdef CONFIG_ESPI_XEC_V3_PC_EMI
+
+/** @brief Vendor peripheral identifier reported in struct espi_event evt_details
+ *         for an Embedded Memory Interface event.
+ *
+ * The generic enum espi_virtual_peripheral has no Embedded Memory Interface
+ * entry, so this identifier is numbered above the highest generic value in the
+ * same way MCHP_XEC_ESPI_PERIPHERAL_MAILBOX is.
+ */
+#define MCHP_XEC_ESPI_PERIPHERAL_EMI 0x102U
+
+/** @brief The two SoC data memory regions one EMI instance windows to the Host
+ *
+ * Bit[15] of the address the Host writes to the EMI address register selects
+ * which region the following data access reaches.
+ */
+enum mchp_xec_espi_pc_emi_region {
+	MCHP_XEC_ESPI_PC_EMI_REGION_0 = 0,
+	MCHP_XEC_ESPI_PC_EMI_REGION_1,
+	MCHP_XEC_ESPI_PC_EMI_REGION_MAX,
+};
+
+/** @brief Payload of an EMI peripheral channel event
+ *
+ * Cast the evt_data member of struct espi_event to this type when evt_details
+ * is MCHP_XEC_ESPI_PERIPHERAL_EMI.
+ */
+struct mchp_xec_espi_pc_emi_evt {
+	uint32_t ldn: 8;  /**< logical device number of the reporting EMI */
+	uint32_t data: 8; /**< value the Host wrote to the Host-to-EC mailbox */
+	uint32_t reserved: 16;
+};
+
+/** @brief Point one EMI memory region at a buffer the caller owns
+ *
+ * Replaces the region the emi-mems device tree property describes, for a caller
+ * that allocates the buffer itself. The driver keeps the values and re-applies
+ * them whenever the eSPI controller reports the Host facing hardware has come
+ * out of reset, so the region survives an eSPI Reset or PLTRST cycle.
+ *
+ * Hardware ignores the low two address bits and the low two bits of each limit,
+ * so pass a four byte aligned buffer. A limit is the exclusive byte offset the
+ * Host may reach: reads are allowed below @p rd_limit and writes below
+ * @p wr_limit, which is how a region exposes a read-only tail.
+ *
+ * @param dev EMI peripheral channel device
+ * @param region region to program
+ * @param base start of the buffer, or NULL to disable the region
+ * @param rd_limit byte offset the Host may read up to
+ * @param wr_limit byte offset the Host may write up to
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL or region is out of range
+ */
+int mchp_xec_espi_pc_emi_region_set(const struct device *dev,
+				    enum mchp_xec_espi_pc_emi_region region, void *base,
+				    uint16_t rd_limit, uint16_t wr_limit);
+
+/** @brief Read the two EMI mailbox registers
+ *
+ * @param dev EMI peripheral channel device
+ * @param h2ec where to store the Host-to-EC mailbox, may be NULL
+ * @param ec2h where to store the EC-to-Host mailbox, may be NULL
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL
+ */
+int mchp_xec_espi_pc_emi_mbox_get(const struct device *dev, uint8_t *h2ec, uint8_t *ec2h);
+
+/** @brief Write the EC-to-Host EMI mailbox register
+ *
+ * @param dev EMI peripheral channel device
+ * @param ec2h value the Host will read from the EC-to-Host mailbox
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL
+ */
+int mchp_xec_espi_pc_emi_mbox_set(const struct device *dev, uint8_t ec2h);
+
+/** @brief Raise EC-to-Host EMI software interrupt sources
+ *
+ * Sets bits in the EMI interrupt source set register. Bit N of @p swi_bits
+ * corresponds to software interrupt source N, which the Host sees in the EMI
+ * interrupt source register and clears by writing it back. Bit 0 is owned by
+ * hardware and reports an EC write to the EC-to-Host mailbox; it is ignored
+ * here.
+ *
+ * @param dev EMI peripheral channel device
+ * @param swi_bits bit mask of software interrupt sources to raise
+ *
+ * @retval 0 success
+ * @retval -EINVAL dev is NULL
+ */
+int mchp_xec_espi_pc_emi_host_swi_set(const struct device *dev, uint16_t swi_bits);
+
+#endif /* CONFIG_ESPI_XEC_V3_PC_EMI */
+
 
 #endif /* INCLUDE_ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_H_ */
