@@ -27,6 +27,7 @@
 #include <zephyr/drivers/espi.h>
 #include <zephyr/drivers/clock_control/mchp_xec_clock_control.h>
 #include <zephyr/drivers/interrupt_controller/intc_mchp_xec_ecia.h>
+#include <zephyr/dt-bindings/espi/mchp-xec-espi-v3.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -759,6 +760,44 @@ static int xec_espi_bus_intr_ctl(const struct device *dev, enum xec_espi_girq_id
  */
 #define XEC_PC_TBL_END 0xffffffffU
 
+/* The io-bars, mem-bars and sirqs device tree properties carry register indices
+ * named by include/zephyr/dt-bindings/espi/mchp-xec-espi-v3.h. Device tree
+ * cannot see the SoC enums those macros mirror, so tie the two together here.
+ */
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_MBOX == (int)IOB_MBOX, "io-bars mailbox index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_KBC == (int)IOB_KBC, "io-bars KBC index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_ACPI_EC0 == (int)IOB_ACPI_EC0, "io-bars ACPI EC0 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_ACPI_EC4 == (int)IOB_ACPI_EC4, "io-bars ACPI EC4 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_ACPI_PM1 == (int)IOB_ACPI_PM1, "io-bars ACPI PM1 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_PORT92 == (int)IOB_PORT92, "io-bars Port92 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_UART1 == (int)IOB_UART1, "io-bars UART1 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_EMI0 == (int)IOB_EMI0, "io-bars EMI0 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_EMI2 == (int)IOB_EMI2, "io-bars EMI2 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_P80BD == (int)IOB_P80BD, "io-bars Port80 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_P80BD_ALIAS == (int)IOB_P80BD_ALIAS,
+	     "io-bars Port80 alias index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_GLUE == (int)IOB_GLUE, "io-bars glue logic index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_IOB_UART3 == (int)IOB_UART3, "io-bars UART3 index mismatch");
+
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_MBOX == (int)MEMB_MBOX, "mem-bars mailbox index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_ACPI_EC0 == (int)MEMB_ACPI_EC0, "mem-bars ACPI EC0 mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_ACPI_EC4 == (int)MEMB_ACPI_EC4, "mem-bars ACPI EC4 mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_EMI0 == (int)MEMB_EMI0, "mem-bars EMI0 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_EMI2 == (int)MEMB_EMI2, "mem-bars EMI2 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_MEMB_T32B == (int)MEMB_T32B, "mem-bars T32B index mismatch");
+
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_MBOX == (int)SIRQ_MBOX, "sirqs mailbox index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_MBOX_SMI == (int)SIRQ_MBOX_SMI, "sirqs mailbox SMI mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_KBC_KIRQ == (int)SIRQ_KBC_KIRQ, "sirqs KBC KIRQ mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_KBC_MIRQ == (int)SIRQ_KBC_MIRQ, "sirqs KBC MIRQ mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_ACPI_EC0_OBF == (int)SIRQ_ACPI_EC0_OBF, "sirqs EC0 OBF mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_ACPI_EC4_OBF == (int)SIRQ_ACPI_EC4_OBF, "sirqs EC4 OBF mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_UART1 == (int)SIRQ_UART1, "sirqs UART1 index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_EMI0_HEV == (int)SIRQ_EMI0_HEV, "sirqs EMI0 HEV mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_EMI2_E2H == (int)SIRQ_EMI2_E2H, "sirqs EMI2 E2H mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_EC == (int)SIRQ_EC, "sirqs EC index mismatch");
+BUILD_ASSERT(MCHP_XEC_ESPI_SIRQ_UART3 == (int)SIRQ_UART3, "sirqs UART3 index mismatch");
+
 /* Each enabled peripheral channel logical device child node describes its own
  * Host facing decoders as flattened <index value> pairs in io-bars, mem-bars
  * and sirqs. Concatenate all of them into one table per register bank so this
@@ -880,6 +919,13 @@ static void xec_pc_notify(const struct device *dev, enum mchp_xec_espi_pc_event 
 			cb->handler(dev, cb->pc_dev, evt);
 		}
 	}
+}
+
+void mchp_xec_espi_v3_send_callbacks(const struct device *espi_dev, struct espi_event evt)
+{
+	struct espi_xec_data *const data = espi_dev->data;
+
+	espi_send_callbacks(&data->callbacks, espi_dev, evt);
 }
 
 int mchp_xec_espi_pc_register(const struct device *espi_dev, struct mchp_xec_espi_pc_cb *cb)
