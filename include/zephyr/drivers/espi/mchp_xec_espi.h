@@ -194,6 +194,24 @@ typedef int (*mchp_xec_espi_pc_lpc_req_t)(const struct device *pc_dev,
 					  bool write);
 
 /**
+ * @brief Peripheral channel interrupt configuration handler.
+ *
+ * Enables or disables the Host facing interrupt sources of one logical device
+ * on behalf of the controller's espi_interrupt_config() implementation. The
+ * device is expected to remember the request and honour it the next time its
+ * event handler reports the Host facing hardware usable, because the
+ * application asks once and the bus may reset any number of times afterwards.
+ *
+ * Sources that assert while the Host has nothing to do, such as an output
+ * buffer empty signal, stay masked until the driver has data for the Host even
+ * when interrupts are enabled.
+ *
+ * @param pc_dev peripheral channel device the registration belongs to
+ * @param enable true to enable this device's interrupt sources
+ */
+typedef void (*mchp_xec_espi_pc_intr_cfg_t)(const struct device *pc_dev, bool enable);
+
+/**
  * @brief Peripheral channel registration.
  *
  * Owned by the peripheral channel driver and must stay allocated for as long
@@ -216,6 +234,19 @@ struct mchp_xec_espi_pc_cb {
 	uint16_t lpc_op_start;
 	/** Last @ref lpc_peripheral_opcode served, inclusive. */
 	uint16_t lpc_op_end;
+	/**
+	 * Interrupt configuration handler. NULL means espi_interrupt_config()
+	 * does not reach this device, which is the right answer for a logical
+	 * device whose interrupt sources the generic
+	 * @ref espi_interrupt_flags bits do not describe.
+	 */
+	mchp_xec_espi_pc_intr_cfg_t intr_cfg;
+	/**
+	 * Bit mask of @ref espi_interrupt_flags values this device answers to.
+	 * @ref intr_cfg is called with enable set when espi_interrupt_config()
+	 * is passed any of these bits, and clear when it is passed none of them.
+	 */
+	uint32_t intr_flags;
 };
 
 /** @brief Register a peripheral channel device with the eSPI controller

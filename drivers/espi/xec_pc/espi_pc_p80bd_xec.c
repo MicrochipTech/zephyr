@@ -139,6 +139,11 @@ struct espi_pc_p80bd_xec_config {
 
 struct espi_pc_p80bd_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
+	/* Whether the application wants Host facing interrupts from this block.
+	 * Enabled until espi_interrupt_config() says otherwise, so an
+	 * application that never calls it behaves as it did under V2.
+	 */
+	bool intr_en;
 };
 
 #ifdef CONFIG_ESPI_XEC_V3_PC_P80BD_MULTIBYTE
@@ -303,6 +308,32 @@ static void p80bd_block_config(const struct device *dev)
 	}
 }
 
+/* Apply the tracked interrupt enable to the hardware. */
+static void p80bd_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_p80bd_xec_config *cfg = dev->config;
+	struct espi_pc_p80bd_xec_data *data = dev->data;
+
+	if (data->intr_en) {
+		xec_pc_girq_clr(cfg->ecia_info);
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	} else {
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+}
+
+/* Called from the controller's espi_interrupt_config() implementation. The block
+ * keeps capturing POST codes into its FIFO either way; this only decides whether
+ * the EC is told about them.
+ */
+static void p80bd_intr_cfg(const struct device *dev, bool enable)
+{
+	struct espi_pc_p80bd_xec_data *data = dev->data;
+
+	data->intr_en = enable;
+	p80bd_intr_apply(dev);
+}
+
 static void p80bd_espi_event(const struct device *espi_dev, const struct device *dev,
 			     enum mchp_xec_espi_pc_event evt)
 {
@@ -317,9 +348,7 @@ static void p80bd_espi_event(const struct device *espi_dev, const struct device 
 
 	/* The controller has re-programmed our Host I/O BARs. */
 	p80bd_block_config(dev);
-
-	xec_pc_girq_clr(cfg->ecia_info);
-	xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	p80bd_intr_apply(dev);
 }
 
 static int espi_pc_p80bd_xec_init(const struct device *dev)
@@ -341,6 +370,9 @@ static int espi_pc_p80bd_xec_init(const struct device *dev)
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = p80bd_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+	data->pc_cb.intr_cfg = p80bd_intr_cfg;
+	data->pc_cb.intr_flags = ESPI_PERIPHERAL_DEBUG_PORT80_EVENTS;
+	data->intr_en = true;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {
@@ -351,7 +383,7 @@ static int espi_pc_p80bd_xec_init(const struct device *dev)
 	IRQ_CONNECT(DT_INST_IRQN(0), DT_INST_IRQ(0, priority), p80bd_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQN(0));
 
-	xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	p80bd_intr_apply(dev);
 
 	return 0;
 }

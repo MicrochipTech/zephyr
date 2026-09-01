@@ -1021,6 +1021,51 @@ int mchp_xec_espi_pc_unregister(const struct device *espi_dev, struct mchp_xec_e
 }
 
 /*
+ * Generic espi_interrupt_flags bits the peripheral channel drivers of this SoC
+ * can answer to. Each enabled logical device claims the one that describes it
+ * in the intr_flags field of its registration.
+ */
+#define XEC_PC_INTR_FLAGS                                                                          \
+	(ESPI_PERIPHERAL_UART_EVENTS | ESPI_PERIPHERAL_DEBUG_PORT80_EVENTS |                       \
+	 ESPI_PERIPHERAL_8042_KBC_EVENTS | ESPI_PERIPHERAL_HOST_IO_EVENTS |                        \
+	 ESPI_PERIPHERAL_SHARED_MEMORY_EVENTS)
+
+/*
+ * Enable or disable the Host facing interrupt sources of the peripheral channel
+ * logical devices, one generic espi_interrupt_flags bit at a time.
+ *
+ * The four bus event flags are accepted and have no effect. The controller's own
+ * eSPI Reset, channel enable and virtual wire interrupts are what tell every
+ * peripheral channel driver when its BARs and Serial IRQ registers have been
+ * re-programmed, so switching them off would silently break the registration
+ * contract those drivers depend on rather than save an interrupt.
+ *
+ * No vendor specific flags are defined, so a caller passing any is told its
+ * request was not understood rather than having it quietly dropped.
+ */
+static int espi_xec_interrupt_config(const struct device *dev, uint32_t espi_flags,
+				     uint32_t espi_vendor_flags)
+{
+	struct espi_xec_data *const data = dev->data;
+	struct mchp_xec_espi_pc_cb *cb = NULL;
+
+	if (((espi_flags & ~(ESPI_INT_BUS_ONLY_MASK | XEC_PC_INTR_FLAGS)) != 0U) ||
+	    (espi_vendor_flags != 0U)) {
+		return -EINVAL;
+	}
+
+	SYS_SLIST_FOR_EACH_CONTAINER(&data->pc_cbs, cb, node) {
+		if ((cb->intr_cfg == NULL) || (cb->intr_flags == 0U)) {
+			continue;
+		}
+
+		cb->intr_cfg(cb->pc_dev, (espi_flags & cb->intr_flags) != 0U);
+	}
+
+	return 0;
+}
+
+/*
  * Dispatch an LPC peripheral request to whichever peripheral channel driver
  * registered the opcode range it falls in. Replaces the compile time opcode
  * table the V2 driver uses, so the generic espi_read_lpc_request() and
@@ -1032,6 +1077,25 @@ static int xec_pc_lpc_request(const struct device *dev, enum lpc_peripheral_opco
 {
 	struct espi_xec_data *const drvdata = dev->data;
 	struct mchp_xec_espi_pc_cb *cb = NULL;
+
+#ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
+	/*
+	 * ECUSTOM_HOST_SUBS_INTERRUPT_EN is deprecated in favour of
+	 * espi_interrupt_config() and is scheduled for removal. It is the all or
+	 * nothing form of the same request, so implement it in terms of the
+	 * replacement rather than give the peripheral channel drivers a second
+	 * way in that could drift from the first. No peripheral claims this
+	 * opcode: it addresses every logical device at once, which makes it a
+	 * controller level operation.
+	 */
+	if (op == ECUSTOM_HOST_SUBS_INTERRUPT_EN) {
+		if ((data == NULL) || !write) {
+			return -EINVAL;
+		}
+
+		return espi_xec_interrupt_config(dev, (*data != 0U) ? XEC_PC_INTR_FLAGS : 0U, 0U);
+	}
+#endif
 
 	SYS_SLIST_FOR_EACH_CONTAINER(&drvdata->pc_cbs, cb, node) {
 		if (cb->lpc_request == NULL) {
@@ -1636,6 +1700,7 @@ static DEVICE_API(espi, espi_xec_driver_api) = {
 	.manage_callback = espi_xec_manage_callback,
 	.read_lpc_request = espi_xec_read_lpc_request,
 	.write_lpc_request = espi_xec_write_lpc_request,
+	.interrupt_config = espi_xec_interrupt_config,
 };
 
 static struct espi_xec_data espi_xec_data_var;

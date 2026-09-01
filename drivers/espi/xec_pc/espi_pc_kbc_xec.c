@@ -47,6 +47,11 @@ struct espi_pc_kbc_xec_config {
 
 struct espi_pc_kbc_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
+	/* Whether the application wants Host facing interrupts from this block.
+	 * Enabled until espi_interrupt_config() says otherwise, so an
+	 * application that never calls it behaves as it did under V2.
+	 */
+	bool intr_en;
 };
 
 /* Apply the KBC block configuration. Called at init and again every time the
@@ -61,6 +66,34 @@ static void kbc_block_config(const struct device *dev)
 	regs->KBC_CTRL |= MCHP_KBC_CTRL_OBFEN;
 	/* This is the activate register, but the HAL has a funny name */
 	regs->ACTV = MCHP_KBC_ACTV_EN;
+}
+
+/* Apply the tracked interrupt enable to the hardware. The Host writes a command
+ * whenever it likes, so IBF is armed whenever interrupts are on. OBE is a level
+ * source that stays asserted for as long as the output buffer is empty, so it is
+ * left masked here and armed by the application once it has a byte for the Host.
+ */
+static void kbc_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_kbc_xec_config *cfg = dev->config;
+	struct espi_pc_kbc_xec_data *data = dev->data;
+
+	if (data->intr_en) {
+		xec_pc_girq_clr(cfg->ibf_ecia_info);
+		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	} else {
+		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+		xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+}
+
+/* Called from the controller's espi_interrupt_config() implementation. */
+static void kbc_intr_cfg(const struct device *dev, bool enable)
+{
+	struct espi_pc_kbc_xec_data *data = dev->data;
+
+	data->intr_en = enable;
+	kbc_intr_apply(dev);
 }
 
 static void kbc_ibf_isr(const struct device *dev)
@@ -223,14 +256,15 @@ static void kbc_espi_event(const struct device *espi_dev, const struct device *d
 
 	if (xec_pc_evt_is_hw_usable(evt)) {
 		/* The controller has re-programmed our Host I/O BAR and the two
-		 * Serial-IRQ slots. Re-arm the block and the IBF interrupt.
+		 * Serial-IRQ slots. Re-arm the block, and the interrupt sources
+		 * if that is what the application last asked for.
 		 */
 		kbc_block_config(dev);
-		xec_pc_girq_clr(cfg->ibf_ecia_info);
-		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+		kbc_intr_apply(dev);
 	} else {
 		/* Host facing registers are about to be held in reset. Stop
-		 * generating events the application cannot act on.
+		 * generating events the application cannot act on, without
+		 * disturbing what it asked for.
 		 */
 		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
 		xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
@@ -259,6 +293,9 @@ static int espi_pc_kbc_xec_init(const struct device *dev)
 	data->pc_cb.lpc_request = kbc_lpc_request;
 	data->pc_cb.lpc_op_start = E8042_START_OPCODE;
 	data->pc_cb.lpc_op_end = E8042_MAX_OPCODE;
+	data->pc_cb.intr_cfg = kbc_intr_cfg;
+	data->pc_cb.intr_flags = ESPI_PERIPHERAL_8042_KBC_EVENTS;
+	data->intr_en = true;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {
@@ -274,10 +311,7 @@ static int espi_pc_kbc_xec_init(const struct device *dev)
 		    kbc_obe_isr, DEVICE_DT_INST_GET(0), 0);
 	irq_enable(DT_INST_IRQ_BY_NAME(0, obe, irq));
 
-	/* Enable the IBF source only. The application turns OBE on after it
-	 * writes the EC-to-Host data register.
-	 */
-	xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	kbc_intr_apply(dev);
 
 	return 0;
 }

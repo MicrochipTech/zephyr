@@ -65,6 +65,11 @@ struct espi_pc_acpi_ec_xec_config {
 
 struct espi_pc_acpi_ec_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
+	/* Whether the application wants Host facing interrupts from this block.
+	 * Enabled until espi_interrupt_config() says otherwise, so an
+	 * application that never calls it behaves as it did under V2.
+	 */
+	bool intr_en;
 };
 
 /* Deliver an ESPI_BUS_PERIPHERAL_NOTIFICATION carrying an ACPI event. The
@@ -193,6 +198,35 @@ static int acpi_ec_lpc_request(const struct device *dev, enum lpc_peripheral_opc
 	return 0;
 }
 
+/* Apply the tracked interrupt enable to the hardware. IBF is armed whenever
+ * interrupts are on, because the Host writes a command whenever it likes. OBE is
+ * a level source that stays asserted for as long as the output buffer is empty,
+ * so it is left masked here and armed by the application once it has a byte for
+ * the Host.
+ */
+static void acpi_ec_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_acpi_ec_xec_config *cfg = dev->config;
+	struct espi_pc_acpi_ec_xec_data *data = dev->data;
+
+	if (data->intr_en) {
+		xec_pc_girq_clr(cfg->ibf_ecia_info);
+		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	} else {
+		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+		xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+}
+
+/* Called from the controller espi_interrupt_config() implementation. */
+static void acpi_ec_intr_cfg(const struct device *dev, bool enable)
+{
+	struct espi_pc_acpi_ec_xec_data *data = dev->data;
+
+	data->intr_en = enable;
+	acpi_ec_intr_apply(dev);
+}
+
 static void acpi_ec_espi_event(const struct device *espi_dev, const struct device *dev,
 			       enum mchp_xec_espi_pc_event evt)
 {
@@ -201,13 +235,11 @@ static void acpi_ec_espi_event(const struct device *espi_dev, const struct devic
 	ARG_UNUSED(espi_dev);
 
 	if (xec_pc_evt_is_hw_usable(evt)) {
-		/* The controller has programmed our BARs and OBF Serial IRQ.
-		 * Re-arm IBF so a Host command right after PLTRST or eSPI Reset
-		 * de-assertion is seen. OBE stays masked until the application
-		 * has something for the Host to read.
+		/* The controller has programmed our BARs and OBF Serial IRQ, so
+		 * a Host command arriving right after PLTRST or eSPI Reset
+		 * de-assertion is seen if the application asked for interrupts.
 		 */
-		xec_pc_girq_clr(cfg->ibf_ecia_info);
-		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+		acpi_ec_intr_apply(dev);
 	} else {
 		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
 		xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
@@ -233,6 +265,10 @@ static int espi_pc_acpi_ec_xec_init(const struct device *dev)
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = acpi_ec_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+
+	data->pc_cb.intr_cfg = acpi_ec_intr_cfg;
+	data->pc_cb.intr_flags = ESPI_PERIPHERAL_HOST_IO_EVENTS;
+	data->intr_en = true;
 
 	if (cfg->serves_eacpi) {
 		data->pc_cb.lpc_request = acpi_ec_lpc_request;
