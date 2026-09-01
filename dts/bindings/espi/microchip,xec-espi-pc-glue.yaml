@@ -2,12 +2,84 @@
 # SPDX-License-Identifier: Apache-2.0
 
 description: |
-  Microchip XEC eSPI peripheral channel glue logic.
+  Microchip XEC eSPI peripheral channel glue (VCC power good generation) logic.
 
-  Aggregates the Host power management handshake signals (S0ix, sleep and
-  wake) that are not part of any other logical device. Has no Host I/O or
-  memory decoder of its own.
+  Derives the VCC_PWRGD2 power good signal the Host chipset sees, and detects
+  entry into the S0ix connected standby state so power good can be taken from a
+  second, lower current, regulator chain while the system is idle. S0ix is
+  derived from the SLP_S0# and CPU_C10 inputs, either of which may be a pin or,
+  for C10, the HOST_C10 eSPI virtual wire. The block reports edges on the
+  derived power good and S0ix signals to the EC as an interrupt.
+
+  The properties below describe how the board wires those inputs. The driver
+  programs them once at init and again after every reset that clears them,
+  writing the input polarity and source selections before the detection source
+  field so VCC_PWRGD2 cannot glitch while it is being configured. Glitches on
+  VCC_PWRGD2 must not reach the chipset.
+
+  The S0ix detection enable bit is a runtime register, so a board may give this
+  node an io-bars pair to let the Host reach it. Hardware clears that bit on
+  every PLTRST, which is why it is separate from the properties here and is
+  re-armed by the driver through
+  mchp_xec_espi_pc_glue_s0ix_detect_enable().
 
 compatible: "microchip,xec-espi-pc-glue"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  pwrgd-source:
+    type: string
+    default: "vcc-pwrgd"
+    description: |
+      Which power good input VCC_PWRGD2 follows while the system is in S0ix, or
+      whenever fw-pwrgd-select is set. Outside those cases hardware always uses
+      the VCC_PWRGD pin and this property has no effect. Defaults to the
+      hardware default of the VCC_PWRGD pin.
+    enum:
+      - "vcc-pwrgd"
+      - "pwrgd-s0ix"
+      - "vcc-pwrgd-and-pwrgd-s0ix"
+
+  s0ix-detect-source:
+    type: string
+    default: "none"
+    description: |
+      Which inputs, after the polarity and source selections below, hardware
+      combines into the S0ix state. Defaults to the hardware default of none,
+      which presents S0ix as a constant zero so VCC_PWRGD2 always follows the
+      VCC_PWRGD pin.
+    enum:
+      - "none"
+      - "slp-s0"
+      - "c10"
+      - "slp-s0-and-c10"
+
+  c10-source:
+    type: string
+    default: "pin"
+    description: |
+      Where the C10 input comes from: the CPU_C10 pin, or the HOST_C10 eSPI
+      virtual wire. Defaults to the hardware default of the pin.
+    enum:
+      - "pin"
+      - "vwire"
+
+  c10-inverted:
+    type: boolean
+    description: |
+      The selected C10 source is low active. Leave out for a high active
+      source, which is the hardware default.
+
+  slp-s0-inverted:
+    type: boolean
+    description: |
+      The SLP_S0# pin input is high active. Leave out for the low active source
+      the signal name implies, which is the hardware default.
+
+  fw-pwrgd-select:
+    type: boolean
+    description: |
+      Take the S0ix state out of the VCC_PWRGD2 input selection, leaving
+      firmware in direct control of it through pwrgd-source. The S0ix state is
+      still reported to firmware as a signal monitor bit.
