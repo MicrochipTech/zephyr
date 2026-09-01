@@ -1,0 +1,14 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel Port80 BIOS debug port.
+
+  Captures Host writes to the BIOS POST code I/O port into a FIFO readable by
+  the EC. The hardware implements a second, alias, I/O decoder which is
+  described by its own node using microchip,xec-espi-pc-bar-cfg because it
+  needs BAR configuration only and has no registers of its own.
+
+compatible: "microchip,xec-espi-pc-p80bd"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

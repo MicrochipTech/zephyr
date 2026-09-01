@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel ACPI Embedded Controller interface.
+
+  Each ACPI EC instance implements one Host I/O decoder for its four byte
+  command/data window, one Memory BAR for the same window in Host memory
+  space, and one OBF Serial IRQ.
+
+compatible: "microchip,xec-espi-pc-acpi-ec"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

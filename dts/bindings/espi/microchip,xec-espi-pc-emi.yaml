@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel Embedded Memory Interface (EMI).
+
+  Each EMI instance implements one Host I/O decoder, one Memory BAR, and two
+  Serial IRQs: Host event (HEV) and EC to Host (E2H). It also gives the Host
+  windowed access to two regions of SoC data memory, described by emi-mems.
+
+compatible: "microchip,xec-espi-pc-emi"
+
+include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  emi-mems:
+    type: array
+    description: |
+      Each EMI host device supports Host access to two SoC data memory
+      regions. Each region requires three configuration parameters: base
+      address in the SoC data memory, read limit, and write limit. If
+      bits[14:2] of the address written by the Host to the EC address register
+      is less than the limit value the access is allowed. Bit[15] of the EC
+      address selects which of the two memory regions is accessed.
+
+  "emi-mem-cells":
+    type: int
+    const: 3
+
+emi-mem-cells:
+  - base
+  - rdlimit
+  - wrlimit

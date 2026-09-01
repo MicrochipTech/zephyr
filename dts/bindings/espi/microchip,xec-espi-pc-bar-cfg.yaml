@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel host decoder configuration only.
+
+  For logical devices whose Host facing decoders and Serial IRQs must be
+  programmed by the eSPI controller but which have no driver of their own,
+  either because the hardware block is owned by another Zephyr subsystem (the
+  host UART, owned by drivers/serial) or because it is an additional decoder
+  belonging to another logical device (the Port80 alias).
+
+  The eSPI controller driver programs the io-bars, mem-bars and sirqs of every
+  okay child node with an ldn property, so no driver needs to bind here.
+
+compatible: "microchip,xec-espi-pc-bar-cfg"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

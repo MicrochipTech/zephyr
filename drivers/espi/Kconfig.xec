@@ -19,7 +19,21 @@ config ESPI_XEC_V2
 	help
 	  Enable the Microchip XEC ESPI driver for MEC172x/4x/5x series.
 
-if ESPI_XEC || ESPI_XEC_V2
+config ESPI_XEC_V3
+	bool "XEC Microchip eSPI V3 driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_V3_ENABLED && !SOC_SERIES_MEC15XX
+	select PINCTRL
+	help
+	  Enable the Microchip XEC eSPI V3 driver for MEC172x/4x/5x series.
+	  Unlike the V2 driver the peripheral (logical) channel devices are not
+	  implemented by this driver. Each one is a separate Zephyr driver bound
+	  to its own devicetree child node. This driver keeps ownership of the
+	  Host I/O BAR, Memory BAR and Serial IRQ registers, which MEC hardware
+	  holds in reset while ESPI_RESET or PLTRST is asserted, and notifies the
+	  peripheral drivers when that hardware becomes usable.
+
+if ESPI_XEC || ESPI_XEC_V2 || ESPI_XEC_V3
 
 config ESPI_OOB_CHANNEL
 	default y
@@ -82,7 +96,7 @@ config ESPI_TAF_XEC_V2
 	  Enable the Microchip XEC TAF ESPI driver for MEC172x series.
 endif #SOC_SERIES_MEC172X || SOC_SERIES_MEC174X || SOC_SERIES_MEC175X || SOC_SERIES_MEC165XB
 
-endif #ESPI_XEC
+endif # ESPI_XEC || ESPI_XEC_V2 || ESPI_XEC_V3
 
 if ESPI_XEC_V2
 
@@ -220,3 +234,133 @@ config ESPI_PERIPHERAL_KBC_OBE_CBK
 	  Enable KBC OBE callback from OBE ISR
 
 endif #ESPI_XEC_V2 && ESPI_PERIPHERAL_8042_KBC
+
+if ESPI_XEC_V3
+
+config ESPI_XEC_V3_PC_INIT_PRIORITY
+	int "eSPI V3 peripheral channel device init priority"
+	default 4
+	help
+	  Initialization priority of the eSPI peripheral (logical) channel device
+	  drivers. Must be greater than ESPI_INIT_PRIORITY so that the eSPI
+	  controller is initialized first: every peripheral driver registers with
+	  the controller for ESPI_RESET, channel enable, and PLTRST events in its
+	  own init function.
+
+config ESPI_XEC_V3_PC_KBC
+	bool "eSPI V3 8042 keyboard controller peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_KBC_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel 8042
+	  keyboard controller.
+
+if ESPI_XEC_V3_PC_KBC
+
+config ESPI_XEC_V3_PC_KBC_IBF_EVT_DATA
+	bool "eSPI V3 KBC event data format in IBF"
+	help
+	  Encode the KBC input buffer full event using the espi_evt_data_kbc
+	  format instead of passing the raw data byte.
+
+config ESPI_XEC_V3_PC_KBC_OBE_CBK
+	bool "eSPI V3 KBC output buffer empty callback"
+	help
+	  Invoke the application callback from the KBC output buffer empty ISR.
+
+endif # ESPI_XEC_V3_PC_KBC
+
+config ESPI_XEC_V3_PC_ACPI_EC
+	bool "eSPI V3 ACPI EC peripherals"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_ACPI_EC_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel ACPI
+	  Embedded Controller interfaces. One driver serves every enabled
+	  instance.
+
+if ESPI_XEC_V3_PC_ACPI_EC
+
+config ESPI_XEC_V3_PC_ACPI_EC_IBF_EVT_DATA
+	bool "eSPI V3 read ACPI EC event data in the IBF ISR"
+	help
+	  Read the event data in the ACPI EC input buffer full ISR and pass it to
+	  the callback. Used in OS environments where the application expects the
+	  ISR to have already consumed the data.
+
+config ESPI_XEC_V3_PC_ACPI_SHD_MEM_SIZE
+	int "eSPI V3 ACPI shared memory region size in bytes"
+	default 256
+	help
+	  Size of the shared memory region the Host reads ACPI response data
+	  from.
+
+config ESPI_XEC_V3_PC_HOST_CMD_PARAM_SIZE
+	int "eSPI V3 EC host command parameter region size in bytes"
+	default 256
+	help
+	  Size of the shared memory region used for EC host command parameter
+	  data.
+
+endif # ESPI_XEC_V3_PC_ACPI_EC
+
+config ESPI_XEC_V3_PC_ACPI_PM1
+	bool "eSPI V3 ACPI PM1 block peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_ACPI_PM1_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel ACPI PM1
+	  fixed hardware register block.
+
+config ESPI_XEC_V3_PC_EMI
+	bool "eSPI V3 embedded memory interface peripherals"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_EMI_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel embedded
+	  memory interfaces. One driver serves every enabled instance.
+
+config ESPI_XEC_V3_PC_MBOX
+	bool "eSPI V3 mailbox peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_MBOX_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel 32 byte
+	  mailbox. Provides the mchp_xec_espi_pc_mailbox_* API declared in
+	  include/zephyr/drivers/espi/mchp_xec_espi.h.
+
+config ESPI_XEC_V3_PC_PORT92
+	bool "eSPI V3 fast Port92h peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_PORT92_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel fast
+	  Port92h GATE A20 and CPU reset logic.
+
+config ESPI_XEC_V3_PC_P80BD
+	bool "eSPI V3 Port80 BIOS debug peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_P80BD_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel Port80
+	  BIOS debug capture port.
+
+if ESPI_XEC_V3_PC_P80BD
+
+config ESPI_XEC_V3_PC_P80BD_MULTIBYTE
+	bool "eSPI V3 Port80 multi-byte Host writes"
+	help
+	  Accept 1, 2 or 4 bytes of Port80 data written by the Host in a single
+	  eSPI transaction.
+
+endif # ESPI_XEC_V3_PC_P80BD
+
+config ESPI_XEC_V3_PC_GLUE
+	bool "eSPI V3 glue logic peripheral"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_ESPI_PC_GLUE_ENABLED
+	help
+	  Enable the standalone driver for the eSPI peripheral channel glue
+	  logic, which aggregates the Host power management handshake signals.
+
+endif # ESPI_XEC_V3
