@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel glue logic.
+
+  Aggregates the Host power management handshake signals (S0ix, sleep and
+  wake) that are not part of any other logical device. Has no Host I/O or
+  memory decoder of its own.
+
+compatible: "microchip,xec-espi-pc-glue"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

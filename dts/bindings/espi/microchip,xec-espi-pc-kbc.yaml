@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel 8042 keyboard controller (KBC).
+
+  The KBC implements two Host I/O decoders: the data register and the
+  command/status register. It generates two Serial IRQs, KIRQ (keyboard, Host
+  IRQ1) and MIRQ (mouse, Host IRQ12).
+
+compatible: "microchip,xec-espi-pc-kbc"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

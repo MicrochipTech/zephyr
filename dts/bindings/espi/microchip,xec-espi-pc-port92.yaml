@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel Fast Port92h logic.
+
+  Implements the legacy Port 92h fast A20 gate and fast CPU reset in Host I/O
+  space. Generates no Serial IRQ.
+
+compatible: "microchip,xec-espi-pc-port92"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

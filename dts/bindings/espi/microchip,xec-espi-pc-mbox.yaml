@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel mailbox.
+
+  Implements a 32 byte mailbox shared between the Host and the EC, reached
+  through one Host I/O decoder and one Memory BAR. Generates two Serial IRQs,
+  a general purpose one and an SMI.
+
+compatible: "microchip,xec-espi-pc-mbox"
+
+include: ["microchip,xec-espi-pc-base.yaml"]

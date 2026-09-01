@@ -1,0 +1,64 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Common properties for Microchip XEC eSPI peripheral (logical) channel devices.
+#
+# Host-facing hardware configuration (I/O BARs, Memory BARs, and Serial IRQ
+# slots) is described on each peripheral node but is programmed by the eSPI
+# controller driver, never by the peripheral driver. MEC hardware holds these
+# registers in reset while ESPI_RESET or PLTRST is asserted, so only the bus
+# driver knows when they are safe to write.
+#
+# This file is for inclusion only and declares no compatible.
+
+include: [base.yaml]
+
+on-bus: espi
+
+properties:
+  reg:
+    required: true
+
+  ldn:
+    type: int
+    required: true
+    description: Logical device number.
+
+  girqs:
+    type: array
+    description: Array of encoded GIRQ and bit positions.
+
+  pcrs:
+    type: array
+    description: PCR sleep register index and bit position.
+
+  io-bars:
+    type: array
+    description: |
+      Flattened list of <bar_idx host_io_addr> pairs. bar_idx is an
+      enum espi_io_bar_idx value from the SoC eSPI register header and
+      host_io_addr is the Host (x86) I/O base address the BAR decodes.
+      Programmed by the eSPI controller driver.
+
+  mem-bars:
+    type: array
+    description: |
+      Flattened list of <bar_idx host_mem_addr> pairs. bar_idx is an
+      enum espi_mem_bar_idx value and host_mem_addr is bits[31:0] of the Host
+      (x86) memory base address. Bits[47:32] come from the controller's
+      host-memmap-addr-high property. Programmed by the eSPI controller driver.
+
+  sirqs:
+    type: array
+    description: |
+      Flattened list of <sirq_idx slot> pairs. sirq_idx is an
+      enum espi_io_sirq_idx value selecting the Serial IRQ register and slot is
+      the Host interrupt slot number. A slot value of 0xFF disables the Serial
+      IRQ. Programmed by the eSPI controller driver.
+
+  host-io-addr-mask:
+    type: int
+    description: |
+      Host I/O address mask. Fixed for all hardware and used only by the Port80
+      BIOS debug alias device to select the byte lane the alias address maps to
+      in the 80h to 83h I/O range.

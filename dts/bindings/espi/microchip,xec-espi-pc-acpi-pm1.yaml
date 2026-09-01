@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC eSPI peripheral channel ACPI PM1 block.
+
+  Implements the ACPI fixed hardware PM1 status, enable and control registers
+  in Host I/O space. Generates no Serial IRQ of its own; the SCI and SMI
+  virtual wires are driven through the glue logic device.
+
+compatible: "microchip,xec-espi-pc-acpi-pm1"
+
+include: ["microchip,xec-espi-pc-base.yaml"]
