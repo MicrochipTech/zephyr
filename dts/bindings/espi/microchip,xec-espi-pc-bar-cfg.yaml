@@ -13,6 +13,11 @@ description: |
   The eSPI controller driver programs the io-bars, mem-bars and sirqs of every
   okay child node with an ldn property, so no driver needs to bind here.
 
+  A node using this compatible need not have a reg property. The Port80 alias
+  has one, because the Port80 driver reaches its activate and byte lane
+  registers through it, but a node that only names a Host I/O decoder, such as
+  the host UART, has no register block of its own.
+
 compatible: "microchip,xec-espi-pc-bar-cfg"
 
 include: ["microchip,xec-espi-pc-base.yaml"]

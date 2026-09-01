@@ -15,6 +15,9 @@ compatible: "microchip,xec-espi-pc-p80bd"
 include: ["microchip,xec-espi-pc-base.yaml"]
 
 properties:
+  reg:
+    required: true
+
   alias-decoder:
     type: phandle
     description: |
