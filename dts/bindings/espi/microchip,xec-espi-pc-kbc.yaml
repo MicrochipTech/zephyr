@@ -11,3 +11,7 @@ description: |
 compatible: "microchip,xec-espi-pc-kbc"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  reg:
+    required: true

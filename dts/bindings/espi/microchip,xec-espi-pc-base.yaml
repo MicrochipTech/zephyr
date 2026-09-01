@@ -16,8 +16,9 @@ include: [base.yaml]
 on-bus: espi
 
 properties:
-  reg:
-    required: true
+  # reg is required by every node that has a driver, and each of those bindings
+  # says so. It is left optional here because a configuration only node
+  # describes Host side decoding and owns no EC register block.
 
   ldn:
     type: int

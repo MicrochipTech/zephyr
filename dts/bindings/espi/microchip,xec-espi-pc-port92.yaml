@@ -10,3 +10,7 @@ description: |
 compatible: "microchip,xec-espi-pc-port92"
 
 include: ["microchip,xec-espi-pc-base.yaml"]
+
+properties:
+  reg:
+    required: true
