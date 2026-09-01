@@ -289,20 +289,6 @@ config ESPI_XEC_V3_PC_ACPI_EC_IBF_EVT_DATA
 	  the callback. Used in OS environments where the application expects the
 	  ISR to have already consumed the data.
 
-config ESPI_XEC_V3_PC_ACPI_SHD_MEM_SIZE
-	int "eSPI V3 ACPI shared memory region size in bytes"
-	default 256
-	help
-	  Size of the shared memory region the Host reads ACPI response data
-	  from.
-
-config ESPI_XEC_V3_PC_HOST_CMD_PARAM_SIZE
-	int "eSPI V3 EC host command parameter region size in bytes"
-	default 256
-	help
-	  Size of the shared memory region used for EC host command parameter
-	  data.
-
 endif # ESPI_XEC_V3_PC_ACPI_EC
 
 config ESPI_XEC_V3_PC_ACPI_PM1

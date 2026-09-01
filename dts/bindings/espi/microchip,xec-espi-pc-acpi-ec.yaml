@@ -33,14 +33,37 @@ properties:
       CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT and
       CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD symbols.
 
-      Exactly one instance may be "host-io". That instance answers the
-      EACPI_* opcode range of espi_read_lpc_request() and
-      espi_write_lpc_request().
+      Two of the roles answer an opcode range of espi_read_lpc_request() and
+      espi_write_lpc_request(), so at most one instance may claim either:
+
+      - "host-io" answers the EACPI_* range.
+      - "ec-host-cmd" answers ECUSTOM_HOST_CMD_GET_PARAM_MEMORY,
+        ECUSTOM_HOST_CMD_GET_PARAM_MEMORY_SIZE and
+        ECUSTOM_HOST_CMD_SEND_RESULT, which is what the eSPI backend in
+        subsys/mgmt/ec_host_cmd calls. It requires
+        CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD for the reported peripheral value,
+        CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE for the opcodes, and a
+        shared-memory-size, which becomes the host command parameter region.
 
   shared-memory-size:
     type: int
     description: |
       Size in bytes of a driver owned, eight byte aligned region of SoC data
-      memory the Host reads ACPI response data from. When present the driver
-      answers the EACPI_GET_SHARED_MEMORY opcode with the base address of this
-      region. Omit it on instances that have no shared memory region.
+      memory the driver allocates for this instance and hands to the caller that
+      asks for it. Omit it on instances that have no shared memory region.
+
+      The two roles that answer an opcode are the two that can hand the address
+      out, and nothing else in the API exposes it, so the region is allocated only
+      when the role's opcode is compiled in:
+
+      - "host-io" through EACPI_GET_SHARED_MEMORY, which needs
+        CONFIG_ESPI_PERIPHERAL_ACPI_SHM_REGION.
+      - "ec-host-cmd" through ECUSTOM_HOST_CMD_GET_PARAM_MEMORY, which needs
+        CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE.
+
+      This is SoC data memory, not Host memory, and this block has no decoder for
+      it: the Host I/O BAR and Memory BAR decode the four byte command/data
+      window, not the region. An application that wants the Host to reach the
+      region fetches its address with the role's opcode and installs it in an EMI
+      window with mchp_xec_espi_pc_emi_region_set(), which is the decoupled form
+      of the wiring the V2 driver compiles into its EMI0 setup.
