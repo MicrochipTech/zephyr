@@ -887,6 +887,53 @@ static void xec_pc_program_sirqs(const struct espi_xec_config *devcfg)
 	}
 }
 
+/* Slot the device tree assigned to one Serial-IRQ register index, or the value
+ * hardware reads as no Serial-IRQ when no enabled logical device claimed it.
+ */
+static uint8_t xec_pc_sirq_slot(uint8_t sirq_idx)
+{
+	for (size_t n = 0U; (n + 1U) < ARRAY_SIZE(xec_pc_sirqs); n += 2U) {
+		if (xec_pc_sirqs[n] == XEC_PC_TBL_END) {
+			break;
+		}
+
+		if (xec_pc_sirqs[n] == (uint32_t)sirq_idx) {
+			return (uint8_t)xec_pc_sirqs[n + 1U];
+		}
+	}
+
+	return MCHP_ESPI_IO_SIRQ_DIS;
+}
+
+int mchp_xec_espi_v3_sirq_enable(const struct device *espi_dev, uint8_t sirq_idx, uint8_t enable)
+{
+	const struct espi_xec_config *devcfg = NULL;
+	struct xec_espi_ioc_cfg_regs *cfgregs = NULL;
+	uint8_t slot = MCHP_ESPI_IO_SIRQ_DIS;
+
+	if (espi_dev == NULL) {
+		return -EINVAL;
+	}
+
+	devcfg = espi_dev->config;
+	cfgregs = (struct xec_espi_ioc_cfg_regs *)(devcfg->ioc_base_addr + MCHP_ESPI_IO_CFG_OFS);
+
+	if (sirq_idx >= ARRAY_SIZE(cfgregs->SIRQ)) {
+		return -EINVAL;
+	}
+
+	if (enable != 0U) {
+		slot = xec_pc_sirq_slot(sirq_idx);
+		if (slot == MCHP_ESPI_IO_SIRQ_DIS) {
+			return -ENOTSUP;
+		}
+	}
+
+	cfgregs->SIRQ[sirq_idx] = slot;
+
+	return 0;
+}
+
 /*
  * Program the Host facing decoders of every enabled peripheral channel logical
  * device. Must run whenever hardware has released these registers from reset
