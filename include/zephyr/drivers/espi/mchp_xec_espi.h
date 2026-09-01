@@ -16,9 +16,11 @@
 #ifndef INCLUDE_ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_H_
 #define INCLUDE_ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_H_
 
+#include <zephyr/device.h>
 #include <zephyr/drivers/espi.h>
+#include <zephyr/sys/slist.h>
 
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
+#if defined(CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX) || defined(CONFIG_ESPI_XEC_V3_PC_MBOX)
 
 #define MCHP_XEC_MAX_MAILBOX_INDEX 32
 
@@ -116,6 +118,122 @@ int mchp_xec_espi_pc_mailbox_cmd(const struct device *dev, enum mchp_xec_espi_pc
 int mchp_xec_espi_pc_mailbox_ictrl(const struct device *dev, enum mchp_xec_espi_pc_mbox_isrc id,
 				   uint8_t enable);
 
-#endif /* CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX */
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX || CONFIG_ESPI_XEC_V3_PC_MBOX */
+
+#ifdef CONFIG_ESPI_XEC_V3
+
+/**
+ * @brief Events the XEC eSPI V3 controller reports to peripheral channel drivers.
+ *
+ * MEC hardware holds the I/O BAR, Memory BAR and Serial-IRQ registers of every
+ * peripheral channel logical device in reset while eSPI Reset or PLTRST is
+ * asserted, and clears them when the peripheral channel is disabled. Only the
+ * controller driver observes those transitions, so peripheral channel drivers
+ * register for them and use the notification as the point at which their
+ * Host facing decoders are known to be valid.
+ *
+ * The controller guarantees the following ordering:
+ *
+ * - Becoming usable (@ref MCHP_XEC_ESPI_PC_EVT_ESPI_RESET_DEASSERT,
+ *   @ref MCHP_XEC_ESPI_PC_EVT_PLTRST_DEASSERT,
+ *   @ref MCHP_XEC_ESPI_PC_EVT_CHAN_ENABLED): every enabled logical device's
+ *   BARs and Serial-IRQ registers are re-programmed from device tree *before*
+ *   the notification is delivered.
+ * - Going away (@ref MCHP_XEC_ESPI_PC_EVT_ESPI_RESET_ASSERT,
+ *   @ref MCHP_XEC_ESPI_PC_EVT_PLTRST_ASSERT,
+ *   @ref MCHP_XEC_ESPI_PC_EVT_CHAN_DISABLED): the notification is delivered
+ *   *before* the hardware holds the registers in reset, giving the peripheral
+ *   driver a chance to quiesce pending Host operations.
+ *
+ * Handlers run in the controller's interrupt context and must not block.
+ */
+enum mchp_xec_espi_pc_event {
+	MCHP_XEC_ESPI_PC_EVT_ESPI_RESET_ASSERT = 0,
+	MCHP_XEC_ESPI_PC_EVT_ESPI_RESET_DEASSERT,
+	MCHP_XEC_ESPI_PC_EVT_CHAN_DISABLED,
+	MCHP_XEC_ESPI_PC_EVT_CHAN_ENABLED,
+	MCHP_XEC_ESPI_PC_EVT_PLTRST_ASSERT,
+	MCHP_XEC_ESPI_PC_EVT_PLTRST_DEASSERT,
+	MCHP_XEC_ESPI_PC_EVT_MAX,
+};
+
+/**
+ * @brief Peripheral channel event handler.
+ *
+ * @param espi_dev eSPI controller device delivering the event
+ * @param pc_dev peripheral channel device the registration belongs to
+ * @param evt event being delivered
+ */
+typedef void (*mchp_xec_espi_pc_handler_t)(const struct device *espi_dev,
+					   const struct device *pc_dev,
+					   enum mchp_xec_espi_pc_event evt);
+
+/**
+ * @brief Peripheral channel LPC request handler.
+ *
+ * Implements one contiguous range of @ref lpc_peripheral_opcode on behalf of
+ * the controller's espi_read_lpc_request() / espi_write_lpc_request() shims.
+ *
+ * @param pc_dev peripheral channel device the registration belongs to
+ * @param op opcode, guaranteed to be within the registered range
+ * @param data in/out data for the opcode
+ * @param write true for a write request, false for a read request
+ *
+ * @retval 0 success
+ * @retval -ENOTSUP opcode is not implemented by this device
+ * @retval -EINVAL invalid arguments
+ */
+typedef int (*mchp_xec_espi_pc_lpc_req_t)(const struct device *pc_dev,
+					  enum lpc_peripheral_opcode op, uint32_t *data,
+					  bool write);
+
+/**
+ * @brief Peripheral channel registration.
+ *
+ * Owned by the peripheral channel driver and must stay allocated for as long
+ * as the registration is active. Fill in @ref pc_dev and @ref evt_mask plus
+ * @ref handler, and optionally the LPC request fields, before calling
+ * mchp_xec_espi_pc_register().
+ */
+struct mchp_xec_espi_pc_cb {
+	/** Internal list node, do not touch. */
+	sys_snode_t node;
+	/** Peripheral channel device this registration belongs to. */
+	const struct device *pc_dev;
+	/** Event handler. May be NULL if only the LPC shim is required. */
+	mchp_xec_espi_pc_handler_t handler;
+	/** Bit mask of BIT(enum mchp_xec_espi_pc_event) values of interest. */
+	uint32_t evt_mask;
+	/** LPC request handler. NULL means this device serves no opcodes. */
+	mchp_xec_espi_pc_lpc_req_t lpc_request;
+	/** First @ref lpc_peripheral_opcode served, inclusive. */
+	uint16_t lpc_op_start;
+	/** Last @ref lpc_peripheral_opcode served, inclusive. */
+	uint16_t lpc_op_end;
+};
+
+/** @brief Register a peripheral channel device with the eSPI controller
+ *
+ * @param espi_dev eSPI controller device, normally DEVICE_DT_GET(DT_INST_PARENT(n))
+ * @param cb registration filled in by the caller and owned by the caller
+ *
+ * @retval 0 success
+ * @retval -EINVAL espi_dev or cb is NULL, or cb->pc_dev is NULL
+ * @retval -EALREADY cb is already registered with this controller
+ */
+int mchp_xec_espi_pc_register(const struct device *espi_dev, struct mchp_xec_espi_pc_cb *cb);
+
+/** @brief Remove a peripheral channel registration
+ *
+ * @param espi_dev eSPI controller device the registration was added to
+ * @param cb registration previously passed to mchp_xec_espi_pc_register()
+ *
+ * @retval 0 success
+ * @retval -EINVAL espi_dev or cb is NULL
+ * @retval -ENOENT cb is not registered with this controller
+ */
+int mchp_xec_espi_pc_unregister(const struct device *espi_dev, struct mchp_xec_espi_pc_cb *cb);
+
+#endif /* CONFIG_ESPI_XEC_V3 */
 
 #endif /* INCLUDE_ZEPHYR_DRIVERS_ESPI_MCHP_XEC_ESPI_H_ */
