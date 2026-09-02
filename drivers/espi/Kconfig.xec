@@ -80,6 +80,18 @@ config ESPI_FLASH_BUFFER_SIZE
 	  Use maximum RAM buffer size defined by spec but allow applications
 	  to override if eSPI host doesn't support it.
 
+config ESPI_VWIRE_SEND_TIMEOUT_US
+	int "Timeout in microseconds for Host responding to VWire available status"
+	default 1000
+	depends on ESPI_VWIRE_CHANNEL
+	help
+	  When a Target-to-Host VWire is changed by firmware, the eSPI target
+	  controller will set the VWires Available hardware status. If the Host
+	  can enabled eSPI alert then our controller generates the alert. Otherwise
+	  the Host can see VWires Available by issuing GET_STATUS. When the Host issues
+	  GET_VW our controller will clear its read-only Target-to-Host VWire change
+	  status bit(s).
+
 config ESPI_TAF_XEC
 	bool "XEC Microchip ESPI TAF driver"
 	default y
