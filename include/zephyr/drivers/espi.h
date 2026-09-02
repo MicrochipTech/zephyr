@@ -1289,6 +1289,16 @@ static inline int espi_remove_callback(const struct device *dev,
 	return api->manage_callback(dev, callback, false);
 }
 
+/** @cond INTERNAL_HIDDEN */
+#if defined(CONFIG_ESPI_INTERRUPT_CONFIG_WARN)
+/*
+ * Out of line because LOG_WRN() cannot be used from a public header: it requires a log module
+ * registered in the including translation unit. Defined in drivers/espi/espi_api.c.
+ */
+void z_espi_interrupt_config_warn(void);
+#endif
+/** @endcond */
+
 /**
  * @brief Control eSPI interrupts.
  *
@@ -1338,6 +1348,19 @@ static inline int espi_remove_callback(const struct device *dev,
  *
  * Note: For both cases a 1 enables the corresponding interrupt event, and 0 disables it.
  *
+ * @note No driver in the tree implements the behaviour described above, and the signature
+ * cannot express it. The flags select device classes, not interrupt sources, so sources
+ * within one class that need opposite treatment cannot be separated: 8042 input buffer full
+ * is an edge source that should stay armed, while output buffer empty is a level source that
+ * must stay masked until the driver has a byte for the Host, yet one bit covers both.
+ * Several instances of the same class share one bit for the same reason. The call is an
+ * absolute whole-word set-state with no mask parameter and no companion getter, so a caller
+ * wanting to change one source has to keep a shadow copy of state the driver owns. Flags a
+ * driver does not implement are dropped silently and the call still returns 0. Drivers are
+ * therefore encouraged to offer a per-source vendor interface; on Microchip XEC see
+ * mchp_xec_espi_pc_intr_set() and mchp_xec_espi_pc_intr_get(), which are addressed to the
+ * individual peripheral device and take a mask and a value.
+ *
  * @retval 0 If successful.
  * @retval -EIO General input / output error, failed to configure device.
  * @retval -EINVAL invalid capabilities, failed to configure device.
@@ -1347,6 +1370,10 @@ static inline int espi_interrupt_config(const struct device *dev, uint32_t espi_
 					uint32_t espi_vendor_flags)
 {
 	const struct espi_driver_api *api = DEVICE_API_GET(espi, dev);
+
+#if defined(CONFIG_ESPI_INTERRUPT_CONFIG_WARN)
+	z_espi_interrupt_config_warn();
+#endif
 
 	if (!api->interrupt_config) {
 		return -ENOTSUP;
