@@ -36,6 +36,18 @@ properties:
     description: |
       Encoded PCR sleep, clock required, reset register index and bit position.
 
+  girq-wake:
+    type: int
+    required: true
+    description: |
+      Encoded PLL wake GIRQ and bit position for eSPI. This wake-only GIRQ must
+      be enabled if the Host sends eSPI traffic when the SoC is in deep sleep.
+      The wake GIRQ turns on the ring oscillator and and SoC eSPI hardware captures
+      and examines the eSPI packet. If the HW can service the packet without SoC
+      firmware intervention it does so and turns off the ring oscillator. If firmware
+      is required the PLL is enabled and the respective eSPI interrupt to the SoC
+      processor is asserted.
+
   pinctrl-0:
     required: true
 
