@@ -31,6 +31,8 @@
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/pm.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/drivers/espi/mchp_xec_espi.h>
@@ -1772,68 +1774,7 @@ static void espi_ht_vw_bank1_isr(const struct device *dev)
 	}
 }
 
-static int espi_xec_init(const struct device *dev);
-
-static DEVICE_API(espi, espi_xec_driver_api) = {
-	.config = espi_xec_configure,
-	.get_channel_status = espi_xec_channel_ready,
-	.send_vwire = espi_xec_send_vwire,
-	.receive_vwire = espi_xec_receive_vwire,
-#ifdef CONFIG_ESPI_OOB_CHANNEL
-	.send_oob = espi_xec_send_oob,
-	.receive_oob = espi_xec_receive_oob,
-#endif
-#ifdef CONFIG_ESPI_FLASH_CHANNEL
-	.flash_read = espi_xec_flash_read,
-	.flash_write = espi_xec_flash_write,
-	.flash_erase = espi_xec_flash_erase,
-#endif
-	.manage_callback = espi_xec_manage_callback,
-	.read_lpc_request = espi_xec_read_lpc_request,
-	.write_lpc_request = espi_xec_write_lpc_request,
-	.interrupt_config = espi_xec_interrupt_config,
-};
-
-static struct espi_xec_data espi_xec_data_var;
-
-/* n = node-id, p = property, i = index */
-#define XEC_IRQ_INFO(n, p, i)                                                                      \
-	{                                                                                          \
-		.gid = MCHP_XEC_ECIA_GIRQ(DT_PROP_BY_IDX(n, p, i)),                                \
-		.gpos = MCHP_XEC_ECIA_GIRQ_POS(DT_PROP_BY_IDX(n, p, i)),                           \
-		.anid = MCHP_XEC_ECIA_NVIC_AGGR(DT_PROP_BY_IDX(n, p, i)),                          \
-		.dnid = MCHP_XEC_ECIA_NVIC_DIRECT(DT_PROP_BY_IDX(n, p, i)),                        \
-	},
-
-static const struct espi_xec_irq_info espi_xec_irq_info_0[] = {
-	DT_FOREACH_PROP_ELEM(DT_DRV_INST(0), girqs, XEC_IRQ_INFO)};
-
-/* pin control structure(s) */
-PINCTRL_DT_INST_DEFINE(0);
-
-static const struct espi_xec_config espi_xec_config = {
-	.ioc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, io),
-	.mc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, mem),
-	.vw_base_addr = DT_INST_REG_ADDR_BY_NAME(0, vw),
-	.pcr_scr = DT_INST_PROP(0, pcr_scr),
-	.irq_info_size = ARRAY_SIZE(espi_xec_irq_info_0),
-	.irq_info_list = espi_xec_irq_info_0,
-	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(0),
-};
-
-DEVICE_DT_INST_DEFINE(0, &espi_xec_init, NULL, &espi_xec_data_var, &espi_xec_config, PRE_KERNEL_2,
-		      CONFIG_ESPI_INIT_PRIORITY, &espi_xec_driver_api);
-
-#define XEC_GIRQ24_NODE DT_NODELABEL(girq24)
-#define XEC_GIRQ25_NODE DT_NODELABEL(girq25)
-
-#define XEC_GIRQ_EN(girq_node_id) DT_NODE_HAS_STATUS_OKAY(node_id)
-
-#define XEC_HAS_IDRV_GIRQ_24_25                                                                    \
-	((DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_ecia) != 0) &&                                   \
-	 ((XEC_GIRQ_EN(XEC_GIRQ24_NODE) != 0) || (XEC_GIRQ_EN(XEC_GIRQ25_NODE) != 0)))
-
-BUILD_ASSERT(XEC_HAS_IDRV_GIRQ_24_25 == 0, "GIRQ24/25 cannot be owned by another driver!");
+/* driver initialization */
 
 /*
  * Connect ESPI bus interrupt handlers: ESPI_RESET and channels.
@@ -2128,3 +2069,97 @@ static int espi_xec_init(const struct device *dev)
 
 	return ret;
 }
+
+#ifdef CONFIG_PM_DEVICE
+static int espi_xec_v3_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	int rc = 0;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		/* TODO */
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		/* TODO */
+		break;
+	case PM_DEVICE_ACTION_TURN_OFF:
+		/* TODO */
+		break;
+	case PM_DEVICE_ACTION_TURN_ON:
+		/* TODO */
+		break;
+	default:
+		rc = -ENOTSUP;
+	}
+q
+	return rc;
+}
+#endif
+
+static DEVICE_API(espi, espi_xec_driver_api) = {
+	.config = espi_xec_configure,
+	.get_channel_status = espi_xec_channel_ready,
+	.send_vwire = espi_xec_send_vwire,
+	.receive_vwire = espi_xec_receive_vwire,
+#ifdef CONFIG_ESPI_OOB_CHANNEL
+	.send_oob = espi_xec_send_oob,
+	.receive_oob = espi_xec_receive_oob,
+#endif
+#ifdef CONFIG_ESPI_FLASH_CHANNEL
+	.flash_read = espi_xec_flash_read,
+	.flash_write = espi_xec_flash_write,
+	.flash_erase = espi_xec_flash_erase,
+#endif
+	.manage_callback = espi_xec_manage_callback,
+	.read_lpc_request = espi_xec_read_lpc_request,
+	.write_lpc_request = espi_xec_write_lpc_request,
+	.interrupt_config = espi_xec_interrupt_config,
+};
+
+static struct espi_xec_data espi_xec_data_var;
+
+#define XEC_GIRQ24_NODE DT_NODELABEL(girq24)
+#define XEC_GIRQ25_NODE DT_NODELABEL(girq25)
+
+#define XEC_GIRQ_EN(girq_node_id) DT_NODE_HAS_STATUS_OKAY(node_id)
+
+#define XEC_HAS_IDRV_GIRQ_24_25                                                                    \
+	((DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_ecia) != 0) &&                                   \
+	 ((XEC_GIRQ_EN(XEC_GIRQ24_NODE) != 0) || (XEC_GIRQ_EN(XEC_GIRQ25_NODE) != 0)))
+
+BUILD_ASSERT(XEC_HAS_IDRV_GIRQ_24_25 == 0, "GIRQ24/25 cannot be owned by another driver!");
+
+/* n = node-id, p = property, i = index */
+#define XEC_IRQ_INFO(n, p, i)                                                                      \
+	{                                                                                          \
+		.gid = MCHP_XEC_ECIA_GIRQ(DT_PROP_BY_IDX(n, p, i)),                                \
+		.gpos = MCHP_XEC_ECIA_GIRQ_POS(DT_PROP_BY_IDX(n, p, i)),                           \
+		.anid = MCHP_XEC_ECIA_NVIC_AGGR(DT_PROP_BY_IDX(n, p, i)),                          \
+		.dnid = MCHP_XEC_ECIA_NVIC_DIRECT(DT_PROP_BY_IDX(n, p, i)),                        \
+	},
+
+static const struct espi_xec_irq_info espi_xec_irq_info_0[] = {
+	DT_FOREACH_PROP_ELEM(DT_DRV_INST(0), girqs, XEC_IRQ_INFO)};
+
+/* pin control structure(s) */
+PINCTRL_DT_INST_DEFINE(0);
+
+static const struct espi_xec_config espi_xec_config_0 = {
+	.ioc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, io),
+	.mc_base_addr = DT_INST_REG_ADDR_BY_NAME(0, mem),
+	.vw_base_addr = DT_INST_REG_ADDR_BY_NAME(0, vw),
+	.pcr_scr = DT_INST_PROP(0, pcr_scr),
+	.irq_info_size = ARRAY_SIZE(espi_xec_irq_info_0),
+	.irq_info_list = espi_xec_irq_info_0,
+	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(0),
+#if defined(CONFIG_PM) || defined(CONFIG_PM_DEVICE)
+	.girq_wake = (uint8_t)MCHP_XEC_ECIA_GIRQ(DT_INST_PROP(0, girq_wake)),
+	.girq_wake_pos = (uint8_t)MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP(0, girq_wake)),
+#endif
+};
+
+PM_DEVICE_DT_INST_DEFINE(0, espi_xec_v3_pm_action);
+
+DEVICE_DT_INST_DEFINE(0, &espi_xec_init, PM_DEVICE_DT_INST_GET(0), &espi_xec_data_var,
+		      &espi_xec_config_0, PRE_KERNEL_2, CONFIG_ESPI_INIT_PRIORITY,
+		      &espi_xec_driver_api);
