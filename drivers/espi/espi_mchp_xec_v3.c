@@ -45,7 +45,7 @@ LOG_MODULE_REGISTER(espi, CONFIG_ESPI_LOG_LEVEL);
 /* Maximum timeout to transmit a virtual wire packet.
  * 1 ms expressed in multiples of 1us
  */
-#define ESPI_XEC_VWIRE_SEND_TIMEOUT 1000ul
+#define ESPI_XEC_VWIRE_SEND_TIMEOUT CONFIG_ESPI_VWIRE_SEND_TIMEOUT_US
 
 #define VW_MAX_GIRQS 2ul
 
