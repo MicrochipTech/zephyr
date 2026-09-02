@@ -83,6 +83,9 @@ struct espi_pc_mbox_xec_config {
 	uint32_t ecia_info;
 };
 
+BUILD_ASSERT(MCHP_XEC_ESPI_PC_MBOX_SRC_EC == BIT(MCHP_XEC_ESPI_PC_MBOX_ISRC_EC),
+	     "Mailbox EC interrupt source bit must match enum mchp_xec_espi_pc_mbox_isrc");
+
 struct espi_pc_mbox_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
 };
@@ -121,6 +124,28 @@ static void mbox_isr(const struct device *dev)
 	mchp_xec_espi_v3_send_callbacks(cfg->espi_dev, evt);
 }
 
+/* Apply the requested interrupt source to the hardware. The Host-to-EC register
+ * write is an edge source, so it is armed as soon as it is asked for, and status
+ * latched while it was masked is discarded on the way in.
+ *
+ * mbox_isr() masks the source in hardware without changing the request, because
+ * the Host has one command outstanding until the application answers it. Reading
+ * the request back therefore reports the source enabled while the hardware is
+ * masked, and re-arming it is what mchp_xec_espi_pc_mailbox_ictrl() is for.
+ */
+static void mbox_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_mbox_xec_config *cfg = dev->config;
+	struct espi_pc_mbox_xec_data *data = dev->data;
+
+	if ((data->pc_cb.intr_src_en & MCHP_XEC_ESPI_PC_MBOX_SRC_EC) != 0U) {
+		xec_pc_girq_clr(cfg->ecia_info);
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	} else {
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+}
+
 static void mbox_espi_event(const struct device *espi_dev, const struct device *dev,
 			    enum mchp_xec_espi_pc_event evt)
 {
@@ -138,8 +163,7 @@ static void mbox_espi_event(const struct device *espi_dev, const struct device *
 	 * issued right after de-assertion is seen even if the application had
 	 * left the source masked from an earlier command.
 	 */
-	xec_pc_girq_clr(cfg->ecia_info);
-	xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	mbox_intr_apply(dev);
 }
 
 int mchp_xec_espi_pc_mailbox_get(const struct device *dev, uint8_t mbox_idx, uint8_t num_mboxes,
@@ -262,9 +286,13 @@ int mchp_xec_espi_pc_mailbox_ictrl(const struct device *dev, enum mchp_xec_espi_
 
 	switch (id) {
 	case MCHP_XEC_ESPI_PC_MBOX_ISRC_EC:
-		xec_pc_girq_ctrl(cfg->ecia_info,
-				 (enable != 0U) ? MCHP_MEC_ECIA_GIRQ_EN : MCHP_MEC_ECIA_GIRQ_DIS);
-		break;
+		/* Goes through the per source API so the two cannot disagree
+		 * about what the application asked for, and so the request
+		 * survives the next bus reset.
+		 */
+		return mchp_xec_espi_pc_intr_set(dev, MCHP_XEC_ESPI_PC_MBOX_SRC_EC,
+						 (enable != 0U) ? MCHP_XEC_ESPI_PC_MBOX_SRC_EC
+								: 0U);
 	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ:
 		return mchp_xec_espi_v3_sirq_enable(cfg->espi_dev, MCHP_XEC_ESPI_SIRQ_MBOX, enable);
 	case MCHP_XEC_ESPI_PC_MBOX_ISRC_SIRQ_SMI:
@@ -294,6 +322,15 @@ static int espi_pc_mbox_xec_init(const struct device *dev)
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = mbox_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+	data->pc_cb.intr_apply = mbox_intr_apply;
+	/* Armed until the application says otherwise, so one that never asks
+	 * behaves as it did under V2. The block's two Serial IRQ outputs are not
+	 * EC interrupt sources and stay with the controller, so they are not
+	 * listed here. No generic espi_interrupt_flags bit describes the mailbox,
+	 * so intr_flags stays clear.
+	 */
+	data->pc_cb.intr_src_supported = MCHP_XEC_ESPI_PC_MBOX_SRC_EC;
+	data->pc_cb.intr_src_en = MCHP_XEC_ESPI_PC_MBOX_SRC_EC;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {

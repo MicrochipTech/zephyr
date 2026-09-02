@@ -236,6 +236,23 @@ static void emi_isr(const struct device *dev)
 	mchp_xec_espi_v3_send_callbacks(cfg->espi_dev, evt);
 }
 
+/* Apply the requested interrupt source to the hardware. The Host-to-EC mailbox
+ * write is an edge source, so it is armed as soon as it is asked for. Status
+ * latched while it was masked is discarded on the way in.
+ */
+static void emi_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_emi_xec_config *cfg = dev->config;
+	struct espi_pc_emi_xec_data *data = dev->data;
+
+	if ((data->pc_cb.intr_src_en & MCHP_XEC_ESPI_PC_EMI_SRC_H2EC) != 0U) {
+		xec_pc_girq_clr(cfg->ecia_info);
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+	} else {
+		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+}
+
 static void emi_espi_event(const struct device *espi_dev, const struct device *dev,
 			   enum mchp_xec_espi_pc_event evt)
 {
@@ -248,8 +265,7 @@ static void emi_espi_event(const struct device *espi_dev, const struct device *d
 		 * and Serial IRQs.
 		 */
 		emi_block_config(dev);
-		xec_pc_girq_clr(cfg->ecia_info);
-		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+		emi_intr_apply(dev);
 	} else {
 		xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
 	}
@@ -287,6 +303,14 @@ static int espi_pc_emi_xec_init(const struct device *dev)
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = emi_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+	data->pc_cb.intr_apply = emi_intr_apply;
+	/* Armed until the application says otherwise, so one that never asks
+	 * behaves as it did under V2. No generic espi_interrupt_flags bit
+	 * describes EMI, so intr_flags stays clear and espi_interrupt_config()
+	 * leaves this block alone.
+	 */
+	data->pc_cb.intr_src_supported = MCHP_XEC_ESPI_PC_EMI_SRC_H2EC;
+	data->pc_cb.intr_src_en = MCHP_XEC_ESPI_PC_EMI_SRC_H2EC;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {
