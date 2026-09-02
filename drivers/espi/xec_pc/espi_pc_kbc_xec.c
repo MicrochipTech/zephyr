@@ -45,13 +45,11 @@ struct espi_pc_kbc_xec_config {
 	uint32_t obe_ecia_info;
 };
 
+/* Interrupt sources this block implements. */
+#define XEC_KBC_SRC_ALL (MCHP_XEC_ESPI_PC_KBC_SRC_IBF | MCHP_XEC_ESPI_PC_KBC_SRC_OBE)
+
 struct espi_pc_kbc_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
-	/* Whether the application wants Host facing interrupts from this block.
-	 * Enabled until espi_interrupt_config() says otherwise, so an
-	 * application that never calls it behaves as it did under V2.
-	 */
-	bool intr_en;
 };
 
 /* Apply the KBC block configuration. Called at init and again every time the
@@ -68,32 +66,45 @@ static void kbc_block_config(const struct device *dev)
 	regs->ACTV = MCHP_KBC_ACTV_EN;
 }
 
-/* Apply the tracked interrupt enable to the hardware. The Host writes a command
- * whenever it likes, so IBF is armed whenever interrupts are on. OBE is a level
- * source that stays asserted for as long as the output buffer is empty, so it is
- * left masked here and armed by the application once it has a byte for the Host.
+/* Apply the requested interrupt sources to the hardware. The Host writes a
+ * command whenever it likes, so IBF is armed as soon as it is asked for. OBE is
+ * a level source that stays asserted for as long as the output buffer is empty,
+ * so asking for it only permits kbc_obe_arm() to arm it once there is a byte for
+ * the Host; disabling it takes effect here immediately.
  */
 static void kbc_intr_apply(const struct device *dev)
 {
 	const struct espi_pc_kbc_xec_config *cfg = dev->config;
 	struct espi_pc_kbc_xec_data *data = dev->data;
+	uint32_t src_en = data->pc_cb.intr_src_en;
 
-	if (data->intr_en) {
+	if ((src_en & MCHP_XEC_ESPI_PC_KBC_SRC_IBF) != 0U) {
 		xec_pc_girq_clr(cfg->ibf_ecia_info);
 		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
 	} else {
 		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	}
+
+	if ((src_en & MCHP_XEC_ESPI_PC_KBC_SRC_OBE) == 0U) {
 		xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
 	}
 }
 
-/* Called from the controller's espi_interrupt_config() implementation. */
-static void kbc_intr_cfg(const struct device *dev, bool enable)
+/* Arm OBE, having just given the Host a byte to collect. The handler masks it
+ * again, so the source is armed for exactly the one transition of interest and
+ * never left asserting into an empty output buffer.
+ */
+static void kbc_obe_arm(const struct device *dev)
 {
+	const struct espi_pc_kbc_xec_config *cfg = dev->config;
 	struct espi_pc_kbc_xec_data *data = dev->data;
 
-	data->intr_en = enable;
-	kbc_intr_apply(dev);
+	if ((data->pc_cb.intr_src_en & MCHP_XEC_ESPI_PC_KBC_SRC_OBE) == 0U) {
+		return;
+	}
+
+	xec_pc_girq_clr(cfg->obe_ecia_info);
+	xec_pc_girq_ctrl(cfg->obe_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
 }
 
 static void kbc_ibf_isr(const struct device *dev)
@@ -215,17 +226,17 @@ static int kbc_lpc_request(const struct device *dev, enum lpc_peripheral_opcode 
 	switch (op) {
 	case E8042_WRITE_KB_CHAR:
 		regs->EC_DATA = *data & 0xffU;
+		kbc_obe_arm(dev);
 		break;
 	case E8042_WRITE_MB_CHAR:
 		regs->EC_AUX_DATA = *data & 0xffU;
+		kbc_obe_arm(dev);
 		break;
 	case E8042_RESUME_IRQ:
-		xec_pc_girq_clr(cfg->ibf_ecia_info);
-		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
-		break;
+		return mchp_xec_espi_pc_intr_set(dev, MCHP_XEC_ESPI_PC_KBC_SRC_IBF,
+						 MCHP_XEC_ESPI_PC_KBC_SRC_IBF);
 	case E8042_PAUSE_IRQ:
-		xec_pc_girq_ctrl(cfg->ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
-		break;
+		return mchp_xec_espi_pc_intr_set(dev, MCHP_XEC_ESPI_PC_KBC_SRC_IBF, 0U);
 	case E8042_CLEAR_OBF:
 		/* Reading the Host register is what clears OBF. */
 		(void)regs->HOST_AUX_DATA;
@@ -293,9 +304,15 @@ static int espi_pc_kbc_xec_init(const struct device *dev)
 	data->pc_cb.lpc_request = kbc_lpc_request;
 	data->pc_cb.lpc_op_start = E8042_START_OPCODE;
 	data->pc_cb.lpc_op_end = E8042_MAX_OPCODE;
-	data->pc_cb.intr_cfg = kbc_intr_cfg;
+	data->pc_cb.intr_apply = kbc_intr_apply;
 	data->pc_cb.intr_flags = ESPI_PERIPHERAL_8042_KBC_EVENTS;
-	data->intr_en = true;
+	data->pc_cb.intr_src_supported = XEC_KBC_SRC_ALL;
+	/* IBF is armed until the application says otherwise, so one that never
+	 * asks behaves as it did under V2. OBE stays off until asked for,
+	 * because an application that is not expecting it has nothing to do
+	 * with the notification.
+	 */
+	data->pc_cb.intr_src_en = MCHP_XEC_ESPI_PC_KBC_SRC_IBF;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {

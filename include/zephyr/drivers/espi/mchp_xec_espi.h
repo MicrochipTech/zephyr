@@ -194,22 +194,77 @@ typedef int (*mchp_xec_espi_pc_lpc_req_t)(const struct device *pc_dev,
 					  bool write);
 
 /**
- * @brief Peripheral channel interrupt configuration handler.
+ * @name Peripheral channel interrupt sources
  *
- * Enables or disables the Host facing interrupt sources of one logical device
- * on behalf of the controller's espi_interrupt_config() implementation. The
- * device is expected to remember the request and honour it the next time its
- * event handler reports the Host facing hardware usable, because the
- * application asks once and the bus may reset any number of times afterwards.
+ * Each logical device names its own interrupt sources, because a bit that meant
+ * the same thing on every device could only ever name a device class, and the
+ * sources within one class are not interchangeable: 8042 input buffer full is
+ * an edge source that wants to stay armed, while output buffer empty is a level
+ * source that must stay masked until there is a byte for the Host. A source bit
+ * is therefore only meaningful together with the device it is passed with, and
+ * mchp_xec_espi_pc_intr_get() reports which bits a given device implements.
  *
- * Sources that assert while the Host has nothing to do, such as an output
- * buffer empty signal, stay masked until the driver has data for the Host even
- * when interrupts are enabled.
+ * @{
+ */
+
+/** 8042 KBC: the Host wrote the command or data register. Edge. */
+#define MCHP_XEC_ESPI_PC_KBC_SRC_IBF BIT(0)
+/**
+ * 8042 KBC: the Host read the output buffer. Level, asserted for as long as the
+ * buffer is empty, so the driver arms it only after writing a byte for the Host
+ * and masks it again in the handler.
+ */
+#define MCHP_XEC_ESPI_PC_KBC_SRC_OBE BIT(1)
+
+/** ACPI EC: the Host wrote the command or data register. Edge. */
+#define MCHP_XEC_ESPI_PC_ACPI_EC_SRC_IBF BIT(0)
+/** ACPI EC: the Host read the data register. Level, as @ref MCHP_XEC_ESPI_PC_KBC_SRC_OBE. */
+#define MCHP_XEC_ESPI_PC_ACPI_EC_SRC_OBE BIT(1)
+
+/** ACPI PM1: the Host wrote the PM1 control register. */
+#define MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_CTL BIT(0)
+/** ACPI PM1: the Host wrote the PM1 enable register. */
+#define MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_EN  BIT(1)
+/** ACPI PM1: the Host wrote the PM1 status register. */
+#define MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_STS BIT(2)
+
+/** EMI: the Host wrote the Host-to-EC mailbox register. */
+#define MCHP_XEC_ESPI_PC_EMI_SRC_H2EC BIT(0)
+
+/**
+ * Mailbox: the Host wrote the Host-to-EC register. This is the block's only EC
+ * interrupt source; its two Serial-IRQ outputs are Host facing IRQ delivery
+ * owned by the controller and stay with
+ * mchp_xec_espi_pc_mailbox_ictrl().
+ */
+#define MCHP_XEC_ESPI_PC_MBOX_SRC_EC BIT(0)
+
+/** Port 80 capture: the FIFO reached its threshold. */
+#define MCHP_XEC_ESPI_PC_P80BD_SRC_THRESHOLD BIT(0)
+
+/** Glue logic: the derived VCC_PWRGD2 power good signal changed. */
+#define MCHP_XEC_ESPI_PC_GLUE_SRC_PWRGD BIT(0)
+/** Glue logic: the derived S0ix connected standby state changed. */
+#define MCHP_XEC_ESPI_PC_GLUE_SRC_S0IX  BIT(1)
+
+/** @} */
+
+/**
+ * @brief Peripheral channel interrupt apply handler.
+ *
+ * Pushes @ref mchp_xec_espi_pc_cb::intr_src_en to the logical device's hardware.
+ * The controller calls it after changing that word, and the peripheral driver
+ * calls it itself once its event handler reports the Host facing hardware usable
+ * again, because MEC hardware clears a block's enables along with its BARs. The
+ * application therefore asks once, however many times the bus resets afterwards.
+ *
+ * A level source is left masked here even when its bit is set, because it would
+ * assert for as long as the Host has nothing to do. The driver arms such a
+ * source at the point it has data for the Host, and only if its bit is set.
  *
  * @param pc_dev peripheral channel device the registration belongs to
- * @param enable true to enable this device's interrupt sources
  */
-typedef void (*mchp_xec_espi_pc_intr_cfg_t)(const struct device *pc_dev, bool enable);
+typedef void (*mchp_xec_espi_pc_intr_apply_t)(const struct device *pc_dev);
 
 /**
  * @brief Peripheral channel registration.
@@ -235,16 +290,32 @@ struct mchp_xec_espi_pc_cb {
 	/** Last @ref lpc_peripheral_opcode served, inclusive. */
 	uint16_t lpc_op_end;
 	/**
-	 * Interrupt configuration handler. NULL means espi_interrupt_config()
-	 * does not reach this device, which is the right answer for a logical
-	 * device whose interrupt sources the generic
-	 * @ref espi_interrupt_flags bits do not describe.
+	 * Interrupt sources this device implements, as its own
+	 * MCHP_XEC_ESPI_PC_*_SRC_* bits. Zero, the default, means the device has
+	 * no Host facing interrupt sources of its own.
 	 */
-	mchp_xec_espi_pc_intr_cfg_t intr_cfg;
+	uint32_t intr_src_supported;
+	/**
+	 * Interrupt sources currently asked for, a subset of
+	 * @ref intr_src_supported. The peripheral driver seeds it before
+	 * registering and reads it from @ref intr_apply; every change after that
+	 * belongs to mchp_xec_espi_pc_intr_set(), so a driver must not write it
+	 * once registered.
+	 */
+	uint32_t intr_src_en;
+	/**
+	 * Applies @ref intr_src_en to hardware. NULL means the device has no
+	 * sources to apply and mchp_xec_espi_pc_intr_set() reports -ENOTSUP.
+	 */
+	mchp_xec_espi_pc_intr_apply_t intr_apply;
 	/**
 	 * Bit mask of @ref espi_interrupt_flags values this device answers to.
-	 * @ref intr_cfg is called with enable set when espi_interrupt_config()
-	 * is passed any of these bits, and clear when it is passed none of them.
+	 * espi_interrupt_config() sets @ref intr_src_en to all of
+	 * @ref intr_src_supported when passed any of these bits and to none of
+	 * them when passed none, which is the whole of the control a class based
+	 * flag word can express. Zero, the default, keeps that API away from this
+	 * device, which is the right answer where no generic flag describes its
+	 * sources.
 	 */
 	uint32_t intr_flags;
 };
@@ -270,6 +341,68 @@ int mchp_xec_espi_pc_register(const struct device *espi_dev, struct mchp_xec_esp
  * @retval -ENOENT cb is not registered with this controller
  */
 int mchp_xec_espi_pc_unregister(const struct device *espi_dev, struct mchp_xec_espi_pc_cb *cb);
+
+/** @brief Enable or disable individual interrupt sources of one logical device
+ *
+ * Corrects, for Microchip XEC, what espi_interrupt_config() cannot express:
+ *
+ * - It is addressed to the peripheral device, so instances of one class, such as
+ *   several ACPI EC blocks, are controlled separately.
+ * - Its bits name interrupt sources rather than a device class, so sources that
+ *   need opposite treatment, such as 8042 input buffer full and output buffer
+ *   empty, are controlled separately.
+ * - It takes a mask and a value rather than setting a whole word absolutely, so
+ *   a caller changes one source without keeping a shadow copy of driver state.
+ * - A source the device does not implement is rejected rather than dropped
+ *   silently.
+ *
+ * The request is remembered and re-applied whenever the controller reports the
+ * Host facing hardware usable again, because MEC hardware clears a peripheral
+ * block's enables along with its BARs while eSPI Reset or PLTRST is asserted. An
+ * application therefore calls this once and not again after every bus reset.
+ *
+ * Enabling a level source records the request but does not arm the hardware,
+ * because such a source asserts for as long as the Host has nothing to do. The
+ * driver arms it when it has data for the Host and masks it again once the Host
+ * has taken it.
+ *
+ * @param pc_dev peripheral channel logical device, not the eSPI controller
+ * @param src_mask sources to change, as that device's MCHP_XEC_ESPI_PC_*_SRC_*
+ *                 bits. Sources outside the mask keep their current setting.
+ * @param src_value new setting for the sources in @p src_mask, a 1 enabling and
+ *                  a 0 disabling. Bits outside @p src_mask are ignored.
+ *
+ * @retval 0 success
+ * @retval -EINVAL pc_dev is NULL, src_mask is zero, or src_mask names a source
+ *                 the device does not implement
+ * @retval -ENODEV pc_dev is not registered with an eSPI controller
+ * @retval -ENOTSUP the device has no interrupt sources
+ */
+int mchp_xec_espi_pc_intr_set(const struct device *pc_dev, uint32_t src_mask, uint32_t src_value);
+
+/** @brief Read back the interrupt sources of one logical device
+ *
+ * The companion espi_interrupt_config() never had. @p src_supported lets a
+ * caller discover which sources a device implements rather than infer them from
+ * a class name, and @p src_enabled reports what is currently asked for, so a
+ * read-modify-write needs no shadow copy.
+ *
+ * @p src_enabled reflects the request, which is what survives a bus reset. It
+ * can differ from the hardware at two documented moments: a level source that is
+ * enabled but not armed because the driver has no data for the Host, and a
+ * one-shot source a handler masked pending the application's next command.
+ *
+ * @param pc_dev peripheral channel logical device, not the eSPI controller
+ * @param src_enabled destination for the sources currently enabled, or NULL
+ * @param src_supported destination for the sources the device implements, or
+ *                      NULL. Zero means the device has none.
+ *
+ * @retval 0 success
+ * @retval -EINVAL pc_dev is NULL
+ * @retval -ENODEV pc_dev is not registered with an eSPI controller
+ */
+int mchp_xec_espi_pc_intr_get(const struct device *pc_dev, uint32_t *src_enabled,
+			      uint32_t *src_supported);
 
 #endif /* CONFIG_ESPI_XEC_V3 */
 
