@@ -22,6 +22,18 @@ module = ESPI
 module-str = espi
 source "subsys/logging/Kconfig.template.log_config"
 
+config ESPI_INTERRUPT_CONFIG_WARN
+	bool "Warn when espi_interrupt_config() is called"
+	default y
+	help
+	  Log a warning the first time espi_interrupt_config() is called. No eSPI
+	  driver implements the behaviour that API documents: its flags select
+	  device classes rather than individual interrupt sources, it sets the
+	  whole flag word absolutely with no mask parameter and no companion
+	  getter, and a driver that ignores a flag still reports success.
+	  Disable this once an application has been reviewed, or where the extra
+	  log strings do not fit.
+
 config ESPI_TARGET
 	bool "ESPI target driver"
 	default y
