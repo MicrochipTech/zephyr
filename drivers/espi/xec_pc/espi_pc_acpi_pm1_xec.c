@@ -63,6 +63,19 @@ struct espi_pc_acpi_pm1_xec_config {
 	uint32_t ecia_info[ACPI_PM1_IRQ_COUNT];
 };
 
+/* Interrupt sources this block implements. The public source bits are the
+ * enum acpi_pm1_irq indices, so one word indexes both the request and the
+ * per source ecia_info.
+ */
+#define XEC_ACPI_PM1_SRC_ALL                                                                       \
+	(MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_CTL | MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_EN |                    \
+	 MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_STS)
+
+BUILD_ASSERT(MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_CTL == BIT(ACPI_PM1_IRQ_CTL) &&
+		     MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_EN == BIT(ACPI_PM1_IRQ_EN) &&
+		     MCHP_XEC_ESPI_PC_ACPI_PM1_SRC_STS == BIT(ACPI_PM1_IRQ_STS),
+	     "ACPI PM1 public interrupt source bits must match enum acpi_pm1_irq");
+
 struct espi_pc_acpi_pm1_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
 };
@@ -180,6 +193,26 @@ static void acpi_pm1_girq_all(const struct espi_pc_acpi_pm1_xec_config *cfg, uin
 	}
 }
 
+/* Apply the requested interrupt sources to the hardware. All three are edge
+ * sources on a Host write, so each is armed as soon as it is asked for. Status
+ * latched while a source was masked, or while the block was held in reset, is
+ * discarded on the way in so the application does not see a stale Host write.
+ */
+static void acpi_pm1_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_acpi_pm1_xec_config *cfg = dev->config;
+	struct espi_pc_acpi_pm1_xec_data *data = dev->data;
+
+	for (int i = 0; i < ACPI_PM1_IRQ_COUNT; i++) {
+		if ((data->pc_cb.intr_src_en & BIT(i)) != 0U) {
+			xec_pc_girq_clr(cfg->ecia_info[i]);
+			xec_pc_girq_ctrl(cfg->ecia_info[i], MCHP_MEC_ECIA_GIRQ_EN);
+		} else {
+			xec_pc_girq_ctrl(cfg->ecia_info[i], MCHP_MEC_ECIA_GIRQ_DIS);
+		}
+	}
+}
+
 static void acpi_pm1_espi_event(const struct device *espi_dev, const struct device *dev,
 				enum mchp_xec_espi_pc_event evt)
 {
@@ -188,15 +221,8 @@ static void acpi_pm1_espi_event(const struct device *espi_dev, const struct devi
 	ARG_UNUSED(espi_dev);
 
 	if (xec_pc_evt_is_hw_usable(evt)) {
-		/* The controller has programmed our Host I/O BAR. Discard any
-		 * status latched while the block was held in reset before
-		 * arming, so the application does not see a stale Host write.
-		 */
-		for (int i = 0; i < ACPI_PM1_IRQ_COUNT; i++) {
-			xec_pc_girq_clr(cfg->ecia_info[i]);
-		}
-
-		acpi_pm1_girq_all(cfg, MCHP_MEC_ECIA_GIRQ_EN);
+		/* The controller has programmed our Host I/O BAR. */
+		acpi_pm1_intr_apply(dev);
 	} else {
 		acpi_pm1_girq_all(cfg, MCHP_MEC_ECIA_GIRQ_DIS);
 	}
@@ -222,6 +248,14 @@ static int espi_pc_acpi_pm1_xec_init(const struct device *dev)
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = acpi_pm1_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+	data->pc_cb.intr_apply = acpi_pm1_intr_apply;
+	/* All three sources are armed until the application says otherwise, so
+	 * one that never asks behaves as it did under V2. No generic
+	 * espi_interrupt_flags bit describes PM1 fixed hardware, so intr_flags
+	 * stays clear and espi_interrupt_config() leaves this block alone.
+	 */
+	data->pc_cb.intr_src_supported = XEC_ACPI_PM1_SRC_ALL;
+	data->pc_cb.intr_src_en = XEC_ACPI_PM1_SRC_ALL;
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {

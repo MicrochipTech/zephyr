@@ -1021,6 +1021,86 @@ int mchp_xec_espi_pc_unregister(const struct device *espi_dev, struct mchp_xec_e
 }
 
 /*
+ * Resolve a peripheral channel device back to its registration. A caller of the
+ * per source interrupt API holds only the peripheral device handle, and the
+ * registration lives in that driver's own data, so the controller answers the
+ * lookup because it is already the registry. The binding is a single instance,
+ * so there is one registry to search.
+ */
+static struct mchp_xec_espi_pc_cb *xec_pc_cb_by_dev(const struct device *pc_dev)
+{
+	struct espi_xec_data *const data = DEVICE_DT_INST_GET(0)->data;
+	struct mchp_xec_espi_pc_cb *cb = NULL;
+
+	SYS_SLIST_FOR_EACH_CONTAINER(&data->pc_cbs, cb, node) {
+		if (cb->pc_dev == pc_dev) {
+			return cb;
+		}
+	}
+
+	return NULL;
+}
+
+int mchp_xec_espi_pc_intr_set(const struct device *pc_dev, uint32_t src_mask, uint32_t src_value)
+{
+	struct mchp_xec_espi_pc_cb *cb = NULL;
+	unsigned int key = 0U;
+
+	if ((pc_dev == NULL) || (src_mask == 0U)) {
+		return -EINVAL;
+	}
+
+	cb = xec_pc_cb_by_dev(pc_dev);
+	if (cb == NULL) {
+		return -ENODEV;
+	}
+
+	if ((cb->intr_apply == NULL) || (cb->intr_src_supported == 0U)) {
+		return -ENOTSUP;
+	}
+
+	/*
+	 * A source this device does not implement is refused rather than
+	 * dropped, so a caller is told its request did not take effect.
+	 */
+	if ((src_mask & ~cb->intr_src_supported) != 0U) {
+		return -EINVAL;
+	}
+
+	key = irq_lock();
+	cb->intr_src_en = (cb->intr_src_en & ~src_mask) | (src_value & src_mask);
+	cb->intr_apply(pc_dev);
+	irq_unlock(key);
+
+	return 0;
+}
+
+int mchp_xec_espi_pc_intr_get(const struct device *pc_dev, uint32_t *src_enabled,
+			      uint32_t *src_supported)
+{
+	struct mchp_xec_espi_pc_cb *cb = NULL;
+
+	if (pc_dev == NULL) {
+		return -EINVAL;
+	}
+
+	cb = xec_pc_cb_by_dev(pc_dev);
+	if (cb == NULL) {
+		return -ENODEV;
+	}
+
+	if (src_enabled != NULL) {
+		*src_enabled = cb->intr_src_en;
+	}
+
+	if (src_supported != NULL) {
+		*src_supported = cb->intr_src_supported;
+	}
+
+	return 0;
+}
+
+/*
  * Generic espi_interrupt_flags bits the peripheral channel drivers of this SoC
  * can answer to. Each enabled logical device claims the one that describes it
  * in the intr_flags field of its registration.
@@ -1042,25 +1122,36 @@ int mchp_xec_espi_pc_unregister(const struct device *espi_dev, struct mchp_xec_e
  *
  * No vendor specific flags are defined, so a caller passing any is told its
  * request was not understood rather than having it quietly dropped.
+ *
+ * A flag bit names a device class, so all of a matching device's sources are
+ * enabled or all are disabled. Callers wanting one source of one device use
+ * mchp_xec_espi_pc_intr_set() instead.
  */
 static int espi_xec_interrupt_config(const struct device *dev, uint32_t espi_flags,
 				     uint32_t espi_vendor_flags)
 {
 	struct espi_xec_data *const data = dev->data;
 	struct mchp_xec_espi_pc_cb *cb = NULL;
+	unsigned int key = 0U;
 
 	if (((espi_flags & ~(ESPI_INT_BUS_ONLY_MASK | XEC_PC_INTR_FLAGS)) != 0U) ||
 	    (espi_vendor_flags != 0U)) {
 		return -EINVAL;
 	}
 
+	key = irq_lock();
+
 	SYS_SLIST_FOR_EACH_CONTAINER(&data->pc_cbs, cb, node) {
-		if ((cb->intr_cfg == NULL) || (cb->intr_flags == 0U)) {
+		if ((cb->intr_apply == NULL) || (cb->intr_flags == 0U)) {
 			continue;
 		}
 
-		cb->intr_cfg(cb->pc_dev, (espi_flags & cb->intr_flags) != 0U);
+		cb->intr_src_en =
+			((espi_flags & cb->intr_flags) != 0U) ? cb->intr_src_supported : 0U;
+		cb->intr_apply(cb->pc_dev);
 	}
+
+	irq_unlock(key);
 
 	return 0;
 }

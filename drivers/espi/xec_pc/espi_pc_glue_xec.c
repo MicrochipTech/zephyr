@@ -113,11 +113,15 @@ struct espi_pc_glue_xec_config {
 	uint8_t s0ix_det_cfg;
 };
 
+BUILD_ASSERT(MCHP_XEC_ESPI_PC_GLUE_SRC_PWRGD == MCHP_XEC_ESPI_PC_GLUE_SIG_PWRGD &&
+		     MCHP_XEC_ESPI_PC_GLUE_SRC_S0IX == MCHP_XEC_ESPI_PC_GLUE_SIG_S0IX,
+	     "Glue logic interrupt source bits must match the signal bits they report");
+
 struct espi_pc_glue_xec_data {
 	struct mchp_xec_espi_pc_cb pc_cb;
-	/* Signal monitor interrupt enables the application asked for */
-	uint8_t smon_ien;
-	/* S0ix detection enable the application asked for */
+	/* S0ix detection enable the application asked for. Not an interrupt
+	 * source: it decides whether the block derives the S0ix signal at all.
+	 */
 	uint8_t s0ix_det_en;
 };
 
@@ -152,6 +156,25 @@ static void glue_isr(const struct device *dev)
 	mchp_xec_espi_v3_send_callbacks(cfg->espi_dev, evt);
 }
 
+/* Apply the requested interrupt sources to the signal monitor. Both are edge
+ * sources on a signal change, so each is armed as soon as it is asked for. Edges
+ * latched while a signal was masked say nothing the application asked to hear,
+ * so they are dropped as it is armed and it is told about the next change.
+ */
+static void glue_intr_apply(const struct device *dev)
+{
+	const struct espi_pc_glue_xec_config *cfg = dev->config;
+	struct espi_pc_glue_xec_data *data = dev->data;
+	uint8_t want = (uint8_t)(data->pc_cb.intr_src_en & XEC_GLUE_SIG_MSK);
+	uint8_t newly = want & (uint8_t)~cfg->regs->SMON_IEN;
+
+	if (newly != 0U) {
+		cfg->regs->SMON_IPEND = newly;
+	}
+
+	cfg->regs->SMON_IEN = want;
+}
+
 static void glue_block_config(const struct device *dev)
 {
 	const struct espi_pc_glue_xec_config *cfg = dev->config;
@@ -173,7 +196,8 @@ static void glue_block_config(const struct device *dev)
 	 * through mchp_xec_espi_pc_glue_state_get().
 	 */
 	cfg->regs->SMON_IPEND = XEC_GLUE_SIG_MSK;
-	cfg->regs->SMON_IEN = data->smon_ien;
+
+	glue_intr_apply(dev);
 }
 
 static void glue_espi_event(const struct device *espi_dev, const struct device *dev,
@@ -214,39 +238,21 @@ int mchp_xec_espi_pc_glue_state_get(const struct device *dev, uint8_t *state)
 
 int mchp_xec_espi_pc_glue_ictrl(const struct device *dev, uint8_t sig_mask, uint8_t enable)
 {
-	const struct espi_pc_glue_xec_config *cfg = NULL;
-	struct espi_pc_glue_xec_data *data = NULL;
-	unsigned int key;
-
 	if (dev == NULL) {
 		return -EINVAL;
 	}
 
+	/* Kept for callers written against the signal bits. Signals outside the
+	 * two this block carries are dropped rather than refused, which is what
+	 * this entry point has always done; mchp_xec_espi_pc_intr_set() is the
+	 * strict one.
+	 */
 	sig_mask &= XEC_GLUE_SIG_MSK;
 	if (sig_mask == 0U) {
 		return -EINVAL;
 	}
 
-	cfg = dev->config;
-	data = dev->data;
-
-	key = irq_lock();
-
-	if (enable != 0U) {
-		data->smon_ien |= sig_mask;
-		/* Drop edges latched while the signal was masked, so the caller
-		 * is told about the next change and not an old one.
-		 */
-		cfg->regs->SMON_IPEND = sig_mask;
-	} else {
-		data->smon_ien &= (uint8_t)~sig_mask;
-	}
-
-	cfg->regs->SMON_IEN = data->smon_ien;
-
-	irq_unlock(key);
-
-	return 0;
+	return mchp_xec_espi_pc_intr_set(dev, sig_mask, (enable != 0U) ? sig_mask : 0U);
 }
 
 int mchp_xec_espi_pc_glue_s0ix_detect_enable(const struct device *dev, uint8_t enable)
@@ -284,17 +290,21 @@ static int espi_pc_glue_xec_init(const struct device *dev)
 	xec_pc_girq_ctrl(cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
 	xec_pc_girq_clr(cfg->ecia_info);
 
-	/* Both derived signals start masked. Nothing but the application knows
-	 * which of them its power sequencing cares about.
-	 */
-	data->smon_ien = 0U;
-	data->s0ix_det_en = 0U;
-
-	glue_block_config(dev);
-
 	data->pc_cb.pc_dev = dev;
 	data->pc_cb.handler = glue_espi_event;
 	data->pc_cb.evt_mask = XEC_PC_EVT_MASK_ALL;
+	data->pc_cb.intr_apply = glue_intr_apply;
+	/* Both derived signals start masked. Nothing but the application knows
+	 * which of them its power sequencing cares about. No generic
+	 * espi_interrupt_flags bit describes them either, so intr_flags stays
+	 * clear and espi_interrupt_config() leaves this block alone.
+	 */
+	data->pc_cb.intr_src_supported =
+		MCHP_XEC_ESPI_PC_GLUE_SRC_PWRGD | MCHP_XEC_ESPI_PC_GLUE_SRC_S0IX;
+	data->pc_cb.intr_src_en = 0U;
+	data->s0ix_det_en = 0U;
+
+	glue_block_config(dev);
 
 	ret = mchp_xec_espi_pc_register(cfg->espi_dev, &data->pc_cb);
 	if (ret != 0) {
