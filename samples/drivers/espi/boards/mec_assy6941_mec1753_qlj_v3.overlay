@@ -43,6 +43,7 @@
 		     &espi_io0_gpio070 &espi_io1_gpio071
 		     &espi_io2_gpio072 &espi_io3_gpio073>;
 	pinctrl-names = "default";
+	girq-wake = <MCHP_XEC_ECIA_GIRQ_ENC(22, 9)>;
 	status = "okay";
 
 	/* The Host reaches one of the EC UARTs as a legacy serial port. The UART
