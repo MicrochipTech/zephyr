@@ -249,7 +249,10 @@ extern "C" {
 #define XEC_I2C_BBCR_SDA_IN_POS 6
 #define XEC_I2C_BBCR_CM_POS     7 /* ver3.8 only */
 
-#define XEC_I2C_MR0_OFS 0x3cU /* MCHP reserved 0 */
+#define XEC_I2C_MR0_OFS        0x3cU /* MCHP reserved 0 */
+#define XEC_I2C_MR0_TM_POS     0
+#define XEC_I2C_MR0_TM_MSK     GENMASK(7, 0)
+#define XEC_I2C_MR0_TM_BAUD16M 0x05
 
 #define XEC_I2C_DT_OFS         0x40U /* data timing */
 #define XEC_I2C_DT_DH_POS      0
