@@ -244,33 +244,34 @@ struct xec_i2c_nl_timing {
 	uint32_t idle_scaling;
 	uint32_t timeout_scaling;
 	uint16_t bus_clock;
+	uint8_t rpt_start_hold_tm;
 	uint8_t mr1;
 };
 
 static const struct xec_i2c_nl_timing xec_i2c_nl_timing_tbl[] = {
-	{
-		/* 100 kHz, 50/50 duty */
-		.data_timing = 0x0C4D5006U,
-		.idle_scaling = 0x01FC01EDU,
-		.timeout_scaling = 0x4B9CC2C7U,
-		.bus_clock = 0x4F4FU,
-		.mr1 = 0x05U,
+	{ /* 100 kHz, 50/50 duty */
+		.data_timing = XEC_I2C_SMB_DATA_TM_100K,
+		.idle_scaling = XEC_I2C_SMB_IDLE_SC_100K,
+		.timeout_scaling = XEC_I2C_SMB_TMO_SC_100K,
+		.bus_clock = XEC_I2C_SMB_BUS_CLK_100K,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_100K,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
-	{
-		/* 400 kHz, lo:hi ~ 1.53 */
-		.data_timing = 0x040A0A06U,
-		.idle_scaling = 0x01000050U,
-		.timeout_scaling = 0x159CC2C7U,
-		.bus_clock = 0x0F17U,
-		.mr1 = 0x05U,
+	{ /* 400 kHz, lo:hi ~ 1.53 */
+		.data_timing = XEC_I2C_SMB_DATA_TM_400K,
+		.idle_scaling = XEC_I2C_SMB_IDLE_SC_400K,
+		.timeout_scaling = XEC_I2C_SMB_TMO_SC_400K,
+		.bus_clock = XEC_I2C_SMB_BUS_CLK_400K,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_400K,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
-	{
-		/* 1 MHz, lo:hi ~ 1.8 */
-		.data_timing = 0x04060601U,
-		.idle_scaling = 0x01000050U,
-		.timeout_scaling = 0x089CC2C7U,
-		.bus_clock = 0x0509U,
-		.mr1 = 0x05U,
+	{ /* 1 MHz, lo:hi ~ 1.8 */
+		.data_timing = XEC_I2C_SMB_DATA_TM_1M,
+		.idle_scaling = XEC_I2C_SMB_IDLE_SC_1M,
+		.timeout_scaling = XEC_I2C_SMB_TMO_SC_1M,
+		.bus_clock = XEC_I2C_SMB_BUS_CLK_1M,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_1M,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
 };
 
@@ -590,7 +591,8 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 	sys_write32(tm->idle_scaling, base + XEC_I2C_ISC_OFS);
 	sys_write32(tm->timeout_scaling, base + XEC_I2C_TMOUT_SC_OFS);
 	sys_write32((uint32_t)tm->bus_clock, base + XEC_I2C_BCLK_OFS);
-	sys_write32((uint32_t)tm->mr1, base + XEC_I2C_MR1_OFS);
+	soc_mmcr_mask_set8(base + XEC_I2C_RSHT_OFS, tm->rpt_start_hold_tm, XEC_I2C_RSHT_MSK);
+	soc_mmcr_mask_set8(base + XEC_I2C_MR0_OFS, tm->mr1, XEC_I2C_MR0_TM_MSK);
 
 	sys_write8(XEC_I2C_NL_CR_DFLT, base + XEC_I2C_CR_OFS);
 	sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
