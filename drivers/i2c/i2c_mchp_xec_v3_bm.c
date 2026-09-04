@@ -180,33 +180,34 @@ struct bm_timing {
 	uint32_t idle_scaling;
 	uint32_t timeout_scaling;
 	uint16_t bus_clock;
+	uint8_t rpt_start_hold_tm;
 	uint8_t mr1;
 };
 
 static const struct bm_timing bm_timing_tbl[] = {
-	{
-		/* 100 kHz */
+	{ /* 100 kHz */
 		.data_timing = XEC_I2C_SMB_DATA_TM_100K,
 		.idle_scaling = XEC_I2C_SMB_IDLE_SC_100K,
 		.timeout_scaling = XEC_I2C_SMB_TMO_SC_100K,
 		.bus_clock = XEC_I2C_SMB_BUS_CLK_100K,
-		.mr1 = 0x05U,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_100K,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
-	{
-		/* 400 kHz */
+	{ /* 400 kHz */
 		.data_timing = XEC_I2C_SMB_DATA_TM_400K,
 		.idle_scaling = XEC_I2C_SMB_IDLE_SC_400K,
 		.timeout_scaling = XEC_I2C_SMB_TMO_SC_400K,
 		.bus_clock = XEC_I2C_SMB_BUS_CLK_400K,
-		.mr1 = 0x05U,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_400K,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
-	{
-		/* 1 MHz */
+	{ /* 1 MHz */
 		.data_timing = XEC_I2C_SMB_DATA_TM_1M,
 		.idle_scaling = XEC_I2C_SMB_IDLE_SC_1M,
 		.timeout_scaling = XEC_I2C_SMB_TMO_SC_1M,
 		.bus_clock = XEC_I2C_SMB_BUS_CLK_1M,
-		.mr1 = 0x05U,
+		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_1M,
+		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
 	},
 };
 
@@ -510,7 +511,8 @@ static int xec_i2c_v3_bm_program_ctrl(const struct device *ctrl, uint32_t freqhz
 	sys_write32(tm->idle_scaling, base + XEC_I2C_ISC_OFS);
 	sys_write32(tm->timeout_scaling, base + XEC_I2C_TMOUT_SC_OFS);
 	sys_write32((uint32_t)tm->bus_clock, base + XEC_I2C_BCLK_OFS);
-	sys_write32((uint32_t)tm->mr1, base + XEC_I2C_MR1_OFS);
+	soc_mmcr_mask_set8(base + XEC_I2C_RSHT_OFS, tm->rpt_start_hold_tm, XEC_I2C_RSHT_MSK);
+	soc_mmcr_mask_set8(base + XEC_I2C_MR0_OFS, tm->mr1, XEC_I2C_MR0_TM_MSK);
 
 	sys_write8(BM_CR_RESET_DFLT, base + XEC_I2C_CR_OFS);
 	sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
