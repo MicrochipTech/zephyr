@@ -35,6 +35,13 @@
 
 #define XEC_UART0_REG_BASE DT_REG_ADDR(DT_NODELABEL(uart0))
 
+/* GIRQ22 is peripheral-clock-wake-only: its sources are not connected to the
+ * NVIC, so enabling a bit here wakes the 96 MHz clock domain (and hence the
+ * PLL) to let a peripheral service an external request without waking the
+ * EC. Bit 9 is the eSPI interface's wake source (falling CS# edge).
+ */
+#define XEC_ESPI_WAKE_ONLY_GIRQ_POS 9U
+
 static uint8_t basic_timer_cr_save[XEC_BASIC_TIMER_INSTANCES];
 static uint8_t uart_actv_save[MEC165XB_UART_INSTANCES];
 
@@ -100,6 +107,31 @@ static void soc_deep_sleep_periph_restore(void)
 }
 
 /*
+ * Allow the eSPI block to wake the main clock domain (and PLL) without
+ * waking the EC. On a CS# falling edge during deep sleep, hardware turns
+ * the clock to the eSPI block back on so it can service the transaction
+ * autonomously; if that transaction doesn't also raise a real interrupt,
+ * the chip goes back to sleep without ever waking the CPU.
+ */
+static void soc_deep_sleep_espi_wake_en(void)
+{
+#ifdef CONFIG_ESPI
+	soc_ecia_girq_status_clear(MCHP_MEC_ECIA_GIRQ22, XEC_ESPI_WAKE_ONLY_GIRQ_POS);
+	soc_ecia_girq_ctrl(MCHP_MEC_ECIA_GIRQ22, XEC_ESPI_WAKE_ONLY_GIRQ_POS,
+			    MCHP_MEC_ECIA_GIRQ_EN);
+#endif
+}
+
+static void soc_deep_sleep_espi_wake_dis(void)
+{
+#ifdef CONFIG_ESPI
+	soc_ecia_girq_ctrl(MCHP_MEC_ECIA_GIRQ22, XEC_ESPI_WAKE_ONLY_GIRQ_POS,
+			    MCHP_MEC_ECIA_GIRQ_DIS);
+	soc_ecia_girq_status_clear(MCHP_MEC_ECIA_GIRQ22, XEC_ESPI_WAKE_ONLY_GIRQ_POS);
+#endif
+}
+
+/*
  * Enable deep sleep mode in CM4 and MEC172x.
  * Enable CM4 deep sleep and sleep signals assertion on WFI.
  * Set MCHP Heavy sleep (PLL OFF when all CLK_REQ clear) and SLEEP_ALL
@@ -120,6 +152,7 @@ static void z_power_soc_deep_sleep(void)
 	__disable_irq();
 
 	soc_deep_sleep_periph_save();
+	soc_deep_sleep_espi_wake_en();
 
 	SCB->SCR |= BIT(SCB_SCR_SLEEPDEEP_Pos);
 
@@ -140,6 +173,7 @@ static void z_power_soc_deep_sleep(void)
 		__NOP();
 	}
 
+	soc_deep_sleep_espi_wake_dis();
 	soc_deep_sleep_periph_restore();
 }
 
