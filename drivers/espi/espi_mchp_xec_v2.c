@@ -14,6 +14,7 @@
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
 #include "espi_utils.h"
@@ -1304,8 +1305,38 @@ static const struct espi_xec_config espi_xec_config = {
 	.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(0),
 };
 
-DEVICE_DT_INST_DEFINE(0, &espi_xec_init, NULL, &espi_xec_data_var, &espi_xec_config, PRE_KERNEL_2,
-		      CONFIG_ESPI_INIT_PRIORITY, &espi_xec_driver_api);
+#ifdef CONFIG_PM_DEVICE
+/* eSPI VW/GIRQ monitoring (SLP_S3/S4/S5, PLTRST, SUS_WARN, ...) must stay live, and
+ * OOB/Flash/PC channel activity has no unified busy flag we can check here. Gating
+ * the block's clock on suspend risks losing host state-change interrupts or
+ * corrupting an in-flight transaction; per the eSPI block datasheet, the block is
+ * not affected by a sleep_en-able signal from the Power, Clocks and Resets unit
+ * anyway.
+ */
+static int espi_xec_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct espi_xec_config *cfg = dev->config;
+	int ret = 0;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_RESUME:
+		soc_xec_pcr_sleep_en_clear(cfg->pcr_scr);
+		break;
+	case PM_DEVICE_ACTION_SUSPEND:
+		break;
+	default:
+		ret = -ENOTSUP;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_PM_DEVICE */
+
+PM_DEVICE_DT_INST_DEFINE(0, espi_xec_pm_action);
+
+DEVICE_DT_INST_DEFINE(0, &espi_xec_init, PM_DEVICE_DT_INST_GET(0), &espi_xec_data_var,
+		      &espi_xec_config, PRE_KERNEL_2, CONFIG_ESPI_INIT_PRIORITY,
+		      &espi_xec_driver_api);
 
 #define XEC_GIRQ24_NODE DT_NODELABEL(girq24)
 #define XEC_GIRQ25_NODE DT_NODELABEL(girq25)
