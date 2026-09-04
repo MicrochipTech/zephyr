@@ -15,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device.h>
+#include <zephyr/pm/policy.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util.h>
 #include "espi_utils.h"
@@ -142,6 +143,33 @@ static uint32_t target_tx_mem[CONFIG_ESPI_OOB_BUFFER_SIZE >> 2];
 #ifdef CONFIG_ESPI_FLASH_CHANNEL
 static uint32_t target_mem[CONFIG_ESPI_FLASH_BUFFER_SIZE >> 2];
 #endif
+
+#ifdef CONFIG_PM_DEVICE
+/* Block CONFIG_PM_DEVICE-managed suspend while an EC-initiated OOB Tx or Flash
+ * Channel operation is in flight: hardware is actively driving the eSPI bus on
+ * our behalf, and entering suspend-to-idle or suspend-to-ram gates the block's
+ * clock (PCR SLEEP_ALL) regardless of espi_xec_pm_action(), which would corrupt
+ * the transaction. Test-and-set/clear guarded, same pattern as the DMA and I2C
+ * XEC drivers, so a get/put pair is idempotent.
+ */
+static void espi_xec_pm_policy_state_lock_get(struct espi_xec_data *data,
+					       enum espi_xec_pm_policy_state_flag flag)
+{
+	if (atomic_test_and_set_bit(data->pm_policy_state_flags, flag) == 0) {
+		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
+	}
+}
+
+static void espi_xec_pm_policy_state_lock_put(struct espi_xec_data *data,
+					       enum espi_xec_pm_policy_state_flag flag)
+{
+	if (atomic_test_and_clear_bit(data->pm_policy_state_flags, flag) == 1) {
+		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
+		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_RAM, PM_ALL_SUBSTATES);
+	}
+}
+#endif /* CONFIG_PM_DEVICE */
 
 static inline uintptr_t xec_msvw_addr(const struct device *dev, uint8_t vw_index)
 {
@@ -406,12 +434,21 @@ static int espi_xec_send_oob(const struct device *dev, struct espi_oob_packet *p
 
 	memcpy(target_tx_mem, pckt->buf, pckt->len);
 
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_get(data, ESPI_XEC_PM_POLICY_STATE_OOB_TX_FLAG);
+#endif
+
 	regs->OOBTXL = pckt->len;
 	regs->OOBTXC = MCHP_ESPI_OOB_TX_CTRL_START;
 	LOG_DBG("%s %d", __func__, regs->OOBTXL);
 
 	/* Wait until ISR or timeout */
 	ret = k_sem_take(&data->tx_lock, K_MSEC(MAX_OOB_TIMEOUT));
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_put(data, ESPI_XEC_PM_POLICY_STATE_OOB_TX_FLAG);
+#endif
+
 	if (ret == -EAGAIN) {
 		return -ETIMEDOUT;
 	}
@@ -496,10 +533,20 @@ static int espi_xec_flash_read(const struct device *dev, struct espi_flash_packe
 	regs->FCBA[0] = (uint32_t)&target_mem[0];
 	regs->FCLEN = pckt->len;
 	regs->FCCTL = MCHP_ESPI_FC_CTRL_FUNC_SET(MCHP_ESPI_FC_CTRL_RD0);
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_get(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	regs->FCCTL |= MCHP_ESPI_FC_CTRL_START;
 
 	/* Wait until ISR or timeout */
 	ret = k_sem_take(&data->flash_lock, K_MSEC(MAX_FLASH_TIMEOUT));
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_put(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	if (ret == -EAGAIN) {
 		LOG_ERR("%s timeout", __func__);
 		return -ETIMEDOUT;
@@ -551,10 +598,20 @@ static int espi_xec_flash_write(const struct device *dev, struct espi_flash_pack
 	regs->FCBA[0] = (uint32_t)&target_mem[0];
 	regs->FCLEN = pckt->len;
 	regs->FCCTL = MCHP_ESPI_FC_CTRL_FUNC_SET(MCHP_ESPI_FC_CTRL_WR0);
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_get(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	regs->FCCTL |= MCHP_ESPI_FC_CTRL_START;
 
 	/* Wait until ISR or timeout */
 	ret = k_sem_take(&data->flash_lock, K_MSEC(MAX_FLASH_TIMEOUT));
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_put(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	if (ret == -EAGAIN) {
 		LOG_ERR("%s timeout", __func__);
 		return -ETIMEDOUT;
@@ -600,10 +657,20 @@ static int espi_xec_flash_erase(const struct device *dev, struct espi_flash_pack
 	regs->FCFA[0] = pckt->flash_addr;
 	regs->FCLEN = ESPI_FLASH_ERASE_DUMMY;
 	regs->FCCTL = MCHP_ESPI_FC_CTRL_FUNC_SET(MCHP_ESPI_FC_CTRL_ERS0);
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_get(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	regs->FCCTL |= MCHP_ESPI_FC_CTRL_START;
 
 	/* Wait until ISR or timeout */
 	ret = k_sem_take(&data->flash_lock, K_MSEC(MAX_FLASH_TIMEOUT));
+
+#ifdef CONFIG_PM_DEVICE
+	espi_xec_pm_policy_state_lock_put(data, ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG);
+#endif
+
 	if (ret == -EAGAIN) {
 		LOG_ERR("%s timeout", __func__);
 		return -ETIMEDOUT;

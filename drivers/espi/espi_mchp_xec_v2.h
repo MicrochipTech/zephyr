@@ -46,11 +46,22 @@ struct espi_xec_config {
 	const struct pinctrl_dev_config *pcfg;
 };
 
+#ifdef CONFIG_PM_DEVICE
+enum espi_xec_pm_policy_state_flag {
+	ESPI_XEC_PM_POLICY_STATE_OOB_TX_FLAG,
+	ESPI_XEC_PM_POLICY_STATE_FLASH_FLAG,
+	ESPI_XEC_PM_POLICY_STATE_FLAG_COUNT,
+};
+#endif
+
 struct espi_xec_data {
 	sys_slist_t callbacks;
 	struct k_sem tx_lock;
 	struct k_sem rx_lock;
 	struct k_sem flash_lock;
+#ifdef CONFIG_PM_DEVICE
+	ATOMIC_DEFINE(pm_policy_state_flags, ESPI_XEC_PM_POLICY_STATE_FLAG_COUNT);
+#endif
 #ifdef ESPI_XEC_V2_DEBUG
 	uint32_t espi_rst_count;
 #endif
