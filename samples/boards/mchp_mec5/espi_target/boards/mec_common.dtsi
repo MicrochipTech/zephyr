@@ -162,9 +162,12 @@
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
 	 */
 	zephyr,user {
-		espi-gpios = <MCHP_GPIO_DECODE_151 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_242 GPIO_ACTIVE_HIGH>,
-			     <MCHP_GPIO_DECODE_140 GPIO_ACTIVE_HIGH>;
+		espi-gpios = /*<MCHP_GPIO_DECODE_151 GPIO_ACTIVE_HIGH>,*/
+				 <MCHP_GPIO_DECODE_202 GPIO_ACTIVE_HIGH>, /*0*/
+			     /*<MCHP_GPIO_DECODE_242 GPIO_ACTIVE_HIGH>,*/
+				 <MCHP_GPIO_DECODE_057 GPIO_ACTIVE_HIGH>, /*1*/
+			     /*<MCHP_GPIO_DECODE_140 GPIO_ACTIVE_HIGH>;*/
+				 <MCHP_GPIO_DECODE_025 GPIO_ACTIVE_HIGH>; /*2*/
 		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
 		pinctrl-names = "default";
 		io-channels = <&adc0 4>, <&adc0 5>;

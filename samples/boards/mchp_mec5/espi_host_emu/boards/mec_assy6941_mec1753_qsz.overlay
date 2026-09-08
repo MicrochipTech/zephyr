@@ -21,8 +21,8 @@
 &qspi0 {
 	compatible = "microchip,mec5-qspi";
 	status = "okay";
-	pinctrl-0 = < &qspi_shd_cs0_n_gpio055_sleep
-		      &qspi_shd_cs1_n_gpio002
+	pinctrl-0 = < &qspi_shd_cs0_n_gpio055
+		     /* &qspi_shd_cs1_n_gpio002 */
 		      &qspi_shd_clk_gpio056
 		      &qspi_shd_io0_gpio223
 		      &qspi_shd_io1_gpio224

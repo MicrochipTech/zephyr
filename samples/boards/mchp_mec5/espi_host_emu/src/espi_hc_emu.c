@@ -526,7 +526,8 @@ int espi_hc_emu_init(uint32_t freqhz)
 
 	/* Use QSPI SHD_nCS1 because SHD_nCS0 is also a strap and has a pull-down on the EVB */
 	ret = mec_hal_qspi_init(qr, MHZ(4), MEC_SPI_SIGNAL_MODE_0,
-				MEC_QSPI_IO_FULL_DUPLEX, MEC_QSPI_CS_1);
+				// MEC_QSPI_IO_FULL_DUPLEX, MEC_QSPI_CS_1);
+				MEC_QSPI_IO_FULL_DUPLEX, MEC_QSPI_CS_0);
 	if (ret != MEC_RET_OK) {
 		return -EIO;
 	}
@@ -621,7 +622,7 @@ static void pr_qspi_regs(struct mec_qspi_regs *qr)
 	LOG_INF("QSPI.Status = 0x%08x", qr->STATUS);
 	LOG_INF("QSPI.Intr_en = 0x%08x", qr->INTR_CTRL);
 	for (uint32_t n = 0; n < 4u; n++) {
-		LOG_INF("QSPI.Descrs[%u] = 0x%08x", n, qr->DESCRS[n]);
+		LOG_INF("QSPI.Descrs[%u] = 0x%08x", n, qr->DESCR[n]);
 	}
 	LOG_INF("QSPI.LDMA_RXEN = 0x%08x", qr->LDMA_RXEN);
 	LOG_INF("QSPI.LDMA_TXEN = 0x%08x", qr->LDMA_TXEN);
@@ -915,14 +916,14 @@ int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t
 		 | (MEC_QSPI_DESCR_QUNITS_1B << MEC_QSPI_DESCR_QUNITS_Pos)
 		 | (MEC_QSPI_DESCR_NEXT_DESCR1 << MEC_QSPI_DESCR_NEXT_Pos)
 		 | ((msglen << MEC_QSPI_DESCR_QNUNITS_Pos) & MEC_QSPI_DESCR_QNUNITS_Msk));
-	qr->DESCRS[0] = descr;
+	qr->DESCR[0] = descr;
 
 	/* build TAR descriptor. Generate 2 clocks with tri-stated I/O lines */
 	descr = ((MEC_QSPI_DESCR_IFM_FD << MEC_QSPI_DESCR_IFM_Pos)
 		 | (MEC_QSPI_DESCR_QUNITS_BITS << MEC_QSPI_DESCR_QUNITS_Pos)
 		 | (MEC_QSPI_DESCR_NEXT_DESCR2 << MEC_QSPI_DESCR_NEXT_Pos)
 		 | ((2u << MEC_QSPI_DESCR_QNUNITS_Pos) & MEC_QSPI_DESCR_QNUNITS_Msk));
-	qr->DESCRS[1] = descr;
+	qr->DESCR[1] = descr;
 
 	/* build receive response descriptor */
 	descr = ((MEC_QSPI_DESCR_IFM_FD << MEC_QSPI_DESCR_IFM_Pos)
@@ -932,18 +933,18 @@ int espi_hc_emu_xfr(const uint8_t *msg, size_t msglen, uint8_t *response, size_t
 		 | (MEC_QSPI_DESCR_NEXT_DESCR3 << MEC_QSPI_DESCR_NEXT_Pos)
 		 | ((resplen << MEC_QSPI_DESCR_QNUNITS_Pos) & MEC_QSPI_DESCR_QNUNITS_Msk)
 		 | BIT(MEC_QSPI_DESCR_CLOSE_Pos) | BIT(MEC_QSPI_DESCR_LAST_Pos));
-	qr->DESCRS[2] = descr;
+	qr->DESCR[2] = descr;
 
 	/* Local DMA TX channel 0 to load msg into TX FIFO */
 	qr->TX_LDMA_CHAN[0].LEN = msglen;
-	qr->TX_LDMA_CHAN[0].MEM_ADDR = (uint32_t)msg;
+	qr->TX_LDMA_CHAN[0].MEM_START = (uint32_t)msg;
 	qr->TX_LDMA_CHAN[0].CTRL =
 		((MEC_QSPI_LDMA_CHAN_CTRL_ACCSZ_1B << MEC_QSPI_LDMA_CHAN_CTRL_ACCSZ_Pos)
 		 | BIT(MEC_QSPI_LDMA_CHAN_CTRL_EN_Pos) | BIT(MEC_QSPI_LDMA_CHAN_CTRL_INCRA_Pos));
 
 	/* Local DMA RX channel 0 to read response from RX FIFO and store in resp */
 	qr->RX_LDMA_CHAN[0].LEN = resplen;
-	qr->RX_LDMA_CHAN[0].MEM_ADDR = (uint32_t)response;
+	qr->RX_LDMA_CHAN[0].MEM_START = (uint32_t)response;
 	qr->RX_LDMA_CHAN[0].CTRL =
 		((MEC_QSPI_LDMA_CHAN_CTRL_ACCSZ_1B << MEC_QSPI_LDMA_CHAN_CTRL_ACCSZ_Pos)
 		 | BIT(MEC_QSPI_LDMA_CHAN_CTRL_EN_Pos) | BIT(MEC_QSPI_LDMA_CHAN_CTRL_INCRA_Pos));

@@ -22,7 +22,7 @@ LOG_MODULE_REGISTER(dma_mchp_mec5, CONFIG_DMA_LOG_LEVEL);
 #include <device_mec5.h>
 #include <mec_ecia_api.h>
 #include <mec_dmac_api.h>
-
+#define MEC_DMA_CFG_FLAG_SWFLC 0x04
 struct dma_mec5_config {
 	struct mec_dmac_regs *regs;
 	uint32_t chmsk;

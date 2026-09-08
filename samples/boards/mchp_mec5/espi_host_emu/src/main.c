@@ -120,7 +120,7 @@ int main(void)
 	 * TARGET_nREADY as input. Board has pull-up jumper installed on this pin.
 	 */
 	LOG_INF("Init eSPI HC emulation using QSPI0");
-	ret = espi_hc_emu_init(MHZ(4));
+	ret = espi_hc_emu_init(MHZ(1));
 	if (ret) {
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
