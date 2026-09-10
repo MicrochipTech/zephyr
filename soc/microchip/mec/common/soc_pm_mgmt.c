@@ -10,8 +10,6 @@
 #include <zephyr/pm/pm.h>
 #include <zephyr/sys/sys_io.h>
 
-#include "soc_pm_periph.h"
-
 #define XEC_PM_DEBUG_GPIO_MARKER
 #define XEC_PM_DEBUG_CLK_REQ_VBAT
 
@@ -229,7 +227,6 @@ static void z_power_soc_deep_sleep(void)
 
 	soc_deep_sleep_periph_restore();
 }
-#endif
 
 /* NOTE: Zephyr kernel does not block all interrupts.
  * We use compiler instrisic to disable all interrupts except unmaskable
