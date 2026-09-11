@@ -598,7 +598,8 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = NULL;
 	uintptr_t rb = xcfg->regbase;
-	uint8_t ier = BIT(CDMA_CHAN_IESR_BERR_POS) | BIT(CDMA_CHAN_IESR_DONE_POS);
+	uint8_t ier = (BIT(CDMA_CHAN_IESR_BERR_POS) | BIT(CDMA_CHAN_IESR_DONE_POS) |
+		       BIT(CDMA_CHAN_IESR_HFCD_TERM_POS));
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
 		return -EINVAL;
@@ -771,14 +772,25 @@ static int xec_cdma_get_attribute(const struct device *dev, uint32_t type, uint3
 /* Called by channel ISR passing the driver device pointer and channel number
  * NOTE: the callback can call any DMA driver API's for this channel.
  *
- * On a successful DONE with more cached blocks remaining, this advances
- * the chain in-place: the channel is ABORTed back to HW IDLE, the next
- * block is programmed via xec_cdma_chan_reprogram, and RUN is re-issued.
- * IER and the GIRQ enables are deliberately left armed across the
- * transition so the next block's DONE re-enters this handler. The
- * per-block callback fires here only when complete_callback_en was set
- * on the dma_config (XEC_DCHAN_EACH_BLOCK_DONE_CB_POS).
+ * Handle bus error, transfer terminated by flow control device, or done.
+ * Bus Error:
+ * Disable the channel's interrupts
+ * If the caller enabled the error callback we invoke it passing -EIO
+ * Exit ISR
  *
+ * Termination by flow control device:
+ * The peripheral using DMA terminated the transfer.
+ * Disable the channel's interrupts
+ * If the caller enabled the normal callback we invoke it with DMA_STATUS_DONE because
+ * the DMA driver does not have a status value for this kind of termination.
+ * Exit ISR
+ * 
+ * Done:
+ * The DMA channel completed the transfer it was programmed for. The channel's memory start
+ * address register was incremented until equal to the memory end address register value.
+ * If there are more blocks to transfer we reconfigure and start the channel for the next block.
+ * If no more blocks we invoke the callback (if enabled) and Exit ISR
+ * 
  * If the channel was configured cyclic (config->cyclic), DONE on the
  * final block wraps back to block 0 instead of taking the terminal path:
  * the per-block callback fires (if enabled), cur_block resets to 0, and
@@ -800,8 +812,9 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 	struct xec_dchan *chdat = &xdat->chdata[chan];
 	uint32_t chan_sr = sys_read32(rb + CDMA_CHAN_SR_OFS);
 	bool err = (chan_sr & BIT(CDMA_CHAN_IESR_BERR_POS)) != 0;
+	bool hw_term = (chan_sr & BIT(CDMA_CHAN_IESR_HFCD_TERM_POS)) != 0;
 	bool last_block = (chdat->cur_block + 1U) >= chdat->num_blocks;
-	bool advance = !err && (!last_block || chdat->cyclic);
+	bool advance = !err && !hw_term && (!last_block || chdat->cyclic);
 
 	/* W1C the status bits we observed (DONE, and possibly BERR). DONE
 	 * will not re-latch until the next RUN write per the HW spec, so
@@ -812,6 +825,15 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 
 	/* CDMA status register implements b[7:0] only */
 	chdat->hw_status = (uint8_t)chan_sr;
+
+	if (err) {
+		sys_write32(0, rb + CDMA_CHAN_IER_OFS);
+		if (((chdat->flags & BIT(XEC_DCHAN_ERROR_CB_DIS_POS)) == 0) &&
+		    (chdat->cb != NULL)) {
+			chdat->cb(dev, chdat->cb_user_data, chan, -EIO);
+		}
+		return;
+	}
 
 	if (advance) {
 		uint32_t next = last_block ? 0U : (uint32_t)(chdat->cur_block + 1U);
@@ -830,15 +852,13 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 		return;
 	}
 
-	/* Terminal: error, or DONE of the final block in a non-cyclic chain. */
+	/* Flow control peripheral terminated or channel DONE of the final block in a
+	 * non-cyclic chain. DMA driver has no completion status for a peripheral
+	 * terminating the DMA early.
+	 */
 	sys_write32(0, rb + CDMA_CHAN_IER_OFS);
 
-	if (err) {
-		if (((chdat->flags & BIT(XEC_DCHAN_ERROR_CB_DIS_POS)) == 0) &&
-		    (chdat->cb != NULL)) {
-			chdat->cb(dev, chdat->cb_user_data, chan, -EIO);
-		}
-	} else if (chdat->cb != NULL) {
+	if (chdat->cb != NULL) {
 		chdat->cb(dev, chdat->cb_user_data, chan, DMA_STATUS_COMPLETE);
 	}
 }
