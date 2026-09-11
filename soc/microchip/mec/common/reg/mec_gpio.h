@@ -112,7 +112,7 @@
 #define MEC_GPIO_CR1_INPV_LO        0
 #define MEC_GPIO_CR1_INPV_HI        1u
 #define MEC_GPIO_CR1_INPV_SET(inpv) FIELD_PREP(MEC_GPIO_CR1_INPV_MSK, (inpv))
-#define MEC_GPIO_CR1_INPV_GET(r)    FIELD_GET(MEC_GPIO_CR1_INVPV_MSK, (r))
+#define MEC_GPIO_CR1_INPV_GET(r)    FIELD_GET(MEC_GPIO_CR1_INPV_MSK, (r))
 
 /* GPIO Control register 2 */
 #define MEC_GPIO_CR2_SLEW_POS    0
