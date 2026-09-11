@@ -13,6 +13,8 @@
 #include <zephyr/drivers/dma.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/pm/device.h>
+#include <zephyr/pm/policy.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/util_macro.h>
 
@@ -185,6 +187,9 @@ struct xec_dchan {
 
 struct xec_cdma_xdata {
 	struct dma_context ctx;
+#ifdef CONFIG_PM_DEVICE
+	atomic_t active_channel_count;
+#endif
 	struct xec_dchan chdata[XEC_DMA_MAX_CHANS];
 };
 
@@ -626,11 +631,38 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 	if (sys_test_bit(rb + XEC_DMA_CHAN_CR_OFS, XEC_DMA_CHAN_CR_DIS_HFC_POS) == 0) {
 		sys_set_bit(rb + XEC_DMA_CHAN_CR_OFS, XEC_DMA_CHAN_CR_HFC_RUN_POS);
 	} else {
+#ifdef CONFIG_PM_DEVICE
+		if (atomic_inc(&xdat->active_channel_count) == 0) { /* returns previous value */
+			pm_device_busy_set(dev);
+		}
+#endif
 		sys_set_bit(rb + XEC_DMA_CHAN_CR_OFS, XEC_DMA_CHAN_CR_SFC_GO_POS);
 	}
 
 	return 0;
 }
+
+#ifdef CONFIG_PM_DEVICE
+static void xec_cdma_check_and_clear_busy(const struct device *dev)
+{
+	struct xec_cdma_xdata *xdat = dev->data;
+	atomic_t prev = 0;
+	bool success = false;
+
+	do {
+		prev = atomic_get(&xdat->active_channel_count);
+		if (prev == 0) {
+			break;
+		}
+
+		success = atomic_cas(&xdat->active_channel_count, prev, prev - 1);
+	} while (!success);
+
+	if (success && (prev == 1)) {
+		pm_device_busy_clear(dev);
+	}
+}
+#endif
 
 /* Stopping a channel while it is running requires using the CR.ABORT bit and spinning
  * for the channel to clear read-only CR.BUSY status. Busy will clear when the current
@@ -656,6 +688,10 @@ static int xec_cdma_stop(const struct device *dev, uint32_t chan)
 	sys_clear_bits(rb + XEC_DMA_CHAN_CR_OFS,
 		       (BIT(XEC_DMA_CHAN_CR_HFC_RUN_POS) | BIT(XEC_DMA_CHAN_CR_SFC_GO_POS) |
 			BIT(XEC_DMA_CHAN_CR_ABORT_POS)));
+
+#ifdef CONFIG_PM_DEVICE
+	xec_cdma_check_and_clear_busy(dev);
+#endif
 
 	return 0;
 }
@@ -828,6 +864,11 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 
 	if (err) {
 		sys_write32(0, rb + XEC_DMA_CHAN_IER_OFS);
+#ifdef CONFIG_PM_DEVICE
+		if (sys_test_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_SFC_GO_POS)) {
+			xec_cdma_check_and_clear_busy(dev);
+		}
+#endif
 		if (((chdat->flags & BIT(XEC_DCHAN_ERROR_CB_DIS_POS)) == 0) &&
 		    (chdat->cb != NULL)) {
 			chdat->cb(dev, chdat->cb_user_data, chan, -EIO);
@@ -857,11 +898,47 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 	 * terminating the DMA early.
 	 */
 	sys_write32(0, rb + XEC_DMA_CHAN_IER_OFS);
-
+#ifdef CONFIG_PM_DEVICE
+	if (sys_test_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_SFC_GO_POS)) {
+		xec_cdma_check_and_clear_busy(dev);
+	}
+#endif
 	if (chdat->cb != NULL) {
 		chdat->cb(dev, chdat->cb_user_data, chan, DMA_STATUS_COMPLETE);
 	}
 }
+
+#ifdef CONFIG_PM_DEVICE
+static int xec_dmac_pm_action_cb(const struct device *dev, enum pm_device_action action)
+{
+	const struct xec_cdma_xcfg *xcfg = dev->config;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		break; /* HW clears CLK_REQ when it is not moving data */
+	case PM_DEVICE_ACTION_RESUME:
+		break; /* No action required */
+	case PM_DEVICE_ACTION_TURN_OFF:
+		sys_clear_bit(xcfg->regbase + CDMA_MAIN_CR_OFS, CDMA_MAIN_CR_EN_POS);
+		for (uint8_t n = 0; n < xcfg->num_girqs; n++) {
+			soc_ecia_girq_ctrl(xcfg->girqs[n].gnum, xcfg->girqs[n].gpos, 0);
+			soc_ecia_girq_status_clear(xcfg->girqs[n].gnum, xcfg->girqs[n].gpos);
+		}
+		break;
+	case PM_DEVICE_ACTION_TURN_ON:
+		xec_cdma_reset(dev);
+		for (uint8_t n = 0; n < xcfg->num_girqs; n++) {
+			soc_ecia_girq_status_clear(xcfg->girqs[n].gnum, xcfg->girqs[n].gpos);
+			soc_ecia_girq_ctrl(xcfg->girqs[n].gnum, xcfg->girqs[n].gpos, 1);
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+#endif
 
 static int xec_cdma_init(const struct device *dev)
 {
@@ -870,6 +947,12 @@ static int xec_cdma_init(const struct device *dev)
 	soc_xec_pcr_sleep_en_clear(xcfg->enc_pcr);
 
 	xec_cdma_reset(dev);
+
+#ifdef CONFIG_PM_DEVICE
+	struct xec_cdma_xdata *xdat = dev->data;
+
+	atomic_set(&xdat->active_channel_count, 0);
+#endif
 
 	if (xcfg->irq_config != NULL) {
 		xcfg->irq_config(dev);
@@ -937,7 +1020,9 @@ static DEVICE_API(dma, xec_cdma_api) = {
 		.irq_config = xec_cdma_irq_cfg##i,                                                 \
 		.girqs = xec_cdma_girqs_##i,                                                       \
 	};                                                                                         \
-	DEVICE_DT_INST_DEFINE(i, xec_cdma_init, NULL, &xec_cdma_xdata##i, &xec_cdma_xcfg##i,       \
-			      PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY, &xec_cdma_api);
+	PM_DEVICE_DT_INST_DEFINE(i, xec_dmac_pm_action_cb);                                        \
+	DEVICE_DT_INST_DEFINE(i, xec_cdma_init, PM_DEVICE_DT_INST_GET(i), &xec_cdma_xdata##i,      \
+			      &xec_cdma_xcfg##i, PRE_KERNEL_1, CONFIG_DMA_INIT_PRIORITY,           \
+			      &xec_cdma_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_DMA_DEVICE)
