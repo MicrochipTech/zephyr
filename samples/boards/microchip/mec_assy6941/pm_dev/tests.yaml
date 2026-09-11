@@ -1,0 +1,15 @@
+sample:
+  description: Microchip XEC power management sample
+  name: microchip_mec_assy6941_pm_dev
+tests:
+  sample.board.microchip.mec_assy6941.pm_dev:
+    harness: i2c
+    platform_allow:
+      - mec_assy6941/mec1753_qlj
+      - mec_assy6941/mec1753_qsz
+    tags: i2c pm
+    depends_on:
+      - dma
+      - i2c
+      - gpio
+

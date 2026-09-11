@@ -1,0 +1,120 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/pinctrl/mchp-xec-pinctrl.h>
+
+/* define sleep states for various pins */
+&pinctrl {
+	adc04_gpio204_lp: adc04_gpio204_lp {
+		pinmux = <MCHP_XEC_PINMUX(0204, MCHP_AF1)>;
+		low-power-enable;
+	};
+	adc05_gpio205_lp: adc05_gpio205_lp {
+		pinmux = <MCHP_XEC_PINMUX(0205, MCHP_AF1)>;
+		low-power-enable;
+	};
+	adc06_gpio206_lp: adc06_gpio206_lp {
+		pinmux = <MCHP_XEC_PINMUX(0206, MCHP_AF1)>;
+		low-power-enable;
+	};
+	adc07_gpio207_lp: adc07_gpio207_lp {
+		pinmux = <MCHP_XEC_PINMUX(0207, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_reset_n_gpio061_lp: espi_reset_n_gpio061_lp {
+		pinmux = <MCHP_XEC_PINMUX(0061, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_alert_n_gpio063_lp: espi_alert_n_gpio063_lp {
+		pinmux = <MCHP_XEC_PINMUX(0063, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_clk_gpio065_lp: espi_clk_gpio065_lp {
+		pinmux = <MCHP_XEC_PINMUX(0065, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_cs_n_gpio066_lp: espi_cs_n_gpio066_lp {
+		pinmux = <MCHP_XEC_PINMUX(0066, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_io0_gpio070_lp: espi_io0_gpio070_lp {
+		pinmux = <MCHP_XEC_PINMUX(0070, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_io1_gpio071_lp: espi_io1_gpio071_lp {
+		pinmux = <MCHP_XEC_PINMUX(0071, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_io2_gpio072_lp: espi_io2_gpio072_lp {
+		pinmux = <MCHP_XEC_PINMUX(0072, MCHP_AF1)>;
+		low-power-enable;
+	};
+	espi_io3_gpio073_lp: espi_io3_gpio073_lp {
+		pinmux = <MCHP_XEC_PINMUX(0073, MCHP_AF1)>;
+		low-power-enable;
+	};	
+	i2c00_sda_gpio003_lp: i2c00_sda_gpio003_lp {
+		pinmux = <MCHP_XEC_PINMUX(0003, MCHP_AF1)>;
+		low-power-enable;
+	};
+	i2c00_scl_gpio004_lp: i2c00_scl_gpio004_lp {
+		pinmux = <MCHP_XEC_PINMUX(0004, MCHP_AF1)>;
+		low-power-enable;
+	};
+	i2c03_sda_gpio007_lp: i2c03_sda_gpio007_lp {
+		pinmux = <MCHP_XEC_PINMUX(0007, MCHP_AF1)>;
+		low-power-enable;
+	};
+	i2c03_scl_gpio010_lp: i2c03_scl_gpio010_lp {
+		pinmux = <MCHP_XEC_PINMUX(0010, MCHP_AF1)>;
+		low-power-enable;
+	};
+	i2c07_sda_gpio012_lp: i2c07_sda_gpio012_lp {
+		pinmux = <MCHP_XEC_PINMUX(0012, MCHP_AF1)>;
+		low-power-enable;
+	};
+	i2c07_scl_gpio013_lp: i2c07_scl_gpio013_lp {
+		pinmux = <MCHP_XEC_PINMUX(0013, MCHP_AF1)>;
+		low-power-enable;
+	};
+	ict0_tach0_gpio050_lp: ict0_tach0_gpio050_lp {
+		pinmux = <MCHP_XEC_PINMUX(0050, MCHP_AF1)>;
+		low-power-enable;
+	};
+	led0_gpio156_lp: led0_gpio156_lp {
+		pinmux = <MCHP_XEC_PINMUX(0156, MCHP_AF1)>;
+		low-power-enable;
+	};
+	ps2_clk0a_gpio114_lp: ps2_clk0a_gpio114_lp {
+		pinmux = <MCHP_XEC_PINMUX(0114, MCHP_AF1)>;
+		low-power-enable;
+	};
+	ps2_dat0a_gpio115_lp: ps2_dat0a_gpio115_lp {
+		pinmux = <MCHP_XEC_PINMUX(0115, MCHP_AF1)>;
+		low-power-enable;
+	};
+	pwm0_gpio053_lp: pwm0_gpio053_lp {
+		pinmux = <MCHP_XEC_PINMUX(0053, MCHP_AF1)>;
+		low-power-enable;
+	};
+	spi1_clk_gpio141_lp: spi1_clk_gpio141_lp {
+		pinmux = <MCHP_XEC_PINMUX(0141, MCHP_AF3)>;
+		low-power-enable;
+	};
+	spi1_sdo_gpio142_lp: spi1_sdo_gpio142_lp {
+		pinmux = <MCHP_XEC_PINMUX(0142, MCHP_AF3)>;
+		low-power-enable;
+	};
+	spi1_sdi_gpio143_lp: spi1_sdi_gpio143_lp {
+		pinmux = <MCHP_XEC_PINMUX(0143, MCHP_AF3)>;
+		low-power-enable;
+	};
+	spi1_cs_n_gpio144_lp: spi1_cs_n_gpio144_lp {
+		pinmux = <MCHP_XEC_PINMUX(0144, MCHP_AF3)>;
+		low-power-enable;
+	};
+};
+
