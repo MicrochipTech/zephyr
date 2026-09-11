@@ -135,7 +135,7 @@ struct xec_girq {
 };
 
 struct xec_cdma_xcfg {
-	mm_reg_t regbase;
+	uintptr_t regbase;
 	uint16_t dma_channels;
 	uint16_t dma_requests;
 	uint16_t enc_pcr;
@@ -192,7 +192,7 @@ struct xec_cdma_xdata {
 static void xec_cdma_reset(const struct device *dev)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 
 	sys_set_bit(rb + CDMA_MAIN_CR_OFS, CDMA_MAIN_CR_SRST_POS);
 	/* wait for FSM to go idle */
@@ -207,7 +207,7 @@ static void xec_cdma_reset(const struct device *dev)
 static int xec_cdma_chan_reset(const struct device *dev, uint32_t chan)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
 		return -EINVAL;
@@ -236,7 +236,7 @@ static int xec_cdma_chan_reset(const struct device *dev, uint32_t chan)
 static bool xec_cdma_chan_is_busy(const struct device *dev, uint32_t chan)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 	uint32_t cr = 0;
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
@@ -376,7 +376,7 @@ static void xec_cdma_load_chan(const struct device *dev, uint32_t chan, uint32_t
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = &xdat->chdata[chan];
 	struct xec_dchan_block *blk = &chdat->blocks[idx];
-	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
+	uintptr_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
 
 	(void)xec_cdma_chan_reset(dev, chan);
 
@@ -404,7 +404,7 @@ static void xec_cdma_chan_reprogram(const struct device *dev, uint32_t chan, uin
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = &xdat->chdata[chan];
 	struct xec_dchan_block *blk = &chdat->blocks[idx];
-	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
+	uintptr_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
 	uint32_t cr;
 
 	sys_set_bit(rb + CDMA_CHAN_CR_OFS, CDMA_CHAN_CR_ABORT_POS);
@@ -541,7 +541,7 @@ static int xec_cdma_reload(const struct device *dev, uint32_t chan, uint32_t src
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat;
 	struct xec_dchan_block *blk;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 	bool mem_source;
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
@@ -597,7 +597,7 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 	const struct xec_cdma_xcfg *xcfg = dev->config;
 	struct xec_cdma_xdata *xdat = dev->data;
 	struct xec_dchan *chdat = NULL;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 	uint8_t ier = BIT(CDMA_CHAN_IESR_BERR_POS) | BIT(CDMA_CHAN_IESR_DONE_POS);
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
@@ -640,7 +640,7 @@ static int xec_cdma_start(const struct device *dev, uint32_t chan)
 static int xec_cdma_stop(const struct device *dev, uint32_t chan)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 
 	if (chan >= XEC_DMAC_MAX_CHANS) {
 		return -EINVAL;
@@ -672,7 +672,7 @@ static int xec_cdma_get_status(const struct device *dev, uint32_t chan, struct d
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
 	struct xec_cdma_xdata *xdat = dev->data;
-	mm_reg_t rb = xcfg->regbase;
+	uintptr_t rb = xcfg->regbase;
 	struct xec_dchan *chdat = NULL;
 	uint32_t msa = 0, mea = 0, remaining = 0;
 	int chan_status = 0;
@@ -796,7 +796,7 @@ static void xec_cdma_chan_handler(const struct device *dev, uint32_t chan)
 {
 	const struct xec_cdma_xcfg *xcfg = dev->config;
 	struct xec_cdma_xdata *xdat = dev->data;
-	mm_reg_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
+	uintptr_t rb = xcfg->regbase + CDMA_CHAN_OFS(chan);
 	struct xec_dchan *chdat = &xdat->chdata[chan];
 	uint32_t chan_sr = sys_read32(rb + CDMA_CHAN_SR_OFS);
 	bool err = (chan_sr & BIT(CDMA_CHAN_IESR_BERR_POS)) != 0;
@@ -909,7 +909,7 @@ static DEVICE_API(dma, xec_cdma_api) = {
 	XEC_CDMA_IRQ_CONNECT(i)                                                                    \
 	XEC_CDMA_GIRQS(i)                                                                          \
 	static const struct xec_cdma_xcfg xec_cdma_xcfg##i = {                                     \
-		.regbase = (mm_reg_t)DT_INST_REG_ADDR(i),                                          \
+		.regbase = (uintptr_t)DT_INST_REG_ADDR(i),                                         \
 		.dma_channels = DT_INST_PROP(i, dma_channels),                                     \
 		.dma_requests = DT_INST_PROP(i, dma_requests),                                     \
 		.enc_pcr = DT_INST_PROP(i, pcr_scr),                                               \
