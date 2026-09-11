@@ -52,20 +52,32 @@
 #define MCHP_XEC_ECIA_GIRQ_ENCLR_REG_OFS(girq)                                                     \
 	MCHP_XEC_ECIA_GIRQ_REG_OFS(girq, MCHP_XEC_ECIA_GIRQ_ENCLR_OFS)
 
+/* Initialize GIRQs in the EC Interrupt Aggregator block
+ * aggr_girq_bm and direct_girq_bm are bit maps with bits set by GIRQ numbers
+ * the chip supports. The allowed GIRQ bits are in MCHP_XEC_ECIA_GIRQ_ALL_MSK.
+ * For example: all current SoC's implement GIRQ's 8 through 26.
+ * We mask the values to ensure bits[7:0] are never set.
+ */
 int soc_ecia_init(uint32_t aggr_girq_bm, uint32_t direct_girq_bm, uint32_t flags)
 {
-	mem_addr_t ecia_base = MCHP_XEC_ECIA_REG_BASE;
-	mem_addr_t ecs_base = MCHP_XEC_ECS_REG_BASE;
-	uint32_t amsk = 0, dmsk = 0, bm = 0, girq = 0, raddr = 0;
+	uintptr_t ecia_base = MCHP_XEC_ECIA_REG_BASE;
+	uintptr_t ecs_base = MCHP_XEC_ECS_REG_BASE;
+	uint32_t amsk = aggr_girq_bm & MCHP_XEC_ECIA_GIRQ_AGGR_MSK;
+	uint32_t dmsk = direct_girq_bm & MCHP_XEC_ECIA_GIRQ_DIRECT_MSK;
+	uint32_t bm = (aggr_girq_bm | direct_girq_bm) & MCHP_XEC_ECIA_GIRQ_ALL_MSK;
 
-	amsk = aggr_girq_bm & MCHP_XEC_ECIA_GIRQ_AGGR_MSK;
-	dmsk = direct_girq_bm & MCHP_XEC_ECIA_GIRQ_DIRECT_MSK;
+	for (uint32_t girq = MCHP_MEC_ECIA_GIRQ_FIRST; girq <= MCHP_MEC_ECIA_GIRQ_LAST; girq++) {
+		if (bm == 0) {
+			break;
+		}
 
-	bm = aggr_girq_bm | direct_girq_bm;
-	while (bm != 0) {
-		girq = find_lsb_set(bm) - 1u;
+		if ((bm & BIT(girq)) == 0) {
+			continue;
+		}
 
-		raddr = ecia_base + MCHP_XEC_ECIA_GIRQ_OFS(girq);
+		bm &= (uint32_t)~BIT(girq);
+
+		uintptr_t raddr = ecia_base + MCHP_XEC_ECIA_GIRQ_OFS(girq);
 
 		if ((flags & MCHP_MEC_ECIA_INIT_CLR_ENABLES) != 0) { /* clear enables? */
 			sys_write32(UINT32_MAX, raddr + MCHP_XEC_ECIA_GIRQ_ENCLR_OFS);
@@ -74,8 +86,6 @@ int soc_ecia_init(uint32_t aggr_girq_bm, uint32_t direct_girq_bm, uint32_t flags
 		if ((flags & MCHP_MEC_ECIA_INIT_CLR_STATUS) != 0) { /* clear status */
 			sys_write32(UINT32_MAX, raddr + MCHP_XEC_ECIA_GIRQ_SRC_OFS);
 		}
-
-		bm &= (uint32_t)~BIT(girq);
 	}
 
 	sys_write32(UINT32_MAX, ecia_base + MCHP_XEC_ECIA_AGGR_ENCLR_OFS);
