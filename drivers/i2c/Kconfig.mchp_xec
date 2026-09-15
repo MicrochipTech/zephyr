@@ -27,6 +27,14 @@ config I2C_MCHP_XEC_V3_BM
 	help
 	  Enable the Microchip XEC I2C version 3 byte mode driver.
 
+config I2C_MCHP_XEC_V3_TRANSFER_TIMEOUT_MS
+	int "Per-transfer timeout (milliseconds)"
+	default 1000
+	depends on I2C_MCHP_XEC_V3_BM
+	help
+	  Upper bound on how long the driver waits for a controller
+	  transaction to complete before returning -ETIMEDOUT.
+
 config I2C_MCHP_XEC_V3_BM_KWQ_STACK_SIZE
 	int "Microchip XEC I2C V3 custom kernel work queue stack size"
 	default 320

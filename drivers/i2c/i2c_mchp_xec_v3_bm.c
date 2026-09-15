@@ -140,7 +140,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_bm, CONFIG_I2C_LOG_LEVEL);
 
 #define BM_INVALID_PORT 0xFFU
 
-#define BM_TIMEOUT K_MSEC(1000)
+#define BM_TIMEOUT K_MSEC(CONFIG_I2C_MCHP_XEC_V3_TRANSFER_TIMEOUT_MS)
 
 #ifdef CONFIG_I2C_TARGET
 /* Target (peripheral) mode. The received address byte carries the R/W
