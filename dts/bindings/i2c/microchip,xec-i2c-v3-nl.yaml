@@ -1,0 +1,68 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC I2Cv3-NL driver using network layer I2C protocol FSM plus DMA
+
+compatible: "microchip,xec-i2c-v3-nl"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  girqs:
+    type: array
+    required: true
+    description: |
+      Hardware GIRQ encoded interrupt routing. Each peripheral
+      interrupt line is routed to a GIRQ bit in the XEC ECIA.
+      The GIRQ result bits are a bitwise AND of GIRQ enable and
+      status bits are routed to the peripheral's NVIC input.
+      Each value in the array is the encoded GIRQ number and bit
+      position for this peripheral instance. For I2Cv3-NL the array
+      has a maximum of two entries. The first entry is the runtime
+      I2C activity and the second is the wake-only interrupt. The
+      wake-only is not routed to the NVIC.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Each I2C instance has a sleep enable, clock required, and reset
+      enable bits in the XEC PCR block. The integer value encodes the
+      logical register index and bit position.
+
+  dmas:
+    required: true
+    description: |
+      Phandle and channel specs mapping this block to its DMA engine.
+      The driver expects up to two named entries:
+
+        "host"    - DMA channel + trigger source for controller-mode transfers
+                    Alwasy required.
+        "target"  - DMA channel + trigger source for target-mode transfers.
+                    Required only when the driver is built with target support.
+
+        The two entries must reference the same DMA controller but use different
+        channels and trigger sources.
+
+  dma-names:
+    required: true
+    description: |
+      Names for the dmas entries. Use ["host"] for controller-only use.
+      Use ["host", "target"] when target mode is enabled in the build.
+
+  default-port:
+    type: phandle
+    dependency-mode: "ignore"
+    description: |
+      Phandle to a port node handled by this controller. Port nodes handle
+      pin routing for their hardware port. Optional: if omitted, no port
+      is pre-routned and the first transfer lazily appplies its own port's
+      routing. The referenced port's "controller" phandle must point back
+      to this node (enforced by build assertion).
