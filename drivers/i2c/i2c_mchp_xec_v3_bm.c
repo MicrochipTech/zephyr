@@ -2066,7 +2066,7 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_V3_BM_CTRL_INIT)
 	};                                                                                         \
 	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_v3_bm_port_init, NULL, NULL,                       \
 				  &xec_i2c_v3_bm_port_xcfg_##inst, POST_KERNEL,                    \
-				  CONFIG_I2C_MCHP_XEC_V3_BM_PORT_INIT_PRIORITY,                    \
+				  CONFIG_I2C_INIT_PRIORITY,                                        \
 				  &xec_i2c_v3_bm_port_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_V3_BM_PORT_INIT)

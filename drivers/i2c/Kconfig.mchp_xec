@@ -27,16 +27,6 @@ config I2C_MCHP_XEC_V3_BM
 	help
 	  Enable the Microchip XEC I2C version 3 byte mode driver.
 
-config I2C_MCHP_XEC_V3_BM_PORT_INIT_PRIORITY
-	int "Microchip XEC I2C V3 port init priority"
-	default 51
-	depends on I2C_MCHP_XEC_V3_BM
-	help
-	  Initialization priority for the I2Cv3 virtual port devices. Must
-	  be greater than CONFIG_I2C_INIT_PRIORITY so that the controller
-	  device referenced by the port's "controller" phandle is ready before
-	  the port's init function runs.
-
 config I2C_MCHP_XEC_V3_BM_KWQ_STACK_SIZE
 	int "Microchip XEC I2C V3 custom kernel work queue stack size"
 	default 320
