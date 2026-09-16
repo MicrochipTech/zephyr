@@ -34,6 +34,25 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
 
 #include "i2c_mchp_xec_regs.h"
 
+#define CMPL_ERR (BIT(XEC_I2C_CMPL_HNAKX_POS) | BIT(XEC_I2C_CMPL_LAB_STS_POS) |\
+		  BIT(XEC_I2C_CMPL_BER_STS_POS))
+
+/* Default I2C control-register value: ESO+ACK+PIN. PIN is also raised at
+ * reset to clear any latent PIN-asserted state in the legacy I2C engine.
+ */
+#define XEC_I2C_NL_CR_DFLT                                                                         \
+	(BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_ACK_POS) | BIT(XEC_I2C_CR_PIN_POS))
+
+#define BBCR_SCL_IN BIT(XEC_I2C_BBCR_SCL_IN_POS)
+#define BBCR_SDA_IN BIT(XEC_I2C_BBCR_SDA_IN_POS)
+
+#define BBCR_LIVE_RD     BIT(XEC_I2C_BBCR_CM_POS) /* CM=1, BBM_EN=0: I2C-driven, readback live */
+#define BBCR_BB_RELEASED BIT(XEC_I2C_BBCR_EN_POS) /* BBM_EN=1, both dirs=input, both released */
+/* BBM_EN=1, SCL drive-low, SDA released */
+#define BBCR_BB_SCL_LOW (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CD_POS))
+/* BBM_EN=1, SDA drive-low, SCL released */
+#define BBCR_BB_SDA_LOW (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_DD_POS))
+
 struct xec_i2c_nl_dev_cfg {
 	uintptr_t regbase;
 	void (*xec_irq_connect)(void);
@@ -59,7 +78,7 @@ struct xec_i2c_nl_dev_data {
 
 struct xec_i2c_nl_port_dev_cfg {
 	const struct device *ctrl;
-	const struct pinctrl_dev_cfg *pincfg;
+	const struct pinctrl_dev_config *pincfg;
 	uint32_t bitrate;
 	uint8_t port;
 	bool is_default;
@@ -101,6 +120,111 @@ static const struct xec_i2c_nl_timing xec_i2c_nl_timing_tbl[] = {
 	},
 };
 
+static const struct xec_i2c_nl_timing *xec_i2c_nl_timing_for(uint32_t freqhz)
+{
+	if (freqhz <= KHZ(100)) {
+		return &xec_i2c_nl_timing_tbl[0];
+	}
+	if (freqhz <= KHZ(400)) {
+		return &xec_i2c_nl_timing_tbl[1];
+	}
+	return &xec_i2c_nl_timing_tbl[2];
+}
+
+/* Write-1-to-clear the named status bits in the Completion register while
+ * preserving its read/write control bits[5:2]. The completion register mixes
+ * RW1C status (IDLE, BER, ...) with RW enables (DTEN/HCEN/TCEN/BIDEN) in one
+ * word, so a bare sys_write32 of a status constant would also write 0 into
+ * those enables.
+ */
+static inline void xec_i2c_v3_cmpl_clear(uintptr_t base, uint32_t bits)
+{
+	uint32_t rw = sys_read32(base + XEC_I2C_CMPL_OFS) & XEC_I2C_CMPL_RW_MSK;
+
+	sys_write32(rw | (bits & XEC_I2C_CMPL_RW1C_MSK), base + XEC_I2C_CMPL_OFS);
+}
+
+/* Full controller programming: PCR reset, GIRQ enable, port select, timing,
+ * and HDONE interrupt enable. Called from ctrl_init and whenever vport
+ * configure changes the bus frequency.
+ *
+ * Must only be called when no transfer is in flight (lock held by caller,
+ * or before any transfers are issued).
+ *
+ * Sequence:
+ * Disable controller before PCR reset. Reset affects both port mux and frequency.
+ * Short delay after reset to allow clearing of status to propagate.
+ * Program controller registers
+ *
+ */
+static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, uint8_t port)
+{
+	const struct xec_i2c_nl_dev_cfg *xcfg = ctrl->config;
+	struct xec_i2c_nl_dev_data *const xdat = ctrl->data;
+	const struct xec_i2c_nl_timing *tm = xec_i2c_nl_timing_for(freqhz);
+	uintptr_t rb = xcfg->regbase;
+
+	soc_ecia_girq_ctrl(xcfg->girq, xcfg->girq_pos, MCHP_MEC_ECIA_GIRQ_DIS);
+
+	sys_write32(0U, rb + XEC_I2C_CFG_OFS);
+
+	soc_xec_pcr_reset_en(xcfg->enc_pcr);
+	k_busy_wait(10U);
+
+	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
+
+	/* PIN=1 to clear any latent assertion left by the legacy engine. */
+	sys_write8(BIT(XEC_I2C_CR_PIN_POS), rb + XEC_I2C_CR_OFS);
+
+	/* Port select, filters on, general-call disabled, HDONE interrupt
+	 * enabled. IDLE_IEN is intentionally LEFT OFF here — see the
+	 * comment on CFG_IDLE_IEN above and the ISR for why it has to be
+	 * enabled later (inside the HDONE handler at NL-finished time).
+	 * ENAB is set last after timing has been written.
+	 */
+	sys_write32((XEC_I2C_CFG_PORT_SET(port) | BIT(XEC_I2C_CFG_FEN_POS) |
+		     BIT(XEC_I2C_CFG_GC_DIS_POS) | BIT(XEC_I2C_CFG_HD_IEN_POS)),
+		    rb + XEC_I2C_CFG_OFS);
+
+	/* Clear any latched CMPL bits we care about so that a stale state
+	 * (left over from a prior run before the PCR reset, or from the
+	 * power-on default) cannot fire the moment GIRQ is enabled.
+	 */
+	xec_i2c_v3_cmpl_clear(rb, (BIT(XEC_I2C_CMPL_HDONE_POS) | BIT(XEC_I2C_CMPL_IDLE_POS) |
+					CMPL_ERR));
+
+	sys_write32(tm->data_timing, rb + XEC_I2C_DT_OFS);
+	sys_write32(tm->idle_scaling, rb + XEC_I2C_ISC_OFS);
+	sys_write32(tm->timeout_scaling, rb + XEC_I2C_TMOUT_SC_OFS);
+	sys_write32((uint32_t)tm->bus_clock, rb + XEC_I2C_BCLK_OFS);
+	soc_mmcr_mask_set8(rb + XEC_I2C_RSHT_OFS, tm->rpt_start_hold_tm, XEC_I2C_RSHT_MSK);
+	soc_mmcr_mask_set8(rb + XEC_I2C_MR0_OFS, tm->mr1, XEC_I2C_MR0_TM_MSK);
+
+	sys_write8(XEC_I2C_NL_CR_DFLT, rb + XEC_I2C_CR_OFS);
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_ENAB_POS);
+	/* Enable-to-first-transfer settling window; matches v2. */
+	k_busy_wait(20U);
+
+	/* Leave BBCR in live-readback mode so any later read of
+	 * BBCR.SCL_IN / BBCR.SDA_IN (e.g. from the recovery path)
+	 * reflects the true line state without engaging bit-bang
+	 * drive. Pins remain under I2C control.
+	 */
+	sys_write8(BBCR_LIVE_RD, rb + XEC_I2C_BBCR_OFS);
+
+	/* Clear the GIRQ status one more time before unmasking so any
+	 * latch from PCR reset or earlier configuration cannot ride into
+	 * NVIC the moment we enable.
+	 */
+	soc_ecia_girq_status_clear(xcfg->girq, xcfg->girq_pos);
+	soc_ecia_girq_ctrl(xcfg->girq, xcfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
+
+	xdat->active_freq = freqhz;
+	xdat->active_port = port;
+
+	return 0;
+}
+
 int mchp_xec_i2c_nl_port_get(const struct device *i2c_port_dev, uint8_t *port)
 {
 	return -ENOTSUP;
@@ -124,7 +248,15 @@ int mchp_xec_i2c_nl_copy_capture(const struct device *port, uint8_t *capdest, si
 
 static int xec_i2c_nl_vport_config(const struct device *port_dev, uint32_t i2c_config)
 {
-	return -ENOTSUP;
+	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
+	const struct device *ctrl_dev = port_cfg->ctrl;
+	uint32_t freqhz = 0; /* TODO */
+	uint8_t port = 0; /* TODO */
+	int rc = 0;
+
+	rc = xec_i2c_nl_program_ctrl(ctrl_dev, freqhz, port);
+
+	return rc;
 }
 
 static int xec_i2c_nl_vport_get_config(const struct device *port_dev, uint32_t *i2c_config)
@@ -206,9 +338,9 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 	static const struct xec_i2c_nl_dev_cfg xec_i2c_nl_xcfg_##inst = { \
 		.regbase = (uintptr_t)DT_INST_REG_ADDR(inst), \
 		.xec_irq_connect = xec_i2c_nl_irq_conn_##inst, \
-		.dma_dev = DEVICE_DT_GET(DT_INST_DMAS_CTRL(inst)), \
+		.dma_dev = DEVICE_DT_GET(DT_INST_DMAS_CTLR(inst)), \
 		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel), \
-		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigscr), \
+		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc), \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr), \
 		.girq = XEC_I2C_NL_GIRQ(inst, 0), \
 		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst, 0), \
@@ -237,7 +369,7 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INST)
 
 #define XEC_I2C_NL_PORT_INST(inst) \
 	PINCTRL_DT_INST_DEFINE(inst); \
-	static const struct xec_i2c_port_dev_cfg *xec_i2c_port_xcfg_##inst = { \
+	static const struct xec_i2c_nl_port_dev_cfg xec_i2c_port_xcfg_##inst = { \
 		.ctrl = DEVICE_DT_GET(DT_INST_PHANDLE(inst, controller)), \
 		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst), \
 		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD), \
