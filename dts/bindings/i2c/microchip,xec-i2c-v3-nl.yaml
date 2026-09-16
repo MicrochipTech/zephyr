@@ -66,3 +66,39 @@ properties:
       is pre-routned and the first transfer lazily appplies its own port's
       routing. The referenced port's "controller" phandle must point back
       to this node (enforced by build assertion).
+
+  timing-standard-params:
+    type: array
+    description: |
+      Five values for I2C standard speed (100 KHz): data timing, idle scaling,
+      timeout scaling, bus clock, repeated start hold time, and tune3c. If not
+      present the driver will use the values in Microchip I2C-SMB version 3.8
+      controller specification.
+
+  timing-fast-params:
+    type: array
+    description: |
+      Five values for I2C fast speed (400 KHz): data timing, idle scaling,
+      timeout scaling, bus clock, repeated start hold time, and tune3c. If not
+      present the driver will use the values in Microchip I2C-SMB version 3.8
+      controller specification.
+
+  timing-fast-plus-params:
+    type: array
+    description: |
+      Five values for I2C fast plus speed (1000 KHz): data timing, idle scaling,
+      timeout scaling, bus clock, repeated start hold time, and tune3c. If not
+      present the driver will use the values in Microchip I2C-SMB version 3.8
+      controller specification.
+
+  timing-custom-params:
+    type: array
+    description: |
+      Five values for a custom I2C speed specified by clock-frequency:
+      data timing, idle scaling, timeout scaling, bus clock, repeated start hold time,
+      and tune3c. If not present the driver will use the values in Microchip I2C-SMB
+      version 3.8 controller specification.
+      Note: custom speed is selected by the application setting the I2C_SPEED_DT flag
+      when calling the I2C configuration API.
+
+
