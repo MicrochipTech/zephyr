@@ -14,6 +14,7 @@
  * configures the DMA channel for MEMORY_TO_PERIPHERAL targeting the
  * controller's HTX register, and writes the host-command (HCMD) register.
  */
+#include "soc_ecia.h"
 #include <soc.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/dma.h>
@@ -53,36 +54,7 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3_nl, CONFIG_I2C_LOG_LEVEL);
 /* BBM_EN=1, SDA drive-low, SCL released */
 #define BBCR_BB_SDA_LOW (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_DD_POS))
 
-struct xec_i2c_nl_dev_cfg {
-	uintptr_t regbase;
-	void (*xec_irq_connect)(void);
-	const struct device *dma_dev;
-	uint8_t dma_chan;
-	uint8_t dma_slot;
-	uint16_t enc_pcr;
-	uint8_t girq;
-	uint8_t girq_pos;
-	uint8_t girq_wk;
-	uint8_t girq_wk_pos;
-	bool wakeup_source;
-};
-
-struct xec_i2c_nl_dev_data {
-	struct device *ctrl;
-	struct k_sem lock;
-	struct k_sem pause_sem;
-	struct k_sem done_sem;
-	uint32_t active_freq;
-	uint8_t active_port;
-};
-
-struct xec_i2c_nl_port_dev_cfg {
-	const struct device *ctrl;
-	const struct pinctrl_dev_config *pincfg;
-	uint32_t bitrate;
-	uint8_t port;
-	bool is_default;
-};
+#define XEC_I2C_NL_INVALID_PORT 0xffU
 
 struct xec_i2c_nl_timing {
 	uint32_t data_timing;
@@ -93,42 +65,68 @@ struct xec_i2c_nl_timing {
 	uint8_t mr1;
 };
 
-static const struct xec_i2c_nl_timing xec_i2c_nl_timing_tbl[] = {
-	{ /* 100 kHz, 50/50 duty */
-		.data_timing = XEC_I2C_SMB_DATA_TM_100K,
-		.idle_scaling = XEC_I2C_SMB_IDLE_SC_100K,
-		.timeout_scaling = XEC_I2C_SMB_TMO_SC_100K,
-		.bus_clock = XEC_I2C_SMB_BUS_CLK_100K,
-		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_100K,
-		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
-	},
-	{ /* 400 kHz, lo:hi ~ 1.53 */
-		.data_timing = XEC_I2C_SMB_DATA_TM_400K,
-		.idle_scaling = XEC_I2C_SMB_IDLE_SC_400K,
-		.timeout_scaling = XEC_I2C_SMB_TMO_SC_400K,
-		.bus_clock = XEC_I2C_SMB_BUS_CLK_400K,
-		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_400K,
-		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
-	},
-	{ /* 1 MHz, lo:hi ~ 1.8 */
-		.data_timing = XEC_I2C_SMB_DATA_TM_1M,
-		.idle_scaling = XEC_I2C_SMB_IDLE_SC_1M,
-		.timeout_scaling = XEC_I2C_SMB_TMO_SC_1M,
-		.bus_clock = XEC_I2C_SMB_BUS_CLK_1M,
-		.rpt_start_hold_tm = XEC_I2C_SMB_RSHT_1M,
-		.mr1 = XEC_I2C_MR0_TM_BAUD16M,
-	},
+struct xec_i2c_nl_dev_cfg {
+	uintptr_t regbase;
+	void (*xec_irq_connect)(void);
+	uint32_t dflt_freq;
+	const struct device *dma_dev;
+	uint8_t dma_chan;
+	uint8_t dma_slot;
+	uint16_t enc_pcr;
+	uint8_t girq;
+	uint8_t girq_pos;
+	uint8_t girq_wk;
+	uint8_t girq_wk_pos;
+	bool wakeup_source;
+	struct xec_i2c_nl_timing timing100k;
+	struct xec_i2c_nl_timing timing400k;
+	struct xec_i2c_nl_timing timing1000k;
+	struct xec_i2c_nl_timing timing_cust;
 };
 
-static const struct xec_i2c_nl_timing *xec_i2c_nl_timing_for(uint32_t freqhz)
+struct xec_i2c_nl_dev_data {
+	const struct device *ctrl_dev;
+	struct k_mutex mutex; /* guards configure, bus recovery, and thread-concurrency */
+	struct k_spinlock lock; /* protects shared state variables: registers and ISR-shared pointers */
+	atomic_t driver_busy;
+	atomic_t transfer_status;
+	bool is_sync;
+#if 0
+	struct k_sem lock;
+	struct k_sem pause_sem;
+	struct k_sem done_sem;
+#endif
+	uint32_t active_cfg;
+	uint32_t active_freq;
+	uint8_t active_port;
+	int xfer_err;
+};
+
+struct xec_i2c_nl_port_dev_cfg {
+	const struct device *ctrl;
+	const struct pinctrl_dev_config *pincfg;
+	uint32_t bitrate;
+	uint8_t port;
+	bool is_default;
+};
+
+static const struct xec_i2c_nl_timing *xec_i2c_nl_timing_for(const struct device *ctrl_dev, uint32_t freqhz)
 {
-	if (freqhz <= KHZ(100)) {
-		return &xec_i2c_nl_timing_tbl[0];
+	const struct xec_i2c_nl_dev_cfg *ctrl_xcfg = ctrl_dev->config;
+
+	switch (freqhz) {
+	case KHZ(100):
+		return &ctrl_xcfg->timing100k;
+	case KHZ(400):
+		return &ctrl_xcfg->timing400k;
+	case KHZ(1000):
+		return &ctrl_xcfg->timing1000k;
+	default:
+		if (ctrl_xcfg->timing_cust.bus_clock == 0) {
+			return NULL;
+		}
+		return &ctrl_xcfg->timing_cust;
 	}
-	if (freqhz <= KHZ(400)) {
-		return &xec_i2c_nl_timing_tbl[1];
-	}
-	return &xec_i2c_nl_timing_tbl[2];
 }
 
 /* Write-1-to-clear the named status bits in the Completion register while
@@ -161,8 +159,9 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 {
 	const struct xec_i2c_nl_dev_cfg *xcfg = ctrl->config;
 	struct xec_i2c_nl_dev_data *const xdat = ctrl->data;
-	const struct xec_i2c_nl_timing *tm = xec_i2c_nl_timing_for(freqhz);
+	const struct xec_i2c_nl_timing *tm = xec_i2c_nl_timing_for(ctrl, freqhz);
 	uintptr_t rb = xcfg->regbase;
+	/* k_spinlock_key_t key; */
 
 	soc_ecia_girq_ctrl(xcfg->girq, xcfg->girq_pos, MCHP_MEC_ECIA_GIRQ_DIS);
 
@@ -225,6 +224,46 @@ static int xec_i2c_nl_program_ctrl(const struct device *ctrl, uint32_t freqhz, u
 	return 0;
 }
 
+/* The v3.8 controller requires a full PCR reset when the port MUX
+ * (or frequency) changes. A soft RMW of CFG.PORT alone -- which
+ * this function did in prior revisions -- leaves internal FSM
+ * state stale and the very next transfer on the new port returns
+ * -ENXIO or -EIO on the address byte with no NAK on the wire.
+ * Reset here through program_ctrl, which:
+ *   - disables the GIRQ,
+ *   - runs soc_xec_pcr_reset_en to clear all internal latches,
+ *   - re-writes CFG (with the new port), timing, CR, and BBCR,
+ *   - clears CMPL RW1C latches,
+ *   - re-enables the GIRQ,
+ *   - updates data->active_port / active_freq on the way out.
+ * program_ctrl is safe to call here because every caller of
+ * apply_port either holds data->lock (vport_transfer,
+ * vport_recover_bus) or runs before any transfers are issued
+ * (port_init).
+ */
+static int xec_i2c_nl_apply_port(const struct device *port_dev)
+{
+	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
+	const struct device *ctrl_dev = port_cfg->ctrl;
+	const struct xec_i2c_nl_dev_cfg *ctrl_cfg = ctrl_dev->config;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	uint32_t freq = 0;
+	int rc = 0;
+
+	if (data->active_port == port_cfg->port) {
+		return 0;
+	}
+
+	rc = pinctrl_apply_state(port_cfg->pincfg, PINCTRL_STATE_DEFAULT);
+	if (rc != 0) {
+		LOG_ERR("pinctrl_apply_state(%s)=%d", port_dev->name, rc);
+		return rc;
+	}
+
+	freq = (port_cfg->bitrate != 0U) ? port_cfg->bitrate : ctrl_cfg->dflt_freq;
+	return xec_i2c_nl_program_ctrl(ctrl_dev, freq, port_cfg->port);
+}
+
 int mchp_xec_i2c_nl_port_get(const struct device *i2c_port_dev, uint8_t *port)
 {
 	return -ENOTSUP;
@@ -233,6 +272,17 @@ int mchp_xec_i2c_nl_port_get(const struct device *i2c_port_dev, uint8_t *port)
 int mchp_xec_i2c_nl_port_set(const struct device *i2c_port_dev, uint8_t port)
 {
 	return -ENOTSUP;
+}
+
+static inline void xec_i2c_nl_signal_done(struct xec_i2c_nl_dev_data *data)
+{
+	/* TODO k_sem_give(&data->done_sem); */
+}
+
+static inline void xec_i2c_nl_signal_error(struct xec_i2c_nl_dev_data *data)
+{
+	/* TODO k_sem_give(&data->pause_sem);
+	k_sem_give(&data->done_sem); */
 }
 
 #ifdef CONFIG_I2C_MCHP_XEC_V3_NL_STATE_CAPTURE
@@ -246,37 +296,194 @@ int mchp_xec_i2c_nl_copy_capture(const struct device *port, uint8_t *capdest, si
 }
 #endif
 
+/* DMA channel callbacks */
+static void xec_i2c_nl_tx_dma_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
+				 int status)
+{
+	struct xec_i2c_nl_dev_data *const data = user_data;
+
+	if (status >= 0) { /* success: complete, block, or half-complete */
+		/* TODO ? */
+		return;
+	}
+
+	xec_i2c_nl_signal_error(data);
+}
+
+static void xec_i2c_nl_rx_dma_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
+				 int status)
+{
+	struct xec_i2c_nl_dev_data *const data = user_data;
+
+	if (status < 0) {
+		data->xfer_err = status;
+		xec_i2c_nl_signal_done(data);
+		return;
+	}
+
+	/* TODO ? */
+}
+
+/* DMA configuration */
+static int xec_i2c_nl_setup_tx_dma(const struct device *ctrl_dev, void *buf, size_t total_write)
+{
+	const struct xec_i2c_nl_dev_cfg *ctrl_cfg = ctrl_dev->config;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	struct dma_block_config block = {
+		.source_address = (uint32_t)buf,
+		.dest_address = ctrl_cfg->regbase + XEC_I2C_HTX_OFS,
+		.source_addr_adj = DMA_ADDR_ADJ_INCREMENT,
+		.dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE,
+		.block_size = total_write,
+	};
+	struct dma_config dcfg = {
+		.dma_slot = ctrl_cfg->dma_slot,
+		.channel_direction = MEMORY_TO_PERIPHERAL,
+		.source_data_size = 1,
+		.dest_data_size = 1,
+		.source_burst_length = 1,
+		.dest_burst_length = 1,
+		.block_count = 1,
+		.head_block = &block,
+		.dma_callback = xec_i2c_nl_tx_dma_cb,
+		.user_data = data,
+		.complete_callback_en = 1,
+		.error_callback_dis = 0,
+	};
+
+	return dma_config(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan, &dcfg);
+}
+
+static int xec_i2c_nl_setup_rx_dma(const struct device *ctrl_dev, void *buf, size_t len)
+{
+	const struct xec_i2c_nl_dev_cfg *ctrl_cfg = ctrl_dev->config;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	struct dma_block_config block = {
+		.source_address = ctrl_cfg->regbase + XEC_I2C_HRX_OFS,
+		.dest_address = (uint32_t)buf,
+		.source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE,
+		.dest_addr_adj = DMA_ADDR_ADJ_INCREMENT,
+		.block_size = len,
+	};
+	struct dma_config dcfg = {
+		.dma_slot = ctrl_cfg->dma_slot,
+		.channel_direction = PERIPHERAL_TO_MEMORY,
+		.source_data_size = 1,
+		.dest_data_size = 1,
+		.source_burst_length = 1,
+		.dest_burst_length = 1,
+		.block_count = 1,
+		.head_block = &block,
+		.dma_callback = xec_i2c_nl_rx_dma_cb,
+		.user_data = data,
+		.complete_callback_en = 1,
+		.error_callback_dis = 0,
+	};
+
+	return dma_config(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan, &dcfg);
+}
+
+/* API */
 static int xec_i2c_nl_vport_config(const struct device *port_dev, uint32_t i2c_config)
 {
 	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
 	const struct device *ctrl_dev = port_cfg->ctrl;
-	uint32_t freqhz = 0; /* TODO */
-	uint8_t port = 0; /* TODO */
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	uint32_t freqhz = 0;
 	int rc = 0;
 
-	rc = xec_i2c_nl_program_ctrl(ctrl_dev, freqhz, port);
+	if ((i2c_config & I2C_MODE_CONTROLLER) == 0U) {
+		LOG_ERR("Configure allowed only for controller");
+		return -ENOTSUP;
+	}
+
+	switch (I2C_SPEED_GET(i2c_config)) {
+	case I2C_SPEED_STANDARD:
+		freqhz = KHZ(100);
+		break;
+	case I2C_SPEED_FAST:
+		freqhz = KHZ(400);
+		break;
+	case I2C_SPEED_FAST_PLUS:
+		freqhz = MHZ(1);
+		break;
+	case I2C_SPEED_DT:
+		freqhz = port_cfg->bitrate;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	k_mutex_lock(&data->mutex, K_FOREVER);
+
+	if (atomic_get(&data->driver_busy) != 0) {
+		rc = -EAGAIN;
+		goto cfg_unlock;
+	}
+
+	if ((freqhz != data->active_freq) || (data->active_port != port_cfg->port)) {
+		rc = pinctrl_apply_state(port_cfg->pincfg, PINCTRL_STATE_DEFAULT);
+		if (rc == 0) {
+			rc = xec_i2c_nl_program_ctrl(ctrl_dev, freqhz, port_cfg->port);
+		}
+	}
+
+	data->active_cfg = i2c_config;
+
+cfg_unlock:
+	k_mutex_unlock(&data->mutex);
 
 	return rc;
 }
 
+/* API */
 static int xec_i2c_nl_vport_get_config(const struct device *port_dev, uint32_t *i2c_config)
 {
+	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
+	const struct device *ctrl_dev = port_cfg->ctrl;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+
 	if (i2c_config == NULL) {
 		return -EINVAL;
 	}
 
-	return -ENOTSUP;
+	k_mutex_lock(&data->mutex, K_FOREVER);
+
+	*i2c_config = data->active_cfg;
+
+	k_mutex_unlock(&data->mutex);
+
+	return 0;
 }
 
+/* API */
 static int xec_i2c_nl_vport_transfer(const struct device *port_dev, struct i2c_msg *msgs,
                                      uint8_t num_msgs, uint16_t addr)
 {
 	return -ENOTSUP;
 }
 
+/* API */
 static int xec_i2c_nl_vport_recover_bus(const struct device *port_dev)
 {
-	return -ENOTSUP;
+	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
+	const struct device *ctrl_dev = port_cfg->ctrl;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	int rc = 0;
+
+	k_mutex_lock(&data->mutex, K_FOREVER);
+
+	if (atomic_get(&data->driver_busy) != 0) {
+		rc = -EBUSY;
+		goto recover_unlock;
+	}
+
+	/* TODO rc = external_recover_func(uintptr_t regbase, uint32_t freqhz, uint8_t port) */
+
+recover_unlock:
+	k_mutex_unlock(&data->mutex);
+
+	return rc;
 }
 
 /* I2C controller ISR */
@@ -288,14 +495,60 @@ static void xec_i2c_nl_isr(void)
 /* Controller and Port initialization */
 static int xec_i2c_ctrl_init(const struct device *ctrl_dev)
 {
-	/* TODO */
+	const struct xec_i2c_nl_dev_cfg *ctrl_cfg = ctrl_dev->config;
+	struct xec_i2c_nl_dev_data *const data = ctrl_dev->data;
+	int rc = 0;
+
+	data->ctrl_dev = ctrl_dev;
+	data->active_port = XEC_I2C_NL_INVALID_PORT;
+	data->active_freq = 0;
+#if 0
+	k_sem_init(&data->lock, 1, 1);
+	k_sem_init(&data->pause_sem, 0, 1);
+	k_sem_init(&data->done_sem, 0, 1);
+#else
+	k_mutex_init(&data->mutex);
+	data->driver_busy = ATOMIC_INIT(0);
+	data->transfer_status = ATOMIC_INIT(0);
+	data->is_sync = false;
+#endif
+	if (!device_is_ready(ctrl_cfg->dma_dev)) {
+		LOG_ERR("I2C Ctrl at %lu DMA not ready!", ctrl_cfg->regbase);
+		return -ENODEV;
+	}
+
+	rc = xec_i2c_nl_program_ctrl(ctrl_dev, ctrl_cfg->dflt_freq, 0);
+	if (rc != 0) {
+		LOG_ERR("I2C Ctrl at %lu init failed", ctrl_cfg->regbase);
+		return rc;
+	}
+
+	/* force port switch on first access */
+	data->active_port = XEC_I2C_NL_INVALID_PORT;
+
+	if (ctrl_cfg->xec_irq_connect != NULL) {
+		ctrl_cfg->xec_irq_connect();
+		soc_ecia_girq_ctrl(ctrl_cfg->girq, ctrl_cfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
+	}
+
 	return 0;
 }
 
 static int xec_i2c_nl_vport_init(const struct device *port_dev)
 {
-	/* TODO */
-	return 0;
+	const struct xec_i2c_nl_port_dev_cfg *port_cfg = port_dev->config;
+	int rc = 0;
+
+	if (!device_is_ready(port_cfg->ctrl)) {
+		LOG_ERR("I2C port %u controller is not ready", port_cfg->port);
+		return -ENODEV;
+	}
+
+	if (port_cfg->is_default) {
+		rc = xec_i2c_nl_apply_port(port_dev);
+	}
+
+	return rc;
 }
 
 #ifdef CONFIG_PM_DEVICE
@@ -328,26 +581,77 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 #define XEC_I2C_NL_GIRQ(inst, idx)     MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(inst, girqs, idx))
 #define XEC_I2C_NL_GIRQ_POS(inst, idx) MCHP_XEC_ECIA_GIRQ_POS(DT_INST_PROP_BY_IDX(inst, girqs, idx))
 
-#define XEC_I2C_NL_CTRL_INST(inst) \
-	static void xec_i2c_nl_irq_conn_##inst(void) \
-	{ \
-		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), xec_i2c_nl_isr, \
-			    DEVICE_DT_INST_GET(inst), 0); \
-		irq_enable(DT_INST_IRQN(inst)); \
-	} \
-	static const struct xec_i2c_nl_dev_cfg xec_i2c_nl_xcfg_##inst = { \
-		.regbase = (uintptr_t)DT_INST_REG_ADDR(inst), \
-		.xec_irq_connect = xec_i2c_nl_irq_conn_##inst, \
-		.dma_dev = DEVICE_DT_GET(DT_INST_DMAS_CTLR(inst)), \
-		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel), \
-		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc), \
-		.enc_pcr = DT_INST_PROP(inst, pcr_scr), \
-		.girq = XEC_I2C_NL_GIRQ(inst, 0), \
-		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst, 0), \
-		.girq_wk = XEC_I2C_NL_GIRQ(inst, 1), \
-		.girq_wk_pos = XEC_I2C_NL_GIRQ_POS(inst, 1), \
-		.wakeup_source = DT_INST_PROP(inst, wakeup_source), \
-	}; \
+#define XEC_I2C_DEFAULT_STANDARD {                                                                 \
+	XEC_I2C_SMB_DATA_TM_100K, XEC_I2C_SMB_IDLE_SC_100K, XEC_I2C_SMB_TMO_SC_100K,               \
+	XEC_I2C_SMB_BUS_CLK_100K, XEC_I2C_SMB_RSHT_100K, XEC_I2C_MR0_TM_BAUD16M }
+
+#define XEC_I2C_DEFAULT_FAST {                                                                     \
+	XEC_I2C_SMB_DATA_TM_400K, XEC_I2C_SMB_IDLE_SC_400K, XEC_I2C_SMB_TMO_SC_400K,               \
+	XEC_I2C_SMB_BUS_CLK_400K, XEC_I2C_SMB_RSHT_400K, XEC_I2C_MR0_TM_BAUD16M }
+
+#define XEC_I2C_DEFAULT_FAST_PLUS {                                                                \
+	XEC_I2C_SMB_DATA_TM_1M, XEC_I2C_SMB_IDLE_SC_1M, XEC_I2C_SMB_TMO_SC_1M,                     \
+	XEC_I2C_SMB_BUS_CLK_1M, XEC_I2C_SMB_RSHT_1M, XEC_I2C_MR0_TM_BAUD16M }
+
+#define XEC_I2C_DEFAULT_CUSTOM { 0, 0, 0, 0, 0, 0 }
+
+#define XEC_I2C_NL_TIMING_100K(inst) \
+	COND_CODE_1(                                                                               \
+            DT_INST_NODE_HAS_PROP(inst, timing_standard_params),                                   \
+            (DT_INST_PROP(inst, timing_standard_params)),                                          \
+            (XEC_I2C_DEFAULT_STANDARD))
+
+#define XEC_I2C_NL_TIMING_400K(inst) \
+	COND_CODE_1(                                                                               \
+            DT_INST_NODE_HAS_PROP(inst, timing_fast_params),                                       \
+            (DT_INST_PROP(inst, timing_fast_params)),                                              \
+            (XEC_I2C_DEFAULT_FAST))
+
+#define XEC_I2C_NL_TIMING_1M(inst)                                                                 \
+	COND_CODE_1(                                                                               \
+            DT_INST_NODE_HAS_PROP(inst, timing_fast_plus_params),                                  \
+            (DT_INST_PROP(inst, timing_fast_plus_params)),                                         \
+            (XEC_I2C_DEFAULT_FAST_PLUS))
+
+#define XEC_I2C_NL_TIMING_CUST(inst)                                                               \
+	COND_CODE_1(                                                                               \
+            DT_INST_NODE_HAS_PROP(inst, timing_custom_params),                                     \
+            (DT_INST_PROP(inst, timing_custom_params)),                                            \
+            (XEC_I2C_DEFAULT_CUSTOM))
+
+#define XEC_I2C_NL_CTRL_INST(inst)                                                                 \
+	BUILD_ASSERT(DT_INST_PROP_LEN_OR(inst, timing_standard_params, 5) == 5,                    \
+                 "timing-standard-params must contain exactly 5 elements!");                       \
+	BUILD_ASSERT(DT_INST_PROP_LEN_OR(inst, timing_fast_params, 5) == 5,                        \
+                 "timing-fast-params must contain exactly 5 elements!");                           \
+	BUILD_ASSERT(DT_INST_PROP_LEN_OR(inst, timing_fast_plus_params, 5) == 5,                   \
+                 "timing-fast-plus-params must contain exactly 5 elements!");                      \
+	BUILD_ASSERT(DT_INST_PROP_LEN_OR(inst, timing_custom_params, 5) == 5,                      \
+                 "timing-custom-params must contain exactly 5 elements!");                         \
+	static void xec_i2c_nl_irq_conn_##inst(void)                                               \
+	{                                                                                          \
+		IRQ_CONNECT(DT_INST_IRQN(inst), DT_INST_IRQ(inst, priority), xec_i2c_nl_isr,       \
+			    DEVICE_DT_INST_GET(inst), 0);                                          \
+		irq_enable(DT_INST_IRQN(inst));                                                    \
+	}                                                                                          \
+	static const struct xec_i2c_nl_dev_cfg xec_i2c_nl_xcfg_##inst = {                          \
+		.regbase = (uintptr_t)DT_INST_REG_ADDR(inst),                                      \
+		.xec_irq_connect = xec_i2c_nl_irq_conn_##inst,                                     \
+		.dflt_freq = I2C_BITRATE_STANDARD,                                                 \
+		.dma_dev = DEVICE_DT_GET(DT_INST_DMAS_CTLR(inst)),                                 \
+		.dma_chan = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel),                        \
+		.dma_slot = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc),                        \
+		.enc_pcr = DT_INST_PROP(inst, pcr_scr),                                            \
+		.girq = XEC_I2C_NL_GIRQ(inst, 0),                                                  \
+		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst, 0),                                          \
+		.girq_wk = XEC_I2C_NL_GIRQ(inst, 1),                                               \
+		.girq_wk_pos = XEC_I2C_NL_GIRQ_POS(inst, 1),                                       \
+		.wakeup_source = DT_INST_PROP(inst, wakeup_source),                                \
+		.timing100k = XEC_I2C_NL_TIMING_100K(inst),                                        \
+		.timing400k = XEC_I2C_NL_TIMING_400K(inst),                                        \
+		.timing1000k = XEC_I2C_NL_TIMING_1M(inst),                                         \
+		.timing_cust = XEC_I2C_NL_TIMING_CUST(inst),                                       \
+	};                                                                                         \
 	static struct xec_i2c_nl_dev_data xec_i2c_nl_xdat_##inst; \
 	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_ctrl_pm_action_cb); \
 	DEVICE_DT_INST_DEFINE(inst, xec_i2c_ctrl_init, PM_DEVICE_DT_INST_GET(inst), \
@@ -367,18 +671,18 @@ DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_CTRL_INST)
 				  DT_PHANDLE(DT_INST_PHANDLE(inst, controller), default_port))),   \
 		    (0))
 
-#define XEC_I2C_NL_PORT_INST(inst) \
-	PINCTRL_DT_INST_DEFINE(inst); \
-	static const struct xec_i2c_nl_port_dev_cfg xec_i2c_port_xcfg_##inst = { \
-		.ctrl = DEVICE_DT_GET(DT_INST_PHANDLE(inst, controller)), \
-		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst), \
-		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD), \
-		.port = (uint8_t)(DT_INST_PROP(inst, port) & 0x0fU), \
-		.is_default = XEC_I2C_NL_PORT_IS_DEFAULT(inst), \
+#define XEC_I2C_NL_PORT_INST(inst)                                                                 \
+	PINCTRL_DT_INST_DEFINE(inst);                                                              \
+	static const struct xec_i2c_nl_port_dev_cfg xec_i2c_port_xcfg_##inst = {                   \
+		.ctrl = DEVICE_DT_GET(DT_INST_PHANDLE(inst, controller)),                          \
+		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                                    \
+		.bitrate = DT_INST_PROP_OR(inst, clock_frequency, I2C_BITRATE_STANDARD),           \
+		.port = (uint8_t)(DT_INST_PROP(inst, port) & 0x0fU),                               \
+		.is_default = XEC_I2C_NL_PORT_IS_DEFAULT(inst),                                    \
 	}; \
-	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_vport_pm_action_cb); \
-	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_vport_init, PM_DEVICE_DT_INST_GET(inst), \
-				  NULL, &xec_i2c_port_xcfg_##inst, POST_KERNEL, \
+	PM_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_vport_pm_action_cb);                             \
+	I2C_DEVICE_DT_INST_DEFINE(inst, xec_i2c_nl_vport_init, PM_DEVICE_DT_INST_GET(inst),        \
+				  NULL, &xec_i2c_port_xcfg_##inst, POST_KERNEL,                    \
 				  CONFIG_I2C_INIT_PRIORITY, &xec_i2c_nl_port_api);
 
 DT_INST_FOREACH_STATUS_OKAY(XEC_I2C_NL_PORT_INST)
