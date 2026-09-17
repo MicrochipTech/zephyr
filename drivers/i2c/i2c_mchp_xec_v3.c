@@ -36,10 +36,13 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 #define I2C_MEC5_STATUS_OFS      0x00U /* read-only  */
 #define I2C_MEC5_OWN_ADDR_OFS    0x04U
 #define I2C_MEC5_DATA_OFS        0x08U
+#define I2C_MEC5_RSHT_OFS        0x18U
 #define I2C_MEC5_COMPLETION_OFS  0x20U
+#define I2C_MEC5_IDLE_SCALE_OFS  0x24U
 #define I2C_MEC5_CONFIG_OFS      0x28U
 #define I2C_MEC5_BUS_CLK_OFS     0x2CU
 #define I2C_MEC5_BBCR_OFS        0x38U
+#define I2C_MEC5_DATA_TIMING_OFS 0x40U
 
 /* --- Control register (offset 0x00, W/O) ------------------------------- */
 
@@ -107,6 +110,53 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 	((((uint16_t)(low) & 0xFFU) << I2C_MEC5_BUS_CLK_LOW_POS) | \
 	 (((uint16_t)(high) & 0xFFU) << I2C_MEC5_BUS_CLK_HIGH_POS))
 
+/* Inverse of the SCL_Hz formula above; used only by BUILD_ASSERT to pin the
+ * tabulated LOW/HIGH pairs to the frequency they are supposed to produce.
+ */
+#define I2C_MEC5_BUS_CLK_TO_HZ(bc)                                                                 \
+	(I2C_MEC5_BAUD_CLOCK_HZ / (((((bc) >> I2C_MEC5_BUS_CLK_LOW_POS) & 0xFFU) + 1U) +           \
+				   ((((bc) >> I2C_MEC5_BUS_CLK_HIGH_POS) & 0xFFU) + 1U)))
+
+/* --- Repeated-START Hold Time register (offset 0x18, R/W) -------------- */
+
+/*
+ * 32-bit register carrying the SCL hold count after a repeated START, in
+ * baud-clock ticks, in its low byte. Datasheet name "RSHT"; the vendor HAL
+ * calls the field HoldTimeStartBit and writes the register as a full dword
+ * (hal/microchip/mec5 mec_i2c.c i2c_timing()), which is what the write helper
+ * below matches -- a byte write would depend on the upper three bytes already
+ * being clear and on the block decoding byte access at this offset.
+ */
+
+/* --- Idle Scaling register (offset 0x24, R/W) -------------------------- */
+
+/*
+ * Two 16-bit fields scaling the minimum bus-free time the controller
+ * enforces between transactions. Programmed as one dword from the vendor
+ * recommended table; the individual fields are never manipulated
+ * separately, so they are not decomposed here.
+ */
+
+/* --- Data Timing register (offset 0x40, R/W) --------------------------- */
+
+/*
+ * Four independent byte counters, each in 62.5 ns baud-clock ticks:
+ *   [7:0]   DATA_HOLD     - SDA hold after SCL falls
+ *   [15:8]  RESTART_SETUP - SDA setup before a repeated START
+ *   [23:16] STOP_SETUP    - SDA setup before STOP
+ *   [31:24] START_HOLD    - SCL hold after a START
+ */
+#define I2C_MEC5_DT_DATA_HOLD_POS     0U
+#define I2C_MEC5_DT_RESTART_SETUP_POS 8U
+#define I2C_MEC5_DT_STOP_SETUP_POS    16U
+#define I2C_MEC5_DT_START_HOLD_POS    24U
+
+#define I2C_MEC5_DATA_TIMING_PACK(hold, restart, stop, start)                                      \
+	((((uint32_t)(hold) & 0xFFU) << I2C_MEC5_DT_DATA_HOLD_POS) |                               \
+	 (((uint32_t)(restart) & 0xFFU) << I2C_MEC5_DT_RESTART_SETUP_POS) |                        \
+	 (((uint32_t)(stop) & 0xFFU) << I2C_MEC5_DT_STOP_SETUP_POS) |                              \
+	 (((uint32_t)(start) & 0xFFU) << I2C_MEC5_DT_START_HOLD_POS))
+
 /* --- Bit-Bang Control register (offset 0x38, R/W) ---------------------- */
 #define I2C_MEC5_BBCR_BBM_EN    BIT(0) /* Enable bit-bang mode. SCL/SDA controlled by BB logic */
 #define I2C_MEC5_BBCR_CLDIR_OUT BIT(1) /* BB mode SCL is an output */
@@ -116,6 +166,9 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_v3, CONFIG_I2C_LOG_LEVEL);
 #define I2C_MEC5_BBCR_CLKI_HI   BIT(5) /* Read only SCL live state is high */
 #define I2C_MEC5_BBCR_DATI_HI   BIT(6) /* Read only SDA live state is high */
 #define I2C_MEC5_BBCR_LIVECM_EN BIT(7) /* enable live SCL/SDA in bits [6:5] */
+
+/* --- Time-Out Scaling register (offset 0x44, R/W) ---------------------- */
+#define I2C_MEC5_TMOUTSC_OFS     0x44U
 
 /* --- Target address format helper -------------------------------------- */
 
@@ -349,6 +402,26 @@ static inline void i2c_mec5_bbcr_w(const struct i2c_mec5_config *cfg, uint8_t v)
 	sys_write8(v, cfg->base + I2C_MEC5_BBCR_OFS);
 }
 
+static inline void i2c_mec5_tmoutsc_w(const struct i2c_mec5_config *cfg, uint32_t v)
+{
+	sys_write32(v, cfg->base + I2C_MEC5_TMOUTSC_OFS);
+}
+
+static inline void i2c_mec5_rsht_w(const struct i2c_mec5_config *cfg, uint32_t v)
+{
+	sys_write32(v, cfg->base + I2C_MEC5_RSHT_OFS);
+}
+
+static inline void i2c_mec5_idle_scale_w(const struct i2c_mec5_config *cfg, uint32_t v)
+{
+	sys_write32(v, cfg->base + I2C_MEC5_IDLE_SCALE_OFS);
+}
+
+static inline void i2c_mec5_data_timing_w(const struct i2c_mec5_config *cfg, uint32_t v)
+{
+	sys_write32(v, cfg->base + I2C_MEC5_DATA_TIMING_OFS);
+}
+
 /* --- Control-register word builders ----------------------------------- */
 
 #define CTRL_BASE  (I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI)
@@ -393,7 +466,7 @@ static int i2c_mec5_sm_kickoff(struct i2c_mec5_data *ctx, struct i2c_msg *msgs, 
 		/* Clear any stale Completion latches before starting. */
 		i2c_mec5_completion_w(cfg, I2C_MEC5_COMP_RW1C_MASK);
 
-		begin_msg(ctx, false); /* first msg: fresh START from idle bus */
+		begin_msg(ctx, false);
 	}
 
 	return ret;
@@ -417,33 +490,12 @@ static void begin_msg(struct i2c_mec5_data *ctx, bool repeated)
 	soc_ecia_girq_ctrl(cfg->girq, cfg->girq_pos, MCHP_MEC_ECIA_GIRQ_EN);
 
 	if (repeated) {
-		/*
-		 * Repeated-START. The controller already owns the bus (NBB=0,
-		 * PIN asserted by the previous byte's service IRQ). The order
-		 * is the reverse of a fresh START and PCLR/bit[7] must NOT be
-		 * set: write Control with STA (no PCLR) FIRST, THEN load the
-		 * address into Data. The Data write releases SCL so the
-		 * address is clocked out immediately after the repeated START.
-		 *
-		 * Doing it the fresh-START way here — PCLR-then-Data-then-STA —
-		 * clears PIN and writes Data while STA is not yet set, so the
-		 * hardware clocks the address out as a plain data byte
-		 * continuing the previous (write) transfer instead of issuing
-		 * a repeated START. That is a race: it works sometimes and
-		 * sometimes wedges the controller at NOSVC=1 with no further
-		 * service IRQ. See i2c_mchp_xec_v2.c gen_start(is_repeated=1).
-		 */
 		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ENI |
 					    I2C_MEC5_CTRL_STA | I2C_MEC5_CTRL_ACK);
 		i2c_mec5_data_w(cfg, addr_byte);
 	} else {
-		/*
-		 * Fresh START from an idle bus (README §START steps 2-5):
-		 * clear stale PIN state, load the address into Data, then
-		 * write STA together with PCLR to generate START + address.
-		 */
-		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
-					    I2C_MEC5_CTRL_ACK);
+		/* README §START steps 2-5. */
+		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO | I2C_MEC5_CTRL_ACK);
 		i2c_mec5_data_w(cfg, addr_byte);
 		i2c_mec5_ctrl_w(cfg, I2C_MEC5_CTRL_PCLR | I2C_MEC5_CTRL_ESO |
 					    I2C_MEC5_CTRL_ENI | I2C_MEC5_CTRL_STA |
@@ -482,11 +534,6 @@ static void begin_or_continue(struct i2c_mec5_data *ctx)
 		return;
 	}
 
-	/*
-	 * Direction change or explicit I2C_MSG_RESTART. The previous message
-	 * was a TX that did not STOP, so the controller still owns the bus:
-	 * this is a repeated START.
-	 */
 	begin_msg(ctx, true);
 }
 
@@ -694,8 +741,8 @@ static void handle_idle_wait(struct i2c_mec5_data *ctx, enum mec5_sm_action act)
 
 		if (more_msgs) {
 			i2c_mec5_dbg_state_update(ctx, 0x58U);
-			/* STOP was forced by the RX path; the bus is idle
-			 * again, so resume with a fresh START for the next msg.
+			/* STOP was forced by the RX path; resume the
+			 * transaction with a fresh START for the next msg.
 			 */
 			ctx->cur_msg++;
 			begin_msg(ctx, false);
@@ -841,45 +888,168 @@ static int mec5_speed_to_freq(uint32_t speed, uint32_t *freq)
 	return 0;
 }
 
-static int mec5_bitrate_apply(const struct device *dev, uint32_t speed)
-{
-	const struct i2c_mec5_config *cfg = dev->config;
-	uint32_t hz;
-	uint32_t divisor;
-	uint8_t half;
-	int ret = 0;
+/*
+ * Per-speed timing register values.
+ *
+ * Provenance: these are byte-for-byte the per-speed values Dell's FreeRTOS EC
+ * firmware programs on this same MEC5507 silicon in shipping products. That
+ * firmware attributes them to a Microchip document its comments cite as
+ * "DS00003501B" Table 7-2 ("Recommended Programming Values") and Table 7-3
+ * ("Bus Clock Register vs. Frequency"), but that document has not been read
+ * first-hand here, so treat the field-proven values as the authority and the
+ * citation as unverified until Microchip confirms the current document and
+ * revision for this part.
+ *
+ * Every field is a count of 16 MHz baud-clock ticks (62.5 ns); the enforced
+ * period is (count + 1) ticks. All five registers are volatile across the
+ * controller soft reset performed by config_hw(), so all five must be
+ * rewritten on every reconfiguration - see mec5_timing_apply().
+ *
+ * Deriving these instead of tabulating them does not work. Only BUS_CLOCK
+ * has a closed-form relationship to the target frequency, and even there a
+ * symmetric LOW/HIGH split is wrong above 100 kHz: Fast-mode and
+ * Fast-mode Plus both require t_LOW > t_HIGH so that the bus minimum low
+ * period is still met once SCL rise time eats into the high phase. The
+ * remaining four registers encode I2C setup/hold minimums that do not scale
+ * linearly with the bit clock at all.
+ */
+enum i2c_mec5_timing_idx {
+	I2C_MEC5_TIMING_100K = 0,
+	I2C_MEC5_TIMING_400K,
+	I2C_MEC5_TIMING_1M,
+	I2C_MEC5_TIMING_COUNT,
+};
 
+/* SCL LOW/HIGH pairs, kept as named constants so BUILD_ASSERT can
+ * check them against the SCL_Hz formula.
+ */
+#define I2C_MEC5_BUS_CLK_100K I2C_MEC5_BUS_CLK_PACK(0x4FU, 0x4FU)
+#define I2C_MEC5_BUS_CLK_400K I2C_MEC5_BUS_CLK_PACK(0x17U, 0x0FU)
+#define I2C_MEC5_BUS_CLK_1M   I2C_MEC5_BUS_CLK_PACK(0x09U, 0x05U)
+
+/* Every field in i2c_mec5_timing_tbl[] is a count of baud-clock ticks, so the
+ * whole table is only valid at 16 MHz. The three SCL_Hz asserts below happen to
+ * fail too if this changes, but they blame the LOW/HIGH pairs; this one names
+ * the real cause and also covers DATA_TIMING/RSHT/IDLE_SCALING/TIME_OUT, which
+ * nothing else checks. A part with a different baud clock (the 5075 runs it at
+ * 10 MHz) needs the table rescaled, not this assert relaxed.
+ */
+BUILD_ASSERT(I2C_MEC5_BAUD_CLOCK_HZ == 16000000U,
+	     "i2c_mec5_timing_tbl[] tick counts assume a 16 MHz SMBus baud clock");
+
+BUILD_ASSERT(I2C_MEC5_BUS_CLK_TO_HZ(I2C_MEC5_BUS_CLK_100K) == 100000U,
+	     "100 kHz bus clock LOW/HIGH pair does not yield 100 kHz");
+BUILD_ASSERT(I2C_MEC5_BUS_CLK_TO_HZ(I2C_MEC5_BUS_CLK_400K) == 400000U,
+	     "400 kHz bus clock LOW/HIGH pair does not yield 400 kHz");
+BUILD_ASSERT(I2C_MEC5_BUS_CLK_TO_HZ(I2C_MEC5_BUS_CLK_1M) == 1000000U,
+	     "1 MHz bus clock LOW/HIGH pair does not yield 1 MHz");
+
+struct i2c_mec5_timing {
+	uint32_t data_timing; /* 0x40: DATA_HOLD / RESTART_SETUP / STOP_SETUP / START_HOLD */
+	uint32_t idle_scale;  /* 0x24: minimum bus-free time between transactions */
+	uint32_t tmoutsc;     /* 0x44: CLOCK_HIGH / TARGET_CUM / SOURCE_CUM / BUS_IDLE */
+	uint16_t bus_clk;     /* 0x2C: SCL LOW / HIGH period */
+	uint8_t rsht;         /* 0x18: repeated-START hold */
+};
+
+static const struct i2c_mec5_timing i2c_mec5_timing_tbl[I2C_MEC5_TIMING_COUNT] = {
+	[I2C_MEC5_TIMING_100K] = {
+		.bus_clk = I2C_MEC5_BUS_CLK_100K,
+		.data_timing = I2C_MEC5_DATA_TIMING_PACK(0x06U, 0x50U, 0x4DU, 0x0CU),
+		.rsht = 0x4DU,
+		.idle_scale = 0x01FC01EDU,
+		.tmoutsc = 0x4B9CC2C7U,
+	},
+	[I2C_MEC5_TIMING_400K] = {
+		.bus_clk = I2C_MEC5_BUS_CLK_400K,
+		.data_timing = I2C_MEC5_DATA_TIMING_PACK(0x06U, 0x0AU, 0x0AU, 0x04U),
+		.rsht = 0x0AU,
+		.idle_scale = 0x01000050U,
+		.tmoutsc = 0x159CC2C7U,
+	},
+	[I2C_MEC5_TIMING_1M] = {
+		.bus_clk = I2C_MEC5_BUS_CLK_1M,
+		.data_timing = I2C_MEC5_DATA_TIMING_PACK(0x01U, 0x06U, 0x06U, 0x04U),
+		.rsht = 0x06U,
+		/* Deliberately NOT the vendor HAL's value. mec_i2c.c
+		 * freq_cfg_dflt[MEC_I2C_STD_FREQ_1M] has 0x10000050, which
+		 * sets reserved bit 28 and leaves FIDLY (bits [27:16],
+		 * mec5_i2c_smb_v3_8.h IDLESC_FIDLY_Msk) at 0 -- almost
+		 * certainly a shifted nibble, since it is the only field in
+		 * any of the three rows that disagrees with the HAL. 0x100
+		 * here matches the 400 kHz row above and the FreeRTOS EC
+		 * value for this silicon. Do not "resync" this to the HAL.
+		 */
+		.idle_scale = 0x01000050U,
+		.tmoutsc = 0x089CC2C7U,
+	},
+};
+
+/**
+ * @brief Look up the vendor timing row for a Zephyr I2C speed code.
+ *
+ * @param speed Zephyr I2C_SPEED_* code (STANDARD, FAST or FAST_PLUS).
+ *
+ * @retval Pointer to the matching const timing row.
+ * @retval NULL @p speed is not one of the three speeds this controller has
+ *              recommended programming values for.
+ */
+static const struct i2c_mec5_timing *mec5_timing_for_speed(uint32_t speed)
+{
 	switch (speed) {
 	case I2C_SPEED_STANDARD:
-		hz = 100000U;
-		break;
+		return &i2c_mec5_timing_tbl[I2C_MEC5_TIMING_100K];
 	case I2C_SPEED_FAST:
-		hz = 400000U;
-		break;
+		return &i2c_mec5_timing_tbl[I2C_MEC5_TIMING_400K];
 	case I2C_SPEED_FAST_PLUS:
-		hz = 1000000U;
-		break;
+		return &i2c_mec5_timing_tbl[I2C_MEC5_TIMING_1M];
 	default:
-		ret = -ENOTSUP;
-		break;
+		return NULL;
+	}
+}
+
+/**
+ * @brief Program every speed-dependent timing register for @p speed.
+ *
+ * Replaces the previous split between a computed BUS_CLOCK value and a
+ * separately tabulated time-out dword. Both of those left DATA_TIMING,
+ * repeated-START hold and IDLE_SCALING at their post-reset contents, which
+ * are sized for 100 kHz; running faster than that with 100 kHz setup/hold
+ * counts costs throughput at 400 kHz and, at 1 MHz, leaves DATA_HOLD longer
+ * than the whole SCL low period the same row programs.
+ *
+ * Must be called after the controller soft reset in config_hw() and before
+ * the controller is enabled, matching the vendor HAL's ordering.
+ *
+ * @param dev   I2C controller device.
+ * @param speed Zephyr I2C_SPEED_* code to program.
+ *
+ * @retval 0 All timing registers programmed.
+ * @retval -ENOTSUP @p speed has no recommended programming values.
+ */
+static int mec5_timing_apply(const struct device *dev, uint32_t speed)
+{
+	const struct i2c_mec5_config *cfg = dev->config;
+	const struct i2c_mec5_timing *tm = mec5_timing_for_speed(speed);
+
+	if (tm == NULL) {
+		return -ENOTSUP;
 	}
 
-	if (ret == 0) {
-		/*
-		 * SCL_Hz = 16_000_000 / ((LOW+1)+(HIGH+1))
-		 * divisor = (LOW+1)+(HIGH+1)
-		 * Symmetric split: LOW = HIGH = divisor/2 - 1.
-		 */
-		divisor = I2C_MEC5_BAUD_CLOCK_HZ / hz;
-		if (divisor < 2U || divisor > 512U || (divisor & 1U) != 0U) {
-			ret = -ERANGE;
-		} else {
-			half = (uint8_t)((divisor / 2U) - 1U);
-			i2c_mec5_bus_clk_w(cfg, I2C_MEC5_BUS_CLK_PACK(half, half));
-		}
-	}
+	/* SCL LOW/HIGH period: sets the bit clock itself. */
+	i2c_mec5_bus_clk_w(cfg, tm->bus_clk);
 
-	return ret;
+	/* Data hold plus repeated-START, STOP and START setup/hold minimums. */
+	i2c_mec5_data_timing_w(cfg, tm->data_timing);
+	i2c_mec5_rsht_w(cfg, tm->rsht);
+
+	/* Minimum bus-free time the controller enforces between transactions. */
+	i2c_mec5_idle_scale_w(cfg, tm->idle_scale);
+
+	/* Clock-high, cumulative target/source and bus-idle timeout scaling. */
+	i2c_mec5_tmoutsc_w(cfg, tm->tmoutsc);
+
+	return 0;
 }
 
 static uint32_t mec5_bitrate_to_speed(uint32_t hz)
@@ -979,13 +1149,23 @@ static int config_hw(const struct device *dev, uint32_t freq_hz, uint8_t port, b
 	config_hw_targets(dev);
 #endif
 
-	ret = mec5_bitrate_apply(dev, speed);
-	if (ret) {
-		return ret;
+	/* Program bus clock and all four setup/hold/idle/timeout registers.
+	 * The soft reset above returned every one of them to its 100 kHz
+	 * default, so this must run on each reconfiguration, not just at init.
+	 */
+	ret = mec5_timing_apply(dev, speed);
+	if (ret == 0) {
+		ret = mec5_port_apply(dev, port);
 	}
-
-	ret = mec5_port_apply(dev, port);
-	if (ret) {
+	if (ret != 0) {
+		/* Bail out with the controller reset and still disabled. Clear the
+		 * shadow rather than leaving the pair this call was asked for --
+		 * or worse, the previous pair -- so a later port_switch() cannot
+		 * match it and skip the reconfiguration this failure left undone.
+		 * (0, MAX_PORTS) is the same unreachable pair init seeds.
+		 */
+		xdat->active_freq = 0U;
+		xdat->active_port = I2C_MEC5_CFG_MAX_PORTS;
 		return ret;
 	}
 
@@ -1046,11 +1226,13 @@ void mchp_xec_i2c_v3_ctrl_unlock(const struct device *ctrl)
 /* Caller must acquire Controller lock before calling */
 int mchp_xec_i2c_v3_ctrl_port_switch(const struct device *ctrl, uint32_t freq, uint8_t port)
 {
-	struct i2c_mec5_data *const data = ctrl->data;
+	struct i2c_mec5_data *data;
 
 	if (ctrl == NULL) {
 		return -EINVAL;
 	}
+
+	data = ctrl->data;
 
 	if ((freq == data->active_freq) && (port == data->active_port)) {
 		return 0; /* nothing to do */
@@ -1218,6 +1400,44 @@ int mchp_i2c_xec_v3_get_config(const struct device *dev, uint32_t *dev_config, u
 	return ret;
 }
 
+/**
+ * @brief Report a port's configuration: controller mode, caller's bus rate.
+ *
+ * mchp_i2c_xec_v3_get_config() decodes the speed from the live BUS_CLK
+ * register, which belongs to whichever port was switched in last. Once ports
+ * carry independent runtime rates that is the wrong answer for every port but
+ * that one, and it breaks the get/modify/restore idiom: a caller saving and
+ * restoring its own configuration would restore another port's rate. Take the
+ * mode and target-address reporting from the controller, then substitute the
+ * rate the calling port owns.
+ *
+ * Port sequence: acquire the controller lock, call this, release the lock.
+ *
+ * @param dev        I2C controller device.
+ * @param bitrate    Calling port's active bus frequency in Hz.
+ * @param dev_config Out: Zephyr dev_config word.
+ *
+ * @retval 0 on success.
+ * @retval -EINVAL @p dev or @p dev_config is NULL.
+ */
+int mchp_i2c_xec_v3_get_port_config(const struct device *dev, uint32_t bitrate,
+				    uint32_t *dev_config)
+{
+	int ret = 0;
+
+	if ((dev == NULL) || (dev_config == NULL)) {
+		return -EINVAL;
+	}
+
+	ret = i2c_mec5_get_i2c_cfg(dev, dev_config);
+	if (ret == 0) {
+		*dev_config = (*dev_config & ~(uint32_t)I2C_SPEED_MASK) |
+			      I2C_SPEED_SET(mec5_bitrate_to_speed(bitrate));
+	}
+
+	return ret;
+}
+
 /* --- Zephyr API: recover_bus ----------------------------------------- */
 
 static int i2c_mec5_bb_check_scl(const struct device *ctrl, uint16_t nloops)
@@ -1309,7 +1529,8 @@ static int i2c_mec5_bb_gen_stop(const struct device *ctrl)
  * Recovery sequence:
  * 1. Attempt controller reset. If successful return
  * 2. Check pin states using BBCR live feature.
- * 3. If SCL is low spin sampling SCL. If it remains low after spin period return error
+ * 3. If SCL is low spin sampling SCL. If it remains low after spin period,
+ *    still attempt forced clock/STOP recovery below.
  * 4. Enable bit-bang control mode where SCL/SDA pins states are set by BB hardware.
  * 5. Loop N times
  *      Generate a 9 clocks at ~100 KHz on SCL
@@ -1340,8 +1561,8 @@ static int i2c_mec5_bb_recover(const struct device *ctrl, uint32_t freq, uint8_t
 
 	ret = i2c_mec5_bb_check_scl(ctrl, 100U);
 	if (ret != 0) {
-		LOG_ERR("I2C recov: SCL stuck low");
-		return ret;
+		LOG_WRN("%s: I2C recov: SCL held low after poll, forcing clock recovery anyway",
+			ctrl->name);
 	}
 
 	/* Enable Bit-Bang control of SCL and SDA with as outputs and tri-stated */
@@ -1378,7 +1599,8 @@ static int i2c_mec5_bb_recover(const struct device *ctrl, uint32_t freq, uint8_t
 
 	bbcr = i2c_mec5_bbcr_r(cfg);
 	if ((bbcr & both_hi_msk) != both_hi_msk) {
-		LOG_INF("I2C recov failed");
+		LOG_ERR("%s: I2C recov(port=%u) failed sts=0x%02x bbcr=0x%02x", ctrl->name,
+			(unsigned int)port, i2c_mec5_status_r(cfg), bbcr);
 		return -EIO;
 	}
 
@@ -1425,7 +1647,9 @@ static void i2c_mec5_post_xfer_recover(const struct device *dev)
 	}
 
 	if (i2c_mec5_bb_recover(dev, ctx->active_freq, ctx->active_port) != 0) {
-		LOG_ERR("post-xfer bus recovery failed");
+		LOG_ERR("%s: post-xfer bus recovery failed port=%u state=%u tgt=%u", dev->name,
+			(unsigned int)ctx->active_port, (unsigned int)ctx->state,
+			(unsigned int)ctx->tgt_state);
 	}
 }
 
@@ -1485,7 +1709,10 @@ static int i2c_mec5_xfr(const struct device *dev, struct i2c_msg *msgs, uint8_t 
 	if (ret == 0) {
 		if (k_sem_take(&ctx->xfer_done, K_MSEC(I2C_MEC5_XFR_TIMEOUT_MS)) != 0) {
 			i2c_mec5_dbg_state_update(ctx, 4U);
-			LOG_ERR("transfer timed out");
+			LOG_ERR("%s: transfer timed out port=%u state=%u tgt=%u sts=0x%02x comp=0x%08x",
+				dev->name, (unsigned int)ctx->active_port, (unsigned int)ctx->state,
+				(unsigned int)ctx->tgt_state, i2c_mec5_status_r(dev->config),
+				i2c_mec5_completion_r(dev->config));
 			ret = -ETIMEDOUT;
 		} else {
 			i2c_mec5_dbg_state_update(ctx, 5U);
@@ -1609,7 +1836,7 @@ static void i2c_mec5_cb_work_handler(struct k_work *work)
 	irq_unlock(key);
 
 	if (timed_out) {
-		LOG_ERR("async transfer timed out");
+		LOG_ERR("%s: async transfer timed out", ctx->dev->name);
 	}
 
 	/* Verify SCL/SDA released before releasing the bus lock so the next
@@ -2154,8 +2381,13 @@ static void handle_target_stop(struct i2c_mec5_data *ctx)
 static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action act,
 				  uint8_t status)
 {
+	const struct i2c_mec5_config *cfg = ctx->dev->config;
 	struct i2c_target_config *tcfg = NULL;
 	enum i2c_error_reason err_reason = I2C_ERROR_GENERIC;
+	uint32_t icfg;
+
+	LOG_WRN("%s: target-mode error path hit (act=%u status=0x%02x) while idle", ctx->dev->name,
+		(unsigned int)act, status);
 
 	i2c_mec5_dbg_state_update(ctx, 0xB4U);
 
@@ -2184,7 +2416,20 @@ static void i2c_mec5_target_error(struct i2c_mec5_data *ctx, enum mec5_sm_action
 		}
 	}
 
+	icfg = i2c_mec5_config_r(cfg);
+	icfg &= (uint32_t)~(I2C_MEC5_CFG_STOP_DET_EN | I2C_MEC5_CFG_ENIDI);
+	i2c_mec5_config_w(cfg, icfg);
+	if ((status & (I2C_MEC5_STATUS_AAT | I2C_MEC5_STATUS_STS)) != 0U) {
+		(void)i2c_mec5_data_r(cfg);
+	}
+	i2c_mec5_ctrl_w(cfg, CTRL_TGT_REST | I2C_MEC5_CTRL_ACK);
+
 	ctx->tgt_state = TGT_IDLE;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	ctx->tgt_buf_idx = 0U;
+	ctx->tgt_buf_len = 0U;
+	ctx->tgt_tx_ptr = NULL;
+#endif
 
 	i2c_mec5_dbg_state_update(ctx, 0xBAU);
 }

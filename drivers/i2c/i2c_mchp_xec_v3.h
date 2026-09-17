@@ -26,6 +26,13 @@ int mchp_xec_i2c_v3_ctrl_port_switch(const struct device *ctrl, uint32_t freq, u
 int mchp_i2c_xec_v3_config(const struct device *dev, uint32_t dev_config, uint8_t port);
 int mchp_i2c_xec_v3_get_config(const struct device *dev, uint32_t *dev_config, uint8_t *port);
 
+/* As above, but reports @p bitrate as the bus rate instead of decoding the
+ * live BUS_CLK register, which reflects the last port switched in rather than
+ * the port asking. Ports must use this one.
+ */
+int mchp_i2c_xec_v3_get_port_config(const struct device *dev, uint32_t bitrate,
+				    uint32_t *dev_config);
+
 int mchp_i2c_xec_v3_transfer(const struct device *dev, struct i2c_msg *msgs, uint8_t num_msgs,
 			     uint16_t addr);
 
