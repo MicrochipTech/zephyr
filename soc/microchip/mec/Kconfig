@@ -279,6 +279,11 @@ config HAS_MCHP_MEC_I3C
 	help
 	  Hidden symbol selected by SoCs which have I3C support
 
+config HAS_MCHP_MEC_I2C_SMB_V38
+	bool
+	help
+	  Hidden symbol selected by SoC with I2C version 3.8 hardware
+
 # Select SoC Part No. and configuration options
 rsource "*/Kconfig"
 
