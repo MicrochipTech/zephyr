@@ -18,3 +18,27 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_NL
+	bool "XEC Microchip I2C Network layer DMA driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL && HAS_MCHP_MEC_I2C_SMB_V38
+	select DMA
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C driver using the network
+	  layer protocol engine plus DMA.
+
+config I2C_MCHP_XEC_NL_STATE_CAPTURE
+	bool "MCHP XEC I2Cv3-BM driver state capture"
+	default n
+	depends on I2C_MCHP_XEC_NL
+	help
+	  Enable driver state capture for helping diagnosing I2C issues
+
+config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
+	int
+	default 256
+	depends on I2C_MCHP_XEC_NL_STATE_CAPTURE
+	help
+	  Size of state capture buffer in bytes. Default is 256.
