@@ -1,0 +1,166 @@
+# Copyright (c) 2026, Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip XEC version 3.8 HW I2C driver using network layer
+  I2C protocol FSM plus DMA.
+
+compatible: "microchip,xec-i2c-nl"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+    description: MMIO Base address register mapping.
+
+  interrupts:
+    required: true
+    description: Hardware interrupt vector assignment.
+
+  girqs:
+    type: array
+    required: true
+    description: |
+      Hardware GIRQ encoded interrupt routing. Each peripheral
+      interrupt line is routed to a GIRQ bit in the XEC ECIA.
+      The GIRQ result bits which are bitwise AND of GIRQ enable
+      and status are routed to the peripheral's NVIC input.
+      The value is the encoded GIRQ number and bit position
+      for this peripheral instance. The array has a maximum of
+      two entries. The first is the runtime GIRQ and the second is
+      the wake GIRQ.
+
+  pcr-scr:
+    type: int
+    required: true
+    description: |
+      Each peripheral instance has sleep enable, clock required, and
+      reset bits in the PCR block. The value is the encoded PCR register
+      index and bit position for the peripheral instance.
+
+  default-port:
+    type: phandle
+    dependency-mode: "ignore"
+    description: |
+      Phandle to one of this controller's port nodes whose pin routing is
+      applied at boot, before the first transfer. Optional: if omitted, no
+      port is pre-routed and the first transfer lazily applies its own
+      port's routing. The referenced port's "controller" phandle must point
+      back to this node (enforced by build assertion).
+
+  dmas:
+    required: true
+    description: |
+      Phandle and channel specs mapping this block to its DMA engine(s).
+      The driver expects up to two named entries:
+
+        "host"   - DMA channel + trigger source for controller-mode
+                   transfers (HCMD/HTX/HRX). Always required.
+        "target" - DMA channel + trigger source for target-mode
+                   transfers (TCMD/TTX/TRX). Required only when an
+                   application registers an I2C target via
+                   i2c_target_register(); target_register returns
+                   -ENODEV at runtime if this entry is absent.
+
+      The two entries must reference the same DMA controller but use
+      different channels and different trigger sources.
+
+  dma-names:
+    required: true
+    description: |
+      Names for the dmas entries. Use ["host"] for controller-only
+      use; use ["host", "target"] when target mode will be used.
+
+  target-buffer-size:
+    type: int
+    description: |
+      Per-instance size, in bytes, of the target-mode RX buffer the
+      driver stages incoming bytes into before invoking the
+      buf_write_received callback. Sized to the largest write the
+      external host will issue plus one byte for the matched target
+      address (which the driver strips before passing data to the
+      callback). If absent, the driver does not allocate a target
+      buffer and i2c_target_register returns -ENOSYS. The hardware
+      receive-byte counter is 16 bits, so this value must be
+      <= 65535 (0xFFFF); a build assertion enforces the cap.
+
+  clock-frequency:
+    type: int
+    description: |
+      Clock frequency is unused for the controller node and required
+      for the port node. We keep it here to prevent build errors on
+      code trees that will have clock-frequency in the chip level DTSI.
+
+  timing-100k:
+    type: array
+    description: |
+      Bus-timing register overrides applied when the bus rate is
+      programmed to 100 kHz or below. Optional: when absent the driver
+      uses its datasheet defaults, so a board only names the rows it
+      needs to tune.
+
+      Exactly six cells, in this order:
+
+        0  data-timing       DT     (0x40) full 32-bit register
+        1  idle-scaling      ISC    (0x24) full 32-bit register
+        2  timeout-scaling   TMOUT_SC (0x44) full 32-bit register
+        3  bus-clock         BCLK   (0x2c) 16 bits: low period in 7:0,
+                                   high period in 15:8
+        4  rpt-start-hold    RSHT   (0x18) 8 bits
+        5  mr0-timing        MR0    (0x3c) bits 7:0, BAUD clock select
+
+      All six are required when the property is present; there is no
+      per-cell fallback. Default row: <0x0C4D5006 0x01FC01ED 0x4B9CC2C7
+      0x4F4F 0x4D 0x05>.
+
+      Every count in cells 0-4 is expressed in BAUD-clock periods, and
+      cell 5 selects that clock: 0x05 is the 16 MHz source all the
+      default rows assume, where one count is 62.5 ns. Changing cell 5
+      rescales the other five, so change them together.
+
+      Cells 0-2 are full 32-bit registers. Devicetree cells are signed
+      32-bit, so a value above 0x7fffffff is stored as a negative number
+      and is not range-checked at build time; it still reaches the
+      hardware register with the correct bits.
+
+      Tuning bus-clock is how a board compensates for SCL edge rates.
+      The controller samples SCL and times the high period from the real
+      V_IH crossing, so on a bus with a slow rise the achieved rate sits
+      below the programmed one; shortening the high period in bits 15:8
+      claws that back, subject to the I2C minimum high and low times for
+      the mode in use.
+
+  timing-400k:
+    type: array
+    description: |
+      Bus-timing register overrides applied above 100 kHz and up to
+      400 kHz. Same six cells and the same rules as timing-100k.
+      Default row: <0x040A0A06 0x01000050 0x159CC2C7 0x0F17 0x0A 0x05>.
+
+  timing-1000k:
+    type: array
+    description: |
+      Bus-timing register overrides applied above 400 kHz. Same six
+      cells and the same rules as timing-100k. Default row:
+      <0x04060601 0x00320030 0x089CC2C7 0x0509 0x06 0x05>.
+
+  timing-dt:
+    type: array
+    description: |
+      A fourth timing row for an operating point the three frequency
+      bands above do not describe. Same six cells and the same rules as
+      timing-100k, but no default: the row exists only when this
+      property is present.
+
+      It is reached only by an explicit
+      i2c_configure(dev, I2C_MODE_CONTROLLER | I2C_SPEED_SET(I2C_SPEED_DT)).
+      A port's clock-frequency continues to select one of the three
+      bands, so adding this property changes nothing until an
+      application asks for I2C_SPEED_DT. When the property is absent,
+      I2C_SPEED_DT keeps its previous meaning and programs the
+      controller's default frequency.
+
+      Because the row is raw register values with no nominal rate, the
+      driver reports I2C_SPEED_DT back from i2c_get_config while it is
+      active rather than guessing a frequency band.
