@@ -299,9 +299,15 @@ static int xec_i2c_nl_apply_port(const struct device *port_dev)
 	struct xec_i2c_nl_port_data *port_data = port_dev->data;
 	const struct device *ctrl = port_cfg->controller;
 	struct xec_i2c_nl_data *ctrl_data = ctrl->data;
+	uint32_t freq = xec_i2c_nl_port_freq(port_cfg, port_data);
 	int rc;
 
-	if (ctrl_data->active_port == port_cfg->port_id) {
+	/* Same port AND same frequency already programmed: nothing to do.
+	 * A port match alone is not enough -- i2c_configure() can change
+	 * this port's frequency while it is the one already selected, and
+	 * that still has to reprogram the timing registers.
+	 */
+	if (ctrl_data->active_port == port_cfg->port_id && ctrl_data->active_freq == freq) {
 		return 0;
 	}
 
@@ -311,17 +317,13 @@ static int xec_i2c_nl_apply_port(const struct device *port_dev)
 		return rc;
 	}
 
-	return xec_i2c_nl_program_ctrl(ctrl, xec_i2c_nl_port_freq(port_cfg, port_data),
-				       port_cfg->port_id);
+	return xec_i2c_nl_program_ctrl(ctrl, freq, port_cfg->port_id);
 }
 
 /* I2C configure API */
 static int xec_i2c_nl_vport_config(const struct device *port_dev, uint32_t i2c_config)
 {
-	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
 	struct xec_i2c_nl_port_data *port_data = port_dev->data;
-	const struct device *ctrl = port_cfg->controller;
-	struct xec_i2c_nl_data *ctrl_data = ctrl->data;
 	uint32_t freq;
 
 	if (!(i2c_config & I2C_MODE_CONTROLLER)) {
@@ -333,17 +335,14 @@ static int xec_i2c_nl_vport_config(const struct device *port_dev, uint32_t i2c_c
 		return -ENOTSUP;
 	}
 
-	/* Sticky per port: applies now if this port is already selected on
-	 * the shared controller, and again on every future switch back to
-	 * this port -- see xec_i2c_nl_apply_port()/xec_i2c_nl_port_freq().
+	/* Sticky per port: xec_i2c_nl_apply_port() compares this against
+	 * the controller's active port AND active frequency, so it
+	 * reprograms immediately if this port is already selected, and
+	 * again on every future switch back to this port.
 	 */
 	port_data->runtime_freq = freq;
 
-	if (ctrl_data->active_port == port_cfg->port_id) {
-		return xec_i2c_nl_program_ctrl(ctrl, freq, port_cfg->port_id);
-	}
-
-	return 0;
+	return xec_i2c_nl_apply_port(port_dev);
 }
 
 /* I2C get config API */
@@ -431,11 +430,10 @@ static int xec_i2c_nl_ctrl_init(const struct device *ctrl_dev)
 
 static int xec_i2c_nl_port_init(const struct device *port_dev)
 {
-	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
-	struct xec_i2c_nl_port_data *const port_data = port_dev->data;
-
-	port_data->runtime_freq = port_cfg->bitrate;
-
+	/* port_data->runtime_freq starts at 0 ("never configured by the
+	 * app") from static zero-init; xec_i2c_nl_port_freq() already
+	 * falls back to the port's DT clock-frequency in that case.
+	 */
 	return xec_i2c_nl_apply_port(port_dev);
 }
 
