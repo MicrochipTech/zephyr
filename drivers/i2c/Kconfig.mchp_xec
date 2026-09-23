@@ -22,7 +22,7 @@ config I2C_XEC_V2
 config I2C_MCHP_XEC_NL
 	bool "XEC Microchip I2C Network layer DMA driver"
 	default y
-	depends on DT_HAS_MICROCHIP_XEC_I2C_NL && HAS_MCHP_MEC_I2C_SMB_V38
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED && HAS_MCHP_MEC_I2C_SMB_V38
 	select DMA
 	select PINCTRL
 	help
