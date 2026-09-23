@@ -1,0 +1,141 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6941 EVB with mec1753_qlj */
+
+/* public zephyr */
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/i2c/mchp-xec-i2c.h>
+
+/ {
+	/* Port 0 (default port) on I2C Controller 0 */
+	i2c0_p0: i2c-port0 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <0>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		pca9555_evb: pca9555@26 {
+			reg = <0x26>;
+			status = "okay";
+		};
+
+		ltc2489_evb: ltc2489@34 {
+			reg = <0x34>;
+			status = "okay";
+		};
+
+		mb85rc256v_fram: mb85rc256v_fram@50 {
+			reg = <0x50>;
+			status = "okay";
+		};
+	};
+
+	i2c0_p3: i2c-port3 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <3>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>;
+		pinctrl-0 = <&i2c03_sda_gpio007 &i2c03_scl_gpio010>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		i2c_dev_fast_plus: i2c-device@40 {
+			reg = <0x40>;
+			status = "okay";
+		};
+	};
+
+	i2c1_p5: i2c-port5 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <5>;
+		controller = <&i2c_smb_1>;
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>;
+		pinctrl-0 = <&i2c05_sda_gpio141 &i2c05_scl_gpio142>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
+};
+
+&dmac {
+	status = "okay";
+};
+
+&uart1 {
+	compatible = "microchip,xec-uart";
+	status = "okay";
+};
+
+&i2c_smb_0 { /* Framework driver. Not yet in Zephyr v4.4.x public tree */
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_CTRL>,
+	       <&dmac 1 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_TARG>;
+	dma-names = "host", "target";
+	/* Target-mode RX staging: largest write the external host will
+	 * issue plus one byte (matched target address). The driver strips
+	 * the address before invoking buf_write_received.
+	 */
+	target-buffer-size = <256>;
+	/* Port routed at boot, before the first transfer. */
+	default-port = <&i2c0_p0>;
+};
+
+/* Port 0 connected to i2c_smb_0 */
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+/* Port 3 pins */
+&i2c03_sda_gpio007 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+&i2c03_scl_gpio010 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c_smb_1 { /* Framework driver. Not yet in Zephyr v4.4.x public tree */
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_CTRL>;
+	dma-names = "host";
+	/* Port routed at boot, before the first transfer. */
+	default-port = <&i2c1_p5>;
+};
+
+/* Port 5 pins */
+&i2c05_sda_gpio141 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+&i2c05_scl_gpio142 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};

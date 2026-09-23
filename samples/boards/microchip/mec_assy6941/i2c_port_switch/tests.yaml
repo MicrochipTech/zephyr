@@ -1,0 +1,18 @@
+# This file is provided so that the application can be compiled using Twister,
+# the Zephyr testing tool. In this file, multiple combinations can be specified,
+# so that you can easily test all of them locally or in CI.
+sample:
+  description: Sample application I2C port switching
+  name: sample-board-microchip-i2c-port-switch
+common:
+  build_only: true
+  integration_platforms:
+    - mec_assy6941/mec1753_qlj
+  depends_on:
+    - dma
+    - gpio
+    - i2c
+    - pinctrl
+    
+tests:
+  app.default: {}
