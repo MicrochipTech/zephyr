@@ -39,6 +39,19 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define CMPL_BER   BIT(XEC_I2C_CMPL_BER_STS_POS)
 #define CMPL_ERR   (CMPL_HNAK | CMPL_LAB | CMPL_BER)
 
+/* Master-mode command register live bits (see README/CLAUDE.md HW model). */
+#define HCMD_RUN     BIT(XEC_I2C_HCMD_RUN_POS)
+#define HCMD_PROCEED BIT(XEC_I2C_HCMD_PROC_POS)
+#define HCMD_START0  BIT(XEC_I2C_HCMD_START0_POS)
+#define HCMD_STARTN  BIT(XEC_I2C_HCMD_STARTN_POS)
+#define HCMD_STOP    BIT(XEC_I2C_HCMD_STOP_POS)
+
+/* v3.8 erratum bit: must only be armed while the bus is NOT already idle
+ * (see the ISR and xec_i2c_nl_program_ctrl()'s CFG write for why it is
+ * otherwise left off).
+ */
+#define CFG_IDLE_IEN BIT(XEC_I2C_CFG_IDLE_IEN_POS)
+
 #define BBCR_SCL_IN BIT(XEC_I2C_BBCR_SCL_IN_POS)
 #define BBCR_SDA_IN BIT(XEC_I2C_BBCR_SDA_IN_POS)
 
@@ -48,6 +61,12 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define BBCR_BB_SCL_LOW  (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CD_POS))
 /* BBM_EN=1, SDA drive-low, SCL released */
 #define BBCR_BB_SDA_LOW  (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_DD_POS)) 
+
+/* struct i2c_msg[] -> HW request parsing; kept SoC-independent, see the
+ * file. Included here, ahead of struct xec_i2c_nl_data, because that
+ * struct embeds a struct xec_i2c_nl_request by value.
+ */
+#include "i2c_mchp_xec_nl_msg.c"
 
 enum xec_i2c_nl_timing_row {
 	XEC_I2C_NL_TM_100K,
@@ -92,13 +111,56 @@ struct xec_i2c_nl_config {
 	struct xec_i2c_nl_timing timing[XEC_I2C_NL_TM_COUNT];
 };
 
+/* One DMA source/dest segment of the currently-armed HW request's write or
+ * read phase -- see the segment model in the Task 3 design notes. A single
+ * request's write phase is NOT one contiguous DMA buffer (this HW has no
+ * scatter-gather): it is the address byte, then each write message's own
+ * (separately allocated) buffer, then optionally a second address byte.
+ * DMA must be re-armed at every one of these boundaries.
+ */
+enum xec_i2c_nl_seg_kind {
+	XEC_I2C_NL_SEG_ADDR0, /* data->addr_byte[0]: write-phase START0 addr byte */
+	XEC_I2C_NL_SEG_WMSG,  /* msgs[cur_seg_msg_idx].buf: a write-phase message */
+	XEC_I2C_NL_SEG_ADDRN, /* data->addr_byte[1]: write-phase STARTN addr byte */
+	XEC_I2C_NL_SEG_RMSG,  /* msgs[cur_seg_msg_idx].buf: a read-phase message  */
+};
+
 /* Controller data structure */
 struct xec_i2c_nl_data {
 	const struct device *ctrl;
 	uint8_t addr_byte[2] __aligned(4);
 	uint32_t active_freq;
 	uint8_t active_port;
-	/* TODO more */
+
+	/* Busy guard (not a mutex: completion, and thus the final unlock,
+	 * happens from ISR context for the async path, and Zephyr mutexes
+	 * cannot be unlocked from ISR). Sync xfr takes it K_FOREVER; async
+	 * xfr_cb takes it K_NO_WAIT and returns -EWOULDBLOCK on failure.
+	 */
+	struct k_sem lock;
+	struct k_sem done_sem; /* sync callers block on this for the whole xfr */
+
+	/* In-flight transfer: the caller's original submission, valid for as
+	 * long as `lock` is held by a transfer.
+	 */
+	struct i2c_msg *xfr_msgs;
+	uint8_t xfr_num_msgs;
+	uint16_t xfr_i2c_addr;
+	const struct device *xfr_port_dev; /* diagnostics only */
+	bool xfr_active;                   /* guards finish_xfr() re-entry */
+
+	/* Currently-armed HW request, and where to resume parsing for the
+	 * next one (== xfr_num_msgs means "nothing left").
+	 */
+	struct xec_i2c_nl_request cur_req;
+	uint8_t next_start_idx;
+
+	/* DMA segment cursor within cur_req. */
+	enum xec_i2c_nl_seg_kind cur_seg_kind;
+	uint8_t cur_seg_msg_idx; /* meaningful for WMSG/RMSG segments only */
+
+	int xfr_result; /* accumulated result for xfr_msgs[]; sticky, first error wins */
+
 #ifdef CONFIG_I2C_CALLBACK
 	/* TODO more */
 #endif
@@ -106,9 +168,6 @@ struct xec_i2c_nl_data {
 	/* TODO more */
 #endif
 };
-
-/* struct i2c_msg[] -> HW request parsing; kept SoC-independent, see the file. */
-#include "i2c_mchp_xec_nl_msg.c"
 
 /* Port device struture */
 struct xec_i2c_nl_port_config {
@@ -358,12 +417,383 @@ static int xec_i2c_nl_vport_get_config(const struct device *port_dev, uint32_t *
 	return 0;
 }
 
+/* 7-bit target address; matches the address-byte layout xec_i2c_nl_parse_msgs()
+ * and the Master TX register expect.
+ */
+#define XEC_I2C_NL_ADDR_MASK 0x7FU
+
+/* Forward declarations: xec_i2c_nl_dma_cb() is registered as the DMA
+ * channel's completion callback before it's defined, and it (along with
+ * xec_i2c_nl_isr(), further below) needs xec_i2c_nl_finish_xfr() before
+ * that is defined.
+ */
+static void xec_i2c_nl_dma_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
+			       int status);
+static void xec_i2c_nl_finish_xfr(const struct device *ctrl, int result);
+
+/* Resolve a DMA segment to its memory-side address/length -- see the
+ * segment model in the Task 3 design notes (struct xec_i2c_nl_data's
+ * cur_seg_kind/cur_seg_msg_idx comment).
+ */
+static void xec_i2c_nl_seg_addr(const struct xec_i2c_nl_data *data,
+				 enum xec_i2c_nl_seg_kind kind, uint8_t msg_idx,
+				 uintptr_t *mem_addr, uint32_t *len)
+{
+	switch (kind) {
+	case XEC_I2C_NL_SEG_ADDR0:
+		*mem_addr = (uintptr_t)&data->addr_byte[0];
+		*len = 1U;
+		break;
+	case XEC_I2C_NL_SEG_ADDRN:
+		*mem_addr = (uintptr_t)&data->addr_byte[1];
+		*len = 1U;
+		break;
+	case XEC_I2C_NL_SEG_WMSG:
+	case XEC_I2C_NL_SEG_RMSG:
+	default:
+		*mem_addr = (uintptr_t)data->xfr_msgs[msg_idx].buf;
+		*len = data->xfr_msgs[msg_idx].len;
+		break;
+	}
+}
+
+static bool xec_i2c_nl_seg_advance_once(const struct xec_i2c_nl_request *req,
+					 enum xec_i2c_nl_seg_kind *kind, uint8_t *msg_idx)
+{
+	switch (*kind) {
+	case XEC_I2C_NL_SEG_ADDR0:
+		if (req->num_write_msgs > 0U) {
+			*kind = XEC_I2C_NL_SEG_WMSG;
+			*msg_idx = req->first_write_msg_idx;
+			return true;
+		}
+		return false;
+	case XEC_I2C_NL_SEG_WMSG:
+		if ((uint16_t)(*msg_idx + 1U) <
+		    (uint16_t)req->first_write_msg_idx + req->num_write_msgs) {
+			(*msg_idx)++;
+			return true;
+		}
+		if (req->flags & XEC_I2C_NL_REQ_STARTN) {
+			*kind = XEC_I2C_NL_SEG_ADDRN;
+			return true;
+		}
+		return false;
+	case XEC_I2C_NL_SEG_ADDRN:
+		return false;
+	case XEC_I2C_NL_SEG_RMSG:
+	default:
+		if ((uint16_t)(*msg_idx + 1U) <
+		    (uint16_t)req->first_read_msg_idx + req->num_read_msgs) {
+			(*msg_idx)++;
+			return true;
+		}
+		return false;
+	}
+}
+
+/* Advance (kind, msg_idx) to the next segment of data->cur_req, skipping
+ * any zero-length message rather than arming a zero-byte DMA block.
+ * Returns false once the current phase (write or read) is exhausted.
+ */
+static bool xec_i2c_nl_seg_next(const struct xec_i2c_nl_data *data,
+				 enum xec_i2c_nl_seg_kind *kind, uint8_t *msg_idx)
+{
+	while (xec_i2c_nl_seg_advance_once(&data->cur_req, kind, msg_idx)) {
+		if ((*kind != XEC_I2C_NL_SEG_WMSG && *kind != XEC_I2C_NL_SEG_RMSG) ||
+		    data->xfr_msgs[*msg_idx].len > 0U) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Arm one write-phase DMA segment. first_segment_of_phase selects a fresh
+ * dma_config() (direction/slot may have changed since the last phase) vs.
+ * the cheaper dma_reload() (same direction, only src/dst/size change).
+ * Both dma_config()/dma_reload() only program the channel; dma_start()
+ * is always required afterward.
+ */
+static int xec_i2c_nl_dma_arm_write(const struct device *ctrl, uintptr_t mem_addr, uint32_t len,
+				     bool first_segment_of_phase)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t dev_addr = cfg->base + XEC_I2C_HTX_OFS;
+	int rc;
+
+	if (!first_segment_of_phase) {
+		rc = dma_reload(cfg->dma_dev, cfg->cm_dma_chan, mem_addr, dev_addr, len);
+	} else {
+		struct dma_block_config blk = {
+			.source_address = mem_addr,
+			.dest_address = dev_addr,
+			.block_size = len,
+			.source_addr_adj = DMA_ADDR_ADJ_INCREMENT,
+			.dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE,
+		};
+		struct dma_config dcfg = {
+			.dma_slot = cfg->cm_dma_slot,
+			.channel_direction = MEMORY_TO_PERIPHERAL,
+			.source_data_size = 1U,
+			.dest_data_size = 1U,
+			.source_burst_length = 1U,
+			.dest_burst_length = 1U,
+			.complete_callback_en = 1U,
+			.block_count = 1U,
+			.head_block = &blk,
+			.dma_callback = xec_i2c_nl_dma_cb,
+			.user_data = data,
+		};
+
+		dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+		rc = dma_config(cfg->dma_dev, cfg->cm_dma_chan, &dcfg);
+	}
+	if (rc != 0) {
+		return rc;
+	}
+
+	return dma_start(cfg->dma_dev, cfg->cm_dma_chan);
+}
+
+/* Arm one read-phase DMA segment; mirrors xec_i2c_nl_dma_arm_write() with
+ * source/dest swapped (peripheral -> memory).
+ */
+static int xec_i2c_nl_dma_arm_read(const struct device *ctrl, uintptr_t mem_addr, uint32_t len,
+				    bool first_segment_of_phase)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t dev_addr = cfg->base + XEC_I2C_HRX_OFS;
+	int rc;
+
+	if (!first_segment_of_phase) {
+		rc = dma_reload(cfg->dma_dev, cfg->cm_dma_chan, dev_addr, mem_addr, len);
+	} else {
+		struct dma_block_config blk = {
+			.source_address = dev_addr,
+			.dest_address = mem_addr,
+			.block_size = len,
+			.source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE,
+			.dest_addr_adj = DMA_ADDR_ADJ_INCREMENT,
+		};
+		struct dma_config dcfg = {
+			.dma_slot = cfg->cm_dma_slot,
+			.channel_direction = PERIPHERAL_TO_MEMORY,
+			.source_data_size = 1U,
+			.dest_data_size = 1U,
+			.source_burst_length = 1U,
+			.dest_burst_length = 1U,
+			.complete_callback_en = 1U,
+			.block_count = 1U,
+			.head_block = &blk,
+			.dma_callback = xec_i2c_nl_dma_cb,
+			.user_data = data,
+		};
+
+		dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+		rc = dma_config(cfg->dma_dev, cfg->cm_dma_chan, &dcfg);
+	}
+	if (rc != 0) {
+		return rc;
+	}
+
+	return dma_start(cfg->dma_dev, cfg->cm_dma_chan);
+}
+
+/* DMA channel completion callback: fires once a single segment's bytes
+ * have actually moved (this DMA is hardware flow-controlled by the I2C
+ * FSM's own per-byte request line). Never signals phase or request
+ * completion -- xec_i2c_nl_isr() owns that via HDONE/IDLE. See the
+ * segment model notes for why these are two independent interrupt
+ * sources that must not race.
+ */
+static void xec_i2c_nl_dma_cb(const struct device *dma_dev, void *user_data, uint32_t channel,
+			       int status)
+{
+	struct xec_i2c_nl_data *data = user_data;
+	const struct device *ctrl = data->ctrl;
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	enum xec_i2c_nl_seg_kind kind = data->cur_seg_kind;
+	uint8_t msg_idx = data->cur_seg_msg_idx;
+	uintptr_t mem_addr;
+	uint32_t len;
+	bool is_read;
+	int rc;
+
+	ARG_UNUSED(dma_dev);
+	ARG_UNUSED(channel);
+
+	if (status < 0) {
+		dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+		xec_i2c_nl_finish_xfr(ctrl, status);
+		return;
+	}
+
+	if (!xec_i2c_nl_seg_next(data, &kind, &msg_idx)) {
+		return; /* phase exhausted; wait for xec_i2c_nl_isr() */
+	}
+
+	xec_i2c_nl_seg_addr(data, kind, msg_idx, &mem_addr, &len);
+
+	is_read = (kind == XEC_I2C_NL_SEG_RMSG);
+	rc = is_read ? xec_i2c_nl_dma_arm_read(ctrl, mem_addr, len, false)
+		     : xec_i2c_nl_dma_arm_write(ctrl, mem_addr, len, false);
+	if (rc != 0) {
+		dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+		xec_i2c_nl_finish_xfr(ctrl, rc);
+		return;
+	}
+
+	data->cur_seg_kind = kind;
+	data->cur_seg_msg_idx = msg_idx;
+}
+
+/* 7-bit address + R/W bit, matching the Master TX register's expected
+ * layout: bits[7:1]=address, bit[0]=0(write)/1(read).
+ */
+#define XEC_I2C_NL_ADDR_BYTE(addr7, is_read) ((uint8_t)(((addr7) << 1) | ((is_read) ? 1U : 0U)))
+
+/* Build the address byte(s) DMA sources for this request's START0 and,
+ * if present, STARTN. A request with no write messages is a plain read,
+ * but its address byte is still sent through the write-phase data path
+ * (see xec_i2c_nl_parse_msgs()'s doc comment) with the read bit set.
+ */
+static void xec_i2c_nl_build_addr_bytes(struct xec_i2c_nl_data *data, uint16_t addr7,
+					 const struct xec_i2c_nl_request *req)
+{
+	data->addr_byte[0] = XEC_I2C_NL_ADDR_BYTE(addr7, req->num_write_msgs == 0U);
+	if (req->flags & XEC_I2C_NL_REQ_STARTN) {
+		data->addr_byte[1] = XEC_I2C_NL_ADDR_BYTE(addr7, true);
+	}
+}
+
+/* Parse and arm the next HW request for the in-flight transfer
+ * (data->xfr_msgs/xfr_num_msgs/next_start_idx). Shared by fresh
+ * submission (xec_i2c_nl_vport_xfr[_cb]()) and ISR-driven continuation
+ * (xec_i2c_nl_isr()'s CMPL.IDLE handler). Returns 0, or a negative errno
+ * if parsing or arming DMA/HCMD failed -- the caller decides how to
+ * finish the transfer in that case.
+ */
+static int xec_i2c_nl_arm_request(const struct device *ctrl)
+{
+	const struct xec_i2c_nl_config *cfg = ctrl->config;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	uintptr_t base = cfg->base;
+	struct xec_i2c_nl_request *req = &data->cur_req;
+	bool force_stop;
+	uint32_t hcmd;
+	int rc;
+
+	rc = xec_i2c_nl_parse_msgs(data->xfr_msgs, data->xfr_num_msgs, data->next_start_idx, req);
+	if (rc < 0) {
+		return rc;
+	}
+	data->next_start_idx = req->last_msg_idx + 1U;
+
+	xec_i2c_nl_build_addr_bytes(data, data->xfr_i2c_addr, req);
+
+	data->cur_seg_kind = XEC_I2C_NL_SEG_ADDR0;
+	data->cur_seg_msg_idx = XEC_I2C_NL_NO_MSG_IDX;
+
+	rc = xec_i2c_nl_dma_arm_write(ctrl, (uintptr_t)&data->addr_byte[0], 1U, true);
+	if (rc != 0) {
+		return rc;
+	}
+
+	sys_write32(XEC_I2C_ELEN_HWR_SET(req->write_count >> 8) |
+			    XEC_I2C_ELEN_HRD_SET(req->read_count >> 8),
+		    base + XEC_I2C_ELEN_OFS);
+
+	/* This HW has no validated way to hold the bus open across two
+	 * separate HCMD.RUN pulses, so every request boundary closes with
+	 * STOP -- both the ordinary case (req already flagged STOP) and the
+	 * rare case where xec_i2c_nl_parse_msgs() ended a request without
+	 * one (>64KB combined length, or an unsupported mid-request
+	 * I2C_MSG_RESTART shape) but more messages remain.
+	 */
+	force_stop = (req->flags & XEC_I2C_NL_REQ_STOP) ||
+		     (data->next_start_idx < data->xfr_num_msgs);
+
+	hcmd = HCMD_RUN | HCMD_PROCEED | XEC_I2C_HCMD_WCL_SET(req->write_count & 0xFFU) |
+	       XEC_I2C_HCMD_RCL_SET(req->read_count & 0xFFU);
+	if (req->flags & XEC_I2C_NL_REQ_START0) {
+		hcmd |= HCMD_START0;
+	}
+	if (req->flags & XEC_I2C_NL_REQ_STARTN) {
+		hcmd |= HCMD_STARTN;
+	}
+	if (force_stop) {
+		hcmd |= HCMD_STOP;
+	}
+	sys_write32(hcmd, base + XEC_I2C_HCMD_OFS);
+
+	return 0;
+}
+
+/* Finish the whole caller-visible transfer (xfr_msgs[0..xfr_num_msgs) --
+ * possibly several HW requests), called from exactly one place per
+ * transfer: xec_i2c_nl_isr() (success or HW error) or, on a submission-
+ * time arm failure, the transfer entry points themselves (which give the
+ * lock back directly instead, to avoid a double k_sem_give -- see
+ * xec_i2c_nl_vport_xfr[_cb]()). xfr_active guards against a pathological
+ * same-tick double call (e.g. an error arriving alongside IDLE).
+ */
+static void xec_i2c_nl_finish_xfr(const struct device *ctrl, int result)
+{
+	struct xec_i2c_nl_data *data = ctrl->data;
+
+	if (!data->xfr_active) {
+		return;
+	}
+	data->xfr_active = false;
+	data->xfr_result = (data->xfr_result == 0) ? result : data->xfr_result;
+
+	k_sem_give(&data->done_sem);
+}
+
 /* I2C synchronous transfer API */
 static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *msgs,
 				uint8_t num_msgs, uint16_t i2c_address)
 {
-	/* TODO */
-	return 0;
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	const struct device *ctrl = port_cfg->controller;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	int rc;
+
+	if (msgs == NULL || num_msgs == 0U || (i2c_address & ~XEC_I2C_NL_ADDR_MASK) != 0U) {
+		return -EINVAL;
+	}
+
+	k_sem_take(&data->lock, K_FOREVER);
+
+	rc = xec_i2c_nl_apply_port(port_dev);
+	if (rc != 0) {
+		k_sem_give(&data->lock);
+		return rc;
+	}
+
+	data->xfr_msgs = msgs;
+	data->xfr_num_msgs = num_msgs;
+	data->xfr_i2c_addr = i2c_address;
+	data->xfr_port_dev = port_dev;
+	data->xfr_active = true;
+	data->xfr_result = 0;
+	data->next_start_idx = 0U;
+
+	rc = xec_i2c_nl_arm_request(ctrl);
+	if (rc != 0) {
+		data->xfr_active = false;
+		k_sem_give(&data->lock);
+		return rc;
+	}
+
+	k_sem_take(&data->done_sem, K_FOREVER);
+
+	rc = data->xfr_result;
+	k_sem_give(&data->lock);
+
+	return rc;
 }
 
 #ifdef CONFIG_I2C_CALLBACK
@@ -396,7 +826,87 @@ static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
 /* ---- Controller interrupt handler --- */
 static void xec_i2c_nl_isr(const struct device *ctrl_dev)
 {
-	/* TODO */
+	const struct xec_i2c_nl_config *cfg = ctrl_dev->config;
+	struct xec_i2c_nl_data *data = ctrl_dev->data;
+	uintptr_t base = cfg->base;
+	uint32_t cmpl = sys_read32(base + XEC_I2C_CMPL_OFS);
+
+	if (cmpl & CMPL_ERR) {
+		int err = (cmpl & CMPL_HNAK) ? -ENXIO : (cmpl & CMPL_LAB) ? -EAGAIN : -EIO;
+
+		xec_i2c_v3_cmpl_clear(base, CMPL_ERR | CMPL_HDONE | CMPL_IDLE);
+		dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+		xec_i2c_nl_finish_xfr(ctrl_dev, err);
+		goto out;
+	}
+
+	if (cmpl & CMPL_HDONE) {
+		uint32_t hcmd = sys_read32(base + XEC_I2C_HCMD_OFS);
+
+		xec_i2c_v3_cmpl_clear(base, CMPL_HDONE);
+
+		if ((hcmd & HCMD_RUN) && !(hcmd & HCMD_PROCEED)) {
+			/* PAUSE: write phase done, direction switching to
+			 * read. Arm the first read segment before letting
+			 * the FSM proceed.
+			 *
+			 * Known gap: if this first read message is itself
+			 * zero-length, this arms a zero-byte DMA block rather
+			 * than skipping it the way xec_i2c_nl_seg_next() does
+			 * for later segments -- not handled, see Task 3 notes.
+			 */
+			uint8_t msg_idx = data->cur_req.first_read_msg_idx;
+			uintptr_t mem_addr;
+			uint32_t len;
+			int rc;
+
+			xec_i2c_nl_seg_addr(data, XEC_I2C_NL_SEG_RMSG, msg_idx, &mem_addr, &len);
+			rc = xec_i2c_nl_dma_arm_read(ctrl_dev, mem_addr, len, true);
+			if (rc != 0) {
+				dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+				xec_i2c_nl_finish_xfr(ctrl_dev, rc);
+				goto out;
+			}
+			data->cur_seg_kind = XEC_I2C_NL_SEG_RMSG;
+			data->cur_seg_msg_idx = msg_idx;
+			sys_set_bit(base + XEC_I2C_HCMD_OFS, XEC_I2C_HCMD_PROC_POS);
+		} else if (!(hcmd & HCMD_RUN) && !(hcmd & HCMD_PROCEED)) {
+			/* NL-finished for this HW request; bus not yet
+			 * physically idle. v3.8 erratum: CFG.IDLE_IEN must
+			 * not be armed while the bus is already idle (fires
+			 * spuriously), so it is only turned on here, right
+			 * before the closing STOP's idle transition.
+			 */
+			sys_set_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+		}
+	}
+
+	if (cmpl & CMPL_IDLE) {
+		uint32_t cfgr = sys_read32(base + XEC_I2C_CFG_OFS);
+
+		/* Only IDLE_IEN we ourselves armed above identifies this as
+		 * the true end of the HW request we just finished; ignore
+		 * any other IDLE source.
+		 */
+		if (cfgr & CFG_IDLE_IEN) {
+			sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+			xec_i2c_v3_cmpl_clear(base, CMPL_IDLE);
+
+			if (data->next_start_idx >= data->xfr_num_msgs) {
+				xec_i2c_nl_finish_xfr(ctrl_dev, 0);
+			} else {
+				int rc = xec_i2c_nl_arm_request(ctrl_dev);
+
+				if (rc != 0) {
+					dma_stop(cfg->dma_dev, cfg->cm_dma_chan);
+					xec_i2c_nl_finish_xfr(ctrl_dev, rc);
+				}
+			}
+		}
+	}
+
+out:
+	soc_ecia_girq_status_clear(cfg->girq, cfg->girq_pos);
 }
 
 #ifdef CONFIG_PM_DEVICE
@@ -418,6 +928,11 @@ static int xec_i2c_nl_vport_pm_action_cb(const struct device *i2c_port,
 static int xec_i2c_nl_ctrl_init(const struct device *ctrl_dev)
 {
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_dev->config;
+	struct xec_i2c_nl_data *ctrl_data = ctrl_dev->data;
+
+	ctrl_data->ctrl = ctrl_dev;
+	k_sem_init(&ctrl_data->lock, 1, 1);
+	k_sem_init(&ctrl_data->done_sem, 0, 1);
 
 	/* TODO */
 
