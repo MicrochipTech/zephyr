@@ -162,7 +162,8 @@ struct xec_i2c_nl_data {
 	int xfr_result; /* accumulated result for xfr_msgs[]; sticky, first error wins */
 
 #ifdef CONFIG_I2C_CALLBACK
-	/* TODO more */
+	i2c_callback_t cb; /* NULL => sync caller owns the in-flight xfr */
+	void *cb_userdata;
 #endif
 #ifdef CONFIG_I2C_TARGET
 	/* TODO more */
@@ -749,6 +750,20 @@ static void xec_i2c_nl_finish_xfr(const struct device *ctrl, int result)
 	data->xfr_active = false;
 	data->xfr_result = (data->xfr_result == 0) ? result : data->xfr_result;
 
+#ifdef CONFIG_I2C_CALLBACK
+	if (data->cb != NULL) {
+		i2c_callback_t cb = data->cb;
+		void *userdata = data->cb_userdata;
+
+		data->cb = NULL;
+		/* Give the lock back before invoking cb() so a callback that
+		 * immediately resubmits doesn't deadlock on its own lock.
+		 */
+		k_sem_give(&data->lock);
+		cb(data->xfr_port_dev, data->xfr_result, userdata);
+		return;
+	}
+#endif
 	k_sem_give(&data->done_sem);
 }
 
@@ -780,6 +795,9 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 	data->xfr_active = true;
 	data->xfr_result = 0;
 	data->next_start_idx = 0U;
+#ifdef CONFIG_I2C_CALLBACK
+	data->cb = NULL;
+#endif
 
 	rc = xec_i2c_nl_arm_request(ctrl);
 	if (rc != 0) {
@@ -802,7 +820,45 @@ static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg
 				   uint8_t num_msgs, uint16_t i2c_address, i2c_callback_t cb,
 				   void *userdata)
 {
-	/* TODO */
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	const struct device *ctrl = port_cfg->controller;
+	struct xec_i2c_nl_data *data = ctrl->data;
+	int rc;
+
+	if (msgs == NULL || num_msgs == 0U || cb == NULL ||
+	    (i2c_address & ~XEC_I2C_NL_ADDR_MASK) != 0U) {
+		return -EINVAL;
+	}
+
+	/* @isr_ok: i2c_transfer_cb() submission must not block. */
+	if (k_sem_take(&data->lock, K_NO_WAIT) != 0) {
+		return -EWOULDBLOCK;
+	}
+
+	rc = xec_i2c_nl_apply_port(port_dev);
+	if (rc != 0) {
+		k_sem_give(&data->lock);
+		return rc;
+	}
+
+	data->xfr_msgs = msgs;
+	data->xfr_num_msgs = num_msgs;
+	data->xfr_i2c_addr = i2c_address;
+	data->xfr_port_dev = port_dev;
+	data->xfr_active = true;
+	data->xfr_result = 0;
+	data->next_start_idx = 0U;
+	data->cb = cb;
+	data->cb_userdata = userdata;
+
+	rc = xec_i2c_nl_arm_request(ctrl);
+	if (rc != 0) {
+		data->xfr_active = false;
+		data->cb = NULL;
+		k_sem_give(&data->lock);
+		return rc;
+	}
+
 	return 0;
 }
 #endif
