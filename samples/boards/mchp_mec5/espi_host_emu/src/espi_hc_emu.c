@@ -28,7 +28,7 @@ LOG_MODULE_DECLARE(app);
 #include "crc8.h"
 #include "espi_hc_emu.h"
 
-/* #define ESPI_EMU_DEBUG_QSPI */
+#define ESPI_EMU_DEBUG_QSPI
 #define ESPI_EMU_DEBUG_QSPI_WITH_PIN
 
 #define ESPI_CFG_DEV_ID			0x4
@@ -620,6 +620,8 @@ static void pr_qspi_regs(struct mec_qspi_regs *qr)
 	LOG_INF("QSPI.Mode = 0x%08x", qr->MODE);
 	LOG_INF("QSPI.Ctrl = 0x%08x", qr->CTRL);
 	LOG_INF("QSPI.Status = 0x%08x", qr->STATUS);
+	LOG_INF("QSPI.BCNT_STS = 0x%08x (TXCNT=%u RXCNT=%u)", qr->BCNT_STS,
+		qr->BCNT_STS & 0xffffu, (qr->BCNT_STS >> 16) & 0xffffu);
 	LOG_INF("QSPI.Intr_en = 0x%08x", qr->INTR_CTRL);
 	for (uint32_t n = 0; n < 4u; n++) {
 		LOG_INF("QSPI.Descrs[%u] = 0x%08x", n, qr->DESCR[n]);
@@ -627,10 +629,10 @@ static void pr_qspi_regs(struct mec_qspi_regs *qr)
 	LOG_INF("QSPI.LDMA_RXEN = 0x%08x", qr->LDMA_RXEN);
 	LOG_INF("QSPI.LDMA_TXEN = 0x%08x", qr->LDMA_TXEN);
 	LOG_INF("QSPI.RX_LDMA_CHAN[0].CTRL = 0x%08x", qr->RX_LDMA_CHAN[0].CTRL);
-	LOG_INF("QSPI.RX_LDMA_CHAN[0].MEM_ADDR = 0x%08x", qr->RX_LDMA_CHAN[0].MEM_ADDR);
+	LOG_INF("QSPI.RX_LDMA_CHAN[0].MEM_START = 0x%08x", qr->RX_LDMA_CHAN[0].MEM_START);
 	LOG_INF("QSPI,RX_LDMA_CHAN[0].LEN = 0x%08x", qr->RX_LDMA_CHAN[0].LEN);
 	LOG_INF("QSPI.TX_LDMA_CHAN[0].CTRL = 0x%08x", qr->TX_LDMA_CHAN[0].CTRL);
-	LOG_INF("QSPI.TX_LDMA_CHAN[0].MEM_ADDR = 0x%08x", qr->TX_LDMA_CHAN[0].MEM_ADDR);
+	LOG_INF("QSPI.TX_LDMA_CHAN[0].MEM_START = 0x%08x", qr->TX_LDMA_CHAN[0].MEM_START);
 	LOG_INF("QSPI,TX_LDMA_CHAN[0].LEN = 0x%08x", qr->TX_LDMA_CHAN[0].LEN);
 }
 #else
