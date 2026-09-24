@@ -1,0 +1,24 @@
+See https://docs.zephyrproject.org/latest/contribute/style/devicetree.html for more details.
+
+ Not correctly formatted.:Index: a/samples/drivers/mspi/mspi_throughput/boards/mec_assy6941_mec1753_qlj.overlay
+===================================================================
+--- a/samples/drivers/mspi/mspi_throughput/boards/mec_assy6941_mec1753_qlj.overlay
++++ a/samples/drivers/mspi/mspi_throughput/boards/mec_assy6941_mec1753_qlj.overlay
+@@ -44,9 +44,9 @@
+ 		mspi-ce-polarity = "MSPI_CE_ACTIVE_LOW";
+ 		mspi-hardware-ce-num = <0>;
+ 		command-length = "INSTR_1_BYTE";
+ 		address-length = "ADDR_3_BYTE";
+-		read-command = <0x6B>;
++		read-command = <0x6b>;
+ 		write-command = <0x32>;
+ 		rx-dummy = <8>;
+ 		tx-dummy = <0>;
+ 		microchip,timing-config-mask = <0>;
+File:samples/drivers/mspi/mspi_throughput/boards/mec_assy6941_mec1753_qlj.overlay
+ :Hex values must be lowercase. Change to '0x6b'
+File:samples/drivers/mspi/mspi_throughput/boards/mec_assy6941_mec1753_qlj.overlay
+Line:48
+Column:18
+EndLine:48
+EndColumn:22
