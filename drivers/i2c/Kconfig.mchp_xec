@@ -18,3 +18,18 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_NL
+	bool "XEC Microchip I2C-NL driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select DMA
+	select PINCTRL
+	help
+	  Enable the Microchip XEC I2C network layer plus
+	  DMA driver. The I2C-NL HW FSM limits this driver
+	  to complete transactions START to STOP comprising
+	  one or two messages: One I2C write or read. Two
+	  I2C writes (write data split across to msg buffers),
+	  Two I2C reads (read data split across to msg buffers),
+	  or two message I2C combined write-read.
