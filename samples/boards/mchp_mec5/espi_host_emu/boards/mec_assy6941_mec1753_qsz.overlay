@@ -16,12 +16,35 @@
 		pinmux = < MCHP_XEC_PINMUX(055, MCHP_AF2) >;
 		low-power-enable;
 	};
+/*
+ * GPIO-input (tristate) aliases for QSPI port pins that must be
+ * de-asserted when their port is inactive. AF0 + output-disable puts the
+ * pin in high-impedance input mode, preventing bus contention between the
+ * three flash chips that share the single QSPI controller.
+ */
+	/* INT port pins tristated (used in "shared" and "pvt" states) */
+	/omit-if-no-ref/ int_spi_cs_n_gpio256_in: int_spi_cs_n_gpio256_in {
+		pinmux = <MCHP_XEC_PINMUX(0256, MCHP_AF0)>; output-disable;
+	};
+	/omit-if-no-ref/ int_spi_clk_gpio257_in: int_spi_clk_gpio257_in {
+		pinmux = <MCHP_XEC_PINMUX(0257, MCHP_AF0)>; output-disable;
+	};
+	/omit-if-no-ref/ int_spi_io0_gpio251_in: int_spi_io0_gpio251_in {
+		pinmux = <MCHP_XEC_PINMUX(0251, MCHP_AF0)>; output-disable;
+	};
+	/omit-if-no-ref/ int_spi_io1_gpio252_in: int_spi_io1_gpio252_in {
+		pinmux = <MCHP_XEC_PINMUX(0252, MCHP_AF0)>; output-disable;
+	};
 };
 
 &qspi0 {
 	compatible = "microchip,mec5-qspi";
 	status = "okay";
-	pinctrl-0 = < &qspi_shd_cs0_n_gpio055
+	pinctrl-0 = < &int_spi_cs_n_gpio256_in
+		      &int_spi_clk_gpio257_in
+		      &int_spi_io0_gpio251_in
+		      &int_spi_io1_gpio252_in
+	&qspi_shd_cs0_n_gpio055
 		     /* &qspi_shd_cs1_n_gpio002 */
 		      &qspi_shd_clk_gpio056
 		      &qspi_shd_io0_gpio223

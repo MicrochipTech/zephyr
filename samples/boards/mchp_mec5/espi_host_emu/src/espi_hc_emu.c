@@ -28,7 +28,7 @@ LOG_MODULE_DECLARE(app);
 #include "crc8.h"
 #include "espi_hc_emu.h"
 
-#define ESPI_EMU_DEBUG_QSPI
+/* #define ESPI_EMU_DEBUG_QSPI */
 #define ESPI_EMU_DEBUG_QSPI_WITH_PIN
 
 #define ESPI_CFG_DEV_ID			0x4
