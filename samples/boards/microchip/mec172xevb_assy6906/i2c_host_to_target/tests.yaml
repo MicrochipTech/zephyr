@@ -1,0 +1,16 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+sample:
+  description: I2C controller traffic to stress an XEC I2C-NL target
+  name: sample-board-microchip-i2c-host-to-target
+common:
+  build_only: true
+  platform_allow:
+    - mec172xevb_assy6906
+  integration_platforms:
+    - mec172xevb_assy6906
+  depends_on:
+    - i2c
+tests:
+  sample.board.microchip.mec172xevb_assy6906.i2c_host_to_target: {}
