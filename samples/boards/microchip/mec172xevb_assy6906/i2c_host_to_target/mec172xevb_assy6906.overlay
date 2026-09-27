@@ -1,0 +1,12 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * I2C controller 0 port 0 (GPIO003 SDA, GPIO004 SCL) drives the target board's bus.
+ */
+
+/ {
+	aliases {
+		i2c-host = &i2c_smb_0;
+	};
+};
