@@ -1,0 +1,59 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "I2C host to target stress"
+
+config APP_TARGET_ADDR_1
+	hex "First target address"
+	default 0x62
+	range 0x08 0x77
+
+config APP_TARGET_ADDR_2
+	hex "Second target address"
+	default 0x64
+	range 0x08 0x77
+
+config APP_ABSENT_ADDR
+	hex "Address with no device, expected to NACK"
+	default 0x66
+	range 0x08 0x77
+
+config APP_TARGET_BUFFER_SIZE
+	int "Target receive buffer size (target-buffer-size of the target board)"
+	default 259
+	help
+	  Writes longer than this, counting the address byte, are NACKed by the
+	  target and dropped.
+
+config APP_ITERATIONS
+	int "Stress operations to run, 0 runs forever"
+	default 0
+
+config APP_REPORT_INTERVAL_MS
+	int "Statistics report interval in milliseconds"
+	default 5000
+
+config APP_RETRY_DELAY_MS
+	int "Delay before retrying a target after an error, in milliseconds"
+	default 2
+	help
+	  An error is usually lost arbitration to the target board's own
+	  controller. Waiting lets its transfer finish before the register
+	  file is rewritten.
+
+config APP_SEED
+	int "Random seed, 0 seeds from the cycle counter"
+	default 0
+
+config APP_RPT_START_WRITE
+	bool "Issue repeated START writes"
+	default y
+	help
+	  Two write messages with I2C_MSG_RESTART on the second. Disable if the
+	  controller driver does not support a repeated START between writes.
+
+config APP_SPEED_SWITCH
+	bool "Switch the bus between 100 kHz and 400 kHz"
+	default y
+
+source "Kconfig.zephyr"
