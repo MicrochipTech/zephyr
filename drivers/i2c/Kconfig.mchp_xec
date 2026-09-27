@@ -18,3 +18,31 @@ config I2C_XEC_V2
 	select PINCTRL
 	help
 	  Enable the Microchip XEC I2C V2 driver.
+
+config I2C_MCHP_XEC_NL
+	bool "XEC Microchip I2C-NL driver"
+	default y
+	depends on DT_HAS_MICROCHIP_XEC_I2C_NL_ENABLED
+	select DMA
+	select PINCTRL
+	select I2C_TRANSFER_TIMEOUT_SUPPORTED
+	help
+	  Enable the Microchip XEC I2C network layer plus
+	  DMA driver. Messages are split into transactions
+	  at each STOP. The I2C-NL HW FSM limits each START
+	  to STOP transaction to one or two messages: One I2C
+	  write or read. Two I2C writes (write data split
+	  across two msg buffers), two I2C reads (read data
+	  split across two msg buffers), or a two message
+	  I2C combined write-read.
+
+config I2C_MCHP_XEC_NL_PORT_SETTLE_US
+	int "XEC I2C-NL port switch settle time in microseconds"
+	default 100
+	range 0 10000
+	depends on I2C_MCHP_XEC_NL
+	help
+	  Time the driver waits after enabling the controller on a newly
+	  selected port, or after a controller reset, so the controller can
+	  sample the port's SCL and SDA before a transaction starts. The
+	  wait is done only in thread context.
