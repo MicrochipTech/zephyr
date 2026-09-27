@@ -4,8 +4,10 @@
  *
  * Microchip XEC version 3.8 I2C HW Network-Layer (NL) I2C driver.
  * The XEC I2C supports 7-bit I2C addressing only.
- * The HW supports can act as controller and target. In this driver
- * we support either controller or target at runtime.
+ * The HW host (controller) and target state machines run in parallel,
+ * each with its own DMA channel. With CONFIG_I2C_TARGET_BUFFER_MODE up to
+ * two targets can be registered on one port; the controller then stays on
+ * that port and controller transfers on it run alongside target mode.
  * The NL hardware FSM drives one full I2C transaction (START to STOP)
  * by pulling bytes from a Microchip DMAC channel and pushing read bytes
  * back to it. The transmit byte stream includes the target START and
@@ -60,6 +62,23 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define XEC_I2C_NL_CMPL_HOST_FATAL                                                                 \
 	(BIT(XEC_I2C_CMPL_LAB_STS_POS) | BIT(XEC_I2C_CMPL_BER_STS_POS) |                           \
 	 BIT(XEC_I2C_CMPL_TMO_STS_POS))
+
+/* Completion register status bits of a target transaction */
+#define XEC_I2C_NL_CMPL_TGT_STS                                                                    \
+	(BIT(XEC_I2C_CMPL_TDONE_POS) | BIT(XEC_I2C_CMPL_TNAKR_STS_POS) |                           \
+	 BIT(XEC_I2C_CMPL_TPROT_POS) | BIT(XEC_I2C_CMPL_RPT_RD_POS) | BIT(XEC_I2C_CMPL_RPT_WR_POS))
+
+/* Extended length register halves, written with 16-bit accesses so host and target
+ * updates do not interfere. Host half: write count bits[15:8] in bits[7:0], read count
+ * bits[15:8] in bits[15:8]. Target half: the same for the target counts.
+ */
+#define XEC_I2C_NL_ELEN_HOST_OFS XEC_I2C_ELEN_OFS
+#define XEC_I2C_NL_ELEN_TGT_OFS  (XEC_I2C_ELEN_OFS + 2U)
+#define XEC_I2C_NL_ELEN_TGT_WR_MSK GENMASK(7, 0)
+#define XEC_I2C_NL_ELEN_TGT_RD_MSK GENMASK(15, 8)
+
+/* Configuration register target transmit and receive buffer flush bits */
+#define XEC_I2C_NL_CFG_FLUSH_TGT (BIT(XEC_I2C_CFG_FTTX_POS) | BIT(XEC_I2C_CFG_FTRX_POS))
 
 /* Configuration register host transmit and receive buffer flush bits */
 #define XEC_I2C_NL_CFG_FLUSH_HOST (BIT(XEC_I2C_CFG_FHTX_POS) | BIT(XEC_I2C_CFG_FHRX_POS))
@@ -137,8 +156,13 @@ struct xec_i2c_nl_config {
 	const struct device *dma_dev;
 	uint8_t dma_chan1;
 	uint8_t dma_slot_cm;
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	bool has_tgt_dma;
 	uint8_t dma_chan2;
 	uint8_t dma_slot_tm;
+	uint16_t tgt_buf_size;
+	uint8_t *tgt_buf;
+#endif
 	uint8_t girq;
 	uint8_t girq_pos;
 	uint8_t girq_wk;
@@ -188,6 +212,19 @@ struct xec_i2c_nl_data {
 	struct k_timer async_timer; /* per request time-out */
 #endif
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	/* Target mode: targets in OWN_ADDRESS_1 and OWN_ADDRESS_2, listening on one port */
+	struct i2c_target_config *tgt_cfg[XEC_I2C_OA_NUM_TARGETS];
+	const struct device *tgt_port_dev;
+	struct i2c_target_config *tgt_active; /* target addressed by the current transaction */
+	uint32_t tgt_rx_armed; /* receive count the target receive DMA was armed with */
+	uint32_t tgt_rx_off;   /* first data byte: 1 after START address, 0 after RPT-START */
+	struct dma_config dma_trx;
+	struct dma_config dma_ttx;
+	struct dma_block_config trx_blk;
+	struct dma_block_config ttx_blk;
+#endif
+
 	uint8_t active_port;
 	uint32_t active_freq;
 };
@@ -214,6 +251,33 @@ static inline bool xec_i2c_is_valid_address(uint16_t i2c_address)
 	}
 
 	return true;
+}
+
+/* A target is registered: the controller must stay on the targets' port */
+static inline bool xec_i2c_nl_tgt_registered(const struct xec_i2c_nl_data *ctrl_data)
+{
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	return ctrl_data->tgt_port_dev != NULL;
+#else
+	ARG_UNUSED(ctrl_data);
+	return false;
+#endif
+}
+
+/* The internal host must not address one of the controller's own target addresses */
+static inline bool xec_i2c_nl_is_tgt_addr(const struct xec_i2c_nl_data *ctrl_data, uint16_t addr)
+{
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
+		if ((ctrl_data->tgt_cfg[i] != NULL) && (ctrl_data->tgt_cfg[i]->address == addr)) {
+			return true;
+		}
+	}
+#else
+	ARG_UNUSED(ctrl_data);
+	ARG_UNUSED(addr);
+#endif
+	return false;
 }
 
 /* Write-1-to-clear the named status bits in the Completion register while
@@ -328,6 +392,11 @@ static void xec_i2c_prog_freq(const struct xec_i2c_nl_config *ctrl_cfg,
 	soc_mmcr_mask_set8(rb + XEC_I2C_MR0_OFS, timing->mr0, XEC_I2C_MR0_TM_MSK);
 }
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
+			       struct xec_i2c_nl_data *ctrl_data);
+#endif
+
 /* Configure controller timings, frequency, and port.
  * Reset the controller using the XEC PCR peripheral reset.
  * This routine does not use any wait spin loops (k_busy_wait or others)
@@ -384,6 +453,11 @@ static int xec_i2c_nl_program_ctrl(const struct xec_i2c_nl_config *ctrl_cfg,
 	ctrl_data->active_freq = freq;
 	ctrl_data->active_port = port_id;
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	/* The reset cleared the own addresses and the target state machine */
+	xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+#endif
+
 	return rc;
 }
 /* Controller busy: host state machine running or bus not free (NBB is 1 when free) */
@@ -426,6 +500,17 @@ static int xec_i2c_nl_apply_port(const struct xec_i2c_nl_port_config *port_cfg,
 
 	if ((ctrl_data->active_port == port) && (ctrl_data->active_freq == freq)) {
 		return 0;
+	}
+
+	if (xec_i2c_nl_tgt_registered(ctrl_data)) {
+		/* Registered targets listen on the active port: it can not change */
+		if (port != ctrl_data->active_port) {
+			return -EBUSY;
+		}
+		/* A frequency change resets the controller: only with the bus idle */
+		if (xec_i2c_nl_is_busy(ctrl_cfg)) {
+			return -EBUSY;
+		}
 	}
 
 	rc = pinctrl_apply_state(port_cfg->pincfg, PINCTRL_STATE_DEFAULT);
@@ -638,6 +723,11 @@ static int xec_i2c_nl_vport_recover_bus(const struct device *port_dev)
 	freq = xec_i2c_nl_port_freq(port_cfg, port_data);
 
 	if (ctrl_data->active_port != port_cfg->port_id) {
+		/* Registered targets listen on the active port */
+		if (xec_i2c_nl_tgt_registered(ctrl_data)) {
+			rc = -EBUSY;
+			goto unlock;
+		}
 		rc = pinctrl_apply_state(port_cfg->pincfg, PINCTRL_STATE_DEFAULT);
 		if (rc != 0) {
 			LOG_ERR("I2C-NL recover port pincfg error (%d)", rc);
@@ -717,6 +807,35 @@ static void xec_i2c_nl_dma_init(const struct xec_i2c_nl_config *ctrl_cfg,
 		ctrl_data->rx_blks[i].source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
 		ctrl_data->rx_blks[i].dest_addr_adj = DMA_ADDR_ADJ_INCREMENT;
 	}
+
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	/* Target mode DMA channel: receive into the driver buffer, transmit from the
+	 * application's buffer.
+	 */
+	dcfg = &ctrl_data->dma_trx;
+	dcfg->dma_slot = ctrl_cfg->dma_slot_tm;
+	dcfg->channel_direction = PERIPHERAL_TO_MEMORY;
+	dcfg->source_data_size = 1U;
+	dcfg->dest_data_size = 1U;
+	dcfg->block_count = 1U;
+	dcfg->head_block = &ctrl_data->trx_blk;
+	ctrl_data->trx_blk.source_address = ctrl_cfg->regbase + XEC_I2C_TRX_OFS;
+	ctrl_data->trx_blk.dest_address = (uintptr_t)ctrl_cfg->tgt_buf;
+	ctrl_data->trx_blk.block_size = ctrl_cfg->tgt_buf_size;
+	ctrl_data->trx_blk.source_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+	ctrl_data->trx_blk.dest_addr_adj = DMA_ADDR_ADJ_INCREMENT;
+
+	dcfg = &ctrl_data->dma_ttx;
+	dcfg->dma_slot = ctrl_cfg->dma_slot_tm;
+	dcfg->channel_direction = MEMORY_TO_PERIPHERAL;
+	dcfg->source_data_size = 1U;
+	dcfg->dest_data_size = 1U;
+	dcfg->block_count = 1U;
+	dcfg->head_block = &ctrl_data->ttx_blk;
+	ctrl_data->ttx_blk.dest_address = ctrl_cfg->regbase + XEC_I2C_TTX_OFS;
+	ctrl_data->ttx_blk.source_addr_adj = DMA_ADDR_ADJ_INCREMENT;
+	ctrl_data->ttx_blk.dest_addr_adj = DMA_ADDR_ADJ_NO_CHANGE;
+#endif
 }
 
 /* Stop the controller and DMA, then reset and reprogram the controller for its
@@ -741,36 +860,45 @@ static void xec_i2c_nl_reset(const struct xec_i2c_nl_config *ctrl_cfg,
 
 /* Clear status and empty the host buffers. Must be done before the TX DMA channel
  * is started: the controller requests TX data as soon as the host transmit buffer
- * is empty.
+ * is empty. Interrupts are locked: the target ISR also updates the configuration
+ * register.
  */
 static void xec_i2c_nl_prep_hw(const struct xec_i2c_nl_config *ctrl_cfg)
 {
 	uintptr_t rb = ctrl_cfg->regbase;
+	unsigned int key = irq_lock();
 
 	xec_i2c_v3_cmpl_clear(rb, XEC_I2C_NL_CMPL_HOST_STS | BIT(XEC_I2C_CMPL_IDLE_POS));
 	sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_HOST);
 	xec_i2c_nl_clear_girqs(ctrl_cfg);
+	irq_unlock(key);
 }
 
-/* Program the transfer counts and start the host state machine */
+/* Program the transfer counts and start the host state machine. Interrupts are
+ * locked for the configuration register update: the target ISR also updates it.
+ */
 static void xec_i2c_nl_start_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 				struct xec_i2c_nl_data *ctrl_data)
 {
 	uintptr_t rb = ctrl_cfg->regbase;
 	struct i2c_xfer_desc *d = &ctrl_data->desc;
-	uint32_t elen = sys_read32(rb + XEC_I2C_ELEN_OFS);
+	unsigned int key = 0;
 	uint32_t hcmd = 0;
 
-	/* Counts are 16-bit: bits[7:0] in HCMD, bits[15:8] in the extended length register */
+	/* Counts are 16-bit: bits[7:0] in HCMD, bits[15:8] in the extended length register
+	 * host half.
+	 */
 	d->elen = XEC_I2C_ELEN_HWR_SET(d->tx_count >> 8) | XEC_I2C_ELEN_HRD_SET(d->rx_count >> 8);
-	elen &= ~(XEC_I2C_ELEN_HWR_MSK | XEC_I2C_ELEN_HRD_MSK);
-	sys_write32(elen | d->elen, rb + XEC_I2C_ELEN_OFS);
+	sys_write16((uint16_t)d->elen, rb + XEC_I2C_NL_ELEN_HOST_OFS);
 
 	hcmd = XEC_I2C_HCMD_WCL_SET(d->tx_count & 0xffU);
 	hcmd |= XEC_I2C_HCMD_RCL_SET(d->rx_count & 0xffU);
 	hcmd |= d->ctrl | BIT(XEC_I2C_HCMD_PROC_POS) | BIT(XEC_I2C_HCMD_RUN_POS);
 
+	key = irq_lock();
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_HD_IEN_POS);
+	irq_unlock(key);
+
 	sys_write32(hcmd, rb + XEC_I2C_HCMD_OFS);
 }
 
@@ -885,6 +1013,10 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 	rc = xec_i2c_nl_validate(msgs, num_msgs, i2c_address);
 	if (rc != 0) {
 		return rc;
+	}
+
+	if (xec_i2c_nl_is_tgt_addr(ctrl_data, i2c_address)) {
+		return -EINVAL;
 	}
 
 	k_sem_take(&ctrl_data->lock, K_FOREVER);
@@ -1056,6 +1188,10 @@ static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg
 		return rc;
 	}
 
+	if (xec_i2c_nl_is_tgt_addr(ctrl_data, i2c_address)) {
+		return -EINVAL;
+	}
+
 	if (k_sem_take(&ctrl_data->lock, K_NO_WAIT) != 0) {
 		return -EWOULDBLOCK;
 	}
@@ -1110,6 +1246,488 @@ static void xec_i2c_nl_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	k_sem_give(&ctrl_data->xfr_done);
 }
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+/* Target mode
+ * The target state machine receives into the driver buffer by DMA. The START address
+ * is stored at offset 0 and a RPT-START address after the data. The state machine
+ * pauses (TDONE with TCMD.RUN=1, TCMD.PROC=0) on a read request and on a RPT-START write;
+ * it stops (TDONE with TCMD.RUN=0) when a transaction ends. When the external controller
+ * reads fewer bytes than supplied, only the STOP detect interrupt ends the transaction.
+ * Receive overflow is NACKed by hardware: the data is dropped and reported as
+ * I2C_ERROR_SIZE.
+ */
+
+/* Bytes received by the target since its receive DMA was started */
+static uint32_t xec_i2c_nl_tgt_rx_count(const struct xec_i2c_nl_config *ctrl_cfg,
+					struct xec_i2c_nl_data *ctrl_data)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint32_t remaining = XEC_I2C_TCMD_RCL_GET(sys_read32(rb + XEC_I2C_TCMD_OFS));
+
+	remaining |= XEC_I2C_ELEN_TRD_GET(sys_read32(rb + XEC_I2C_ELEN_OFS)) << 8;
+	if (remaining > ctrl_data->tgt_rx_armed) {
+		return 0U;
+	}
+
+	return ctrl_data->tgt_rx_armed - remaining;
+}
+
+/* Start the target receive DMA into the whole buffer and set the receive count
+ * bits[15:8]. The caller writes bits[7:0] to TCMD.
+ */
+static int xec_i2c_nl_tgt_rx_start(const struct xec_i2c_nl_config *ctrl_cfg,
+				   struct xec_i2c_nl_data *ctrl_data)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint16_t elen = 0;
+	int rc = dma_config(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2, &ctrl_data->dma_trx);
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	rc = dma_start(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
+	if (rc != 0) {
+		return rc;
+	}
+
+	elen = sys_read16(rb + XEC_I2C_NL_ELEN_TGT_OFS) & ~XEC_I2C_NL_ELEN_TGT_RD_MSK;
+	elen |= FIELD_PREP(XEC_I2C_NL_ELEN_TGT_RD_MSK, ctrl_cfg->tgt_buf_size >> 8);
+	sys_write16(elen, rb + XEC_I2C_NL_ELEN_TGT_OFS);
+	ctrl_data->tgt_rx_armed = ctrl_cfg->tgt_buf_size;
+
+	return 0;
+}
+
+/* Program the own addresses and arm the target state machine for the next
+ * transaction. Does nothing when no target is registered. Callable from ISR context;
+ * runs with interrupts locked as thread context callers race the target ISR.
+ */
+static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
+				      struct xec_i2c_nl_data *ctrl_data)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint32_t oa = 0;
+	int rc = 0;
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
+		if (ctrl_data->tgt_cfg[i] != NULL) {
+			oa |= XEC_I2C_OA_SET(i, ctrl_data->tgt_cfg[i]->address);
+		}
+	}
+	sys_write32(oa, rb + XEC_I2C_OA_OFS);
+
+	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
+	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
+	sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_TGT);
+	xec_i2c_v3_cmpl_clear(rb, XEC_I2C_NL_CMPL_TGT_STS);
+
+	ctrl_data->tgt_active = NULL;
+	ctrl_data->tgt_rx_off = 1U;
+
+	rc = xec_i2c_nl_tgt_rx_start(ctrl_cfg, ctrl_data);
+	if (rc != 0) {
+		LOG_ERR("I2C-NL target RX DMA start error (%d)", rc);
+		return;
+	}
+
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
+	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
+		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
+		    rb + XEC_I2C_TCMD_OFS);
+}
+
+static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
+			       struct xec_i2c_nl_data *ctrl_data)
+{
+	unsigned int key = 0;
+
+	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
+		return;
+	}
+
+	key = irq_lock();
+	xec_i2c_nl_tgt_arm_locked(ctrl_cfg, ctrl_data);
+	irq_unlock(key);
+}
+
+/* Registered target with 7-bit address addr, else NULL */
+static struct i2c_target_config *xec_i2c_nl_tgt_match(struct xec_i2c_nl_data *ctrl_data,
+						      uint8_t addr)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
+		if ((ctrl_data->tgt_cfg[i] != NULL) && (ctrl_data->tgt_cfg[i]->address == addr)) {
+			return ctrl_data->tgt_cfg[i];
+		}
+	}
+
+	return NULL;
+}
+
+static void xec_i2c_nl_tgt_deliver(struct i2c_target_config *tgt, uint8_t *buf, uint32_t len)
+{
+	if ((tgt != NULL) && (len != 0U)) {
+		tgt->callbacks->buf_write_received(tgt, buf, len);
+	}
+}
+
+/* End the target transaction: report an error (reason >= 0), invoke the stop callback,
+ * and re-arm. A bus error or lost arbitration needs a controller reset, which re-arms
+ * the target; it is left to the host path when a host transaction is running.
+ */
+static void xec_i2c_nl_tgt_end(const struct xec_i2c_nl_config *ctrl_cfg,
+			       struct xec_i2c_nl_data *ctrl_data, int reason, bool reset)
+{
+	struct i2c_target_config *tgt = ctrl_data->tgt_active;
+	uintptr_t rb = ctrl_cfg->regbase;
+
+	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
+	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
+
+	if (tgt != NULL) {
+		if ((reason >= 0) && (tgt->callbacks->error != NULL)) {
+			tgt->callbacks->error(tgt, (enum i2c_error_reason)reason);
+		}
+		if (tgt->callbacks->stop != NULL) {
+			(void)tgt->callbacks->stop(tgt);
+		}
+	}
+
+	if (reset && (sys_test_bit(rb + XEC_I2C_HCMD_OFS, XEC_I2C_HCMD_RUN_POS) == 0)) {
+		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
+					      ctrl_data->active_port);
+		return;
+	}
+
+	xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+}
+
+/* Target state machine paused on a RPT-START write or a read request. Deliver the
+ * write data received before the pause, then continue receiving or start transmitting.
+ */
+static void xec_i2c_nl_tgt_pause(const struct xec_i2c_nl_config *ctrl_cfg,
+				 struct xec_i2c_nl_data *ctrl_data)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint8_t *buf = ctrl_cfg->tgt_buf;
+	uint32_t rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
+	uint32_t off = ctrl_data->tgt_rx_off;
+	struct i2c_target_config *tgt = NULL;
+	uint32_t tcmd = 0;
+	uint16_t elen = 0;
+	uint8_t *ptr = NULL;
+	uint32_t len = 0;
+	uint8_t addr_byte = 0;
+	int rc = 0;
+
+	if (rcvd == 0U) {
+		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
+		return;
+	}
+
+	if (off != 0U) {
+		ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
+	}
+
+	/* The address byte that caused the pause is the last byte received */
+	addr_byte = buf[rcvd - 1U];
+	if ((rcvd - 1U) > off) {
+		xec_i2c_nl_tgt_deliver(ctrl_data->tgt_active, &buf[off], rcvd - 1U - off);
+	}
+
+	tgt = xec_i2c_nl_tgt_match(ctrl_data, addr_byte >> 1);
+	if (tgt == NULL) {
+		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
+		return;
+	}
+	ctrl_data->tgt_active = tgt;
+
+	tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
+
+	if ((addr_byte & 1U) == 0U) {
+		/* RPT-START write: receive its data from the buffer start */
+		ctrl_data->tgt_rx_off = 0U;
+		rc = xec_i2c_nl_tgt_rx_start(ctrl_cfg, ctrl_data);
+		if (rc != 0) {
+			xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_DMA, false);
+			return;
+		}
+		tcmd &= ~XEC_I2C_TCMD_RCL_MSK;
+		tcmd |= XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU);
+		sys_write32(tcmd | BIT(XEC_I2C_TCMD_PROC_POS), rb + XEC_I2C_TCMD_OFS);
+		return;
+	}
+
+	/* Read request. With no data the hardware resends the transmit buffer and sets
+	 * TPROT, reported at the end of the transaction.
+	 */
+	if ((tgt->callbacks->buf_read_requested(tgt, &ptr, &len) != 0) || (ptr == NULL)) {
+		len = 0U;
+	}
+	len = MIN(len, I2C_HW_MAX_COUNT);
+
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_FTTX_POS);
+	if (len != 0U) {
+		ctrl_data->ttx_blk.source_address = (uintptr_t)ptr;
+		ctrl_data->ttx_blk.block_size = len;
+		rc = dma_config(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2, &ctrl_data->dma_ttx);
+		if (rc == 0) {
+			rc = dma_start(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
+		}
+		if (rc != 0) {
+			LOG_ERR("I2C-NL target TX DMA start error (%d)", rc);
+			len = 0U;
+		}
+	}
+
+	elen = sys_read16(rb + XEC_I2C_NL_ELEN_TGT_OFS) & ~XEC_I2C_NL_ELEN_TGT_WR_MSK;
+	elen |= FIELD_PREP(XEC_I2C_NL_ELEN_TGT_WR_MSK, len >> 8);
+	sys_write16(elen, rb + XEC_I2C_NL_ELEN_TGT_OFS);
+
+	/* A read shorter than len ends only with the STOP detect interrupt */
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
+
+	tcmd &= ~XEC_I2C_TCMD_WCL_MSK;
+	tcmd |= XEC_I2C_TCMD_WCL_SET(len & 0xffU);
+	sys_write32(tcmd | BIT(XEC_I2C_TCMD_PROC_POS), rb + XEC_I2C_TCMD_OFS);
+}
+
+/* Target state machine stopped: the transaction ended */
+static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
+				struct xec_i2c_nl_data *ctrl_data, uint32_t cmpl)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint8_t *buf = ctrl_cfg->tgt_buf;
+	uint32_t off = ctrl_data->tgt_rx_off;
+	uint32_t rcvd = 0;
+	uint32_t tx_left = 0;
+	int reason = -1;
+	bool reset = false;
+
+	if ((cmpl & BIT(XEC_I2C_CMPL_LAB_STS_POS)) != 0U) {
+		reason = I2C_ERROR_ARBITRATION;
+		reset = true;
+	} else if ((cmpl & BIT(XEC_I2C_CMPL_BER_STS_POS)) != 0U) {
+		reason = I2C_ERROR_GENERIC;
+		reset = true;
+	} else if ((cmpl & BIT(XEC_I2C_CMPL_TMO_STS_POS)) != 0U) {
+		reason = I2C_ERROR_TIMEOUT;
+		reset = true;
+	} else if ((cmpl & BIT(XEC_I2C_CMPL_TNAKR_STS_POS)) != 0U) {
+		/* Receive overflow NACKed by hardware: drop the data */
+		reason = I2C_ERROR_SIZE;
+	}
+
+	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) != 0U) {
+		/* Receive phase ended: a write transaction */
+		rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
+		if ((off != 0U) && (rcvd != 0U)) {
+			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
+		}
+		if ((reason < 0) && (rcvd > off)) {
+			xec_i2c_nl_tgt_deliver(ctrl_data->tgt_active, &buf[off], rcvd - off);
+		}
+	} else if ((reason < 0) && ((cmpl & BIT(XEC_I2C_CMPL_TPROT_POS)) != 0U)) {
+		/* TPROT with the write count at 0: read beyond the data supplied */
+		tx_left = XEC_I2C_TCMD_WCL_GET(sys_read32(rb + XEC_I2C_TCMD_OFS));
+		tx_left |= XEC_I2C_ELEN_TWR_GET(sys_read32(rb + XEC_I2C_ELEN_OFS)) << 8;
+		if (tx_left == 0U) {
+			reason = I2C_ERROR_SIZE;
+		}
+	}
+
+	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, reason, reset);
+}
+
+/* Target part of the controller ISR. Clears the target status, then the GIRQs, before
+ * acting. Returns true if a target event was handled.
+ */
+static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
+			       struct xec_i2c_nl_data *ctrl_data, uint32_t cfg, uint32_t cmpl)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+	uint32_t tcmd = 0;
+
+	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
+	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) != 0U)) {
+		xec_i2c_v3_cmpl_clear(rb, cmpl & XEC_I2C_NL_CMPL_TGT_STS);
+		xec_i2c_nl_clear_girqs(ctrl_cfg);
+
+		tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
+		if (((tcmd & BIT(XEC_I2C_TCMD_RUN_POS)) == 0U) ||
+		    ((cmpl & XEC_I2C_NL_CMPL_HOST_FATAL) != 0U) ||
+		    ((cmpl & BIT(XEC_I2C_CMPL_TNAKR_STS_POS)) != 0U)) {
+			xec_i2c_nl_tgt_done(ctrl_cfg, ctrl_data, cmpl);
+		} else if ((tcmd & BIT(XEC_I2C_TCMD_PROC_POS)) == 0U) {
+			xec_i2c_nl_tgt_pause(ctrl_cfg, ctrl_data);
+		}
+		return true;
+	}
+
+	/* STOP detect: STS is read-only, so its interrupt enable is cleared instead */
+	if (((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) &&
+	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U)) {
+		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
+		xec_i2c_nl_clear_girqs(ctrl_cfg);
+		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, -1, false);
+		return true;
+	}
+
+	return false;
+}
+
+/* API: target register
+ * Up to two targets per controller (OWN_ADDRESS_1 and OWN_ADDRESS_2), with different
+ * addresses, on one port. The controller is routed to that port and stays there while
+ * a target is registered: operations needing another port return -EBUSY.
+ */
+static int xec_i2c_nl_vport_target_register(const struct device *port_dev,
+					    struct i2c_target_config *cfg)
+{
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	struct xec_i2c_nl_port_data *port_data = port_dev->data;
+	const struct xec_i2c_nl_config *ctrl_cfg = port_cfg->controller->config;
+	struct xec_i2c_nl_data *ctrl_data = port_cfg->controller->data;
+	size_t slot = ARRAY_SIZE(ctrl_data->tgt_cfg);
+	int rc = 0;
+
+	if ((cfg == NULL) || (cfg->callbacks == NULL) ||
+	    (cfg->callbacks->buf_write_received == NULL) ||
+	    (cfg->callbacks->buf_read_requested == NULL)) {
+		return -EINVAL;
+	}
+
+	if ((cfg->flags & I2C_TARGET_FLAGS_ADDR_10_BITS) != 0U) {
+		return -ENOTSUP;
+	}
+
+	if ((cfg->address == 0U) || (cfg->address > 0x7FU)) {
+		return -EINVAL;
+	}
+
+	if (!ctrl_cfg->has_tgt_dma) {
+		return -ENODEV;
+	}
+
+	if ((ctrl_cfg->tgt_buf == NULL) || (ctrl_cfg->tgt_buf_size == 0U)) {
+		return -ENOSYS;
+	}
+
+	k_sem_take(&ctrl_data->lock, K_FOREVER);
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
+		if ((ctrl_data->tgt_cfg[i] == cfg) ||
+		    ((ctrl_data->tgt_cfg[i] != NULL) &&
+		     (ctrl_data->tgt_cfg[i]->address == cfg->address))) {
+			rc = -EINVAL;
+			goto unlock;
+		}
+		if ((ctrl_data->tgt_cfg[i] == NULL) && (slot == ARRAY_SIZE(ctrl_data->tgt_cfg))) {
+			slot = i;
+		}
+	}
+
+	if (slot == ARRAY_SIZE(ctrl_data->tgt_cfg)) {
+		rc = -EBUSY;
+		goto unlock;
+	}
+
+	if (xec_i2c_nl_tgt_registered(ctrl_data)) {
+		/* All targets listen on one port. Re-arming needs an idle bus. */
+		if ((ctrl_data->tgt_port_dev != port_dev) || xec_i2c_nl_is_busy(ctrl_cfg)) {
+			rc = -EBUSY;
+			goto unlock;
+		}
+	} else {
+		rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
+		if (rc != 0) {
+			goto unlock;
+		}
+		ctrl_data->tgt_port_dev = port_dev;
+	}
+
+	ctrl_data->tgt_cfg[slot] = cfg;
+	xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+
+unlock:
+	k_sem_give(&ctrl_data->lock);
+
+	return rc;
+}
+
+/* API: target unregister. Removing the last target resets the controller, which is the
+ * only way to stop the target state machine.
+ */
+static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
+					      struct i2c_target_config *cfg)
+{
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	const struct xec_i2c_nl_config *ctrl_cfg = port_cfg->controller->config;
+	struct xec_i2c_nl_data *ctrl_data = port_cfg->controller->data;
+	int rc = -EINVAL;
+
+	if (cfg == NULL) {
+		return -EINVAL;
+	}
+
+	k_sem_take(&ctrl_data->lock, K_FOREVER);
+
+	if (ctrl_data->tgt_port_dev != port_dev) {
+		goto unlock;
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
+		if (ctrl_data->tgt_cfg[i] == cfg) {
+			ctrl_data->tgt_cfg[i] = NULL;
+			rc = 0;
+		}
+	}
+
+	if (rc != 0) {
+		goto unlock;
+	}
+
+	if ((ctrl_data->tgt_cfg[0] == NULL) && (ctrl_data->tgt_cfg[1] == NULL)) {
+		unsigned int key = irq_lock();
+
+		ctrl_data->tgt_port_dev = NULL;
+		sys_clear_bits(ctrl_cfg->regbase + XEC_I2C_CFG_OFS,
+			       BIT(XEC_I2C_CFG_TD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS));
+		irq_unlock(key);
+		(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
+		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
+					      ctrl_data->active_port);
+		xec_i2c_nl_port_settle();
+	} else {
+		xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+	}
+
+unlock:
+	k_sem_give(&ctrl_data->lock);
+
+	return rc;
+}
+#elif defined(CONFIG_I2C_TARGET)
+/* Target mode requires CONFIG_I2C_TARGET_BUFFER_MODE: DMA gives no per byte events */
+static int xec_i2c_nl_vport_target_register(const struct device *port_dev,
+					    struct i2c_target_config *cfg)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(cfg);
+
+	return -ENOTSUP;
+}
+
+static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
+					      struct i2c_target_config *cfg)
+{
+	ARG_UNUSED(port_dev);
+	ARG_UNUSED(cfg);
+
+	return -ENOTSUP;
+}
+#endif /* CONFIG_I2C_TARGET_BUFFER_MODE */
+
 /* End a host transaction: stop DMA and the HDONE interrupt. When the host state
  * machine has stopped and no controller reset is needed, wait for the IDLE interrupt
  * (bus released after STOP) before waking the thread. Otherwise wake the thread now
@@ -1129,6 +1747,12 @@ static void xec_i2c_nl_isr_finish(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	if (ctrl_data->xfr_reset || ((hcmd & BIT(XEC_I2C_HCMD_RUN_POS)) != 0U)) {
 		ctrl_data->xfr_reset = true;
+		xec_i2c_nl_req_done(ctrl_cfg, ctrl_data);
+		return;
+	}
+
+	/* An armed target keeps TCMD.RUN set, which rules out the IDLE interrupt */
+	if (xec_i2c_nl_tgt_registered(ctrl_data)) {
 		xec_i2c_nl_req_done(ctrl_cfg, ctrl_data);
 		return;
 	}
@@ -1153,11 +1777,16 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	uint32_t cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
 	uint32_t cmpl = sys_read32(rb + XEC_I2C_CMPL_OFS);
 	uint32_t hcmd = 0;
+	bool handled = false;
 	int rc = 0;
 
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
-	 * interrupt source (IDLE, HPROCEED, or the next request).
+	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
 	 */
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+	handled = xec_i2c_nl_tgt_isr(ctrl_cfg, ctrl_data, cfg, cmpl);
+#endif
+
 	if (((cfg & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0U)) {
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
@@ -1169,8 +1798,10 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 
 	if (((cfg & BIT(XEC_I2C_CFG_HD_IEN_POS)) == 0U) ||
 	    ((cmpl & BIT(XEC_I2C_CMPL_HDONE_POS)) == 0U)) {
-		/* No enabled source is active */
-		xec_i2c_nl_clear_girqs(ctrl_cfg);
+		/* No enabled host source is active */
+		if (!handled) {
+			xec_i2c_nl_clear_girqs(ctrl_cfg);
+		}
 		return;
 	}
 
@@ -1276,6 +1907,10 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 #ifdef CONFIG_I2C_CALLBACK
 	.transfer_cb = xec_i2c_nl_vport_xfr_cb,
 #endif
+#ifdef CONFIG_I2C_TARGET
+	.target_register = xec_i2c_nl_vport_target_register,
+	.target_unregister = xec_i2c_nl_vport_target_unregister,
+#endif
 };
 
 /* Controller device instances */
@@ -1340,8 +1975,34 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 			DT_PHANDLE(DT_INST_PHANDLE(inst, default_port), controller)),              \
 			"default-port must reference a port on this controller");))
 
+#ifdef CONFIG_I2C_TARGET_BUFFER_MODE
+/* Target receive buffer: the largest external write plus the START address byte */
+#define XEC_I2C_NL_TGT_BUF_DEFINE(inst)                                                            \
+	COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, target_buffer_size),                               \
+		    (BUILD_ASSERT((DT_INST_PROP(inst, target_buffer_size) >= 2) &&                 \
+				  (DT_INST_PROP(inst, target_buffer_size) <= 0xFFFF),              \
+				  "target-buffer-size must be 2 to 65535");                        \
+		     static uint8_t xec_i2c_nl_tgt_buf_##inst[DT_INST_PROP(inst,                   \
+							       target_buffer_size)];),     \
+		    ())
+
+#define XEC_I2C_NL_TGT_CFG(inst)                                                                   \
+	.has_tgt_dma = DT_INST_DMAS_HAS_NAME(inst, target),                                        \
+	.dma_chan2 = COND_CODE_1(DT_INST_DMAS_HAS_NAME(inst, target),                              \
+				 (DT_INST_DMAS_CELL_BY_NAME(inst, target, channel)), (0)),         \
+	.dma_slot_tm = COND_CODE_1(DT_INST_DMAS_HAS_NAME(inst, target),                            \
+				   (DT_INST_DMAS_CELL_BY_NAME(inst, target, trigsrc)), (0)),       \
+	.tgt_buf_size = DT_INST_PROP_OR(inst, target_buffer_size, 0),                              \
+	.tgt_buf = COND_CODE_1(DT_INST_NODE_HAS_PROP(inst, target_buffer_size),                    \
+			       (xec_i2c_nl_tgt_buf_##inst), (NULL)),
+#else
+#define XEC_I2C_NL_TGT_BUF_DEFINE(inst)
+#define XEC_I2C_NL_TGT_CFG(inst)
+#endif
+
 #define XEC_I2C_NL_INIT(inst) \
 	XEC_I2C_NL_DEFPORT_ASSERT(inst)                                                            \
+	XEC_I2C_NL_TGT_BUF_DEFINE(inst)                                                            \
 	XEC_I2C_NL_TIMING_ASSERT(inst, timing_100k)                                                \
 	XEC_I2C_NL_TIMING_ASSERT(inst, timing_400k)                                                \
 	XEC_I2C_NL_TIMING_ASSERT(inst, timing_1000k)                                               \
@@ -1357,8 +2018,7 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 		.dma_dev = DEVICE_DT_GET(DT_INST_DMAS_CTLR(inst)), \
 		.dma_chan1 = DT_INST_DMAS_CELL_BY_NAME(inst, host, channel), \
 		.dma_slot_cm = DT_INST_DMAS_CELL_BY_NAME(inst, host, trigsrc), \
-		.dma_chan2 = DT_INST_DMAS_CELL_BY_NAME(inst, target, channel), \
-		.dma_slot_tm = DT_INST_DMAS_CELL_BY_NAME(inst, target, trigsrc), \
+		XEC_I2C_NL_TGT_CFG(inst) \
 		.enc_pcr = DT_INST_PROP(inst, pcr_scr), \
 		.girq = XEC_I2C_NL_GIRQ(inst, 0), \
 		.girq_pos = XEC_I2C_NL_GIRQ_POS(inst, 0), \
