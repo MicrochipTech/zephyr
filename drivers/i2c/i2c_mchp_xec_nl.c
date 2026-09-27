@@ -67,6 +67,46 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 /* Status register bits a new host transaction can not start with */
 #define XEC_I2C_NL_SR_ERR (BIT(XEC_I2C_SR_BER_POS) | BIT(XEC_I2C_SR_LAB_POS))
 
+/* BBCR (bit-bang control register) has two operating modes on v3.8:
+ *
+ *   Live-readback (BBM_EN=0, CM=1, i.e. BBCR=0x80): pins stay on the
+ *   I2C engine; BBCR.SCL_IN / BBCR.SDA_IN reflect the live line state.
+ *   The driver leaves BBCR in this mode whenever the bus-recovery
+ *   path is not actively driving the lines, so any read picks up the
+ *   true line state without disturbing I2C operation.
+ *
+ *   Bit-bang drive (BBM_EN=1, CM=0): pins are routed to BB control.
+ *   Bits 1 and 2 are the SCL/SDA "direction" bits — 0 = input (line
+ *   released to the external pull-up, floats high), 1 = output (line
+ *   driven low by HW). Bits 3 and 4 (the legacy output-value bits)
+ *   are not used on v3.8 silicon — direction alone selects drive-low
+ *   versus release. The four BBCR_BB_* values below cover every
+ *   combination the recovery sequence needs.
+ */
+#define BBCR_SCL_IN BIT(XEC_I2C_BBCR_SCL_IN_POS)
+#define BBCR_SDA_IN BIT(XEC_I2C_BBCR_SDA_IN_POS)
+
+/* BBM_EN=1, both dirs=input, both released */
+#define BBCR_BB_RELEASED BIT(XEC_I2C_BBCR_EN_POS)
+/* BBM_EN=1, SCL drive-low, SDA released */
+#define BBCR_BB_SCL_LOW (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_CD_POS))
+/* BBM_EN=1, SDA drive-low, SCL released */
+#define BBCR_BB_SDA_LOW (BIT(XEC_I2C_BBCR_EN_POS) | BIT(XEC_I2C_BBCR_DD_POS))
+
+#define SR_IDLE (BIT(XEC_I2C_SR_PIN_POS) | BIT(XEC_I2C_SR_NBB_POS))
+
+/* Recovery timing: nine clocks at ~100 kHz with one STOP, repeated
+ * up to 10 times against a stuck slave. SCL stuck-low timeout is 10
+ * polls at 1 ms each (10 ms total) — long enough to ride out a
+ * slow-clocking slave but not long enough to wedge the calling
+ * thread for "real" timeouts.
+ */
+#define XEC_I2C_NL_BB_HALF_PERIOD_US   5U
+#define XEC_I2C_NL_BB_POLL_INTERVAL_US 1000U
+#define XEC_I2C_NL_BB_SCL_POLL_LOOPS   10U
+#define XEC_I2C_NL_BB_SDA_RECOV_LOOPS  10U
+#define XEC_I2C_NL_BB_RECOV_CLOCKS     9U
+
 /* The TX DMA block chain of a request is one DMA configuration */
 #ifdef CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN
 BUILD_ASSERT(CONFIG_DMA_MCHP_XEC_MAX_BLOCKS_PER_CHAN >= I2C_XFER_MAX_TX_SEGS,
@@ -259,6 +299,19 @@ static void xec_i2c_nl_clear_girqs(const struct xec_i2c_nl_config *ctrl_cfg)
 	soc_ecia_girq_status_clear(ctrl_cfg->girq_wk, ctrl_cfg->girq_wk_pos);
 }
 
+static void xec_i2c_prog_freq(const struct xec_i2c_nl_config *ctrl_cfg,
+			      const struct xec_i2c_timing *timing)
+{
+	uintptr_t rb = ctrl_cfg->regbase;
+
+	sys_write32(timing->bus_clock, rb + XEC_I2C_BCLK_OFS);
+	sys_write32(timing->data_timing, rb + XEC_I2C_DT_OFS);
+	sys_write32(timing->idle_scaling, rb + XEC_I2C_ISC_OFS);
+	sys_write32(timing->timeout_scaling, rb + XEC_I2C_TMOUT_SC_OFS);
+	soc_mmcr_mask_set8(rb + XEC_I2C_RSHT_OFS, timing->rpt_start_hold_tm, XEC_I2C_RSHT_MSK);
+	soc_mmcr_mask_set8(rb + XEC_I2C_MR0_OFS, timing->mr0, XEC_I2C_MR0_TM_MSK);
+}
+
 /* Configure controller timings, frequency, and port.
  * Reset the controller using the XEC PCR peripheral reset.
  * This routine does not use any wait spin loops (k_busy_wait or others)
@@ -292,12 +345,7 @@ static int xec_i2c_nl_program_ctrl(const struct xec_i2c_nl_config *ctrl_cfg,
 	     BIT(XEC_I2C_CFG_GC_DIS_POS));
 	sys_write32(r, rb + XEC_I2C_CFG_OFS);
 
-	sys_write32(timing->bus_clock, rb + XEC_I2C_BCLK_OFS);
-	sys_write32(timing->data_timing, rb + XEC_I2C_DT_OFS);
-	sys_write32(timing->idle_scaling, rb + XEC_I2C_ISC_OFS);
-	sys_write32(timing->timeout_scaling, rb + XEC_I2C_TMOUT_SC_OFS);
-	soc_mmcr_mask_set8(rb + XEC_I2C_RSHT_OFS, timing->rpt_start_hold_tm, XEC_I2C_RSHT_MSK);
-	soc_mmcr_mask_set8(rb + XEC_I2C_MR0_OFS, timing->mr0, XEC_I2C_MR0_TM_MSK);
+	xec_i2c_prog_freq(ctrl_cfg, timing);
 
 	sys_write8(XEC_I2C_NL_CR_DFLT, rb + XEC_I2C_CR_OFS);
 	/* Enable. Controller begins to sample pins. If pins are not both high the controller
@@ -456,12 +504,137 @@ static int xec_i2c_nl_vport_get_config(const struct device *port_dev, uint32_t *
 
 	return 0;
 }
-/* API: bus recovery: not implemented */
+
+/* API: bus recovery and helpers */
+
+/* Drive XEC_I2C_NL_BB_RECOV_CLOCKS SCL pulses at ~100 kHz while leaving
+ * SDA released. Caller must already have engaged bit-bang mode (BBCR
+ * set to BBCR_BB_RELEASED).
+ * Tuned for 100KHz I2C bus clock.
+ */
+static void xec_i2c_nl_bb_clock_burst(uintptr_t base)
+{
+	for (uint32_t i = 0; i < XEC_I2C_NL_BB_RECOV_CLOCKS; i++) {
+		sys_write8(BBCR_BB_SCL_LOW, base + XEC_I2C_BBCR_OFS);
+		k_busy_wait(XEC_I2C_NL_BB_HALF_PERIOD_US);
+		sys_write8(BBCR_BB_RELEASED, base + XEC_I2C_BBCR_OFS);
+		k_busy_wait(XEC_I2C_NL_BB_HALF_PERIOD_US);
+	}
+}
+
+/* Generate an I2C STOP condition: SDA low -> high while SCL stays high.
+ * Caller must already be in bit-bang mode with SCL released.
+ * Tuned for 100KHz I2C bus clock.
+ */
+static void xec_i2c_nl_bb_stop(uintptr_t base)
+{
+	sys_write8(BBCR_BB_SDA_LOW, base + XEC_I2C_BBCR_OFS);
+	k_busy_wait(XEC_I2C_NL_BB_HALF_PERIOD_US);
+	sys_write8(BBCR_BB_RELEASED, base + XEC_I2C_BBCR_OFS);
+	k_busy_wait(XEC_I2C_NL_BB_HALF_PERIOD_US);
+}
+
+static int xec_i2c_nl_bus_recover(const struct xec_i2c_nl_config *ctrl_cfg,
+				  struct xec_i2c_nl_data *ctrl_data, uint32_t freq, uint8_t port)
+{
+	uintptr_t base = ctrl_cfg->regbase;
+	uint8_t bbcr = 0;
+	int rc = xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, freq, port);
+
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* Let the controller sample the pins before checking for an idle bus */
+	xec_i2c_nl_port_settle();
+
+	if (sys_read8(base + XEC_I2C_SR_OFS) == SR_IDLE) {
+		return 0;
+	}
+
+	/* Bit-bang mode muxes SCL/SDA away from the I2C logic: the bus clock
+	 * programming does not affect recovery timing.
+	 */
+	for (uint32_t i = 0; i < XEC_I2C_NL_BB_SCL_POLL_LOOPS; i++) {
+		bbcr = sys_read8(base + XEC_I2C_BBCR_OFS);
+		if ((bbcr & BBCR_SCL_IN) != 0U) {
+			break;
+		}
+		k_busy_wait(XEC_I2C_NL_BB_POLL_INTERVAL_US);
+	}
+	if ((bbcr & BBCR_SCL_IN) == 0U) {
+		LOG_ERR("i2c-recover: SCL stuck low");
+		return -EIO;
+	}
+
+	if ((bbcr & BBCR_SDA_IN) == 0U) {
+		sys_write8(BBCR_BB_RELEASED, base + XEC_I2C_BBCR_OFS);
+		k_busy_wait(XEC_I2C_NL_BB_HALF_PERIOD_US);
+
+		for (uint32_t i = 0; i < XEC_I2C_NL_BB_SDA_RECOV_LOOPS; i++) {
+			xec_i2c_nl_bb_clock_burst(base);
+			xec_i2c_nl_bb_stop(base);
+			bbcr = sys_read8(base + XEC_I2C_BBCR_OFS);
+			if ((bbcr & BBCR_SDA_IN) != 0U) {
+				break;
+			}
+		}
+	}
+
+	/* Return pins to I2C control with live readback still on. */
+	sys_write8(XEC_I2C_BBCR_LIVE_RD, base + XEC_I2C_BBCR_OFS);
+
+	/* Reset the controller, clearing BER/LAB latched during recovery, and let it
+	 * sample the pins now connected to the I2C logic again.
+	 */
+	rc = xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, freq, port);
+	if (rc != 0) {
+		return rc;
+	}
+	xec_i2c_nl_port_settle();
+
+	bbcr = sys_read8(base + XEC_I2C_BBCR_OFS);
+	if ((bbcr & (BBCR_SCL_IN | BBCR_SDA_IN)) != (BBCR_SCL_IN | BBCR_SDA_IN)) {
+		LOG_ERR("i2c-recover: SCL=%u SDA=%u still not both high",
+			(bbcr & BBCR_SCL_IN) ? 1U : 0U, (bbcr & BBCR_SDA_IN) ? 1U : 0U);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+/* API: bus recovery of the bus on this port.
+ * The controller is routed to this port first: its pins are applied when the
+ * controller is on another port. xec_i2c_nl_bus_recover() resets and programs the
+ * controller for this port and frequency, which it keeps afterwards.
+ */
 static int xec_i2c_nl_vport_recover_bus(const struct device *port_dev)
 {
-	ARG_UNUSED(port_dev);
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	struct xec_i2c_nl_port_data *port_data = port_dev->data;
+	const struct xec_i2c_nl_config *ctrl_cfg = port_cfg->controller->config;
+	struct xec_i2c_nl_data *ctrl_data = port_cfg->controller->data;
+	uint32_t freq = 0;
+	int rc = 0;
 
-	return -ENOSYS;
+	k_sem_take(&ctrl_data->lock, K_FOREVER);
+
+	freq = xec_i2c_nl_port_freq(port_cfg, port_data);
+
+	if (ctrl_data->active_port != port_cfg->port_id) {
+		rc = pinctrl_apply_state(port_cfg->pincfg, PINCTRL_STATE_DEFAULT);
+		if (rc != 0) {
+			LOG_ERR("I2C-NL recover port pincfg error (%d)", rc);
+			goto unlock;
+		}
+	}
+
+	rc = xec_i2c_nl_bus_recover(ctrl_cfg, ctrl_data, freq, port_cfg->port_id);
+
+unlock:
+	k_sem_give(&ctrl_data->lock);
+
+	return rc;
 }
 
 /* Load the TX or RX segments of the current request into the DMA block chain,
