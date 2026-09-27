@@ -172,6 +172,22 @@ struct xec_i2c_nl_data {
 	uint32_t xfr_cmpl;
 	bool xfr_reset;
 
+#ifdef CONFIG_I2C_CALLBACK
+	/* Asynchronous transfer: messages, current request, and completion callback */
+	bool xfr_async;
+	bool async_cb_pending;
+	int async_result;
+	uint16_t async_addr;
+	uint8_t async_num_msgs;
+	uint8_t async_idx; /* first message of the current request */
+	uint8_t async_n;   /* messages in the current request */
+	struct i2c_msg *async_msgs;
+	const struct device *async_port_dev;
+	i2c_callback_t async_cb;
+	void *async_userdata;
+	struct k_timer async_timer; /* per request time-out */
+#endif
+
 	uint8_t active_port;
 	uint32_t active_freq;
 };
@@ -758,9 +774,9 @@ static void xec_i2c_nl_start_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 	sys_write32(hcmd, rb + XEC_I2C_HCMD_OFS);
 }
 
-/* Execute the request in ctrl_data->desc and wait for it to finish */
-static int xec_i2c_nl_xfr_one(const struct xec_i2c_nl_config *ctrl_cfg,
-			      struct xec_i2c_nl_data *ctrl_data)
+/* Start the request in ctrl_data->desc. Callable from ISR context. */
+static int xec_i2c_nl_req_start(const struct xec_i2c_nl_config *ctrl_cfg,
+				struct xec_i2c_nl_data *ctrl_data)
 {
 	int rc = 0;
 
@@ -778,6 +794,19 @@ static int xec_i2c_nl_xfr_one(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 
 	xec_i2c_nl_start_hw(ctrl_cfg, ctrl_data);
+
+	return 0;
+}
+
+/* Execute the request in ctrl_data->desc and wait for it to finish */
+static int xec_i2c_nl_xfr_one(const struct xec_i2c_nl_config *ctrl_cfg,
+			      struct xec_i2c_nl_data *ctrl_data)
+{
+	int rc = xec_i2c_nl_req_start(ctrl_cfg, ctrl_data);
+
+	if (rc != 0) {
+		return rc;
+	}
 
 	rc = k_sem_take(&ctrl_data->xfr_done, I2C_TRANSFER_TIMEOUT);
 	if (rc != 0) {
@@ -811,6 +840,28 @@ static uint8_t xec_i2c_nl_req_len(const struct i2c_msg *msgs, uint8_t num_msgs)
 	return num_msgs;
 }
 
+/* Check every request of a transfer before the bus is used */
+static int xec_i2c_nl_validate(const struct i2c_msg *msgs, uint8_t num_msgs, uint16_t addr)
+{
+	struct i2c_xfer_desc desc;
+	uint8_t n = 0;
+	int rc = 0;
+
+	if (!xec_i2c_is_valid_address(addr) || (msgs == NULL)) {
+		return -EINVAL;
+	}
+
+	for (uint8_t idx = 0; idx < num_msgs; idx += n) {
+		n = xec_i2c_nl_req_len(&msgs[idx], num_msgs - idx);
+		rc = xec_i2c_nl_xfer_parse(&msgs[idx], n, addr, &desc);
+		if (rc != 0) {
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
 /* API: synchronous transfer
  * The messages are split into requests at each I2C_MSG_STOP. Each request is one
  * START to STOP transaction executed by the host state machine. All requests are
@@ -823,29 +874,17 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 	struct xec_i2c_nl_port_data *port_data = port_dev->data;
 	const struct xec_i2c_nl_config *ctrl_cfg = port_cfg->controller->config;
 	struct xec_i2c_nl_data *ctrl_data = port_cfg->controller->data;
-	struct i2c_xfer_desc desc;
 	uint8_t idx = 0;
 	uint8_t n = 0;
 	int rc = 0;
-
-	if (!xec_i2c_is_valid_address(i2c_address)) {
-		return -EINVAL;
-	}
 
 	if (num_msgs == 0U) {
 		return 0;
 	}
 
-	if (msgs == NULL) {
-		return -EINVAL;
-	}
-
-	for (idx = 0; idx < num_msgs; idx += n) {
-		n = xec_i2c_nl_req_len(&msgs[idx], num_msgs - idx);
-		rc = xec_i2c_nl_xfer_parse(&msgs[idx], n, i2c_address, &desc);
-		if (rc != 0) {
-			return rc;
-		}
+	rc = xec_i2c_nl_validate(msgs, num_msgs, i2c_address);
+	if (rc != 0) {
+		return rc;
 	}
 
 	k_sem_take(&ctrl_data->lock, K_FOREVER);
@@ -879,6 +918,198 @@ unlock:
 	return rc;
 }
 
+#ifdef CONFIG_I2C_CALLBACK
+/* End an asynchronous transfer. The callback is invoked by
+ * xec_i2c_nl_async_notify() once interrupts are unlocked.
+ */
+static void xec_i2c_nl_async_end(struct xec_i2c_nl_data *ctrl_data, int result)
+{
+	(void)k_timer_stop(&ctrl_data->async_timer);
+	ctrl_data->xfr_async = false;
+	ctrl_data->async_result = result;
+	ctrl_data->async_cb_pending = true;
+}
+
+/* Start the asynchronous request at async_idx and its time-out */
+static int xec_i2c_nl_async_start_req(const struct xec_i2c_nl_config *ctrl_cfg,
+				      struct xec_i2c_nl_data *ctrl_data)
+{
+	struct i2c_msg *msgs = &ctrl_data->async_msgs[ctrl_data->async_idx];
+	uint8_t left = ctrl_data->async_num_msgs - ctrl_data->async_idx;
+	int rc = 0;
+
+	ctrl_data->async_n = xec_i2c_nl_req_len(msgs, left);
+	rc = xec_i2c_nl_xfer_parse(msgs, ctrl_data->async_n, ctrl_data->async_addr,
+				   &ctrl_data->desc);
+	if (rc != 0) {
+		return rc;
+	}
+
+	if (!K_TIMEOUT_EQ(I2C_TRANSFER_TIMEOUT, K_FOREVER)) {
+		k_timer_start(&ctrl_data->async_timer, I2C_TRANSFER_TIMEOUT, K_NO_WAIT);
+	}
+
+	return xec_i2c_nl_req_start(ctrl_cfg, ctrl_data);
+}
+
+/* Invoke the completion callback of an ended asynchronous transfer. The API lock is
+ * released first so the callback can start another transfer.
+ */
+static void xec_i2c_nl_async_notify(struct xec_i2c_nl_data *ctrl_data)
+{
+	unsigned int key = irq_lock();
+	bool pending = ctrl_data->async_cb_pending;
+	i2c_callback_t cb = ctrl_data->async_cb;
+	const struct device *port_dev = ctrl_data->async_port_dev;
+	void *userdata = ctrl_data->async_userdata;
+	int result = ctrl_data->async_result;
+
+	ctrl_data->async_cb_pending = false;
+	irq_unlock(key);
+
+	if (!pending) {
+		return;
+	}
+
+	k_sem_give(&ctrl_data->lock);
+
+	if (cb != NULL) {
+		cb(port_dev, result, userdata);
+	}
+}
+
+/* Asynchronous request time-out. Runs with interrupts locked so it can not interleave
+ * with the controller ISR. A timer restarted for the next request while this handler
+ * waited has remaining time and is ignored.
+ */
+static void xec_i2c_nl_async_timeout(struct k_timer *timer)
+{
+	struct xec_i2c_nl_data *ctrl_data = CONTAINER_OF(timer, struct xec_i2c_nl_data,
+							 async_timer);
+	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
+	unsigned int key = irq_lock();
+
+	if (ctrl_data->xfr_async && (k_timer_remaining_ticks(timer) == 0)) {
+		LOG_ERR("I2C-NL async transfer timeout (%d): addr 0x%02x", ctrl_data->xfr_err,
+			ctrl_data->desc.addr);
+		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
+		xec_i2c_nl_async_end(ctrl_data, (ctrl_data->xfr_err != 0) ? ctrl_data->xfr_err
+									  : -ETIMEDOUT);
+	}
+
+	irq_unlock(key);
+
+	xec_i2c_nl_async_notify(ctrl_data);
+}
+
+/* An asynchronous request ended (ISR context): reset the controller if needed, then
+ * start the next request or end the transfer.
+ */
+static void xec_i2c_nl_async_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
+				      struct xec_i2c_nl_data *ctrl_data)
+{
+	int rc = ctrl_data->xfr_err;
+
+	if (ctrl_data->xfr_reset) {
+		LOG_ERR("I2C-NL transfer error (%d): addr 0x%02x cmpl 0x%08x", rc,
+			ctrl_data->desc.addr, ctrl_data->xfr_cmpl);
+		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
+	}
+
+	if (rc == 0) {
+		ctrl_data->async_idx += ctrl_data->async_n;
+		if (ctrl_data->async_idx < ctrl_data->async_num_msgs) {
+			rc = xec_i2c_nl_async_start_req(ctrl_cfg, ctrl_data);
+			if (rc == 0) {
+				return;
+			}
+		}
+	}
+
+	xec_i2c_nl_async_end(ctrl_data, rc);
+}
+
+/* API: asynchronous transfer. Callable from ISR context.
+ * Returns -EWOULDBLOCK when a transfer is in progress on the controller. Requests are
+ * started from the controller ISR; cb is invoked from ISR context with the result of
+ * the first failed request, or 0. msgs must stay valid until cb is invoked.
+ */
+static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg *msgs,
+				   uint8_t num_msgs, uint16_t i2c_address, i2c_callback_t cb,
+				   void *userdata)
+{
+	const struct xec_i2c_nl_port_config *port_cfg = port_dev->config;
+	struct xec_i2c_nl_port_data *port_data = port_dev->data;
+	const struct xec_i2c_nl_config *ctrl_cfg = port_cfg->controller->config;
+	struct xec_i2c_nl_data *ctrl_data = port_cfg->controller->data;
+	int rc = 0;
+
+	if (num_msgs == 0U) {
+		if (cb != NULL) {
+			cb(port_dev, 0, userdata);
+		}
+		return 0;
+	}
+
+	rc = xec_i2c_nl_validate(msgs, num_msgs, i2c_address);
+	if (rc != 0) {
+		return rc;
+	}
+
+	if (k_sem_take(&ctrl_data->lock, K_NO_WAIT) != 0) {
+		return -EWOULDBLOCK;
+	}
+
+	rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
+	if (rc != 0) {
+		goto unlock;
+	}
+
+	/* Bus error or lost arbitration latched in the controller core */
+	if ((sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS) & XEC_I2C_NL_SR_ERR) != 0U) {
+		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
+	}
+
+	ctrl_data->async_port_dev = port_dev;
+	ctrl_data->async_msgs = msgs;
+	ctrl_data->async_num_msgs = num_msgs;
+	ctrl_data->async_addr = i2c_address;
+	ctrl_data->async_idx = 0U;
+	ctrl_data->async_cb = cb;
+	ctrl_data->async_userdata = userdata;
+	ctrl_data->async_cb_pending = false;
+	ctrl_data->xfr_async = true;
+
+	rc = xec_i2c_nl_async_start_req(ctrl_cfg, ctrl_data);
+	if (rc == 0) {
+		return 0;
+	}
+
+	ctrl_data->xfr_async = false;
+	(void)k_timer_stop(&ctrl_data->async_timer);
+
+unlock:
+	k_sem_give(&ctrl_data->lock);
+
+	return rc;
+}
+#endif /* CONFIG_I2C_CALLBACK */
+
+/* A request ended (ISR context). Synchronous: wake the waiting thread, which resets
+ * the controller if needed.
+ */
+static void xec_i2c_nl_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
+				struct xec_i2c_nl_data *ctrl_data)
+{
+#ifdef CONFIG_I2C_CALLBACK
+	if (ctrl_data->xfr_async) {
+		xec_i2c_nl_async_req_done(ctrl_cfg, ctrl_data);
+		return;
+	}
+#endif
+	k_sem_give(&ctrl_data->xfr_done);
+}
+
 /* End a host transaction: stop DMA and the HDONE interrupt. When the host state
  * machine has stopped and no controller reset is needed, wait for the IDLE interrupt
  * (bus released after STOP) before waking the thread. Otherwise wake the thread now
@@ -898,7 +1129,7 @@ static void xec_i2c_nl_isr_finish(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	if (ctrl_data->xfr_reset || ((hcmd & BIT(XEC_I2C_HCMD_RUN_POS)) != 0U)) {
 		ctrl_data->xfr_reset = true;
-		k_sem_give(&ctrl_data->xfr_done);
+		xec_i2c_nl_req_done(ctrl_cfg, ctrl_data);
 		return;
 	}
 
@@ -914,7 +1145,7 @@ static void xec_i2c_nl_isr_finish(const struct xec_i2c_nl_config *ctrl_cfg,
  *   HPROCEED=0, HRUN=0: transaction complete.
  * IDLE fires, when enabled at the end of a transaction, once the bus is released.
  */
-static void xec_i2c_nl_isr(const struct device *ctrl_dev)
+static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 {
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_dev->config;
 	struct xec_i2c_nl_data *ctrl_data = ctrl_dev->data;
@@ -932,7 +1163,7 @@ static void xec_i2c_nl_isr(const struct device *ctrl_dev)
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
-		k_sem_give(&ctrl_data->xfr_done);
+		xec_i2c_nl_req_done(ctrl_cfg, ctrl_data);
 		return;
 	}
 
@@ -974,6 +1205,23 @@ static void xec_i2c_nl_isr(const struct device *ctrl_dev)
 	xec_i2c_nl_isr_finish(ctrl_cfg, ctrl_data, hcmd);
 }
 
+/* With asynchronous transfers the handler runs with interrupts locked so it can not
+ * interleave with the request time-out handler. The completion callback runs after.
+ */
+static void xec_i2c_nl_isr(const struct device *ctrl_dev)
+{
+#ifdef CONFIG_I2C_CALLBACK
+	unsigned int key = irq_lock();
+
+	xec_i2c_nl_isr_handler(ctrl_dev);
+	irq_unlock(key);
+
+	xec_i2c_nl_async_notify(ctrl_dev->data);
+#else
+	xec_i2c_nl_isr_handler(ctrl_dev);
+#endif
+}
+
 /* Controller driver initialization */
 static int xec_i2c_nl_ctrl_init(const struct device *ctrl_dev)
 {
@@ -990,6 +1238,10 @@ static int xec_i2c_nl_ctrl_init(const struct device *ctrl_dev)
 	}
 
 	xec_i2c_nl_dma_init(ctrl_cfg, ctrl_data);
+
+#ifdef CONFIG_I2C_CALLBACK
+	k_timer_init(&ctrl_data->async_timer, xec_i2c_nl_async_timeout, NULL);
+#endif
 
 	if (ctrl_cfg->irq_connect != NULL) {
 		ctrl_cfg->irq_connect();
@@ -1021,6 +1273,9 @@ static DEVICE_API(i2c, xec_i2c_nl_port_api) = {
 	.get_config = xec_i2c_nl_vport_get_config,
 	.transfer = xec_i2c_nl_vport_xfr,
 	.recover_bus = xec_i2c_nl_vport_recover_bus,
+#ifdef CONFIG_I2C_CALLBACK
+	.transfer_cb = xec_i2c_nl_vport_xfr_cb,
+#endif
 };
 
 /* Controller device instances */
