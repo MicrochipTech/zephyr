@@ -2625,6 +2625,184 @@ int espi_hc_emu_put_pc_mem_rd32(struct espi_hc_context *hc, uint32_t mem_addr, u
 }
 
 #ifdef CONFIG_SAMPLE_ESPI_TAF
+/* Maximum GET_STATUS polls waiting for a deferred TAF completion */
+#define ESPI_FC_DEFER_POLL_MAX		1000u
+#define ESPI_FC_DEFER_POLL_DELAY_US	100u
+
+/* Wait for the Target to post a flash completion after a DEFER response.
+ * Poll GET_STATUS until FLASH_C_AVAIL (status bit[12]) is set.
+ */
+static int espi_hc_emu_fc_wait_compl(struct espi_hc_context *hc)
+{
+	uint16_t status = 0u;
+	int ret;
+
+	for (uint32_t n = 0; n < ESPI_FC_DEFER_POLL_MAX; n++) {
+		ret = espi_hc_emu_get_status(hc, &status);
+		if (ret) {
+			return ret;
+		}
+
+		if (status & BIT(ESPI_STATUS_FC_AVAIL_POS)) {
+			return 0;
+		}
+
+		k_busy_wait(ESPI_FC_DEFER_POLL_DELAY_US);
+	}
+
+	LOG_ERR("TAF deferred completion timeout: status 0x%04x", status);
+
+	return -ETIMEDOUT;
+}
+
+/* Fetch a flash completion posted by the Target (TAF deferred request).
+ * Command Packet: Opcode(GET_FLASH_COMPL) | CRC
+ * Response Packet: RespCode | CycleType | Tag:LenMsb | LenLsb | Data(opt) | StatusLsb |
+ *                  StatusMsb | CRC
+ * Completion cycle types (Table 5):
+ *   0x06 successful without data (write, erase)
+ *   0b0000_1yy1 successful with data (read)
+ *   0b0000_1yy0 unsuccessful without data
+ * data may be NULL if no data is expected. On success *rsp_len is the
+ * number of data bytes copied.
+ */
+static int espi_hc_emu_get_flash_compl(struct espi_hc_context *hc, uint8_t exp_tag,
+				       uint8_t *data, uint16_t datalen, uint16_t *rsp_len,
+				       uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 96u;
+	uint16_t status = 0u, cmp_len = 0u;
+	uint8_t n = 0u, pktlen = 0u, cycle_type = 0u, tag = 0u;
+	uint8_t rsp_crc8 = 0;
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	emsg->buf[0] = ESPI_OPCODE_GET_FLASH_COMPL;
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)emsg->buf, 1u);
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	emsg->buf[1] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, 2u, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf == ESPI_RESP_CODE_NO_RESP) {
+			LOG_ERR("GET_FLASH_COMPL No Response");
+			return -EIO;
+		}
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("GET_FLASH_COMPL error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	if ((rbuf[0] & ESPI_RESP_CODE_RESP_MSK) != ESPI_RESP_CODE_RESP_OK) {
+		LOG_ERR("GET_FLASH_COMPL RespCode=0x%02x", rbuf[0]);
+		return -EIO;
+	}
+
+	cycle_type = rbuf[1];
+	tag = rbuf[2] >> 4;
+	cmp_len = ((uint16_t)(rbuf[2] & 0xfu) << 8) | rbuf[3];
+
+	/* Only completions with data carry a payload */
+	if ((cycle_type & 0x09u) != 0x09u) {
+		cmp_len = 0u;
+	}
+
+	if (cmp_len > 64u) {
+		LOG_ERR("GET_FLASH_COMPL bad length %u", cmp_len);
+		return -EIO;
+	}
+
+	pktlen = (uint8_t)cmp_len + 7u;
+	if ((n + pktlen) > max_rsp_len) {
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, pktlen - 1u);
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[pktlen - 1u]) {
+		LOG_ERR("GET_FLASH_COMPL: CRC error: expected=0x%02x calc=0x%02x",
+			rsp_crc8, rbuf[pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	status = ((uint16_t)rbuf[pktlen - 2u] << 8) | rbuf[pktlen - 3u];
+	*cmd_status = status;
+	hc->pkt_status = status;
+
+	LOG_INF("eSPI HC EMU GET_FLASH_COMPL cycle=0x%02x tag=0x%x len=%u Status 0x%04x",
+		cycle_type, tag, cmp_len, status);
+
+	if (tag != (exp_tag & 0xfu)) {
+		LOG_ERR("GET_FLASH_COMPL tag mismatch: got 0x%x expected 0x%x", tag, exp_tag);
+		return -EIO;
+	}
+
+	if ((cycle_type != ESPI_CYCLE_PC_COMPL) && ((cycle_type & 0x09u) != 0x09u)) {
+		LOG_ERR("GET_FLASH_COMPL unsuccessful completion cycle=0x%02x", cycle_type);
+		return -EIO;
+	}
+
+	if (data && cmp_len) {
+		if (cmp_len > datalen) {
+			cmp_len = datalen;
+		}
+		memcpy(data, &rbuf[4], cmp_len);
+	}
+
+	if (rsp_len) {
+		*rsp_len = cmp_len;
+	}
+
+	return 0;
+}
+
+/* Complete a deferred TAF request: wait for FLASH_C_AVAIL then GET_FLASH_COMPL */
+static int espi_hc_emu_fc_deferred(struct espi_hc_context *hc, uint8_t tag, uint8_t *data,
+				   uint16_t datalen, uint16_t *cmd_status)
+{
+	uint16_t rsp_len = 0u;
+	int ret;
+
+	ret = espi_hc_emu_fc_wait_compl(hc);
+	if (ret) {
+		return ret;
+	}
+
+	ret = espi_hc_emu_get_flash_compl(hc, tag, data, datalen, &rsp_len, cmd_status);
+	if (ret) {
+		return ret;
+	}
+
+	if (data && (rsp_len != datalen)) {
+		LOG_ERR("TAF deferred read returned %u of %u bytes", rsp_len, datalen);
+		return -EIO;
+	}
+
+	return 0;
+}
+
 /* Transmit eSPI PUT_FLASH_NP read request to target and parse data from the
  * completion response. Modeled directly on espi_hc_emu_put_pc_mem_rd32()
  * above: same header shape, tag/len packing, and response validation
@@ -2710,6 +2888,11 @@ int espi_hc_emu_flash_read(struct espi_hc_context *hc, uint32_t flash_addr, uint
 		return -EIO;
 	}
 
+	/* DEFER response has no header or data: RespCode | Status(2) | CRC */
+	if ((rbuf[0] & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		pktlen = 4u;
+	}
+
 	rsp_crc8 = crc8_init();
 	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (pktlen - 1u));
 	rsp_crc8 = crc8_finalize(rsp_crc8);
@@ -2735,6 +2918,12 @@ int espi_hc_emu_flash_read(struct espi_hc_context *hc, uint32_t flash_addr, uint
 		}
 	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
 		LOG_INF("PUT_FLASH_NP(Read) Deferred by Target");
+		*cmd_status = status;
+		return espi_hc_emu_fc_deferred(hc, tag, data, datalen, cmd_status);
+	} else {
+		LOG_ERR("PUT_FLASH_NP(Read) RespCode=0x%0x", rsp_code);
+		*cmd_status = status;
+		return -EIO;
 	}
 
 	*cmd_status = status;
@@ -2836,6 +3025,10 @@ int espi_hc_emu_flash_write(struct espi_hc_context *hc, uint32_t flash_addr, uin
 
 	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
 		LOG_INF("PUT_FLASH_NP Deferred by Target");
+		return espi_hc_emu_fc_deferred(hc, tag, NULL, 0u, cmd_status);
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) != ESPI_RESP_CODE_RESP_OK) {
+		LOG_ERR("PUT_FLASH_NP RespCode=0x%0x", rsp_code);
+		return -EIO;
 	}
 
 	LOG_INF("eSPI HC EMU PUT_FLASH_NP RespCode=0x%0x Status 0x%04x", rsp_code, status);
@@ -2938,6 +3131,10 @@ int espi_hc_emu_flash_erase(struct espi_hc_context *hc, uint32_t flash_addr, uin
 
 	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
 		LOG_INF("PUT_FLASH_NP ERASE Deferred by Target");
+		return espi_hc_emu_fc_deferred(hc, tag, NULL, 0u, cmd_status);
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) != ESPI_RESP_CODE_RESP_OK) {
+		LOG_ERR("PUT_FLASH_NP ERASE RespCode=0x%0x", rsp_code);
+		return -EIO;
 	}
 
 	LOG_INF("eSPI HC EMU PUT_FLASH_NP ERASE RespCode=0x%0x Status 0x%04x", rsp_code, status);
