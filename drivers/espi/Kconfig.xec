@@ -114,6 +114,16 @@ config ESPI_XEC_P80_MULTIBYTE
 
 if ESPI_PERIPHERAL_CHANNEL
 
+config ESPI_PERIPHERAL_XEC_EMI
+	bool "SoC Embedded Memory Interface (EMI) over eSPI"
+	depends on !ESPI_PERIPHERAL_EC_HOST_CMD
+	help
+	  Map each EMI device enabled in devicetree to Host I/O and/or Host
+	  memory space using its host-io and host-mem properties. A Host write
+	  to the EMI Host-to-EC mailbox is reported as a peripheral
+	  notification event. EMI0 is owned by the EC host command subsystem
+	  when ESPI_PERIPHERAL_EC_HOST_CMD is enabled.
+
 config ESPI_PERIPHERAL_XEC_MAILBOX
 	bool "SoC Mailbox over eSPI"
 	help
