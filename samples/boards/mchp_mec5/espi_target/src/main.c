@@ -132,7 +132,7 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 	ARG_UNUSED(dev);
 	ARG_UNUSED(cb);
 
-	switch (ev.evt_details & 0xffu) {
+	switch (ev.evt_details) {
 	case ESPI_PERIPHERAL_UART:
 		LOG_INF("eSPI CB: PC Host UART");
 		break;
@@ -149,6 +149,16 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 		LOG_INF("eSPI CB: PC Host PVT I/O data 0x%x", ev.evt_data);
 		break;
 	default:
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
+		if ((ev.evt_details & ~0xffu) == MCHP_XEC_ESPI_PERIPHERAL_EMI) {
+			uint8_t emi_id = ev.evt_details & 0xffu;
+
+			LOG_INF("eSPI CB: EMI%u Host-to-EC mailbox = 0x%02x", emi_id,
+				ev.evt_data);
+			mchp_xec_espi_emi_mbox_ack(dev, emi_id);
+			break;
+		}
+#endif
 		LOG_INF("eSPI CB: PC details 0x%x data 0x%x", ev.evt_details, ev.evt_data);
 		break;
 	}

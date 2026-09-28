@@ -77,6 +77,19 @@
 	status = "okay";
 };
 
+/* EMI0/EMI1 registers mapped to Host memory. Offset 0 is the Host-to-EC
+ * mailbox written by the Host emulator.
+ */
+&emi0 {
+	host-mem = <0x10000000>;
+	status = "okay";
+};
+
+&emi1 {
+	host-mem = <0x10001000>;
+	status = "okay";
+};
+
 /* BIOS debug Port 80h - 83h capture */
 &p80bd0 {
 	status = "okay";
