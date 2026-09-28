@@ -31,7 +31,9 @@ LOG_MODULE_DECLARE(app);
 /* #define ESPI_EMU_DEBUG_QSPI */
 #define ESPI_EMU_DEBUG_QSPI_WITH_PIN
 
-#define QSPI_EMU_CLK_HZ MHZ(4)
+/* QSPI chip select connected to ESPI_nCS: 0 = SHD_nCS0, 1 = SHD_nCS1 */
+#define QSPI_EMU_CS DT_PROP_OR(DT_PATH(zephyr_user), qspi_cs, XEC_QSPI_MODE_CS_SEL_1)
+BUILD_ASSERT(QSPI_EMU_CS <= XEC_QSPI_MODE_CS_SEL_1, "zephyr,user qspi-cs must be 0 or 1");
 
 #define QSPI_EMU_ALL_ERRORS \
 	(BIT(XEC_QSPI_SR_TXB_ERR_POS) | BIT(XEC_QSPI_SR_RXB_ERR_POS) | \
@@ -481,7 +483,7 @@ int espi_hc_emu_init(uint32_t freqhz)
 	uint32_t r = 0;
 	int ret;
 
-	if (freqhz > MHZ(48)) {
+	if ((freqhz == 0) || (freqhz > MHZ(48))) {
 		return -EINVAL;
 	}
 
@@ -544,14 +546,16 @@ int espi_hc_emu_init(uint32_t freqhz)
 	}
 #endif
 
-	/* Use QSPI SHD_nCS1 because SHD_nCS0 is also a strap and has a pull-down on the EVB */
+	/* QSPI chip select from zephyr,user qspi-cs (default SHD_nCS1 because
+	 * SHD_nCS0 is also a strap and has a pull-down on some EVBs).
+	 */
 	sys_set_bit(qb + XEC_QSPI_MODE_OFS, XEC_QSPI_MODE_SRST_POS);
 	while (sys_test_bit(qb + XEC_QSPI_MODE_OFS, XEC_QSPI_MODE_SRST_POS) != 0) {
 	}
 
-	r = XEC_QSPI_MODE_CK_DIV_SET(XEC_QSPI_FREQ_MAX / QSPI_EMU_CLK_HZ)
+	r = XEC_QSPI_MODE_CK_DIV_SET(XEC_QSPI_FREQ_MAX / freqhz)
 	    | XEC_QSPI_MODE_CP_SET(XEC_QSPI_SPI_MODE_0)
-	    | XEC_QSPI_MODE_CS_SEL_SET(XEC_QSPI_MODE_CS_SEL_1);
+	    | XEC_QSPI_MODE_CS_SEL_SET(QSPI_EMU_CS);
 	sys_write32(r, qb + XEC_QSPI_MODE_OFS);
 
 	sys_write32(XEC_QSPI_CR_IFM_SET(XEC_QSPI_CR_IFM_FD), qb + XEC_QSPI_CR_OFS);
