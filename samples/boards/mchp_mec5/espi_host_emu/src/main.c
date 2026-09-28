@@ -843,9 +843,9 @@ int main(void)
 		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
-#if 0
+#ifdef CONFIG_SAMPLE_ESPI_ACPI_EC4
 	io_addr_len = 0x10340u;
-	io_data = 0x33u;
+	io_data = 0x44u;
 	cmd_status = 0u;
 	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
 	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
@@ -854,7 +854,7 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
 	}
-	
+
 	esd.buf = &hcvw2;
 	esd.bufsz = sizeof(hcvw2);
 	esd.nitems = 0u;
@@ -863,7 +863,7 @@ int main(void)
 		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
-#endif
+#endif /* CONFIG_SAMPLE_ESPI_ACPI_EC4 */
 
 	/* eSPI Target memory mapped SRAM0, SRAM1, EMI0 and EMI1 try using eSPI PUT/GET_PC MEM32
 	 * to access SRAM and EMI.
@@ -1098,55 +1098,23 @@ int main(void)
 	}
 #endif /* CONFIG_SAMPLE_ESPI_TAF */
 
-#if 0
-	/* eSPI Target memory mapped ACPI_EC4 @ 0x10002000 
+#ifdef CONFIG_SAMPLE_ESPI_ACPI_EC4
+	/* eSPI Target memory mapped ACPI_EC4 @ 0x10002000
 	 * base + 0 = OS data byte 0
 	 * base + 1 = OS data byte 1
 	 * base + 2 = OS data byte 2
 	 * base + 3 = OS data byte 3
 	 * base + 4 = OS command(write), status(read)
-	 * base + 5 = OS Byte Control 
+	 * base + 5 = OS Byte Control (read-only for the Host)
+	 * The Target enables four byte mode, not the Host. In the default one byte
+	 * mode only data byte 0 is registered and sets IBF.
 	 */
-	tag = 0u;
-	cmd_status = 0u;
-	mem_addr = 0x10002005u;
-	mem_data = 0x01u;
-
-	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 1-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
-
-	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 1u, &cmd_status);
-	if (ret) {
-		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	ret = espi_hc_ctx_get_status(&hc);
-	if (ret) {
-		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	esd.buf = &hcvw2;
-	esd.bufsz = sizeof(hcvw2);
-	esd.nitems = 0u;
-	ret = app_process_espi_status(&hc, cmd_status, &esd);
-	if (ret) {
-		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
-	ret = espi_hc_ctx_get_status(&hc);
-	if (ret) {
-		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
-		spin_on((uint32_t)__LINE__, ret);
-	}
-
 	tag = 0u;
 	cmd_status = 0u;
 	mem_addr = 0x10002004u;
 	mem_data = 0u;
 
-	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data, 1u, &cmd_status); 
+	ret = espi_hc_emu_pc_memrd32_short(&hc, mem_addr, (uint8_t *)&mem_data, 1u, &cmd_status);
 	if (ret) {
 		LOG_ERR("eSPI EMU PUT_MEMRD32_SHORT error (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
@@ -1173,14 +1141,15 @@ int main(void)
 		spin_on((uint32_t)__LINE__, ret);
 	}
 
-	LOG_INF("eSPI EMU PUT_MEMRD32_SHORT 1-byte [0x%0x] = 0x%0x", mem_addr, mem_data);
+	LOG_INF("ACPI_EC4 OS status [0x%0x] = 0x%02x", mem_addr, mem_data & 0xffu);
 
 	tag = 0u;
 	cmd_status = 0u;
 	mem_addr = 0x10002000u;
 	mem_data = 0x44332211u;
 
-	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x", mem_addr, mem_data);
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 4-bytes [0x%0x] = 0x%0x (Target sees 0x11)", mem_addr,
+		mem_data);
 
 	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, mem_data, 4u, &cmd_status);
 	if (ret) {
@@ -1242,7 +1211,7 @@ int main(void)
 		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
 		spin_on((uint32_t)__LINE__, ret);
 	}
-#endif
+#endif /* CONFIG_SAMPLE_ESPI_ACPI_EC4 */
 	k_sleep(K_MSEC(50));
 
 	/* Signal the Target we wrote to SRAM0 BAR */

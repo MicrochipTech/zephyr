@@ -23,4 +23,12 @@ config SAMPLE_ESPI_TAF
 	  If disabled, the Flash channel is enabled in Controller Attached
 	  Flash Sharing (CAFS) mode and no flash traffic is generated.
 
+config SAMPLE_ESPI_ACPI_EC4
+	bool "Exercise Target ACPI_EC4"
+	default y
+	help
+	  Write ACPI_EC4 at Host I/O 340h and at its Host memory mapping
+	  0x10002000: data +0, command/status +4. Disable when the Target
+	  does not map ACPI_EC4.
+
 source "Kconfig.zephyr"
