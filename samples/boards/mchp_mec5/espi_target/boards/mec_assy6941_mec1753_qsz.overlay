@@ -72,6 +72,14 @@
 	status = "okay";
 };
 
+/* ACPI_EC4 at I/O CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4_PORT_NUM and Host memory
+ * 0x10002000 (data +0, cmd/status +4)
+ */
+&acpi_ec4 {
+	host-mem = <0x10002000>;
+	status = "okay";
+};
+
 /* 8042 keyboard controller at Host I/O 60h/64h */
 &kbc0 {
 	status = "okay";
