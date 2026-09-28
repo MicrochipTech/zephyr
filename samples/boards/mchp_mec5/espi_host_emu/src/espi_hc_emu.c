@@ -2620,6 +2620,7 @@ int espi_hc_emu_put_pc_mem_rd32(struct espi_hc_context *hc, uint32_t mem_addr, u
 	return 0;
 }
 
+#ifdef CONFIG_SAMPLE_ESPI_TAF
 /* Transmit eSPI PUT_FLASH_NP read request to target and parse data from the
  * completion response. Modeled directly on espi_hc_emu_put_pc_mem_rd32()
  * above: same header shape, tag/len packing, and response validation
@@ -2939,6 +2940,7 @@ int espi_hc_emu_flash_erase(struct espi_hc_context *hc, uint32_t flash_addr, uin
 
 	return 0;
 }
+#endif /* CONFIG_SAMPLE_ESPI_TAF */
 
 /* Transmit eSPIO PUT_MEMWR32_SHORT write packet to target.
  * Command Packet is: Opcode | Header | Data | CRC

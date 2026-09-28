@@ -386,7 +386,8 @@ int main(void)
 
 	/* Enable Flash Channel
 	 * Set b[14:12]=001b max. read request size of 64 bytes
-	 * Set b[11]=1b TAF (Target Attached Flash)
+	 * Set b[11]=1b TAF (Target Attached Flash) if CONFIG_SAMPLE_ESPI_TAF
+	 * else b[11]=0b CAFS
 	 * Set b[10:8]=001b max max payload size of 64 bytes
 	 * Set b[4:2]=001b flash block erase size 4KB
 	 * b[1]=ready (R/O)
@@ -396,7 +397,10 @@ int main(void)
 	chan_config = hc.fc_cap_cfg;
 	LOG_INF("Current FC Cap/Cfg = 0x%08x", chan_config);
 	chan_config &= ~((0x7u << 12) | BIT(11) | (0x7u << 8) | (0x7u << 2));
-	chan_config |= ((1u << 12) | (1u << 8) | (1u << 2) | BIT(0) | BIT(11));
+	chan_config |= ((1u << 12) | (1u << 8) | (1u << 2) | BIT(0));
+#ifdef CONFIG_SAMPLE_ESPI_TAF
+	chan_config |= BIT(11);
+#endif
 	LOG_INF("New VW Caps/Cfg = 0x%08x", chan_config);
 
 	cfgid = ESPI_GET_CONFIG_FC_CAP;
@@ -414,12 +418,14 @@ int main(void)
 		goto app_exit;
 	}
 
+#ifdef CONFIG_SAMPLE_ESPI_TAF
 	if (hc.fc_cap_cfg & BIT(11)) {
 		LOG_INF("Target accepted TAF (Target Attached Flash) sharing mode");
 	} else {
 		LOG_WRN("Target did not accept TAF: fc_cap_cfg=0x%08x reports CAFS",
 			hc.fc_cap_cfg);
 	}
+#endif
 
 	LOG_INF("Issue GET_STATUS");
 	ret = espi_hc_ctx_get_status(&hc);
@@ -1008,6 +1014,7 @@ int main(void)
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
 
+#ifdef CONFIG_SAMPLE_ESPI_TAF
 	/* Flash Access Channel (TAF) read/write/erase test.
 	 * Only meaningful if the Target accepted TAF above; if it fell back to
 	 * CAFS (no Target-attached flash), these requests are expected to fail
@@ -1089,6 +1096,7 @@ int main(void)
 	} else {
 		LOG_ERR("Flash erase result does not read back as 0xFF: FAIL");
 	}
+#endif /* CONFIG_SAMPLE_ESPI_TAF */
 
 #if 0
 	/* eSPI Target memory mapped ACPI_EC4 @ 0x10002000 
