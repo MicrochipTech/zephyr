@@ -1180,9 +1180,7 @@ static int init_acpi_ec3(const struct device *dev)
 
 #endif /* CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT3 */
 
-#ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
-
-BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)), "XEC EMI0 DT node is disabled!");
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI)
 
 /* EC only access */
 #define XEC_EMI_H2EC_MBOX_OFS 0x100U
@@ -1207,13 +1205,23 @@ BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)), "XEC EMI0 DT node is d
 struct xec_emi_config {
 	uintptr_t regbase;
 	uint32_t ecia_info;
+	uint32_t host_mem_addr;
+	uint16_t host_io_addr;
 	uint8_t sirq_slot_hev;
 	uint8_t sirq_slot_e2h;
 };
 
+#endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD || CONFIG_ESPI_PERIPHERAL_XEC_EMI */
+
+#ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
+
+BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0)), "XEC EMI0 DT node is disabled!");
+
 static const struct xec_emi_config xec_emi0_cfg = {
 	.regbase = DT_REG_ADDR(DT_NODELABEL(emi0)),
 	.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(emi0), girqs, 0),
+	.host_mem_addr = UINT32_MAX,
+	.host_io_addr = UINT16_MAX,
 	.sirq_slot_hev = MCHP_ESPI_IO_SIRQ_DIS,
 	.sirq_slot_e2h = MCHP_ESPI_IO_SIRQ_DIS,
 };
@@ -1258,6 +1266,143 @@ static int init_emi0(const struct device *dev)
 #define INIT_EMI0 init_emi0
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
+
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
+
+/* Standalone EMI devices. Each EMI enabled in devicetree is mapped to Host I/O
+ * and/or Host memory space from its host-io and host-mem properties. The EMI
+ * memory regions are left disabled.
+ */
+#define XEC_EMI_CFG(n)                                                                             \
+	{                                                                                          \
+		.regbase = DT_REG_ADDR(DT_NODELABEL(emi##n)),                                      \
+		.ecia_info = DT_PROP_BY_IDX(DT_NODELABEL(emi##n), girqs, 0),                        \
+		.host_mem_addr = DT_PROP_OR(DT_NODELABEL(emi##n), host_mem, UINT32_MAX),            \
+		.host_io_addr = DT_PROP_OR(DT_NODELABEL(emi##n), host_io, UINT16_MAX),              \
+		.sirq_slot_hev = MCHP_ESPI_IO_SIRQ_DIS,                                            \
+		.sirq_slot_e2h = MCHP_ESPI_IO_SIRQ_DIS,                                            \
+	}
+
+static int xec_emi_init(const struct device *dev, const struct xec_emi_config *emi_cfg,
+			uint8_t io_bar_idx, uint8_t mem_bar_idx, uint8_t sirq_hev_idx,
+			uint8_t sirq_e2h_idx)
+{
+	const struct espi_xec_config *devcfg = dev->config;
+	struct xec_espi_ioc_cfg_regs *regs =
+		(struct xec_espi_ioc_cfg_regs *)(devcfg->ioc_base_addr + MCHP_ESPI_IO_CFG_OFS);
+	mm_reg_t emib = emi_cfg->regbase;
+
+	sys_write8(0, emib + XEC_EMI_H2EC_MBOX_OFS); /* clear mailbox */
+
+	/* memory regions disabled: read and write limits of zero */
+	sys_write32(0, emib + XEC_EMI_RWLIM0_OFS);
+	sys_write32(0, emib + XEC_EMI_RWLIM1_OFS);
+
+	if (emi_cfg->host_io_addr != UINT16_MAX) {
+		regs->IOHBAR[io_bar_idx] = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(emi_cfg->host_io_addr) |
+					   MCHP_ESPI_IO_BAR_HOST_VALID;
+	}
+
+	if (emi_cfg->host_mem_addr != UINT32_MAX) {
+		xec_espi_mbar_host_set(devcfg->mc_base_addr, mem_bar_idx, emi_cfg->host_mem_addr,
+				       true);
+	}
+
+	/* Serial IRQ */
+	regs->SIRQ[sirq_hev_idx] = emi_cfg->sirq_slot_hev;
+	regs->SIRQ[sirq_e2h_idx] = emi_cfg->sirq_slot_e2h;
+
+	return 0;
+}
+
+/* Host write to the Host-to-EC mailbox. Like mbox0_isr, the GIRQ source is disabled
+ * instead of clearing the mailbox, so the Host can poll for EC completion.
+ */
+static void xec_emi_isr(const struct device *dev, const struct xec_emi_config *emi_cfg,
+			uint8_t emi_id)
+{
+	struct espi_xec_data *const data = dev->data;
+	struct espi_event evt = {
+		.evt_type = ESPI_BUS_PERIPHERAL_NOTIFICATION,
+		.evt_details = MCHP_XEC_ESPI_PERIPHERAL_EMI | emi_id,
+		.evt_data = sys_read8(emi_cfg->regbase + XEC_EMI_H2EC_MBOX_OFS),
+	};
+
+	xec_ecia_info_girq_ctrl(emi_cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_DIS);
+	xec_ecia_info_girq_src_clear(emi_cfg->ecia_info);
+
+	espi_send_callbacks(&data->callbacks, dev, evt);
+}
+
+#define XEC_EMI_DEFINE(n)                                                                          \
+	static const struct xec_emi_config xec_emi##n##_cfg = XEC_EMI_CFG(n);                      \
+                                                                                                   \
+	static void emi##n##_isr(const struct device *dev)                                         \
+	{                                                                                          \
+		xec_emi_isr(dev, &xec_emi##n##_cfg, n);                                            \
+	}                                                                                          \
+                                                                                                   \
+	static int connect_irq_emi##n(const struct device *dev)                                    \
+	{                                                                                          \
+		xec_ecia_info_girq_src_clear(xec_emi##n##_cfg.ecia_info);                          \
+		IRQ_CONNECT(DT_IRQN(DT_NODELABEL(emi##n)), DT_IRQ(DT_NODELABEL(emi##n), priority), \
+			    emi##n##_isr, DEVICE_DT_GET(XEC_ESPI0_NODE), 0);                       \
+		irq_enable(DT_IRQN(DT_NODELABEL(emi##n)));                                         \
+		xec_ecia_info_girq_ctrl(xec_emi##n##_cfg.ecia_info, MCHP_MEC_ECIA_GIRQ_EN);        \
+		return 0;                                                                          \
+	}                                                                                          \
+                                                                                                   \
+	static int init_emi##n(const struct device *dev)                                           \
+	{                                                                                          \
+		return xec_emi_init(dev, &xec_emi##n##_cfg, IOB_EMI##n, MEMB_EMI##n,               \
+				    SIRQ_EMI##n##_HEV, SIRQ_EMI##n##_E2H);                         \
+	}
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0))
+XEC_EMI_DEFINE(0)
+#undef CONNECT_IRQ_EMI0
+#define CONNECT_IRQ_EMI0 connect_irq_emi0
+#undef INIT_EMI0
+#define INIT_EMI0 init_emi0
+#endif
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi1))
+XEC_EMI_DEFINE(1)
+#undef CONNECT_IRQ_EMI1
+#define CONNECT_IRQ_EMI1 connect_irq_emi1
+#undef INIT_EMI1
+#define INIT_EMI1 init_emi1
+#endif
+
+int mchp_xec_espi_emi_mbox_ack(const struct device *dev, uint8_t emi_id)
+{
+	const struct xec_emi_config *emi_cfg = NULL;
+
+	ARG_UNUSED(dev);
+
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0))
+	if (emi_id == 0) {
+		emi_cfg = &xec_emi0_cfg;
+	}
+#endif
+#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi1))
+	if (emi_id == 1) {
+		emi_cfg = &xec_emi1_cfg;
+	}
+#endif
+	if (emi_cfg == NULL) {
+		return -ENODEV;
+	}
+
+	/* EC writes 0xFF to clear the Host-to-EC mailbox and its interrupt */
+	sys_write8(0xffu, emi_cfg->regbase + XEC_EMI_H2EC_MBOX_OFS);
+	xec_ecia_info_girq_src_clear(emi_cfg->ecia_info);
+	xec_ecia_info_girq_ctrl(emi_cfg->ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+
+	return 0;
+}
+
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_EMI */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
 
