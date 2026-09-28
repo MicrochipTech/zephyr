@@ -14,4 +14,13 @@ config SAMPLE_USE_ESPI_ALERT_PIN
 	  Use ESPI_nALERT side band pin as the alert mechanism
 	  instead of the in-band alert on ESPI_IO1 pin.
 
+config SAMPLE_ESPI_TAF
+	bool "Exercise eSPI Flash channel in TAF (Target Attached Flash) mode"
+	default n
+	help
+	  eSPI emulated host requests Target Attached Flash sharing mode
+	  and runs flash write/read/erase tests using PUT_FLASH_NP.
+	  If disabled, the Flash channel is enabled in Controller Attached
+	  Flash Sharing (CAFS) mode and no flash traffic is generated.
+
 source "Kconfig.zephyr"
