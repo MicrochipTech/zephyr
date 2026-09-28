@@ -192,4 +192,26 @@ int espi_hc_emu_pc_memrd32_short(struct espi_hc_context *hc, uint32_t mem_addr,
 int espi_hc_emu_send_get_pc(struct espi_hc_context *hc, bool is_np,
 			    uint8_t *data, uint8_t datasz, uint16_t *cmd_status);
 
+/* Flash Access Channel (TAF: Target Attached Flash) */
+int espi_hc_emu_flash_read(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			   uint8_t *data, uint16_t datalen, uint16_t *cmd_status);
+
+int espi_hc_emu_flash_write(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			    const uint8_t *data, uint16_t datalen, uint16_t *cmd_status);
+
+/* eSPI Flash Access Channel Erase length-field encodings, Target Attached
+ * Flash Sharing (eSPI Base Spec Table 16). Only these 4 values are valid for
+ * TAF; Controller Attached Flash Sharing (CAFS) uses a different encoding
+ * (0h resvd, 1h=4KB, 2h=64KB, 4h=128KB, 5h=256KB) not used by this driver
+ * since it always negotiates TAF.
+ */
+#define ESPI_FC_TAF_ERASE_SEL_4KB	0u
+#define ESPI_FC_TAF_ERASE_SEL_32KB	1u
+#define ESPI_FC_TAF_ERASE_SEL_64KB	2u
+#define ESPI_FC_TAF_ERASE_SEL_128KB	3u
+
+/* flash_addr must be aligned to the erase block size selected by erase_size_sel */
+int espi_hc_emu_flash_erase(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			    uint8_t erase_size_sel, uint16_t *cmd_status);
+
 #endif /* __SAMPLES_BOARDS_MEC_ASSY6941_ESPI_HC_EMU_H_ */
