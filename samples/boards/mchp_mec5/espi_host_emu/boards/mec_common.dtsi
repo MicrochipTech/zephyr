@@ -252,8 +252,13 @@
 	 * index 5 = GPIO014 (VTR2) used as GPIO input ESPI_nALERT
 	 * index 6 = GPIO140 (VTR1) used at GPIO output Host-to-Target nReady
 	 * In application code use GPIO_DT_SPEC_GET_BY_IDX() macro.
+	 *
+	 * qspi-cs selects the QSPI0 shared port chip select wired to ESPI_nCS:
+	 * 0 = SHD_nCS0 (GPIO055), 1 = SHD_nCS1 (GPIO002). Default 1.
+	 * Board overlays override it together with the qspi0 pinctrl.
 	 */
 	zephyr,user {
+		qspi-cs = <1>;
 		espi-gpios = <MCHP_GPIO_DECODE_222 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_071 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_013 GPIO_ACTIVE_HIGH>,
