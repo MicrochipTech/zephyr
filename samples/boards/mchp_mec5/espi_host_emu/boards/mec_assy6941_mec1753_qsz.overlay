@@ -5,22 +5,47 @@
  */
 
 /* mec_assy6941 EVB with MEC1753Q-SZ daughter card
- * MEC1753 does not have an internal SPI flash.
- * Connect QSPI to external shared SPI flash pins using SHD_nCS1.
+ * QSPI0 shared port SHD_nCS0 (GPIO055) drives ESPI_nCS.
+ *
+ * The same daughter card may carry a MEC1757 which has an internal SPI
+ * flash. The internal flash pins are connected to QMSPI and override the
+ * shared port inputs (QSPI reads all 0xFF). Put the internal SPI pins in
+ * low power state so QMSPI receives on the shared port. This is harmless
+ * on MEC1753 which has no internal flash.
  */
 
 #include "mec_common.dtsi"
+
+/ {
+	zephyr,user {
+		qspi-cs = <0>;
+
+		/* eSPI signals re-wired on this bench, see mec_common.dtsi for index use */
+		espi-gpios = <MCHP_GPIO_DECODE_130 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_071 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_013 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_057 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_202 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_131 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_025 GPIO_ACTIVE_HIGH>;
+	};
+};
 
 &qspi0 {
 	compatible = "microchip,xec-qmspi-ldma";
 	status = "okay";
 	clock-frequency = <4000000>;
-	pinctrl-0 = < &qspi_shd_cs0_n_gpio055_lp
-		      &qspi_shd_cs1_n_gpio002
+	pinctrl-0 = < &qspi_shd_cs0_n_gpio055
 		      &qspi_shd_clk_gpio056
 		      &qspi_shd_io0_gpio223
 		      &qspi_shd_io1_gpio224
 		      &qspi_shd_io2_gpio227
-		      &qspi_shd_io3_gpio016 >;
+		      &qspi_shd_io3_gpio016
+		      &int_spi_io0_gpio251_sleep
+		      &int_spi_io1_gpio252_sleep
+		      &int_spi_cs_n_gpio256_sleep
+		      &int_spi_clk_gpio257_sleep
+		      &int_spi_wp_gpio260_sleep
+		      &int_spi_wp_gpio261_sleep >;
 	pinctrl-names = "default";
 };
