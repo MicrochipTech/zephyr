@@ -37,6 +37,17 @@
  */
 int mchp_xec_espi_sram_bar_get(const struct device *dev, uint8_t id, uint8_t **buf, size_t *size);
 
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4
+
+/**
+ * Vendor-specific peripheral identifier reported in @ref espi_event::evt_details
+ * for ACPI_EC4 IBF and OBE events. evt_data is formatted as
+ * struct espi_evt_data_pvt, as for ESPI_PERIPHERAL_HOST_IO_PVT2/3.
+ */
+#define MCHP_XEC_ESPI_PERIPHERAL_ACPI_EC4 0x300U
+
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4 */
+
 #ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
 
 /**

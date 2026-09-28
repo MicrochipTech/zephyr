@@ -114,6 +114,22 @@ config ESPI_XEC_P80_MULTIBYTE
 
 if ESPI_PERIPHERAL_CHANNEL
 
+config ESPI_PERIPHERAL_XEC_ACPI_EC4
+	bool "SoC ACPI_EC4 over eSPI"
+	help
+	  Map ACPI_EC4 to Host I/O and/or Host memory space. The Host I/O port
+	  is ESPI_PERIPHERAL_XEC_ACPI_EC4_PORT_NUM and the Host memory address
+	  is the acpi_ec4 devicetree host-mem property. IBF and OBE events are
+	  reported with MCHP_XEC_ESPI_PERIPHERAL_ACPI_EC4.
+
+config ESPI_PERIPHERAL_XEC_ACPI_EC4_PORT_NUM
+	hex "Host I/O port for ACPI_EC4"
+	depends on ESPI_PERIPHERAL_XEC_ACPI_EC4
+	default 0x0078
+	help
+	  Host I/O port the ACPI_EC4 BAR is mapped to. Make sure the value
+	  does not clash with other Host I/O peripherals.
+
 config ESPI_PERIPHERAL_XEC_EMI
 	bool "SoC Embedded Memory Interface (EMI) over eSPI"
 	depends on !ESPI_PERIPHERAL_EC_HOST_CMD

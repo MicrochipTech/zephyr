@@ -966,11 +966,11 @@ static int init_acpi_ec1(const struct device *dev)
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD || CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT */
 
-#if defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2) || defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT3)
+#if defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2) || defined(CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT3) ||   \
+	defined(CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4)
 
 static void acpi_ec_pvt_ibf_handler(const struct device *dev,
-				    const struct xec_acpi_ec_config *acpi_ec_cfg,
-				    enum espi_virtual_peripheral periph)
+				    const struct xec_acpi_ec_config *acpi_ec_cfg, uint32_t periph)
 {
 	struct espi_xec_data *const data = dev->data;
 	struct acpi_ec_regs *regs = (struct acpi_ec_regs *)acpi_ec_cfg->regbase;
@@ -1000,8 +1000,7 @@ static void acpi_ec_pvt_ibf_handler(const struct device *dev,
 }
 
 static void acpi_ec_pvt_obe_handler(const struct device *dev,
-				    const struct xec_acpi_ec_config *acpi_ec_cfg,
-				    enum espi_virtual_peripheral periph)
+				    const struct xec_acpi_ec_config *acpi_ec_cfg, uint32_t periph)
 {
 	struct espi_xec_data *const data = dev->data;
 	struct espi_event evt = {
@@ -1048,6 +1047,12 @@ static int init_acpi_ec_bars(const struct device *dev, const struct xec_acpi_ec_
 			iob_value = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(iob_value);
 			iob_value |= MCHP_ESPI_IO_BAR_HOST_VALID;
 		}
+	} else if (io_bar_idx == IOB_ACPI_EC4) {
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4
+		iob_value = CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4_PORT_NUM;
+		iob_value = MCHP_ESPI_IO_BAR_HOST_ADDR_SET(iob_value);
+		iob_value |= MCHP_ESPI_IO_BAR_HOST_VALID;
+#endif
 	} else {
 		return -EINVAL;
 	}
@@ -1066,7 +1071,7 @@ static int init_acpi_ec_bars(const struct device *dev, const struct xec_acpi_ec_
 
 	return 0;
 }
-#endif /* CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2 || CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT3 */
+#endif /* CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2/3 || CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4 */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2
 
@@ -1179,6 +1184,62 @@ static int init_acpi_ec3(const struct device *dev)
 #define INIT_ACPI_EC3 init_acpi_ec3
 
 #endif /* CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT3 */
+
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4
+
+#define XEC_AEC4_NODE DT_NODELABEL(acpi_ec4)
+
+static const struct xec_acpi_ec_config xec_acpi_ec4_cfg = {
+	.regbase = DT_REG_ADDR(XEC_AEC4_NODE),
+	.ibf_ecia_info = DT_PROP_BY_IDX(XEC_AEC4_NODE, girqs, 0),
+	.obe_ecia_info = DT_PROP_BY_IDX(XEC_AEC4_NODE, girqs, 1),
+	.host_mem_addr = DT_PROP_OR(XEC_AEC4_NODE, host_mem, UINT32_MAX),
+	.host_io_addr = DT_PROP_OR(XEC_AEC4_NODE, host_io, UINT16_MAX),
+	.obf_sirq_slot_val = MCHP_ESPI_IO_SIRQ_DIS,
+};
+
+static void acpi_ec4_ibf_isr(const struct device *dev)
+{
+	acpi_ec_pvt_ibf_handler(dev, &xec_acpi_ec4_cfg, MCHP_XEC_ESPI_PERIPHERAL_ACPI_EC4);
+}
+
+static void acpi_ec4_obe_isr(const struct device *dev)
+{
+	acpi_ec_pvt_obe_handler(dev, &xec_acpi_ec4_cfg, MCHP_XEC_ESPI_PERIPHERAL_ACPI_EC4);
+}
+
+static int connect_irq_acpi_ec4(const struct device *dev)
+{
+	xec_ecia_info_girq_src_clear(xec_acpi_ec4_cfg.ibf_ecia_info);
+	xec_ecia_info_girq_src_clear(xec_acpi_ec4_cfg.obe_ecia_info);
+
+	IRQ_CONNECT(DT_IRQ_BY_NAME(XEC_AEC4_NODE, ibf, irq),
+		    DT_IRQ_BY_NAME(XEC_AEC4_NODE, ibf, priority), acpi_ec4_ibf_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(XEC_AEC4_NODE, ibf, irq));
+
+	IRQ_CONNECT(DT_IRQ_BY_NAME(XEC_AEC4_NODE, obe, irq),
+		    DT_IRQ_BY_NAME(XEC_AEC4_NODE, obe, priority), acpi_ec4_obe_isr,
+		    DEVICE_DT_GET(DT_NODELABEL(espi0)), 0);
+	irq_enable(DT_IRQ_BY_NAME(XEC_AEC4_NODE, obe, irq));
+
+	xec_ecia_info_girq_ctrl(xec_acpi_ec4_cfg.ibf_ecia_info, MCHP_MEC_ECIA_GIRQ_EN);
+
+	return 0;
+}
+
+static int init_acpi_ec4(const struct device *dev)
+{
+	return init_acpi_ec_bars(dev, &xec_acpi_ec4_cfg, IOB_ACPI_EC4, MEMB_ACPI_EC4,
+				 SIRQ_ACPI_EC4_OBF);
+}
+
+#undef CONNECT_IRQ_ACPI_EC4
+#define CONNECT_IRQ_ACPI_EC4 connect_irq_acpi_ec4
+#undef INIT_ACPI_EC4
+#define INIT_ACPI_EC4 init_acpi_ec4
+
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4 */
 
 #if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI)
 
