@@ -1,0 +1,83 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6941 EVB with MEC1753Q-SZ daughter card as eSPI Target for
+ * samples/boards/mchp_mec5/espi_host_emu.
+ */
+
+/ {
+	/* zephyr,user is a special case node for application & test use.
+	 * espi-gpios:
+	 * index 0 = Target_nREADY output to Host eSPI emulator
+	 * index 1 = VCC_PWRGD_ALT driven by the Host eSPI emulator
+	 * index 2 = Host_nREADY input
+	 */
+	zephyr,user {
+		espi-gpios = <MCHP_GPIO_DECODE_202 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_057 GPIO_ACTIVE_HIGH>,
+			     <MCHP_GPIO_DECODE_025 GPIO_ACTIVE_HIGH>;
+		pinctrl-0 = <&vcc_pwrgd_alt_gpio242 &pwrok_gpio106>;
+		pinctrl-names = "default";
+	};
+};
+
+&espi0 {
+	status = "okay";
+	pinctrl-0 = < &espi_reset_n_gpio061 &espi_alert_n_gpio063
+		      &espi_clk_gpio065 &espi_cs_n_gpio066
+		      &espi_io0_gpio070 &espi_io1_gpio071
+		      &espi_io2_gpio072 &espi_io3_gpio073 >;
+	pinctrl-names = "default";
+	host-memmap-addr-high = <0>;
+	sram-bar-addr-high = <0>;
+
+	/* Host emulator memory tests use SRAM BAR0 at 0x20000000 */
+	sram-bars {
+		compatible = "microchip,xec-espi-sram-bar";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		sram_bar0: sram-bar@0 {
+			reg = <0>;
+			host-address = <0x20000000>;
+			size = <1024>;
+			access = "READ_WRITE";
+		};
+
+		sram_bar1: sram-bar@1 {
+			reg = <1>;
+			host-address = <0x20001000>;
+			size = <1024>;
+			access = "READ_WRITE";
+		};
+	};
+};
+
+/* OS ACPI EC at Host I/O 62h/66h */
+&acpi_ec0 {
+	status = "okay";
+};
+
+/* Host emulator generic ACPI EC I/O tests, port from
+ * CONFIG_ESPI_PERIPHERAL_HOST_IO_PVT2/3_PORT_NUM
+ */
+&acpi_ec2 {
+	status = "okay";
+};
+
+&acpi_ec3 {
+	status = "okay";
+};
+
+/* 8042 keyboard controller at Host I/O 60h/64h */
+&kbc0 {
+	status = "okay";
+};
+
+/* BIOS debug Port 80h - 83h capture */
+&p80bd0 {
+	status = "okay";
+};
