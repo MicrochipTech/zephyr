@@ -146,8 +146,16 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 		LOG_INF("eSPI CB: PC BIOS debug port 80 data 0x%x", ev.evt_data);
 		break;
 	case ESPI_PERIPHERAL_HOST_IO_PVT:
-		LOG_INF("eSPI CB: PC Host PVT I/O data 0x%x", ev.evt_data);
+	case ESPI_PERIPHERAL_HOST_IO_PVT2:
+	case ESPI_PERIPHERAL_HOST_IO_PVT3:
+		LOG_INF("eSPI CB: PC Host PVT%u I/O data 0x%x",
+			ev.evt_details - ESPI_PERIPHERAL_HOST_IO_PVT + 1u, ev.evt_data);
 		break;
+#ifdef CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4
+	case MCHP_XEC_ESPI_PERIPHERAL_ACPI_EC4:
+		LOG_INF("eSPI CB: PC ACPI_EC4 I/O data 0x%x", ev.evt_data);
+		break;
+#endif
 	default:
 #ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
 		if ((ev.evt_details & ~0xffu) == MCHP_XEC_ESPI_PERIPHERAL_EMI) {
