@@ -139,9 +139,12 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 	case ESPI_PERIPHERAL_8042_KBC:
 		LOG_INF("eSPI CB: PC 8042-KBC data 0x%x", ev.evt_data);
 		break;
-	case ESPI_PERIPHERAL_HOST_IO:
-		LOG_INF("eSPI CB: PC Host I/O (ACPI_EC0) data 0x%x", ev.evt_data);
+	case ESPI_PERIPHERAL_HOST_IO: {
+		struct espi_evt_data_acpi *acpi = (struct espi_evt_data_acpi *)&ev.evt_data;
+
+		LOG_INF("eSPI CB: PC ACPI_EC0 %s 0x%02x", acpi->type ? "cmd" : "data", acpi->data);
 		break;
+	}
 	case ESPI_PERIPHERAL_DEBUG_PORT80:
 		LOG_INF("eSPI CB: PC BIOS debug port 80 data 0x%x", ev.evt_data);
 		break;
