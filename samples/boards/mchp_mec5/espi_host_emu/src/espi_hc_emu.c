@@ -60,6 +60,18 @@ LOG_MODULE_DECLARE(app);
 #define ESPI_CYCLE_OOB_MSG		0x20 /* Fig. 45 */
 /* Flash */
 #define ESPI_CYCLE_FC_RD		0x00 /* Fig. 48 */
+#define ESPI_CYCLE_FC_WR		0x01
+#define ESPI_CYCLE_FC_ERASE		0x02
+/* Successful Completion With Data encoding is 0001:P1:P0:1 (Table 5). P1P0=11b
+ * ("the only completion for a split transaction") since this driver never
+ * splits a completion across multiple packets -> 0x0Fu. Same family as PC's
+ * ESPI_CYCLE_PC_COMPL_WITH_DATA, just a different P1P0 value.
+ */
+#define ESPI_CYCLE_FC_COMPL_WITH_DATA	0x0Fu
+
+/* ESPI_FC_TAF_ERASE_SEL_* erase-size selector values are in espi_hc_emu.h
+ * (public API for espi_hc_emu_flash_erase()).
+ */
 
 /* eSPI command opcodes
  * put a posted or completion header and optional data
@@ -2604,6 +2616,326 @@ int espi_hc_emu_put_pc_mem_rd32(struct espi_hc_context *hc, uint32_t mem_addr, u
 	*cmd_status = status;
 
 	LOG_INF("eSPI HC EMU PUT_NP Read MEM32 RespCode=0x%0x Status 0x%04x", rsp_code, status);
+
+	return 0;
+}
+
+/* Transmit eSPI PUT_FLASH_NP read request to target and parse data from the
+ * completion response. Modeled directly on espi_hc_emu_put_pc_mem_rd32()
+ * above: same header shape, tag/len packing, and response validation
+ * sequence, but using the Flash Channel cycle-type values instead of the PC
+ * channel's.
+ *
+ * NOTE: per the eSPI Base Specification section 4.2.4.2 (Target Attached
+ * Flash Sharing), the controller always issues flash requests - read,
+ * write, and erase alike - using opcode PUT_FLASH_NP; the Cycle Type byte
+ * (ESPI_CYCLE_FC_RD/WR/ERASE) is what distinguishes the operation.
+ * GET_FLASH_NP is a Controller Attached Flash Sharing (CAFS) opcode used by
+ * the target to request flash access from the controller - the reverse
+ * direction - and must not be issued by the controller in TAF mode.
+ *
+ * Command Packet: Opcode(PUT_FLASH_NP) | CycleType(FC_RD) | Tag:LenMsb | LenLsb | Addr[31:0] | CRC
+ * Response Packet (success with data): RespCode | Header(3) | Data | StatusLsb | StatusMsb | CRC
+ */
+int espi_hc_emu_flash_read(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			   uint8_t *data, uint16_t datalen, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0u;
+	uint16_t status = 0u;
+	uint16_t rsp_data_len = 0u;
+	uint8_t cmd_pktlen = 0u, n = 0u;
+	uint8_t pktlen = 0u; /* response packet length */
+	uint8_t rsp_code = 0;
+	uint8_t rsp_crc8 = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_FLASH_NP;
+
+	LOG_INF("eSPI HC emu: PUT_FLASH_NP(Read) tag=0x%0x flash_addr=0x%0x len=0x%0x",
+		tag, flash_addr, datalen);
+
+	if (!hc || !data || !cmd_status || !datalen || (datalen > 64u)) {
+		return -EINVAL;
+	}
+
+	cmd_pktlen = 9u;
+	pktlen = (uint8_t)datalen + 7u; /* GET_FLASH_COMPL with data */
+	max_rsp_len = 96u;
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+	uint8_t *rbuf = ersp->buf;
+
+	emsg->buf[0] = opcode;
+	emsg->buf[1] = ESPI_CYCLE_FC_RD;
+	emsg->buf[2] = (tag & 0xfu) << 4;
+	emsg->buf[3] = (uint8_t)datalen;
+	emsg->buf[4] = (uint8_t)(flash_addr >> 24);
+	emsg->buf[5] = (uint8_t)(flash_addr >> 16);
+	emsg->buf[6] = (uint8_t)(flash_addr >> 8);
+	emsg->buf[7] = (uint8_t)flash_addr;
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)emsg->buf, cmd_pktlen - 1u);
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	emsg->buf[8] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, cmd_pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf == ESPI_RESP_CODE_NO_RESP) {
+			LOG_ERR("PUT_FLASH_NP(Read) No Response");
+			return -EIO;
+		}
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_FLASH_NP(Read) error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, (pktlen - 1u));
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[pktlen - 1u]) {
+		LOG_ERR("PUT_FLASH_NP(Read): CRC error: expected=0x%02x calc=0x%02x",
+			rsp_crc8, rbuf[pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+	status = ((uint16_t)rbuf[pktlen - 2u] << 8) | rbuf[pktlen - 3u];
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_OK) {
+		rsp_data_len = rbuf[2] & 0xfu;
+		rsp_data_len <<= 8;
+		rsp_data_len |= rbuf[3];
+		if (rsp_data_len < datalen) {
+			memcpy(data, &rbuf[4], rsp_data_len);
+		} else {
+			memcpy(data, &rbuf[4], datalen);
+		}
+	} else if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("PUT_FLASH_NP(Read) Deferred by Target");
+	}
+
+	*cmd_status = status;
+
+	LOG_INF("eSPI HC EMU PUT_FLASH_NP(Read) RespCode=0x%0x Status 0x%04x", rsp_code, status);
+
+	return 0;
+}
+
+/* Transmit eSPI PUT_FLASH_NP write request to target and parse the status-only
+ * PUT_FLASH_COMPL response. Request framing mirrors espi_hc_emu_flash_read()
+ * above (header + address + data + CRC); response parsing mirrors
+ * espi_hc_emu_put_pc_mem_wr32()'s 4-byte status-only completion, since a
+ * flash write completion carries no data back.
+ */
+int espi_hc_emu_flash_write(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			    const uint8_t *data, uint16_t datalen, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0u;
+	uint16_t status = 0u;
+	uint8_t n = 0u, pktlen = 0u, rsp_pktlen = 0u;
+	uint8_t rsp_code = 0;
+	uint8_t rsp_crc8 = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_FLASH_NP;
+
+	LOG_INF("eSPI HC emu: PUT_FLASH_NP tag=0x%0x flash_addr=0x%0x len=0x%0x",
+		tag, flash_addr, datalen);
+
+	if (!hc || !cmd_status || !data || !datalen || (datalen > 64u)) {
+		return -EINVAL;
+	}
+
+	/* Packet size is: 1(opcode) + 1(cycle type) + 2(tag/len) + 4(addr) + datalen + 1(CRC) */
+	pktlen = (uint8_t)datalen + 9u;
+	rsp_pktlen = 4u;
+	max_rsp_len = 96u;
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *buf = emsg->buf;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	buf[0] = opcode;
+	buf[1] = ESPI_CYCLE_FC_WR;
+	buf[2] = (tag & 0xfu) << 4;
+	buf[3] = (uint8_t)datalen;
+	buf[4] = (uint8_t)(flash_addr >> 24);
+	buf[5] = (uint8_t)(flash_addr >> 16);
+	buf[6] = (uint8_t)(flash_addr >> 8);
+	buf[7] = (uint8_t)flash_addr;
+	memcpy(&buf[8], data, datalen);
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)buf, (pktlen - 1u));
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	buf[pktlen - 1u] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)buf, pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf == ESPI_RESP_CODE_NO_RESP) {
+			LOG_ERR("PUT_FLASH_NP No Response");
+			return -EIO;
+		}
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_FLASH_NP error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, rsp_pktlen - 1u);
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[rsp_pktlen - 1u]) {
+		LOG_ERR("PUT_FLASH_NP: rsp_crc=0x%02x crc=0x%02x",
+			rsp_crc8, rbuf[rsp_pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+	status = ((uint16_t)rbuf[rsp_pktlen - 2u] << 8) | rbuf[rsp_pktlen - 3u];
+	*cmd_status = status;
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("PUT_FLASH_NP Deferred by Target");
+	}
+
+	LOG_INF("eSPI HC EMU PUT_FLASH_NP RespCode=0x%0x Status 0x%04x", rsp_code, status);
+
+	return 0;
+}
+
+/* Transmit eSPI PUT_FLASH_NP erase request to target and parse the
+ * status-only PUT_FLASH_COMPL response. Same framing as espi_hc_emu_flash_write()
+ * minus the data payload.
+ *
+ * Per the eSPI Base Specification Table 16 (Target Attached Flash Sharing),
+ * the Erase command's Length[11:0] field is NOT a byte count - it is an
+ * encoded erase-block-size selector with only 4 valid values:
+ *   0h = 4KB, 1h = 32KB, 2h = 64KB, 3h = 128KB (4h-FFFh reserved)
+ * erase_size_sel must be one of ESPI_FC_TAF_ERASE_SEL_{4KB,32KB,64KB,128KB}.
+ * flash_addr must be aligned to the corresponding erase block size.
+ */
+int espi_hc_emu_flash_erase(struct espi_hc_context *hc, uint32_t flash_addr, uint8_t tag,
+			    uint8_t erase_size_sel, uint16_t *cmd_status)
+{
+	int ret = 0;
+	size_t max_rsp_len = 0u;
+	uint16_t status = 0u;
+	uint8_t n = 0u, pktlen = 0u, rsp_pktlen = 0u;
+	uint8_t rsp_code = 0;
+	uint8_t rsp_crc8 = 0;
+	uint8_t opcode = ESPI_OPCODE_PUT_FLASH_NP;
+
+	LOG_INF("eSPI HC emu: PUT_FLASH_NP ERASE tag=0x%0x flash_addr=0x%0x erase_size_sel=0x%0x",
+		tag, flash_addr, erase_size_sel);
+
+	if (!hc || !cmd_status || (erase_size_sel > ESPI_FC_TAF_ERASE_SEL_128KB)) {
+		return -EINVAL;
+	}
+
+	pktlen = 9u; /* header + addr + CRC, no data payload */
+	rsp_pktlen = 4u;
+	max_rsp_len = 96u;
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+	uint8_t *buf = emsg->buf;
+	uint8_t *rbuf = ersp->buf;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	buf[0] = opcode;
+	buf[1] = ESPI_CYCLE_FC_ERASE;
+	buf[2] = (tag & 0xfu) << 4; /* Length[11:8] = 0, selector fits in Length[7:0] */
+	buf[3] = erase_size_sel;
+	buf[4] = (uint8_t)(flash_addr >> 24);
+	buf[5] = (uint8_t)(flash_addr >> 16);
+	buf[6] = (uint8_t)(flash_addr >> 8);
+	buf[7] = (uint8_t)flash_addr;
+
+	emsg->crc8 = crc8_init();
+	emsg->crc8 = crc8_update(emsg->crc8, (const void *)buf, (pktlen - 1u));
+	emsg->crc8 = crc8_finalize(emsg->crc8);
+	buf[pktlen - 1u] = emsg->crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)buf, pktlen, rbuf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	n = 0;
+	while (n < max_rsp_len) {
+		if (*rbuf == ESPI_RESP_CODE_NO_RESP) {
+			LOG_ERR("PUT_FLASH_NP ERASE No Response");
+			return -EIO;
+		}
+		if (*rbuf != ESPI_RESP_CODE_RESP_WAIT) {
+			break;
+		}
+		rbuf++;
+		n++;
+	}
+
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_FLASH_NP ERASE error received %u WAIT_STATEs!", max_rsp_len);
+		return -EIO;
+	}
+
+	rsp_crc8 = crc8_init();
+	rsp_crc8 = crc8_update(rsp_crc8, (const void *)rbuf, rsp_pktlen - 1u);
+	rsp_crc8 = crc8_finalize(rsp_crc8);
+
+	if (rsp_crc8 != rbuf[rsp_pktlen - 1u]) {
+		LOG_ERR("PUT_FLASH_NP ERASE: rsp_crc=0x%02x crc=0x%02x",
+			rsp_crc8, rbuf[rsp_pktlen - 1u]);
+		*cmd_status = 0xffffu;
+		return -EIO;
+	}
+
+	rsp_code = rbuf[0];
+	status = ((uint16_t)rbuf[rsp_pktlen - 2u] << 8) | rbuf[rsp_pktlen - 3u];
+	*cmd_status = status;
+
+	if ((rsp_code & ESPI_RESP_CODE_RESP_MSK) == ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_INF("PUT_FLASH_NP ERASE Deferred by Target");
+	}
+
+	LOG_INF("eSPI HC EMU PUT_FLASH_NP ERASE RespCode=0x%0x Status 0x%04x", rsp_code, status);
 
 	return 0;
 }
