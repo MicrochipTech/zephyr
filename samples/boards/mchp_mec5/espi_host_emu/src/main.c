@@ -386,7 +386,7 @@ int main(void)
 
 	/* Enable Flash Channel
 	 * Set b[14:12]=001b max. read request size of 64 bytes
-	 * Set b[11]=0b CAFS
+	 * Set b[11]=1b TAF (Target Attached Flash)
 	 * Set b[10:8]=001b max max payload size of 64 bytes
 	 * Set b[4:2]=001b flash block erase size 4KB
 	 * b[1]=ready (R/O)
@@ -396,7 +396,7 @@ int main(void)
 	chan_config = hc.fc_cap_cfg;
 	LOG_INF("Current FC Cap/Cfg = 0x%08x", chan_config);
 	chan_config &= ~((0x7u << 12) | BIT(11) | (0x7u << 8) | (0x7u << 2));
-	chan_config |= ((1u << 12) | (1u << 8) | (1u << 2) | BIT(0));
+	chan_config |= ((1u << 12) | (1u << 8) | (1u << 2) | BIT(0) | BIT(11));
 	LOG_INF("New VW Caps/Cfg = 0x%08x", chan_config);
 
 	cfgid = ESPI_GET_CONFIG_FC_CAP;
@@ -412,6 +412,13 @@ int main(void)
 	ret = wait_espi_chan_ready(&hc, cfgid, -1);
 	if (ret) {
 		goto app_exit;
+	}
+
+	if (hc.fc_cap_cfg & BIT(11)) {
+		LOG_INF("Target accepted TAF (Target Attached Flash) sharing mode");
+	} else {
+		LOG_WRN("Target did not accept TAF: fc_cap_cfg=0x%08x reports CAFS",
+			hc.fc_cap_cfg);
 	}
 
 	LOG_INF("Issue GET_STATUS");
@@ -1000,6 +1007,88 @@ int main(void)
 	}
 
 	LOG_INF("eSPI Status = 0x%04x", hc.pkt_status);
+
+	/* Flash Access Channel (TAF) read/write/erase test.
+	 * Only meaningful if the Target accepted TAF above; if it fell back to
+	 * CAFS (no Target-attached flash), these requests are expected to fail
+	 * or be rejected by the Target.
+	 */
+	tag = 2u;
+	mem_addr = 0x1000u; /* flash offset, not a memory address */
+	mem_len = 0x10u;
+	for (size_t n = 0; n < mem_len; n++) {
+		data_buf[n] = (uint8_t)(0xA0u + n);
+	}
+
+	LOG_INF("Flash write: %u bytes to flash offset 0x%0x", mem_len, mem_addr);
+
+	cmd_status = 0;
+	ret = espi_hc_emu_flash_write(&hc, mem_addr, tag, data_buf, (uint16_t)mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI Flash write failed: (%d)", ret);
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("Flash read: %u bytes from flash offset 0x%0x", mem_len, mem_addr);
+	memset(data_buf2, 0x55, sizeof(data_buf2));
+
+	cmd_status = 0;
+	ret = espi_hc_emu_flash_read(&hc, mem_addr, tag, data_buf2, (uint16_t)mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI Flash read failed: (%d)", ret);
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = memcmp(data_buf, data_buf2, mem_len);
+	if (ret == 0) {
+		LOG_INF("Flash read data matches Flash write data: PASS");
+	} else {
+		LOG_ERR("Flash read data does not match Flash write data: FAIL");
+	}
+
+	/* erase_size_sel is an encoded selector (Table 16, TAF), not a byte count:
+	 * 0=4KB, 1=32KB, 2=64KB, 3=128KB. mem_addr (0x1000) is already 4KB-aligned.
+	 */
+	LOG_INF("Flash erase: offset 0x%0x size_sel=4KB", mem_addr);
+
+	cmd_status = 0;
+	ret = espi_hc_emu_flash_erase(&hc, mem_addr, tag, ESPI_FC_TAF_ERASE_SEL_4KB, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI Flash erase failed: (%d)", ret);
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	LOG_INF("Flash read after erase: %u bytes from flash offset 0x%0x", mem_len, mem_addr);
+	memset(data_buf2, 0x55, sizeof(data_buf2));
+
+	cmd_status = 0;
+	ret = espi_hc_emu_flash_read(&hc, mem_addr, tag, data_buf2, (uint16_t)mem_len, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI Flash read after erase failed: (%d)", ret);
+	}
+
+	memset(data_buf, 0xFFu, mem_len); /* NOR flash erased state */
+	ret = memcmp(data_buf, data_buf2, mem_len);
+	if (ret == 0) {
+		LOG_INF("Flash erase result reads back as 0xFF: PASS");
+	} else {
+		LOG_ERR("Flash erase result does not read back as 0xFF: FAIL");
+	}
 
 #if 0
 	/* eSPI Target memory mapped ACPI_EC4 @ 0x10002000 
