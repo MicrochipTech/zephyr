@@ -23,6 +23,15 @@ config SAMPLE_ESPI_TAF
 	  If disabled, the Flash channel is enabled in Controller Attached
 	  Flash Sharing (CAFS) mode and no flash traffic is generated.
 
+config SAMPLE_ESPI_P80_ALIAS
+	bool "Exercise Target Port 80 alias"
+	default y
+	help
+	  Write one byte to the Target Port 80 alias I/O address given by the
+	  zephyr,user target-p80-alias-io property (default 90h). The Target
+	  captures it in the Port 80 byte lane selected by its p80bd0_alias
+	  host-io-addr-mask. Disable when the Target does not enable the alias.
+
 config SAMPLE_ESPI_ACPI_EC4
 	bool "Exercise Target ACPI_EC4"
 	default y

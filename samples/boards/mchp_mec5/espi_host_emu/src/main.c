@@ -37,6 +37,14 @@ struct espi_status_data {
 #define APP_FLAG_GET_STATUS_LOOP BIT(0)
 
 /* IMPORTANT: these must match eSPI Target application configuration */
+/* Target Port 80 Host I/O addresses from zephyr,user, default 80h */
+#define TARGET_P80_IO DT_PROP_OR(DT_PATH(zephyr_user), target_p80_io, 0x80)
+#define TARGET_P80_ALIAS_IO DT_PROP_OR(DT_PATH(zephyr_user), target_p80_alias_io, 0x90)
+BUILD_ASSERT((TARGET_P80_IO & 0x3u) == 0, "Target Port 80 base must be 4-byte aligned");
+
+/* PUT_IOWR address: b[31:16] = access width in bytes, b[15:0] = I/O address */
+#define IOWR_ADDR_LEN(len, addr) (((uint32_t)(len) << 16) | ((uint32_t)(addr) & 0xffffu))
+
 #define TARGET_SRAM0_BASE_ADDR 0x20000000u
 #define TARGET_SRAM0_SIZE 256u
 #define TARGET_SRAM1_BASE_ADDR 0x20001000u
@@ -704,7 +712,7 @@ int main(void)
 		goto app_exit;
 	}
 
-	io_addr_len = 0x10080u;
+	io_addr_len = IOWR_ADDR_LEN(1, TARGET_P80_IO);
 	io_data = 0x69u;
 	cmd_status = 0u;
 	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
@@ -718,7 +726,7 @@ int main(void)
 	k_sleep(K_MSEC(50));
 
 
-	io_addr_len = 0x10081u;
+	io_addr_len = IOWR_ADDR_LEN(1, TARGET_P80_IO + 1u);
 	io_data = 0x6Au;
 	cmd_status = 0u;
 	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
@@ -731,7 +739,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x10082u;
+	io_addr_len = IOWR_ADDR_LEN(1, TARGET_P80_IO + 2u);
 	io_data = 0x6Bu;
 	cmd_status = 0u;
 	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
@@ -744,7 +752,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x10083u;
+	io_addr_len = IOWR_ADDR_LEN(1, TARGET_P80_IO + 3u);
 	io_data = 0x6Cu;
 	cmd_status = 0u;
 	LOG_INF("8-bit Write I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
@@ -757,7 +765,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x20080u;
+	io_addr_len = IOWR_ADDR_LEN(2, TARGET_P80_IO);
 	io_data = 0x4321u;
 	cmd_status = 0u;
 	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
@@ -770,7 +778,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x20082u;
+	io_addr_len = IOWR_ADDR_LEN(2, TARGET_P80_IO + 2u);
 	io_data = 0x9876u;
 	cmd_status = 0u;
 	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
@@ -783,7 +791,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x20081u;
+	io_addr_len = IOWR_ADDR_LEN(2, TARGET_P80_IO + 1u);
 	io_data = 0xA987u;
 	cmd_status = 0u;
 	LOG_INF("16-bit Write I/O Port 0x%02x = 0x%04x", io_addr_len, io_data);
@@ -796,7 +804,7 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
-	io_addr_len = 0x40080u;
+	io_addr_len = IOWR_ADDR_LEN(4, TARGET_P80_IO);
 	io_data = 0x99887766u;
 	cmd_status = 0u;
 	LOG_INF("32-bit Write I/O Port 0x%02x = 0x%08x", io_addr_len, io_data);
@@ -808,6 +816,24 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
+
+#ifdef CONFIG_SAMPLE_ESPI_P80_ALIAS
+	/* Port 80 alias is a single byte I/O location which the Target maps to
+	 * one byte lane of the Port 80 capture.
+	 */
+	io_addr_len = IOWR_ADDR_LEN(1, TARGET_P80_ALIAS_IO);
+	io_data = 0xA5u;
+	cmd_status = 0u;
+	LOG_INF("8-bit Write Port 80 alias I/O Port 0x%02x = 0x%02x", io_addr_len, io_data);
+	ret = espi_hc_emu_put_iowr(&hc, io_addr_len, io_data, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_IOWR error %d", ret);
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
+	k_sleep(K_MSEC(50));
+#endif /* CONFIG_SAMPLE_ESPI_P80_ALIAS */
 
 	io_addr_len = 0x10320u;
 	io_data = 0x22u;

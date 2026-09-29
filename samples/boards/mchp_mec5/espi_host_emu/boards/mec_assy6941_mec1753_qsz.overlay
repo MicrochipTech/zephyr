@@ -20,6 +20,12 @@
 	zephyr,user {
 		qspi-cs = <0>;
 
+		/* Target Port 80 base (4 bytes) and alias (1 byte) Host I/O addresses.
+		 * Must match the Target p80bd0 and p80bd0_alias host-io properties.
+		 */
+		target-p80-io = <0x80>;
+		target-p80-alias-io = <0x90>;
+
 		/* eSPI signals re-wired on this bench, see mec_common.dtsi for index use */
 		espi-gpios = <MCHP_GPIO_DECODE_130 GPIO_ACTIVE_HIGH>,
 			     <MCHP_GPIO_DECODE_071 GPIO_ACTIVE_HIGH>,
