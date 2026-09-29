@@ -1242,7 +1242,8 @@ static int init_acpi_ec4(const struct device *dev)
 
 #endif /* CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4 */
 
-#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI)
+#if defined(CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI0) ||  \
+	defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI1) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI2)
 
 /* EC only access */
 #define XEC_EMI_H2EC_MBOX_OFS 0x100U
@@ -1273,7 +1274,7 @@ struct xec_emi_config {
 	uint8_t sirq_slot_e2h;
 };
 
-#endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD || CONFIG_ESPI_PERIPHERAL_XEC_EMI */
+#endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD || CONFIG_ESPI_PERIPHERAL_XEC_EMIn */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD
 
@@ -1329,12 +1330,17 @@ static int init_emi0(const struct device *dev)
 
 #endif /* CONFIG_ESPI_PERIPHERAL_EC_HOST_CMD */
 
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
+#if defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI0) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI1) ||      \
+	defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI2)
 
-/* Standalone EMI devices. Each EMI enabled in devicetree is mapped to Host I/O
- * and/or Host memory space from its host-io and host-mem properties. The EMI
- * memory regions are left disabled.
+/* EMI devices not owned by the EC host command subsystem. EMI n is used when
+ * CONFIG_ESPI_PERIPHERAL_XEC_EMIn is enabled and the emin devicetree node is okay.
+ * It is mapped to Host I/O and/or Host memory space from its host-io and host-mem
+ * properties. The EMI memory regions are left disabled.
  */
+#define XEC_EMI_ENABLED(n)                                                                         \
+	(IS_ENABLED(CONFIG_ESPI_PERIPHERAL_XEC_EMI##n) && DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi##n)))
+
 #define XEC_EMI_CFG(n)                                                                             \
 	{                                                                                          \
 		.regbase = DT_REG_ADDR(DT_NODELABEL(emi##n)),                                      \
@@ -1420,7 +1426,7 @@ static void xec_emi_isr(const struct device *dev, const struct xec_emi_config *e
 				    SIRQ_EMI##n##_HEV, SIRQ_EMI##n##_E2H);                         \
 	}
 
-#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0))
+#if XEC_EMI_ENABLED(0)
 XEC_EMI_DEFINE(0)
 #undef CONNECT_IRQ_EMI0
 #define CONNECT_IRQ_EMI0 connect_irq_emi0
@@ -1428,12 +1434,20 @@ XEC_EMI_DEFINE(0)
 #define INIT_EMI0 init_emi0
 #endif
 
-#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi1))
+#if XEC_EMI_ENABLED(1)
 XEC_EMI_DEFINE(1)
 #undef CONNECT_IRQ_EMI1
 #define CONNECT_IRQ_EMI1 connect_irq_emi1
 #undef INIT_EMI1
 #define INIT_EMI1 init_emi1
+#endif
+
+#if XEC_EMI_ENABLED(2)
+XEC_EMI_DEFINE(2)
+#undef CONNECT_IRQ_EMI2
+#define CONNECT_IRQ_EMI2 connect_irq_emi2
+#undef INIT_EMI2
+#define INIT_EMI2 init_emi2
 #endif
 
 int mchp_xec_espi_emi_mbox_ack(const struct device *dev, uint8_t emi_id)
@@ -1442,14 +1456,19 @@ int mchp_xec_espi_emi_mbox_ack(const struct device *dev, uint8_t emi_id)
 
 	ARG_UNUSED(dev);
 
-#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi0))
+#if XEC_EMI_ENABLED(0)
 	if (emi_id == 0) {
 		emi_cfg = &xec_emi0_cfg;
 	}
 #endif
-#if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(emi1))
+#if XEC_EMI_ENABLED(1)
 	if (emi_id == 1) {
 		emi_cfg = &xec_emi1_cfg;
+	}
+#endif
+#if XEC_EMI_ENABLED(2)
+	if (emi_id == 2) {
+		emi_cfg = &xec_emi2_cfg;
 	}
 #endif
 	if (emi_cfg == NULL) {
@@ -1464,7 +1483,7 @@ int mchp_xec_espi_emi_mbox_ack(const struct device *dev, uint8_t emi_id)
 	return 0;
 }
 
-#endif /* CONFIG_ESPI_PERIPHERAL_XEC_EMI */
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_EMI0 || CONFIG_ESPI_PERIPHERAL_XEC_EMI1 || ... */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_CUSTOM_OPCODE
 
