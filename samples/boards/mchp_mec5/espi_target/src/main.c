@@ -174,7 +174,8 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 		break;
 #endif
 	default:
-#if defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI0) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI1)
+#if defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI0) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI1) ||      \
+	defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI2)
 		if ((ev.evt_details & ~0xffu) == MCHP_XEC_ESPI_PERIPHERAL_EMI) {
 			uint8_t emi_id = ev.evt_details & 0xffu;
 
