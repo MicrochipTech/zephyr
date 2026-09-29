@@ -132,12 +132,20 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 	ARG_UNUSED(dev);
 	ARG_UNUSED(cb);
 
-	/* Port 80: evt_details b[15:0] = peripheral, b[23:16] = byte lane,
-	 * evt_data b[7:0] = value written by the Host.
-	 */
 	if ((ev.evt_details & 0xffffu) == ESPI_PERIPHERAL_DEBUG_PORT80) {
+#ifdef CONFIG_ESPI_XEC_P80_MULTIBYTE
+		/* One event per Host write: evt_details b[19:16] = byte lane mask,
+		 * b[23:20] = width in bytes, evt_data = bytes placed in their lanes.
+		 */
+		LOG_INF("eSPI CB: PC Port 80 width %u lanes 0x%x = 0x%08x",
+			(ev.evt_details >> 20) & 0xfu, (ev.evt_details >> 16) & 0xfu, ev.evt_data);
+#else
+		/* One event per byte: evt_details b[23:16] = byte lane,
+		 * evt_data b[7:0] = value written by the Host.
+		 */
 		LOG_INF("eSPI CB: PC Port 80 lane %u = 0x%02x", (ev.evt_details >> 16) & 0xffu,
 			ev.evt_data & 0xffu);
+#endif
 		return;
 	}
 
