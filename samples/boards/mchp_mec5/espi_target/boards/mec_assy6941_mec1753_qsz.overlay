@@ -99,14 +99,15 @@
 };
 
 /* BIOS debug Port 80h - 83h capture */
+/* Port 80 base at a non-default 4-byte aligned Host I/O address */
 &p80bd0 {
-	host-io = <0x80>;
+	host-io = <0x1608>;
 	status = "okay";
 };
 
-/* Port 80 alias: Host I/O 90h is captured in byte lane 1, same as 81h */
+/* Port 80 alias: Host I/O 86h is captured in byte lane 2, same as 160Ah */
 &p80bd0_alias {
-	host-io = <0x90>;
-	host-io-addr-mask = <0x01>;
+	host-io = <0x86>;
+	host-io-addr-mask = <0x02>;
 	status = "okay";
 };
