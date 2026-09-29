@@ -132,6 +132,15 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 	ARG_UNUSED(dev);
 	ARG_UNUSED(cb);
 
+	/* Port 80: evt_details b[15:0] = peripheral, b[23:16] = byte lane,
+	 * evt_data b[7:0] = value written by the Host.
+	 */
+	if ((ev.evt_details & 0xffffu) == ESPI_PERIPHERAL_DEBUG_PORT80) {
+		LOG_INF("eSPI CB: PC Port 80 lane %u = 0x%02x", (ev.evt_details >> 16) & 0xffu,
+			ev.evt_data & 0xffu);
+		return;
+	}
+
 	switch (ev.evt_details) {
 	case ESPI_PERIPHERAL_UART:
 		LOG_INF("eSPI CB: PC Host UART");
@@ -145,9 +154,6 @@ static void espi_periph_cb(const struct device *dev, struct espi_callback *cb,
 		LOG_INF("eSPI CB: PC ACPI_EC0 %s 0x%02x", acpi->type ? "cmd" : "data", acpi->data);
 		break;
 	}
-	case ESPI_PERIPHERAL_DEBUG_PORT80:
-		LOG_INF("eSPI CB: PC BIOS debug port 80 data 0x%x", ev.evt_data);
-		break;
 	case ESPI_PERIPHERAL_HOST_IO_PVT:
 	case ESPI_PERIPHERAL_HOST_IO_PVT2:
 	case ESPI_PERIPHERAL_HOST_IO_PVT3:
