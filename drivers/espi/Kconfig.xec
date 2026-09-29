@@ -173,21 +173,30 @@ config ESPI_PERIPHERAL_XEC_ACPI_PM1
 
 config ESPI_PERIPHERAL_XEC_EMI0
 	bool "SoC EMI 0 over eSPI"
+	depends on !ESPI_PERIPHERAL_EC_HOST_CMD
 	help
-	  Enable EMI 0 interface accessible via Host I/O over the
-	  ESPI Peripheral Channel.
+	  Enable EMI 0 over the ESPI Peripheral Channel. The emi0 devicetree
+	  node host-io and host-mem properties map it to Host I/O and/or Host
+	  memory space. A Host write to its Host-to-EC mailbox is reported as
+	  a peripheral notification event.
+	  EMI 0 is owned by the EC host command subsystem when
+	  ESPI_PERIPHERAL_EC_HOST_CMD is enabled.
 
 config ESPI_PERIPHERAL_XEC_EMI1
 	bool "SoC EMI 1 over eSPI"
 	help
-	  Enable EMI 1 interface accessible via Host I/O over the
-	  ESPI Peripheral Channel.
+	  Enable EMI 1 over the ESPI Peripheral Channel. The emi1 devicetree
+	  node host-io and host-mem properties map it to Host I/O and/or Host
+	  memory space. A Host write to its Host-to-EC mailbox is reported as
+	  a peripheral notification event.
 
 config ESPI_PERIPHERAL_XEC_EMI2
 	bool "SoC EMI 2 over eSPI"
 	help
-	  Enable EMI 2 interface accessible via Host I/O over the
-	  ESPI Peripheral Channel.
+	  Enable EMI 2 over the ESPI Peripheral Channel. The emi2 devicetree
+	  node host-io and host-mem properties map it to Host I/O and/or Host
+	  memory space. A Host write to its Host-to-EC mailbox is reported as
+	  a peripheral notification event.
 
 config ESPI_PERIPHERAL_8042_FAST_KBC_PORT92
 	bool "8042 keyboard fast alternate GATE A20 support at Host I/O 92h"
