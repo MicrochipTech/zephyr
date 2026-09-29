@@ -48,12 +48,13 @@ int mchp_xec_espi_sram_bar_get(const struct device *dev, uint8_t id, uint8_t **b
 
 #endif /* CONFIG_ESPI_PERIPHERAL_XEC_ACPI_EC4 */
 
-#ifdef CONFIG_ESPI_PERIPHERAL_XEC_EMI
+#if defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI0) || defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI1) ||      \
+	defined(CONFIG_ESPI_PERIPHERAL_XEC_EMI2)
 
 /**
  * Vendor-specific peripheral identifier reported in @ref espi_event::evt_details
  * when the Host writes the Host-to-EC mailbox of an EMI device. Bits[7:0] of
- * evt_details hold the EMI instance (0 or 1). evt_data holds the mailbox value.
+ * evt_details hold the EMI instance (0 to 2). evt_data holds the mailbox value.
  */
 #define MCHP_XEC_ESPI_PERIPHERAL_EMI 0x200U
 
@@ -63,14 +64,14 @@ int mchp_xec_espi_sram_bar_get(const struct device *dev, uint8_t id, uint8_t **b
  * re-enables the EMI Host-to-EC interrupt disabled when the event was reported.
  *
  * @param dev Pointer to the eSPI device
- * @param emi_id EMI instance (0 or 1)
+ * @param emi_id EMI instance (0 to 2)
  *
  * @retval 0 success
- * @retval -ENODEV if EMI instance is not enabled in devicetree
+ * @retval -ENODEV if EMI instance is not enabled
  */
 int mchp_xec_espi_emi_mbox_ack(const struct device *dev, uint8_t emi_id);
 
-#endif /* CONFIG_ESPI_PERIPHERAL_XEC_EMI */
+#endif /* CONFIG_ESPI_PERIPHERAL_XEC_EMI0 || CONFIG_ESPI_PERIPHERAL_XEC_EMI1 || ... */
 
 #ifdef CONFIG_ESPI_PERIPHERAL_XEC_MAILBOX
 
