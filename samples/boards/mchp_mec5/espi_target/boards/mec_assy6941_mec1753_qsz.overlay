@@ -100,5 +100,13 @@
 
 /* BIOS debug Port 80h - 83h capture */
 &p80bd0 {
+	host-io = <0x80>;
+	status = "okay";
+};
+
+/* Port 80 alias: Host I/O 90h is captured in byte lane 1, same as 81h */
+&p80bd0_alias {
+	host-io = <0x90>;
+	host-io-addr-mask = <0x01>;
 	status = "okay";
 };
