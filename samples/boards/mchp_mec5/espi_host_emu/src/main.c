@@ -52,6 +52,8 @@ BUILD_ASSERT((TARGET_P80_IO & 0x3u) == 0, "Target Port 80 base must be 4-byte al
 
 #define TARGET_EMI0_BASE_ADDR 0x10000000u
 #define TARGET_EMI1_BASE_ADDR 0x10001000u
+/* 0x10002000 is ACPI_EC4, so EMI2 is mapped above it */
+#define TARGET_EMI2_BASE_ADDR 0x10003000u
 #define EMI_HOST_TO_EC_MBOX_OFFSET 0
 #define EMI_EC_TO_HOST_MBOX_OFFSET 1u
 #define EMI_EC_ADDR_LSB_OFFSET 2u
@@ -95,6 +97,7 @@ static uint8_t c2t_vw_host_idxs[] = {
 
 static void spin_on(uint32_t id, int rval);
 static int wait_espi_chan_ready(struct espi_hc_context *pch, uint16_t cfgid, int timeout_cnt);
+static void emi_mbox_write(uint32_t emi_base, uint8_t val);
 int app_process_espi_status(struct espi_hc_context *hc, uint16_t espi_status,
 			    struct espi_status_data *data);
 
@@ -1277,6 +1280,10 @@ int main(void)
 
 	k_sleep(K_MSEC(50));
 
+	/* EMI1 and EMI2 Host-to-EC mailboxes, distinct values from EMI0 */
+	emi_mbox_write(TARGET_EMI1_BASE_ADDR, 0xB6u);
+	emi_mbox_write(TARGET_EMI2_BASE_ADDR, 0xC7u);
+
 	app_flags |= APP_FLAG_GET_STATUS_LOOP;
 	if (app_flags & APP_FLAG_GET_STATUS_LOOP) {
 		LOG_INF("Application loop issuing eSPI GET_STATUS");
@@ -1311,6 +1318,39 @@ app_exit:
 	app_main_exit = 1;
 
 	return 0;
+}
+
+/* Write a byte to the Host-to-EC mailbox of a Target EMI mapped in Host memory */
+static void emi_mbox_write(uint32_t emi_base, uint8_t val)
+{
+	uint16_t cmd_status = 0u;
+	uint32_t mem_addr = emi_base + EMI_HOST_TO_EC_MBOX_OFFSET;
+	int ret;
+
+	LOG_INF("eSPI EMU PUT_MEMWR32_SHORT 1-byte EMI mailbox [0x%0x] = 0x%02x", mem_addr, val);
+
+	ret = espi_hc_emu_pc_memwr32_short(&hc, mem_addr, val, 1u, &cmd_status);
+	if (ret) {
+		LOG_ERR("eSPI EMU PUT_MEMWR32_SHORT error (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	ret = espi_hc_ctx_get_status(&hc);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	esd.buf = &hcvw2;
+	esd.bufsz = sizeof(hcvw2);
+	esd.nitems = 0u;
+	ret = app_process_espi_status(&hc, cmd_status, &esd);
+	if (ret) {
+		LOG_ERR("eSPI GET_STATUS failed: (%d)", ret);
+		spin_on((uint32_t)__LINE__, ret);
+	}
+
+	k_sleep(K_MSEC(50));
 }
 
 static void spin_on(uint32_t id, int rval)
