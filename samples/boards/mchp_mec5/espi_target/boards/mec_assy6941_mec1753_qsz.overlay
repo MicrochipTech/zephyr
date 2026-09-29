@@ -98,6 +98,12 @@
 	status = "okay";
 };
 
+/* 0x10002000 is ACPI_EC4, so EMI2 is mapped above it */
+&emi2 {
+	host-mem = <0x10003000>;
+	status = "okay";
+};
+
 /* BIOS debug Port 80h - 83h capture */
 /* Port 80 base at a non-default 4-byte aligned Host I/O address */
 &p80bd0 {
