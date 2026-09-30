@@ -40,6 +40,9 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #define TARGET_PORT_NODE DT_ALIAS(i2c_target_port)
 #define PCA9555_NODE     DT_NODELABEL(pca9555_evb)
 
+#define CONTROLLER_PORT_NODE DT_ALIAS(i2c_controller_port)
+#define FRAM_NODE            DT_NODELABEL(fram_evb)
+
 struct reg_target {
 	struct i2c_target_config cfg;
 	uint8_t regs[REG_FILE_SIZE];
@@ -53,6 +56,9 @@ struct reg_target {
 
 static const struct device *const target_port = DEVICE_DT_GET(TARGET_PORT_NODE);
 static const struct i2c_dt_spec pca9555 = I2C_DT_SPEC_GET(PCA9555_NODE);
+
+static const struct device *const controller_port = DEVICE_DT_GET(CONTROLLER_PORT_NODE);
+static const struct i2c_dt_spec fram_spec = I2C_DT_SPEC_GET(FRAM_NODE);
 
 static struct reg_target targets[2];
 
@@ -132,6 +138,19 @@ static void reg_target_log(const struct reg_target *t)
 		atomic_get(&t->stops), atomic_get(&t->errors), atomic_get(&t->last_error));
 }
 
+enum buf_fill_alg {
+	BUF_FILL_ALG_VALUE = 0,
+	BUF_FILL_ALG_INCR,
+	BUF_FILL_ALG_DECR,
+	BUF_FILL_ALG_MAX,
+};
+
+#define FRAM_BUF_LEN 256U
+static uint8_t fram_buf[FRAM_BUF_LEN];
+static uint8_t fram_buf2[FRAM_BUF_LEN];
+
+int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_alg);
+
 int main(void)
 {
 	uint8_t cmd = PCA9555_CMD_PORT0_IN;
@@ -139,6 +158,14 @@ int main(void)
 	int rc = 0;
 
 	LOG_INF("MEC_ASSY6941 I2C-NL target mode sample");
+
+	memset((void *)fram_buf, 0, sizeof(fram_buf));
+	memset((void *)fram_buf2, 0, sizeof(fram_buf2));
+
+	if (!device_is_ready(controller_port)) {
+		LOG_ERR("I2C controller port device is not ready");
+		return 0;
+	}
 
 	if (!device_is_ready(target_port)) {
 		LOG_ERR("I2C target port device is not ready");
@@ -167,11 +194,82 @@ int main(void)
 			LOG_INF("PCA9555 input port 0 = 0x%02x%02x", port0[1], port0[0]);
 		}
 
+		fram_buf[0] = 0x02U; /* MSB of FRAM memory array offset */
+		fram_buf[1] = 0x10U; /* LSB of FRAM memory array offset */
+		fill_buf(&fram_buf[2], 32U, 0, BUF_FILL_ALG_INCR);
+
+		/* write 16-bit offset plus 32 bytes of data */
+		rc = i2c_write_dt(&fram_spec, fram_buf, 34U);
+		if (rc != 0) {
+			LOG_ERR("FRAM write offset plus data error (%d)", rc);
+		} else {
+			LOG_INF("FRAM write offset plus data OK");
+		}
+
+		memset((void *)fram_buf2, 0, sizeof(fram_buf2));
+		rc = i2c_write_read_dt(&fram_spec, fram_buf, 2U, fram_buf2, 32U);
+		if (rc != 0) {
+			LOG_ERR("FRAM read back of data error (%d)", rc);
+		} else {
+			LOG_INF("FRAM read back of data ok");
+			rc = memcmp((void *)&fram_buf[2], (void *)fram_buf2, 32U);
+			if (rc == 0) {
+				LOG_INF("Data compare: PASS");
+			} else {
+				LOG_ERR("Data mismatch: FAIL");
+			}
+		}
+
+		fram_buf[0] = 0x01U;
+		LOG_INF("Write 0x%02x to target at 0x%02x", fram_buf[0], TARGET_ADDR_1);
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 1U, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Write to target 1 error (%d)", rc);
+		}
+
+		fram_buf[4] = 0x02U;
+		LOG_INF("Write 0x%02x to target at 0x%02x", fram_buf[4], TARGET_ADDR_2);
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)&fram_buf[4], 1U, TARGET_ADDR_2);
+		if (rc != 0) {
+			LOG_ERR("Write to target 2 error (%d)", rc);
+		}
+
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
 		}
 
 		k_msleep(1000);
+	}
+
+	return 0;
+}
+
+int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_alg)
+{
+	if (buf == NULL) {
+		return -EINVAL;
+	}
+
+	if (buflen == 0) {
+		return 0;
+	}
+
+	switch (fill_alg) {
+	case BUF_FILL_ALG_VALUE:
+		memset((void *)buf, (int)val, buflen);
+		break;
+	case BUF_FILL_ALG_INCR:
+		for (size_t n = 0; n < buflen; n++) {
+			buf[n] = (uint8_t)(n % 256U);
+		}
+		break;
+	case BUF_FILL_ALG_DECR:
+		for (size_t n = 0; n < buflen; n++) {
+			buf[n] = (uint8_t)((buflen - n) % 256U);
+		}
+		break;
+	default:
+		return -EINVAL;
 	}
 
 	return 0;
