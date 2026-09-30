@@ -101,6 +101,7 @@ int main(void)
 	uint16_t cmd_status = 0;
 	uint8_t tag = 0;
 
+	/* 2026: mec1723 + Hal */
 	LOG_INF("MEC5 eSPI Host Controller emulation for board: %s", DT_N_COMPAT_MODEL_IDX_0);
 
 	ret = espi_hc_ctx_emu_init(&hc);
