@@ -11,6 +11,7 @@
 / {
 	aliases {
 		i2c-target-port = &i2c0_p0;
+		i2c-controller-port = &i2c1_p7;
 	};
 
 	/* Port 0 on I2C controller 0: targets and controller transfers share it */
@@ -27,6 +28,24 @@
 
 		pca9555_evb: pca9555@26 {
 			reg = <0x26>;
+			status = "okay";
+		};
+	};
+
+	/* Port 7 on I2C controller 1: controller mode */
+	i2c1_p7: i2c-port7 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <7>;
+		controller = <&i2c_smb_1>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		fram_evb: fram@50 {
+			reg = <0x50>;
 			status = "okay";
 		};
 	};
@@ -61,6 +80,31 @@
 };
 
 &i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+	dmas = <&dmac 2 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_CTRL>,
+	       <&dmac 3 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_TARG>;
+	dma-names = "host", "target";
+	/* Largest external write (register pointer + 256 data bytes), the START
+	 * address byte, and a RPT-START address byte.
+	 */
+	target-buffer-size = <259>;
+	default-port = <&i2c1_p7>;
+};
+
+&i2c07_sda_gpio012 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c07_scl_gpio013 {
 	drive-open-drain;
 	output-enable;
 	output-high;
