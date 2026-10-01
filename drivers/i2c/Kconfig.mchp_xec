@@ -65,3 +65,33 @@ config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
 	  RAM cost is this value times the number of instances. Capture
 	  stops when the buffer is full; size it for the longest
 	  transaction to be traced.
+
+# Each symbol below gates one bug fix, so a build machine can turn an individual fix
+# off and measure the behaviour it changed without hand editing the driver, and so the
+# configuration under test is recorded in the build's .config rather than being
+# invisible. They exist for that measurement only and are removed once it is done.
+# Every one of them defaults to the fixed behaviour: change one only for a deliberate
+# A/B test.
+
+config I2C_MCHP_XEC_NL_FIX_HOST_CMPL_MASK
+	bool "XEC I2C-NL host setup leaves the shared bus status alone"
+	default y
+	depends on I2C_MCHP_XEC_NL
+	help
+	  Clear only the host owned completion status before a host transfer while a
+	  target is registered, leaving the LAB, BER and time-out sources that report
+	  the bus rather than one state machine and that the target state machine reads.
+	  Set to n to clear the whole host mask from thread context, as the driver did
+	  before, which can discard the status of a target transaction in flight.
+
+config I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK
+	bool "XEC I2C-NL target recovers from a done with the machine still running"
+	default y
+	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	help
+	  Handle a target done interrupt that arrives with the target command register
+	  still showing run and proceed, by ending the transaction and arming the target
+	  again. Set to n to ignore it, as the driver did before, which strands the
+	  target with no interrupt left to recover on. Setting this to n also removes the
+	  state capture marker that records the branch, so the state is no longer visible
+	  in a trace.
