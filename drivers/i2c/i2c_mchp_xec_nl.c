@@ -227,6 +227,11 @@ struct xec_i2c_nl_data {
 
 	uint8_t active_port;
 	uint32_t active_freq;
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE
+	volatile uint32_t cap_idx;
+	volatile uint8_t capbuf[CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE];
+#endif
 };
 
 /* Port device configuration */
@@ -242,6 +247,29 @@ struct xec_i2c_nl_port_config {
 struct xec_i2c_nl_port_data {
 	uint32_t runtime_freq;
 };
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE
+static void xec_i2c_nl_state_cap_init(struct xec_i2c_nl_data *data)
+{
+	data->cap_idx = 0;
+	memset((void *)data->capbuf, 0, CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE);
+}
+
+static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t val)
+{
+	if (data->cap_idx >= CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE) {
+		return;
+	}
+
+	data->capbuf[data->cap_idx++] = val;
+}
+
+#define XEC_I2C_NL_STATE_CAP_INIT(data) xec_i2c_nl_state_cap_init(data)
+#define XEC_I2C_NL_STATE_CAP_UPDATE(data, val) xec_i2c_nl_state_cap_update(data, val)
+#else
+#define XEC_I2C_NL_STATE_CAP_INIT(data)
+#define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
+#endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
 static inline bool xec_i2c_is_valid_address(uint16_t i2c_address)
@@ -885,6 +913,8 @@ static void xec_i2c_nl_start_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 	unsigned int key = 0;
 	uint32_t hcmd = 0;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x12U);
+
 	/* Counts are 16-bit: bits[7:0] in HCMD, bits[15:8] in the extended length register
 	 * host half.
 	 */
@@ -899,6 +929,7 @@ static void xec_i2c_nl_start_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_HD_IEN_POS);
 	irq_unlock(key);
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x13U);
 	sys_write32(hcmd, rb + XEC_I2C_HCMD_OFS);
 }
 
@@ -907,6 +938,8 @@ static int xec_i2c_nl_req_start(const struct xec_i2c_nl_config *ctrl_cfg,
 				struct xec_i2c_nl_data *ctrl_data)
 {
 	int rc = 0;
+
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x10U);
 
 	k_sem_reset(&ctrl_data->xfr_done);
 	ctrl_data->xfr_err = 0;
@@ -917,6 +950,7 @@ static int xec_i2c_nl_req_start(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	rc = xec_i2c_nl_dma_start(ctrl_cfg, ctrl_data, false);
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x11U);
 		LOG_ERR("I2C-NL TX DMA start error (%d)", rc);
 		return rc;
 	}
@@ -933,11 +967,15 @@ static int xec_i2c_nl_xfr_one(const struct xec_i2c_nl_config *ctrl_cfg,
 	int rc = xec_i2c_nl_req_start(ctrl_cfg, ctrl_data);
 
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x14U);
 		return rc;
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x20U);
+
 	rc = k_sem_take(&ctrl_data->xfr_done, I2C_TRANSFER_TIMEOUT);
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x21U);
 		LOG_ERR("I2C-NL transfer timeout (%d): addr 0x%02x", ctrl_data->xfr_err,
 			ctrl_data->desc.addr);
 		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
@@ -946,11 +984,13 @@ static int xec_i2c_nl_xfr_one(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 
 	if (ctrl_data->xfr_reset) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x22U);
 		LOG_ERR("I2C-NL transfer error (%d): addr 0x%02x cmpl 0x%08x",
 			ctrl_data->xfr_err, ctrl_data->desc.addr, ctrl_data->xfr_cmpl);
 		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x23U);
 	return ctrl_data->xfr_err;
 }
 
@@ -1021,30 +1061,39 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 
 	k_sem_take(&ctrl_data->lock, K_FOREVER);
 
+	XEC_I2C_NL_STATE_CAP_INIT(ctrl_data);
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 1U);
+
 	rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 2U);
 		goto unlock;
 	}
 
 	/* Bus error or lost arbitration latched in the controller core */
 	if ((sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS) & XEC_I2C_NL_SR_ERR) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 3U);
 		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 4U);
 	for (idx = 0; idx < num_msgs; idx += n) {
 		n = xec_i2c_nl_req_len(&msgs[idx], num_msgs - idx);
 		rc = xec_i2c_nl_xfer_parse(&msgs[idx], n, i2c_address, &ctrl_data->desc);
 		if (rc != 0) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 5U);
 			break;
 		}
 
 		rc = xec_i2c_nl_xfr_one(ctrl_cfg, ctrl_data);
 		if (rc != 0) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 6U);
 			break;
 		}
 	}
 
 unlock:
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 7U);
 	k_sem_give(&ctrl_data->lock);
 
 	return rc;
@@ -1056,6 +1105,7 @@ unlock:
  */
 static void xec_i2c_nl_async_end(struct xec_i2c_nl_data *ctrl_data, int result)
 {
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA0U);
 	(void)k_timer_stop(&ctrl_data->async_timer);
 	ctrl_data->xfr_async = false;
 	ctrl_data->async_result = result;
@@ -1548,8 +1598,11 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	uintptr_t rb = ctrl_cfg->regbase;
 	uint32_t tcmd = 0;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x90U);
+
 	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) != 0U)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x91U);
 		xec_i2c_v3_cmpl_clear(rb, cmpl & XEC_I2C_NL_CMPL_TGT_STS);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
 
@@ -1557,8 +1610,10 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		if (((tcmd & BIT(XEC_I2C_TCMD_RUN_POS)) == 0U) ||
 		    ((cmpl & XEC_I2C_NL_CMPL_HOST_FATAL) != 0U) ||
 		    ((cmpl & BIT(XEC_I2C_CMPL_TNAKR_STS_POS)) != 0U)) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x92U);
 			xec_i2c_nl_tgt_done(ctrl_cfg, ctrl_data, cmpl);
 		} else if ((tcmd & BIT(XEC_I2C_TCMD_PROC_POS)) == 0U) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x93U);
 			xec_i2c_nl_tgt_pause(ctrl_cfg, ctrl_data);
 		}
 		return true;
@@ -1567,12 +1622,14 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	/* STOP detect: STS is read-only, so its interrupt enable is cleared instead */
 	if (((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) &&
 	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x94U);
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
 		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, -1, false);
 		return true;
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x95U);
 	return false;
 }
 
@@ -1780,6 +1837,8 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	bool handled = false;
 	int rc = 0;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
+
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
 	 */
@@ -1789,6 +1848,7 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 
 	if (((cfg & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0U)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x81U);
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
@@ -1799,32 +1859,40 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	if (((cfg & BIT(XEC_I2C_CFG_HD_IEN_POS)) == 0U) ||
 	    ((cmpl & BIT(XEC_I2C_CMPL_HDONE_POS)) == 0U)) {
 		/* No enabled host source is active */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x82U);
 		if (!handled) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x83U);
 			xec_i2c_nl_clear_girqs(ctrl_cfg);
 		}
 		return;
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x84U);
 	xec_i2c_v3_cmpl_clear(rb, cmpl & XEC_I2C_NL_CMPL_HOST_STS);
 	xec_i2c_nl_clear_girqs(ctrl_cfg);
 	hcmd = sys_read32(rb + XEC_I2C_HCMD_OFS);
 
 	if ((cmpl & XEC_I2C_NL_CMPL_HOST_FATAL) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x85U);
 		ctrl_data->xfr_err = -EIO;
 		ctrl_data->xfr_cmpl = cmpl;
 		ctrl_data->xfr_reset = true;
 	} else if ((cmpl & BIT(XEC_I2C_CMPL_HNAKX_POS)) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x86U);
 		ctrl_data->xfr_err = -ENXIO;
 		ctrl_data->xfr_cmpl = cmpl;
 	} else if ((hcmd & BIT(XEC_I2C_HCMD_PROC_POS)) != 0U) {
 		/* HPROCEED=1 with HDONE is not a valid host state */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x87U);
 		ctrl_data->xfr_err = -EIO;
 		ctrl_data->xfr_cmpl = cmpl;
 		ctrl_data->xfr_reset = true;
 	} else if ((hcmd & BIT(XEC_I2C_HCMD_RUN_POS)) != 0U) {
 		/* Write to read turn around */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x88U);
 		rc = xec_i2c_nl_dma_start(ctrl_cfg, ctrl_data, true);
 		if (rc == 0) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x89U);
 			sys_set_bit(rb + XEC_I2C_HCMD_OFS, XEC_I2C_HCMD_PROC_POS);
 			return;
 		}
@@ -1834,6 +1902,8 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	}
 
 	xec_i2c_nl_isr_finish(ctrl_cfg, ctrl_data, hcmd);
+
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x8FU);
 }
 
 /* With asynchronous transfers the handler runs with interrupts locked so it can not
