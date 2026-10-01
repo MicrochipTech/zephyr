@@ -1588,7 +1588,14 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 		reason = I2C_ERROR_SIZE;
 	}
 
-	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) != 0U) {
+	/* TTR reads 0 when the target finished the receive phase and 1 when it finished
+	 * the transmit phase. The I2C-SMB v3.8 data sheet documents TTR the other way
+	 * round, but that contradicts both the HTR description of the host state machine
+	 * in the same table and the vendor HAL, and state capture on MEC1753 shows TTR
+	 * clear at TDONE for an external write. Do not invert this test to match the
+	 * data sheet: doing so drops every write transaction.
+	 */
+	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) == 0U) {
 		/* Receive phase ended: a write transaction */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9AU);
 		rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
@@ -1601,7 +1608,9 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 			xec_i2c_nl_tgt_deliver(ctrl_data->tgt_active, &buf[off], rcvd - off);
 		}
 	} else if ((reason < 0) && ((cmpl & BIT(XEC_I2C_CMPL_TPROT_POS)) != 0U)) {
-		/* TPROT with the write count at 0: read beyond the data supplied */
+		/* Transmit phase ended: a read transaction. TPROT with the write
+		 * count at 0 means the external host read beyond the data supplied.
+		 */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9DU);
 		tx_left = XEC_I2C_TCMD_WCL_GET(sys_read32(rb + XEC_I2C_TCMD_OFS));
 		tx_left |= XEC_I2C_ELEN_TWR_GET(sys_read32(rb + XEC_I2C_ELEN_OFS)) << 8;
