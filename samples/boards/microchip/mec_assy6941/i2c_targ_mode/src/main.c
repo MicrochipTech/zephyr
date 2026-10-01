@@ -22,6 +22,8 @@
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/counter.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -151,6 +153,158 @@ static uint8_t fram_buf2[FRAM_BUF_LEN];
 
 int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_alg);
 
+#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
+
+#if DT_NODE_HAS_PROP(ZEPHYR_USER_NODE, fault_inject_gpios) &&                                      \
+	DT_NODE_HAS_PROP(ZEPHYR_USER_NODE, fault_inject_timer)
+#define FAULT_INJECT 1
+#endif
+
+#ifdef FAULT_INJECT
+/* Bus fault injection. A GPIO fly wired to the SDA line of the target port is pulled
+ * low part way through a long host transfer, so the controller reports a bus fault and
+ * the driver's error paths run on real hardware. See the board overlay for the wiring
+ * and for which pin to use.
+ */
+
+/* Offset into the FRAM and the data length of the transfer the fault lands inside. At
+ * the port's 100 kHz bit rate the 2 offset bytes, 32 data bytes and the addressing take
+ * about 3.2 ms, so the one-shot below has a wide window to fire in.
+ */
+#define FAULT_FRAM_OFFSET_MSB 0x02U
+#define FAULT_FRAM_OFFSET_LSB 0x20U
+#define FAULT_DATA_LEN        32U
+
+/* Delay from arming the one-shot to the pull. Comfortably inside the transfer. */
+#define FAULT_DELAY_US 1000U
+
+/* How long SDA is held low. Longer than the 10 us SCL period at 100 kHz, so the pull
+ * necessarily spans an SCL high phase. A shorter pull can fall entirely within an SCL
+ * low phase, where it reads as a data bit rather than a protocol violation.
+ */
+#define FAULT_LOW_US 25U
+
+static const struct gpio_dt_spec fault_pin =
+	GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, fault_inject_gpios);
+static const struct device *const fault_timer =
+	DEVICE_DT_GET(DT_PHANDLE(ZEPHYR_USER_NODE, fault_inject_timer));
+
+static uint8_t fault_buf[2U + FAULT_DATA_LEN];
+static atomic_t fault_fired;
+
+/* Counter callback, ISR context. The pull is released here rather than from the thread
+ * after the transfer returns: the driver's bus recovery clocks SCL and checks SDA, so a
+ * line still held low would turn the fault into a wedged bus and recovery would fail.
+ *
+ * The release is a busy wait because this basic timer reports a single alarm channel, so
+ * a second alarm cannot be scheduled to do it. A few tens of microseconds in an ISR is
+ * acceptable in a test, not in a driver.
+ */
+static void fault_inject_cb(const struct device *dev, uint8_t chan_id, uint32_t ticks,
+			    void *user_data)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(chan_id);
+	ARG_UNUSED(ticks);
+	ARG_UNUSED(user_data);
+
+	(void)gpio_pin_set_dt(&fault_pin, 0);
+	k_busy_wait(FAULT_LOW_US);
+	(void)gpio_pin_set_dt(&fault_pin, 1);
+
+	atomic_set(&fault_fired, 1);
+}
+
+static int fault_inject_init(void)
+{
+	int rc = 0;
+
+	if (!gpio_is_ready_dt(&fault_pin)) {
+		LOG_ERR("Fault injection GPIO device is not ready");
+		return -ENODEV;
+	}
+
+	if (!device_is_ready(fault_timer)) {
+		LOG_ERR("Fault injection counter device is not ready");
+		return -ENODEV;
+	}
+
+	/* Open drain driven high is the released state: SDA is left to the bus pull-up */
+	rc = gpio_pin_configure_dt(&fault_pin, GPIO_OUTPUT_HIGH);
+	if (rc != 0) {
+		LOG_ERR("Fault injection GPIO configure error (%d)", rc);
+		return rc;
+	}
+
+	rc = counter_start(fault_timer);
+	if (rc != 0) {
+		LOG_ERR("Fault injection counter start error (%d)", rc);
+		return rc;
+	}
+
+	LOG_INF("Fault injection armed on %s pin %u, timer %s", fault_pin.port->name,
+		fault_pin.pin, fault_timer->name);
+
+	return 0;
+}
+
+static void fault_inject_test(void)
+{
+	struct counter_alarm_cfg alarm = {
+		.callback = fault_inject_cb,
+		.user_data = NULL,
+		.flags = 0U,
+	};
+	int rc = 0;
+
+	fault_buf[0] = FAULT_FRAM_OFFSET_MSB;
+	fault_buf[1] = FAULT_FRAM_OFFSET_LSB;
+	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
+
+	alarm.ticks = counter_us_to_ticks(fault_timer, FAULT_DELAY_US);
+	atomic_set(&fault_fired, 0);
+
+	rc = counter_set_channel_alarm(fault_timer, 0, &alarm);
+	if (rc != 0) {
+		LOG_ERR("Fault injection alarm error (%d)", rc);
+		return;
+	}
+
+	rc = i2c_write_dt(&fram_spec, fault_buf, sizeof(fault_buf));
+
+	if (atomic_get(&fault_fired) == 0) {
+		LOG_WRN("Fault injection did not fire inside the transfer (rc %d)", rc);
+		(void)counter_cancel_channel_alarm(fault_timer, 0);
+		return;
+	}
+
+	/* The driver reports an arbitration loss, a bus error and a time-out as -EIO */
+	if (rc == -EIO) {
+		LOG_INF("Fault injection: transfer failed with -EIO, as expected");
+	} else if (rc == 0) {
+		LOG_INF("Fault injection: transfer completed, no fault seen. Either the "
+			"fly wire is not fitted or the pull missed an SCL high phase");
+	} else {
+		LOG_WRN("Fault injection: transfer failed with %d, expected -EIO", rc);
+	}
+
+	/* The aborted transfer can leave the addressed device holding SDA */
+	rc = i2c_recover_bus(fram_spec.bus);
+	if (rc != 0) {
+		LOG_ERR("Bus recovery after fault injection error (%d)", rc);
+	}
+}
+#else
+static int fault_inject_init(void)
+{
+	return 0;
+}
+
+static void fault_inject_test(void)
+{
+}
+#endif /* FAULT_INJECT */
+
 int main(void)
 {
 	uint64_t loop_count = 0;
@@ -186,6 +340,11 @@ int main(void)
 	}
 
 	LOG_INF("Targets 0x%02x and 0x%02x registered", TARGET_ADDR_1, TARGET_ADDR_2);
+
+	rc = fault_inject_init();
+	if (rc != 0) {
+		LOG_WRN("Fault injection unavailable (%d), continuing without it", rc);
+	}
 
 	while (true) {
 		rc = i2c_write_read_dt(&pca9555, &cmd, 1U, port0, sizeof(port0));
@@ -266,6 +425,8 @@ int main(void)
 		} else {
 			LOG_HEXDUMP_INF(fram_buf2, 4, "Read back data");
 		}
+
+		fault_inject_test();
 
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
