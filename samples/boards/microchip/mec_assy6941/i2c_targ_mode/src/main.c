@@ -153,6 +153,7 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
 
 int main(void)
 {
+	uint64_t loop_count = 0;
 	uint8_t cmd = PCA9555_CMD_PORT0_IN;
 	uint8_t port0[2] = {0};
 	int rc = 0;
@@ -244,9 +245,34 @@ int main(void)
 			LOG_ERR("Write to target 2 error (%d)", rc);
 		}
 
+		fram_buf[0] = 0x30;
+		fram_buf[1] = 0x31;
+		fram_buf[2] = 0x32;
+		fram_buf[3] = 0x33;
+		LOG_HEXDUMP_INF(fram_buf, 4, "Write this to TARGET_ADDR_1");
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 4U, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Write to target 1 error (%d)", rc);
+		}
+
+		fram_buf2[0] = 0xAAU;
+		fram_buf2[1] = 0xAAU;
+		fram_buf2[2] = 0xAAU;
+		fram_buf2[3] = 0xAAU;
+		LOG_INF("Read 4 bytes from target at 0x%02x", TARGET_ADDR_1);
+		rc = i2c_read(fram_spec.bus, fram_buf2, 4U, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Read from target 1 error (%d)", rc);
+		} else {
+			LOG_HEXDUMP_INF(fram_buf2, 4, "Read back data");
+		}
+
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
 		}
+
+		loop_count++;
+		LOG_INF("Loop count = %llu", loop_count);
 
 		k_msleep(1000);
 	}
