@@ -1360,6 +1360,8 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	uint32_t oa = 0;
 	int rc = 0;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x32U);
+
 	for (size_t i = 0; i < ARRAY_SIZE(ctrl_data->tgt_cfg); i++) {
 		if (ctrl_data->tgt_cfg[i] != NULL) {
 			oa |= XEC_I2C_OA_SET(i, ctrl_data->tgt_cfg[i]->address);
@@ -1372,15 +1374,19 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_TGT);
 	xec_i2c_v3_cmpl_clear(rb, XEC_I2C_NL_CMPL_TGT_STS);
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x33U);
+
 	ctrl_data->tgt_active = NULL;
 	ctrl_data->tgt_rx_off = 1U;
 
 	rc = xec_i2c_nl_tgt_rx_start(ctrl_cfg, ctrl_data);
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x34U);
 		LOG_ERR("I2C-NL target RX DMA start error (%d)", rc);
 		return;
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x35U);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
 		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
@@ -1392,7 +1398,10 @@ static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
 {
 	unsigned int key = 0;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x30U);
+
 	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x31U);
 		return;
 	}
 
@@ -1431,24 +1440,31 @@ static void xec_i2c_nl_tgt_end(const struct xec_i2c_nl_config *ctrl_cfg,
 	struct i2c_target_config *tgt = ctrl_data->tgt_active;
 	uintptr_t rb = ctrl_cfg->regbase;
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB0U);
+
 	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
 	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 
 	if (tgt != NULL) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB1U);
 		if ((reason >= 0) && (tgt->callbacks->error != NULL)) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB2U);
 			tgt->callbacks->error(tgt, (enum i2c_error_reason)reason);
 		}
 		if (tgt->callbacks->stop != NULL) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB3U);
 			(void)tgt->callbacks->stop(tgt);
 		}
 	}
 
 	if (reset && (sys_test_bit(rb + XEC_I2C_HCMD_OFS, XEC_I2C_HCMD_RUN_POS) == 0)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB4U);
 		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
 					      ctrl_data->active_port);
 		return;
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB5U);
 	xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
 }
 
@@ -1555,37 +1571,47 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	bool reset = false;
 
 	if ((cmpl & BIT(XEC_I2C_CMPL_LAB_STS_POS)) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x96U);
 		reason = I2C_ERROR_ARBITRATION;
 		reset = true;
 	} else if ((cmpl & BIT(XEC_I2C_CMPL_BER_STS_POS)) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x97U);
 		reason = I2C_ERROR_GENERIC;
 		reset = true;
 	} else if ((cmpl & BIT(XEC_I2C_CMPL_TMO_STS_POS)) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x98U);
 		reason = I2C_ERROR_TIMEOUT;
 		reset = true;
 	} else if ((cmpl & BIT(XEC_I2C_CMPL_TNAKR_STS_POS)) != 0U) {
 		/* Receive overflow NACKed by hardware: drop the data */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x99U);
 		reason = I2C_ERROR_SIZE;
 	}
 
 	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) != 0U) {
 		/* Receive phase ended: a write transaction */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9AU);
 		rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
 		if ((off != 0U) && (rcvd != 0U)) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9BU);
 			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
 		}
 		if ((reason < 0) && (rcvd > off)) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9CU);
 			xec_i2c_nl_tgt_deliver(ctrl_data->tgt_active, &buf[off], rcvd - off);
 		}
 	} else if ((reason < 0) && ((cmpl & BIT(XEC_I2C_CMPL_TPROT_POS)) != 0U)) {
 		/* TPROT with the write count at 0: read beyond the data supplied */
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9DU);
 		tx_left = XEC_I2C_TCMD_WCL_GET(sys_read32(rb + XEC_I2C_TCMD_OFS));
 		tx_left |= XEC_I2C_ELEN_TWR_GET(sys_read32(rb + XEC_I2C_ELEN_OFS)) << 8;
 		if (tx_left == 0U) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9EU);
 			reason = I2C_ERROR_SIZE;
 		}
 	}
 
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9FU);
 	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, reason, reset);
 }
 
