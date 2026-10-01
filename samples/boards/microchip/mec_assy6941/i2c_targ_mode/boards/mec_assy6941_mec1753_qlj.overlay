@@ -6,9 +6,35 @@
 /* mec_assy6941 EVB with mec1753_qlj */
 
 #include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 
 / {
+	zephyr,user {
+		/* Bus fault injection for the error paths of the I2C-NL driver.
+		 *
+		 * Fly wire fault-inject-gpios to the SDA line of port 0, the same net as
+		 * i2c00_sda_gpio003. The sample pulls it low part way through a long host
+		 * transfer, which the controller reports as an arbitration loss or a bus
+		 * error depending on where the pull lands against SCL.
+		 *
+		 * GPIO050 (bank 1 pin 8: octal pin number 050 is 40, bank 40 / 32, pin
+		 * 40 % 32) is a placeholder. Check the EVB schematic that the pin is free
+		 * and brought out to a header before wiring anything to it, and change
+		 * the entry here if it is not. Open drain so the pin only ever sinks:
+		 * driving a push-pull high onto SDA would fight the bus.
+		 *
+		 * Without the wire fitted the sample still builds and runs, and reports
+		 * that no fault was seen.
+		 */
+		fault-inject-gpios = <&gpio_040_076 8 GPIO_OPEN_DRAIN>;
+
+		/* 32-bit basic timer. timer0 to timer3 are 16 bit and at 48 MHz reach
+		 * only 1.365 ms, shorter than the transfer the fault lands inside.
+		 */
+		fault-inject-timer = <&timer5>;
+	};
+
 	aliases {
 		i2c-target-port = &i2c0_p0;
 		i2c-controller-port = &i2c1_p7;
@@ -108,4 +134,9 @@
 	drive-open-drain;
 	output-enable;
 	output-high;
+};
+
+/* 32-bit basic timer used to time the bus fault injection */
+&timer5 {
+	status = "okay";
 };
