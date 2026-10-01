@@ -27,12 +27,12 @@
 		 * Without the wire fitted the sample still builds and runs, and reports
 		 * that no fault was seen.
 		 */
-		fault-inject-gpios = <&gpio_040_076 8 GPIO_OPEN_DRAIN>;
+		fault-inject-gpios = <MCHP_GPIO_DECODE_050 GPIO_OPEN_DRAIN>;
 
 		/* 32-bit basic timer. timer0 to timer3 are 16 bit and at 48 MHz reach
 		 * only 1.365 ms, shorter than the transfer the fault lands inside.
 		 */
-		fault-inject-timer = <&timer5>;
+		fault-inject-timer = <&timer4>;
 	};
 
 	aliases {
@@ -137,6 +137,6 @@
 };
 
 /* 32-bit basic timer used to time the bus fault injection */
-&timer5 {
+&timer4 {
 	status = "okay";
 };
