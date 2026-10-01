@@ -239,6 +239,25 @@ struct xec_i2c_nl_data {
 #ifdef CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE
 	volatile uint32_t cap_idx;
 	volatile uint8_t capbuf[CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE];
+
+	/* Event counters. The capture buffer is reset at the start of every host
+	 * transfer, so it only ever holds the most recent one and a rare event is
+	 * erased by the traffic that follows it. These are never reset, so they
+	 * still read correctly at the end of a long run. All are written from the
+	 * ISR only.
+	 *
+	 * cnt_tgt_done     target transactions completed, the denominator for the
+	 *                  rest
+	 * cnt_tgt_err      of those, the ones that reported an error reason
+	 * cnt_tgt_stuck    target done seen with the state machine still running
+	 *                  and proceeding, counted whether or not the recovery for
+	 *                  it is enabled
+	 * cnt_isr_unclaimed  controller interrupts the target half did not claim
+	 */
+	volatile uint32_t cnt_tgt_done;
+	volatile uint32_t cnt_tgt_err;
+	volatile uint32_t cnt_tgt_stuck;
+	volatile uint32_t cnt_isr_unclaimed;
 #endif
 };
 
@@ -274,9 +293,12 @@ static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t va
 
 #define XEC_I2C_NL_STATE_CAP_INIT(data) xec_i2c_nl_state_cap_init(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val) xec_i2c_nl_state_cap_update(data, val)
+/* Counter increments are not reset by XEC_I2C_NL_STATE_CAP_INIT() on purpose */
+#define XEC_I2C_NL_CNT_INC(data, member) ((data)->member++)
 #else
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
+#define XEC_I2C_NL_CNT_INC(data, member)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -1464,6 +1486,10 @@ static void xec_i2c_nl_tgt_end(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB0U);
 
+	if (reason >= 0) {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_err);
+	}
+
 	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
 	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 
@@ -1592,6 +1618,8 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	int reason = -1;
 	bool reset = false;
 
+	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_done);
+
 	if ((cmpl & BIT(XEC_I2C_CMPL_LAB_STS_POS)) != 0U) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x96U);
 		reason = I2C_ERROR_ARBITRATION;
@@ -1672,7 +1700,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		} else if ((tcmd & BIT(XEC_I2C_TCMD_PROC_POS)) == 0U) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x93U);
 			xec_i2c_nl_tgt_pause(ctrl_cfg, ctrl_data);
-		} else if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK)) {
+		} else {
 			/* TDONE with the state machine left running and proceeding.
 			 * Hardware clears the RUN bit when a target transaction
 			 * completes and PROCEED when it pauses, so this combination
@@ -1680,10 +1708,18 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 			 * The status and the GIRQs are already cleared, so returning
 			 * without acting would strand the target with no further
 			 * interrupt to recover on. Put it back to a known armed state.
+			 *
+			 * The state is recorded whether or not the recovery is enabled,
+			 * so turning the recovery off to measure what it changes does
+			 * not also hide the state it recovers from.
 			 */
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA1U);
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_stuck);
 			LOG_ERR("I2C-NL target done with TCMD still running (0x%08x)", tcmd);
-			xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
+			if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK)) {
+				xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC,
+						   false);
+			}
 		}
 		return true;
 	}
@@ -1699,6 +1735,8 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x95U);
+	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
+
 	return false;
 }
 
