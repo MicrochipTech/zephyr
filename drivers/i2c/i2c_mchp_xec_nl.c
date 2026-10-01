@@ -58,6 +58,14 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 	 BIT(XEC_I2C_CMPL_TCTO_STS_POS) | BIT(XEC_I2C_CMPL_HCTO_STS_POS) |                         \
 	 BIT(XEC_I2C_CMPL_DTS_STS_POS))
 
+/* Completion register status bits of a host transaction that no other state machine
+ * reports into. The rest of XEC_I2C_NL_CMPL_HOST_STS describes the bus and is shared
+ * with the target state machine.
+ */
+#define XEC_I2C_NL_CMPL_HOST_OWNED                                                                 \
+	(BIT(XEC_I2C_CMPL_HDONE_POS) | BIT(XEC_I2C_CMPL_HNAKX_POS) |                               \
+	 BIT(XEC_I2C_CMPL_IDLE_POS))
+
 /* Completion register errors that end a host transaction and require a controller reset */
 #define XEC_I2C_NL_CMPL_HOST_FATAL                                                                 \
 	(BIT(XEC_I2C_CMPL_LAB_STS_POS) | BIT(XEC_I2C_CMPL_BER_STS_POS) |                           \
@@ -891,12 +899,25 @@ static void xec_i2c_nl_reset(const struct xec_i2c_nl_config *ctrl_cfg,
  * is empty. Interrupts are locked: the target ISR also updates the configuration
  * register.
  */
-static void xec_i2c_nl_prep_hw(const struct xec_i2c_nl_config *ctrl_cfg)
+static void xec_i2c_nl_prep_hw(const struct xec_i2c_nl_config *ctrl_cfg,
+			       struct xec_i2c_nl_data *ctrl_data)
 {
 	uintptr_t rb = ctrl_cfg->regbase;
+	uint32_t bits = XEC_I2C_NL_CMPL_HOST_OWNED;
 	unsigned int key = irq_lock();
 
-	xec_i2c_v3_cmpl_clear(rb, XEC_I2C_NL_CMPL_HOST_STS | BIT(XEC_I2C_CMPL_IDLE_POS));
+	/* LAB, BER and the time-out sources behind TMO_STS report the bus, not one state
+	 * machine, and xec_i2c_nl_tgt_done() reads them. This runs in thread context, so
+	 * clearing them here would discard the status of a target transaction already in
+	 * flight on the port the targets share with the host. Clear them only when no
+	 * target is registered; otherwise rely on the host ISR clearing the status it
+	 * observed in its own snapshot.
+	 */
+	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
+		bits |= XEC_I2C_NL_CMPL_HOST_STS;
+	}
+
+	xec_i2c_v3_cmpl_clear(rb, bits);
 	sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_HOST);
 	xec_i2c_nl_clear_girqs(ctrl_cfg);
 	irq_unlock(key);
@@ -946,7 +967,7 @@ static int xec_i2c_nl_req_start(const struct xec_i2c_nl_config *ctrl_cfg,
 	ctrl_data->xfr_cmpl = 0U;
 	ctrl_data->xfr_reset = false;
 
-	xec_i2c_nl_prep_hw(ctrl_cfg);
+	xec_i2c_nl_prep_hw(ctrl_cfg, ctrl_data);
 
 	rc = xec_i2c_nl_dma_start(ctrl_cfg, ctrl_data, false);
 	if (rc != 0) {
