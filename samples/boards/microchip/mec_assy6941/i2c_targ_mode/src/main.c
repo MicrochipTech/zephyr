@@ -220,6 +220,16 @@ int main(void)
 			}
 		}
 
+		fram_buf2[0] = 0x11U;
+		fram_buf2[1] = 0x22U;
+		LOG_INF("Read 2 bytes from target at 0x%02x", TARGET_ADDR_1);
+		rc = i2c_read(fram_spec.bus, fram_buf2, 2U, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Read from target 1 error (%d)", rc);
+		} else {
+			LOG_INF("Read data = 0x%02x, 0x%02x", fram_buf2[0], fram_buf2[1]);
+		}
+
 		fram_buf[0] = 0x01U;
 		LOG_INF("Write 0x%02x to target at 0x%02x", fram_buf[0], TARGET_ADDR_1);
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 1U, TARGET_ADDR_1);
