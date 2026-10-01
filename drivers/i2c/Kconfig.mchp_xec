@@ -46,3 +46,18 @@ config I2C_MCHP_XEC_NL_PORT_SETTLE_US
 	  selected port, or after a controller reset, so the controller can
 	  sample the port's SCL and SDA before a transaction starts. The
 	  wait is done only in thread context.
+
+config I2C_MCHP_XEC_NL_STATE_CAPTURE
+	bool "XEC I2C-NL state capture enable"
+	depends on I2C_MCHP_XEC_NL
+	help
+	  Enable the I2C-NL driver to capture state into
+	  a driver buffer.
+
+config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
+	int "XEC I2C-NL state capture buffer size"
+	default 256
+	depends on I2C_MCHP_XEC_NL_STATE_CAPTURE
+	help
+	  State capture buffer size in bytes.
+	  Default is 256.
