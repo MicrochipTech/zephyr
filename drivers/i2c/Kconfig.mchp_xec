@@ -52,7 +52,11 @@ config I2C_MCHP_XEC_NL_STATE_CAPTURE
 	depends on I2C_MCHP_XEC_NL
 	help
 	  Enable the I2C-NL driver to capture state into
-	  a driver buffer.
+	  a driver buffer, and to keep event counters alongside it. The buffer is
+	  reset at the start of every host transfer and so holds only the most
+	  recent one; the counters are never reset and so still read correctly
+	  after a long run. Both are read from the driver data of a controller
+	  instance.
 
 config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
 	int "XEC I2C-NL state capture buffer size"
