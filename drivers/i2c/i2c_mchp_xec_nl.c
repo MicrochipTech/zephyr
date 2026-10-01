@@ -913,7 +913,8 @@ static void xec_i2c_nl_prep_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * target is registered; otherwise rely on the host ISR clearing the status it
 	 * observed in its own snapshot.
 	 */
-	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
+	if (!IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_FIX_HOST_CMPL_MASK) ||
+	    !xec_i2c_nl_tgt_registered(ctrl_data)) {
 		bits |= XEC_I2C_NL_CMPL_HOST_STS;
 	}
 
@@ -1671,7 +1672,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		} else if ((tcmd & BIT(XEC_I2C_TCMD_PROC_POS)) == 0U) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x93U);
 			xec_i2c_nl_tgt_pause(ctrl_cfg, ctrl_data);
-		} else {
+		} else if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK)) {
 			/* TDONE with the state machine left running and proceeding.
 			 * Hardware clears the RUN bit when a target transaction
 			 * completes and PROCEED when it pauses, so this combination
