@@ -1671,6 +1671,18 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		} else if ((tcmd & BIT(XEC_I2C_TCMD_PROC_POS)) == 0U) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x93U);
 			xec_i2c_nl_tgt_pause(ctrl_cfg, ctrl_data);
+		} else {
+			/* TDONE with the state machine left running and proceeding.
+			 * Hardware clears the RUN bit when a target transaction
+			 * completes and PROCEED when it pauses, so this combination
+			 * should not occur.
+			 * The status and the GIRQs are already cleared, so returning
+			 * without acting would strand the target with no further
+			 * interrupt to recover on. Put it back to a known armed state.
+			 */
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA1U);
+			LOG_ERR("I2C-NL target done with TCMD still running (0x%08x)", tcmd);
+			xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
 		}
 		return true;
 	}
