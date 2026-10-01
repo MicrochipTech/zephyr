@@ -167,13 +167,15 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
  * and for which pin to use.
  */
 
-/* Offset into the FRAM and the data length of the transfer the fault lands inside. At
- * the port's 100 kHz bit rate the 2 offset bytes, 32 data bytes and the addressing take
- * about 3.2 ms, so the one-shot below has a wide window to fire in.
+/* The transfer the fault lands inside: 2 header bytes and 32 data bytes. At the port's
+ * 100 kHz bit rate that plus the addressing takes about 3.2 ms, so the one-shot below has
+ * a wide window to fire in. The header is read by whatever is addressed: the FRAM takes
+ * the two bytes as a memory offset, and a register file target of this sample takes the
+ * first as its register pointer and the second as data.
  */
-#define FAULT_FRAM_OFFSET_MSB 0x02U
-#define FAULT_FRAM_OFFSET_LSB 0x20U
-#define FAULT_DATA_LEN        32U
+#define FAULT_HDR_BYTE0 0x02U
+#define FAULT_HDR_BYTE1 0x20U
+#define FAULT_DATA_LEN  32U
 
 /* Delay from arming the one-shot to the pull. Comfortably inside the transfer. */
 #define FAULT_DELAY_US 1000U
@@ -248,7 +250,19 @@ static int fault_inject_init(void)
 	return 0;
 }
 
-static void fault_inject_test(void)
+/* Write to i2c_addr on i2c_port_dev with a bus fault injected part way through.
+ *
+ * Addressing a device outside the SoC, such as the EVB FRAM, faults a transfer that only
+ * the host state machine of i2c_port_dev is running, so the host error paths are what
+ * report it.
+ *
+ * Addressing a target this sample registered faults a transfer that a target state
+ * machine is servicing at the same time, because the port the targets listen on and the
+ * port this writes from are the same bus. Both roles then report the fault, from their own
+ * halves of the completion register, and the error reaches the target error callback. The
+ * target counters logged each loop show whether it did.
+ */
+static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr)
 {
 	struct counter_alarm_cfg alarm = {
 		.callback = fault_inject_cb,
@@ -257,8 +271,8 @@ static void fault_inject_test(void)
 	};
 	int rc = 0;
 
-	fault_buf[0] = FAULT_FRAM_OFFSET_MSB;
-	fault_buf[1] = FAULT_FRAM_OFFSET_LSB;
+	fault_buf[0] = FAULT_HDR_BYTE0;
+	fault_buf[1] = FAULT_HDR_BYTE1;
 	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
 
 	alarm.ticks = counter_us_to_ticks(fault_timer, FAULT_DELAY_US);
@@ -270,26 +284,29 @@ static void fault_inject_test(void)
 		return;
 	}
 
-	rc = i2c_write_dt(&fram_spec, fault_buf, sizeof(fault_buf));
+	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
 
 	if (atomic_get(&fault_fired) == 0) {
-		LOG_WRN("Fault injection did not fire inside the transfer (rc %d)", rc);
+		LOG_WRN("Fault injection to 0x%02x did not fire inside the transfer (rc %d)",
+			i2c_addr, rc);
 		(void)counter_cancel_channel_alarm(fault_timer, 0);
 		return;
 	}
 
 	/* The driver reports an arbitration loss, a bus error and a time-out as -EIO */
 	if (rc == -EIO) {
-		LOG_INF("Fault injection: transfer failed with -EIO, as expected");
+		LOG_INF("Fault injection to 0x%02x: failed with -EIO, as expected", i2c_addr);
 	} else if (rc == 0) {
-		LOG_INF("Fault injection: transfer completed, no fault seen. Either the "
-			"fly wire is not fitted or the pull missed an SCL high phase");
+		LOG_INF("Fault injection to 0x%02x: completed, no fault seen. Either the "
+			"fly wire is not fitted or the pull missed an SCL high phase",
+			i2c_addr);
 	} else {
-		LOG_WRN("Fault injection: transfer failed with %d, expected -EIO", rc);
+		LOG_WRN("Fault injection to 0x%02x: failed with %d, expected -EIO", i2c_addr,
+			rc);
 	}
 
 	/* The aborted transfer can leave the addressed device holding SDA */
-	rc = i2c_recover_bus(fram_spec.bus);
+	rc = i2c_recover_bus(i2c_port_dev);
 	if (rc != 0) {
 		LOG_ERR("Bus recovery after fault injection error (%d)", rc);
 	}
@@ -300,8 +317,10 @@ static int fault_inject_init(void)
 	return 0;
 }
 
-static void fault_inject_test(void)
+static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr)
 {
+	ARG_UNUSED(i2c_port_dev);
+	ARG_UNUSED(i2c_addr);
 }
 #endif /* FAULT_INJECT */
 
@@ -426,7 +445,13 @@ int main(void)
 			LOG_HEXDUMP_INF(fram_buf2, 4, "Read back data");
 		}
 
-		fault_inject_test();
+		/* Controller role: the fault hits a transfer to a device outside the SoC */
+		fault_inject_test(fram_spec.bus, fram_spec.addr);
+
+		/* Target role: the fault hits a transfer one of our own targets is
+		 * servicing, so the target error paths report it too
+		 */
+		fault_inject_test(fram_spec.bus, TARGET_ADDR_1);
 
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
