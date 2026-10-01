@@ -57,7 +57,11 @@ config I2C_MCHP_XEC_NL_STATE_CAPTURE
 config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
 	int "XEC I2C-NL state capture buffer size"
 	default 256
+	range 16 4096
 	depends on I2C_MCHP_XEC_NL_STATE_CAPTURE
 	help
-	  State capture buffer size in bytes.
-	  Default is 256.
+	  State capture buffer size in bytes. The buffer is allocated in
+	  driver data for every enabled I2C-NL controller instance, so the
+	  RAM cost is this value times the number of instances. Capture
+	  stops when the buffer is full; size it for the longest
+	  transaction to be traced.
