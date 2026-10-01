@@ -177,8 +177,21 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
 #define FAULT_HDR_BYTE1 0x20U
 #define FAULT_DATA_LEN  32U
 
-/* Delay from arming the one-shot to the pull. Comfortably inside the transfer. */
-#define FAULT_DELAY_US 1000U
+/* Delay from arming the one-shot to the pull, swept over this range one step per call.
+ *
+ * A single delay has to be tuned to land inside the data phase, and what it has to clear
+ * is not fixed: the driver logs a failed transfer, recovers the bus and waits out the port
+ * settle time, so how long after arming a transfer actually starts varies. A pull before
+ * the START finds an idle bus and does nothing.
+ *
+ * Sweeping also walks the pull across SCL phases and past any stretch the addressed device
+ * inserts, so it does not depend on one window straddling an SCL high phase. The range
+ * covers an idle bus through the whole of a 3.2 ms transfer, so a fault lands within a few
+ * loops wherever the transfer sits.
+ */
+#define FAULT_DELAY_MIN_US  200U
+#define FAULT_DELAY_MAX_US  3000U
+#define FAULT_DELAY_STEP_US 200U
 
 /* How long SDA is held low. Longer than the 10 us SCL period at 100 kHz, so the pull
  * necessarily spans an SCL high phase. A shorter pull can fall entirely within an SCL
@@ -193,6 +206,7 @@ static const struct device *const fault_timer =
 
 static uint8_t fault_buf[2U + FAULT_DATA_LEN];
 static atomic_t fault_fired;
+static uint32_t fault_delay_us = FAULT_DELAY_MIN_US;
 
 /* Counter callback, ISR context. The pull is released here rather than from the thread
  * after the transfer returns: the driver's bus recovery clocks SCL and checks SDA, so a
@@ -269,14 +283,24 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 		.user_data = NULL,
 		.flags = 0U,
 	};
+	uint32_t delay_us = 0;
 	int rc = 0;
 
 	fault_buf[0] = FAULT_HDR_BYTE0;
 	fault_buf[1] = FAULT_HDR_BYTE1;
 	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
 
-	alarm.ticks = counter_us_to_ticks(fault_timer, FAULT_DELAY_US);
+	alarm.ticks = counter_us_to_ticks(fault_timer, fault_delay_us);
 	atomic_set(&fault_fired, 0);
+
+	/* Advance the sweep whatever this call does, so a delay that cannot produce a fault
+	 * is not retried forever
+	 */
+	delay_us = fault_delay_us;
+	fault_delay_us += FAULT_DELAY_STEP_US;
+	if (fault_delay_us > FAULT_DELAY_MAX_US) {
+		fault_delay_us = FAULT_DELAY_MIN_US;
+	}
 
 	rc = counter_set_channel_alarm(fault_timer, 0, &alarm);
 	if (rc != 0) {
@@ -287,22 +311,23 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
 
 	if (atomic_get(&fault_fired) == 0) {
-		LOG_WRN("Fault injection to 0x%02x did not fire inside the transfer (rc %d)",
-			i2c_addr, rc);
+		LOG_WRN("Fault injection to 0x%02x at %u us did not fire inside the transfer "
+			"(rc %d)", i2c_addr, delay_us, rc);
 		(void)counter_cancel_channel_alarm(fault_timer, 0);
 		return;
 	}
 
 	/* The driver reports an arbitration loss, a bus error and a time-out as -EIO */
 	if (rc == -EIO) {
-		LOG_INF("Fault injection to 0x%02x: failed with -EIO, as expected", i2c_addr);
+		LOG_INF("Fault injection to 0x%02x at %u us: failed with -EIO, as expected",
+			i2c_addr, delay_us);
 	} else if (rc == 0) {
-		LOG_INF("Fault injection to 0x%02x: completed, no fault seen. Either the "
-			"fly wire is not fitted or the pull missed an SCL high phase",
-			i2c_addr);
+		LOG_INF("Fault injection to 0x%02x at %u us: completed, no fault seen. The "
+			"pull landed on an idle bus, or on a low SDA with SCL held low",
+			i2c_addr, delay_us);
 	} else {
-		LOG_WRN("Fault injection to 0x%02x: failed with %d, expected -EIO", i2c_addr,
-			rc);
+		LOG_WRN("Fault injection to 0x%02x at %u us: failed with %d, expected -EIO",
+			i2c_addr, delay_us, rc);
 	}
 
 	/* The aborted transfer can leave the addressed device holding SDA */
