@@ -264,6 +264,44 @@ static int fault_inject_init(void)
 	return 0;
 }
 
+/* Hold SDA low across a whole transfer, from thread context, and report whether it
+ * failed. This takes the counter and the pull length out of the picture: it answers only
+ * whether driving the pin reaches the SDA line at all.
+ *
+ * A pass means the wiring and the pin are good and any later "no fault seen" is about when
+ * the pull lands or how long it lasts. A rc of 0 here means the pin is not reaching SDA,
+ * so check the fly wire, that the pin is free on this assembly, and that the port the
+ * transfer uses is the bus the wire is on.
+ *
+ * Any error is a pass. The driver may report the aborted transfer, or refuse to start one
+ * because SDA is already low, and either shows the line is being pulled.
+ */
+static void fault_inject_selftest(const struct device *i2c_port_dev, uint16_t i2c_addr)
+{
+	int rc = 0;
+
+	fault_buf[0] = FAULT_HDR_BYTE0;
+	fault_buf[1] = FAULT_HDR_BYTE1;
+	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
+
+	(void)gpio_pin_set_dt(&fault_pin, 0);
+	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
+	(void)gpio_pin_set_dt(&fault_pin, 1);
+
+	if (rc != 0) {
+		LOG_INF("Fault injection self test to 0x%02x: failed with %d, the pin reaches "
+			"SDA", i2c_addr, rc);
+	} else {
+		LOG_ERR("Fault injection self test to 0x%02x: transfer completed with SDA held "
+			"low. The pin is not reaching the SDA line of this port", i2c_addr);
+	}
+
+	rc = i2c_recover_bus(i2c_port_dev);
+	if (rc != 0) {
+		LOG_ERR("Bus recovery after fault injection self test error (%d)", rc);
+	}
+}
+
 /* Write to i2c_addr on i2c_port_dev with a bus fault injected part way through.
  *
  * Addressing a device outside the SoC, such as the EVB FRAM, faults a transfer that only
@@ -347,6 +385,12 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 	ARG_UNUSED(i2c_port_dev);
 	ARG_UNUSED(i2c_addr);
 }
+
+static void fault_inject_selftest(const struct device *i2c_port_dev, uint16_t i2c_addr)
+{
+	ARG_UNUSED(i2c_port_dev);
+	ARG_UNUSED(i2c_addr);
+}
 #endif /* FAULT_INJECT */
 
 int main(void)
@@ -388,6 +432,9 @@ int main(void)
 	rc = fault_inject_init();
 	if (rc != 0) {
 		LOG_WRN("Fault injection unavailable (%d), continuing without it", rc);
+	} else {
+		/* Prove the pin reaches SDA before reading anything into the timed runs */
+		fault_inject_selftest(fram_spec.bus, fram_spec.addr);
 	}
 
 	while (true) {
