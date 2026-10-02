@@ -256,11 +256,18 @@ struct xec_i2c_nl_data {
 	 *                  was armed and the hardware had not reported it done, that is
 	 *                  a target GIRQ with no target source behind it. Host
 	 *                  interrupts are not counted: they reach the same place.
+	 * cnt_tgt_stop_det  times the network layer STOP detect reported an
+	 *                  externally generated STOP. The hardware detects one only in
+	 *                  target mode, and older versions of this controller detected
+	 *                  it only while the target was receiving, so a zero here says
+	 *                  the enable the driver sets during a target transmit phase
+	 *                  never fires.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
 	volatile uint32_t cnt_tgt_stuck;
 	volatile uint32_t cnt_isr_unclaimed;
+	volatile uint32_t cnt_tgt_stop_det;
 #endif
 };
 
@@ -1756,6 +1763,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	if (((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) &&
 	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U)) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x94U);
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_stop_det);
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
 		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, -1, false);
