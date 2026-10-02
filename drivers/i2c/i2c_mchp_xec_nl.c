@@ -346,6 +346,20 @@ static inline bool xec_i2c_nl_is_tgt_addr(const struct xec_i2c_nl_data *ctrl_dat
  * RW1C status (IDLE, BER, ...) with RW enables (DTEN/HCEN/TCEN/BIDEN) in one
  * word, so a bare sys_write32 of a status constant would also write 0 into
  * those enables.
+ *
+ * Those four enables are left at their reset value of 0 and this driver never sets
+ * them. Do not enable them: the time-out hardware behind them was built for the
+ * original network layer, whose write and read counts were 8 bits, and it was not
+ * reworked when the Extended Length register widened those counts to 16. Using it
+ * means keeping Extended Length at 0, which caps a transfer at 254 bytes of data
+ * once the address bytes are taken out of the write count, and caps a target
+ * receive buffer at 255. This driver and its bindings are built for the 16-bit
+ * counts, and the i2c_targ_mode sample already asks for a 259 byte target buffer.
+ *
+ * The consequence is that TMO_STS never asserts, so the I2C_ERROR_TIMEOUT reason in
+ * xec_i2c_nl_tgt_done() and the TMO_STS bit in XEC_I2C_NL_CMPL_HOST_FATAL are
+ * unreachable. They are kept because the status is defined and a future part may
+ * fix the time-out hardware, not because they have been seen to happen.
  */
 static inline void xec_i2c_v3_cmpl_clear(uintptr_t base, uint32_t bits)
 {
