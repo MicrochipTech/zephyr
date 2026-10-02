@@ -439,17 +439,24 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 		return;
 	}
 
-	/* The driver reports an arbitration loss, a bus error and a time-out as -EIO */
-	if (rc == -EIO) {
-		LOG_INF("Fault injection to 0x%02x at %u us: failed with -EIO, as expected",
-			i2c_addr, delay_us);
+	/* A fault reaches the caller two ways. The driver reports an arbitration loss, a bus
+	 * error or a completion time-out as -EIO. A pull that stalls the transfer instead of
+	 * latching one of those leaves the request unfinished, and the transfer times out as
+	 * -ETIMEDOUT. Both are the test working.
+	 *
+	 * -ENXIO is not a fault: the address was NACKed, which happens when the target being
+	 * addressed is inside the controller reset that a previous fault triggered.
+	 */
+	if ((rc == -EIO) || (rc == -ETIMEDOUT)) {
+		LOG_INF("Fault injection to 0x%02x at %u us: faulted with %d, as expected",
+			i2c_addr, delay_us, rc);
 	} else if (rc == 0) {
 		LOG_INF("Fault injection to 0x%02x at %u us: completed, no fault seen. The "
 			"pull landed on an idle bus, or on a low SDA with SCL held low",
 			i2c_addr, delay_us);
 	} else {
-		LOG_WRN("Fault injection to 0x%02x at %u us: failed with %d, expected -EIO",
-			i2c_addr, delay_us, rc);
+		LOG_WRN("Fault injection to 0x%02x at %u us: failed with %d, which is not a "
+			"fault this test injects", i2c_addr, delay_us, rc);
 	}
 
 	/* The aborted transfer can leave the addressed device holding SDA */
