@@ -1105,7 +1105,9 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 
 	k_sem_take(&ctrl_data->lock, K_FOREVER);
 
-	XEC_I2C_NL_STATE_CAP_INIT(ctrl_data);
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_INIT_ON_XFR)) {
+		XEC_I2C_NL_STATE_CAP_INIT(ctrl_data);
+	}
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 1U);
 
 	rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
@@ -1290,13 +1292,20 @@ static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg
 		return -EWOULDBLOCK;
 	}
 
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STATE_CAPTURE_INIT_ON_XFR)) {
+		XEC_I2C_NL_STATE_CAP_INIT(ctrl_data);
+	}
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 8U);
+
 	rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
 	if (rc != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 9U);
 		goto unlock;
 	}
 
 	/* Bus error or lost arbitration latched in the controller core */
 	if ((sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS) & XEC_I2C_NL_SR_ERR) != 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x0AU);
 		xec_i2c_nl_reset(ctrl_cfg, ctrl_data);
 	}
 
@@ -1312,6 +1321,7 @@ static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg
 
 	rc = xec_i2c_nl_async_start_req(ctrl_cfg, ctrl_data);
 	if (rc == 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x0BU);
 		return 0;
 	}
 
@@ -1319,6 +1329,7 @@ static int xec_i2c_nl_vport_xfr_cb(const struct device *port_dev, struct i2c_msg
 	(void)k_timer_stop(&ctrl_data->async_timer);
 
 unlock:
+	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x0CU);
 	k_sem_give(&ctrl_data->lock);
 
 	return rc;
