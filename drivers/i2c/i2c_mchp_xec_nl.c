@@ -2069,6 +2069,12 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
 
+	uint8_t sr = sys_read8(rb + XEC_I2C_SR_OFS);
+
+	if ((sr & BIT(XEC_I2C_SR_STO_POS)) != 0) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x50U);
+	}
+
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
 	 */
