@@ -70,6 +70,15 @@ config I2C_MCHP_XEC_NL_STATE_CAPTURE_SIZE
 	  stops when the buffer is full; size it for the longest
 	  transaction to be traced.
 
+config I2C_MCHP_XEC_NL_STATE_CAPTURE_INIT_ON_XFR
+	bool "XEC I2C-NL state capture init on transfer start"
+	default y
+	depends on I2C_MCHP_XEC_NL_STATE_CAPTURE
+	help
+	  The default state capture feature will clear the capture
+	  index and zero out the capture buffer at in the transfer
+	  API calls. Target role is not affected.
+
 # Each symbol below gates one bug fix, so a build machine can turn an individual fix
 # off and measure the behaviour it changed without hand editing the driver, and so the
 # configuration under test is recorded in the build's .config rather than being
