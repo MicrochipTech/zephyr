@@ -37,6 +37,19 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define REG_FILE_SIZE 256U
 
+/* A run of ones in the register file, for a read that a bus fault is injected into.
+ *
+ * A target loses arbitration only while it is driving SDA high, so only a one bit it is
+ * transmitting can be pulled low to cause one. The rest of the file is initialised to the
+ * register index, which is about half zero bits, and a pull on a zero bit does nothing.
+ * Reading from here instead means every bit of the transmitted data can cause it.
+ *
+ * The range starts above everything the other tests touch: the first read uses 0x00, the
+ * four byte test 0x30, and the faulted write 0x02 onwards.
+ */
+#define FAULT_ONES_REG_OFFSET 0x80U
+#define FAULT_ONES_REG_LEN    64U
+
 #define PCA9555_CMD_PORT0_IN 0U
 
 #define TARGET_PORT_NODE DT_ALIAS(i2c_target_port)
@@ -127,6 +140,8 @@ static int reg_target_register(struct reg_target *t, uint16_t addr)
 		t->regs[i] = (uint8_t)i;
 	}
 
+	memset(&t->regs[FAULT_ONES_REG_OFFSET], 0xFF, FAULT_ONES_REG_LEN);
+
 	t->cfg.address = addr;
 	t->cfg.callbacks = &reg_target_callbacks;
 
@@ -188,6 +203,17 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
  * be inside the device.
  */
 #define FAULT_DATA_FILL 0xFFU
+
+/* Direction of the faulted transfer. A write faults the receive side of whatever is
+ * addressed, and for one of this sample's targets that is reported as a bus error: a
+ * receiving target is not driving SDA, so it cannot lose arbitration. A read faults the
+ * transmit side, where a target is driving, which is the only way to reach the lost
+ * arbitration branch of the driver's target error handling.
+ */
+enum fault_xfr_dir {
+	FAULT_XFR_WRITE = 0,
+	FAULT_XFR_READ,
+};
 #define FAULT_DATA_LEN  32U
 
 /* Delay from arming the one-shot to the pull, swept over this range one step per call.
@@ -381,17 +407,21 @@ static void fault_inject_selftest(const struct device *i2c_port_dev, uint16_t i2
  * halves of the completion register, and the error reaches the target error callback. The
  * target counters logged each loop show whether it did.
  */
-static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr)
+static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr,
+			      enum fault_xfr_dir dir)
 {
 	struct counter_alarm_cfg alarm = {
 		.callback = fault_inject_cb,
 		.user_data = NULL,
 		.flags = 0U,
 	};
+	const char *dirname = (dir == FAULT_XFR_READ) ? "read" : "write";
 	uint32_t delay_us = 0;
 	int rc = 0;
 
-	fault_fill_buf();
+	if (dir == FAULT_XFR_WRITE) {
+		fault_fill_buf();
+	}
 
 	alarm.ticks = counter_us_to_ticks(fault_timer, fault_delay_us);
 	atomic_set(&fault_fired, 0);
@@ -423,7 +453,11 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 		return;
 	}
 
-	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
+	if (dir == FAULT_XFR_READ) {
+		rc = i2c_read(i2c_port_dev, fault_buf, FAULT_DATA_LEN, i2c_addr);
+	} else {
+		rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
+	}
 
 #ifdef CONFIG_APP_FAULT_SYNC_START
 	/* The edge fires once per transfer, but disarm in case the transfer never
@@ -433,8 +467,8 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 #endif
 
 	if (atomic_get(&fault_fired) == 0) {
-		LOG_WRN("Fault injection to 0x%02x at %u us did not fire inside the transfer "
-			"(rc %d)", i2c_addr, delay_us, rc);
+		LOG_WRN("Fault injection %s to 0x%02x at %u us did not fire inside the "
+			"transfer (rc %d)", dirname, i2c_addr, delay_us, rc);
 		(void)counter_cancel_channel_alarm(fault_timer, 0);
 		return;
 	}
@@ -448,15 +482,15 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 	 * addressed is inside the controller reset that a previous fault triggered.
 	 */
 	if ((rc == -EIO) || (rc == -ETIMEDOUT)) {
-		LOG_INF("Fault injection to 0x%02x at %u us: faulted with %d, as expected",
-			i2c_addr, delay_us, rc);
+		LOG_INF("Fault injection %s to 0x%02x at %u us: faulted with %d, as "
+			"expected", dirname, i2c_addr, delay_us, rc);
 	} else if (rc == 0) {
-		LOG_INF("Fault injection to 0x%02x at %u us: completed, no fault seen. The "
-			"pull landed on an idle bus, or on a low SDA with SCL held low",
-			i2c_addr, delay_us);
+		LOG_INF("Fault injection %s to 0x%02x at %u us: completed, no fault seen. "
+			"The pull landed on an idle bus, or on a low SDA with SCL held "
+			"low", dirname, i2c_addr, delay_us);
 	} else {
-		LOG_WRN("Fault injection to 0x%02x at %u us: failed with %d, which is not a "
-			"fault this test injects", i2c_addr, delay_us, rc);
+		LOG_WRN("Fault injection %s to 0x%02x at %u us: failed with %d, which is "
+			"not a fault this test injects", dirname, i2c_addr, delay_us, rc);
 	}
 
 	/* The aborted transfer can leave the addressed device holding SDA */
@@ -471,10 +505,12 @@ static int fault_inject_init(void)
 	return 0;
 }
 
-static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr)
+static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_addr,
+			      enum fault_xfr_dir dir)
 {
 	ARG_UNUSED(i2c_port_dev);
 	ARG_UNUSED(i2c_addr);
+	ARG_UNUSED(dir);
 }
 
 static void fault_inject_selftest(const struct device *i2c_port_dev, uint16_t i2c_addr)
@@ -609,12 +645,26 @@ int main(void)
 		}
 
 		/* Controller role: the fault hits a transfer to a device outside the SoC */
-		fault_inject_test(fram_spec.bus, fram_spec.addr);
+		fault_inject_test(fram_spec.bus, fram_spec.addr, FAULT_XFR_WRITE);
 
-		/* Target role: the fault hits a transfer one of our own targets is
-		 * servicing, so the target error paths report it too
+		/* Target role, receive side. A receiving target is not driving SDA, so it
+		 * reports the fault as a bus error.
 		 */
-		fault_inject_test(fram_spec.bus, TARGET_ADDR_1);
+		fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_WRITE);
+
+		/* Target role, transmit side, where the target is driving SDA and so can
+		 * lose arbitration. Seek its register pointer to the run of ones first,
+		 * with a clean write, so every bit it transmits can be pulled low. A read
+		 * leaves the pointer at 0, so the seek is needed each time.
+		 */
+		fram_buf[0] = FAULT_ONES_REG_OFFSET;
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 1U, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Seek target 1 to 0x%02x error (%d)", FAULT_ONES_REG_OFFSET,
+				rc);
+		} else {
+			fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_READ);
+		}
 
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
