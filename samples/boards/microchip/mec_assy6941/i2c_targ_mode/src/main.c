@@ -67,6 +67,13 @@ struct reg_target {
 	atomic_t stops;
 	atomic_t errors;
 	atomic_t last_error;
+
+	/* Errors counted per i2c_error_reason. last_error only holds the most recent
+	 * one, so when a loop faults the target more than once it reports whichever
+	 * came last and the others cannot be seen at all. Counting each reason makes
+	 * the result independent of the order the tests run in.
+	 */
+	atomic_t err_reason[I2C_ERROR_GENERIC + 1];
 };
 
 static const struct device *const target_port = DEVICE_DT_GET(TARGET_PORT_NODE);
@@ -125,6 +132,10 @@ static void reg_target_error(struct i2c_target_config *cfg, enum i2c_error_reaso
 
 	atomic_set(&t->last_error, (atomic_val_t)reason);
 	atomic_inc(&t->errors);
+
+	if ((unsigned int)reason < ARRAY_SIZE(t->err_reason)) {
+		atomic_inc(&t->err_reason[reason]);
+	}
 }
 
 static const struct i2c_target_callbacks reg_target_callbacks = {
@@ -153,6 +164,16 @@ static void reg_target_log(const struct reg_target *t)
 	LOG_INF("target 0x%02x: writes %ld reads %ld stops %ld errors %ld (last %ld)",
 		t->cfg.address, atomic_get(&t->writes), atomic_get(&t->reads),
 		atomic_get(&t->stops), atomic_get(&t->errors), atomic_get(&t->last_error));
+
+	if (atomic_get(&t->errors) != 0) {
+		LOG_INF("target 0x%02x: timeout %ld arbitration %ld size %ld dma %ld "
+			"generic %ld", t->cfg.address,
+			atomic_get(&t->err_reason[I2C_ERROR_TIMEOUT]),
+			atomic_get(&t->err_reason[I2C_ERROR_ARBITRATION]),
+			atomic_get(&t->err_reason[I2C_ERROR_SIZE]),
+			atomic_get(&t->err_reason[I2C_ERROR_DMA]),
+			atomic_get(&t->err_reason[I2C_ERROR_GENERIC]));
+	}
 }
 
 enum buf_fill_alg {
