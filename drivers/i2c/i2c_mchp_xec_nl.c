@@ -252,7 +252,10 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_stuck    target done seen with the state machine still running
 	 *                  and proceeding, counted whether or not the recovery for
 	 *                  it is enabled
-	 * cnt_isr_unclaimed  controller interrupts the target half did not claim
+	 * cnt_isr_unclaimed  interrupts the target half did not claim while the target
+	 *                  was armed and the hardware had not reported it done, that is
+	 *                  a target GIRQ with no target source behind it. Host
+	 *                  interrupts are not counted: they reach the same place.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -1746,7 +1749,17 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x95U);
-	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
+
+	/* An interrupt the target half did not claim is only interesting when the target is
+	 * armed and the hardware did not report it done: that is a target GIRQ asserted with
+	 * no target source behind it. Every host interrupt also reaches here, and on a
+	 * controller with no target registered so does every interrupt it ever takes, so
+	 * counting all of them measures host traffic rather than anything spurious.
+	 */
+	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
+	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) == 0U)) {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
+	}
 
 	return false;
 }
