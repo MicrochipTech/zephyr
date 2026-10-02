@@ -244,6 +244,38 @@ static void fault_inject_cb(const struct device *dev, uint8_t chan_id, uint32_t 
 	atomic_set(&fault_fired, 1);
 }
 
+#ifdef CONFIG_APP_FAULT_SYNC_START
+/* SDA of the port the faulted transfers run on. Only ever used to arm a GPIO interrupt:
+ * the pad keeps the I2C function pinctrl gave it, because the XEC GPIO driver writes only
+ * the interrupt detection field when an interrupt is configured and leaves the pin mux
+ * alone. Calling gpio_pin_configure_dt() on this pin would hand the pad to the GPIO block
+ * and break the bus, so the sample never does.
+ */
+static const struct gpio_dt_spec fault_sda = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, fault_sda_gpios);
+static struct gpio_callback fault_sda_cb;
+static uint32_t fault_sync_ticks;
+
+/* First falling edge of SDA after arming, which on an idle bus is the START condition.
+ * Disarm, so the data bits that follow do not retrigger, and start the one shot from here.
+ */
+static void fault_sda_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+	struct counter_alarm_cfg alarm = {
+		.callback = fault_inject_cb,
+		.user_data = NULL,
+		.flags = 0U,
+		.ticks = fault_sync_ticks,
+	};
+
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	(void)gpio_pin_interrupt_configure_dt(&fault_sda, GPIO_INT_DISABLE);
+	(void)counter_set_channel_alarm(fault_timer, 0, &alarm);
+}
+#endif
+
 static void fault_fill_buf(void)
 {
 	fault_buf[0] = FAULT_HDR_BYTE0;
@@ -277,6 +309,23 @@ static int fault_inject_init(void)
 		LOG_ERR("Fault injection counter start error (%d)", rc);
 		return rc;
 	}
+
+#ifdef CONFIG_APP_FAULT_SYNC_START
+	if (!gpio_is_ready_dt(&fault_sda)) {
+		LOG_ERR("Fault injection SDA GPIO device is not ready");
+		return -ENODEV;
+	}
+
+	gpio_init_callback(&fault_sda_cb, fault_sda_handler, BIT(fault_sda.pin));
+	rc = gpio_add_callback_dt(&fault_sda, &fault_sda_cb);
+	if (rc != 0) {
+		LOG_ERR("Fault injection SDA callback error (%d)", rc);
+		return rc;
+	}
+
+	LOG_INF("Fault injection timed from the START condition, SDA %s pin %u",
+		fault_sda.port->name, fault_sda.pin);
+#endif
 
 	LOG_INF("Fault injection armed on %s pin %u, timer %s", fault_pin.port->name,
 		fault_pin.pin, fault_timer->name);
@@ -356,13 +405,32 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 		fault_delay_us = FAULT_DELAY_MIN_US;
 	}
 
-	rc = counter_set_channel_alarm(fault_timer, 0, &alarm);
+	if (IS_ENABLED(CONFIG_APP_FAULT_SYNC_START)) {
+		/* Arm the START detect. The one shot is started from the edge, so the
+		 * delay is an offset into the transaction rather than into the wait for
+		 * one to begin.
+		 */
+#ifdef CONFIG_APP_FAULT_SYNC_START
+		fault_sync_ticks = alarm.ticks;
+		rc = gpio_pin_interrupt_configure_dt(&fault_sda, GPIO_INT_EDGE_FALLING);
+#endif
+	} else {
+		rc = counter_set_channel_alarm(fault_timer, 0, &alarm);
+	}
+
 	if (rc != 0) {
-		LOG_ERR("Fault injection alarm error (%d)", rc);
+		LOG_ERR("Fault injection arm error (%d)", rc);
 		return;
 	}
 
 	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
+
+#ifdef CONFIG_APP_FAULT_SYNC_START
+	/* The edge fires once per transfer, but disarm in case the transfer never
+	 * started one
+	 */
+	(void)gpio_pin_interrupt_configure_dt(&fault_sda, GPIO_INT_DISABLE);
+#endif
 
 	if (atomic_get(&fault_fired) == 0) {
 		LOG_WRN("Fault injection to 0x%02x at %u us did not fire inside the transfer "
