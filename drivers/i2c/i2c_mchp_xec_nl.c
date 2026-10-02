@@ -233,6 +233,16 @@ struct xec_i2c_nl_data {
 	struct dma_block_config ttx_blk;
 #endif
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+	/* Target watchdog: the receive count read at the previous sample, and whether a
+	 * transaction was in progress then. A transaction that has started and has not
+	 * advanced between two samples while the target command register still shows
+	 * running is stuck.
+	 */
+	struct k_timer tgt_wdog;
+	uint32_t tgt_wdog_rcvd;
+#endif
+
 	uint8_t active_port;
 	uint32_t active_freq;
 
@@ -268,6 +278,7 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_stuck;
 	volatile uint32_t cnt_isr_unclaimed;
 	volatile uint32_t cnt_tgt_stop_det;
+	volatile uint32_t cnt_tgt_wdog;
 #endif
 };
 
@@ -1498,6 +1509,54 @@ static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
 	irq_unlock(key);
 }
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+/* Recover a target transaction the hardware never reports done.
+ *
+ * The target state machine can be left running with no completion interrupt
+ * pending, which was observed after it lost arbitration while transmitting: the
+ * target command register still running and proceeding, no target done, and the
+ * target NACKing its own address. The STOP detect cannot help a transaction that
+ * ends without an externally generated STOP, and the hardware time-outs are
+ * unusable with 16-bit counts, so this is the only escape.
+ *
+ * Runs from the timer interrupt. A transaction that has started, has not advanced
+ * since the previous sample, and still shows running is taken as stuck.
+ */
+static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
+{
+	struct xec_i2c_nl_data *ctrl_data =
+		CONTAINER_OF(timer, struct xec_i2c_nl_data, tgt_wdog);
+	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
+	uint32_t rcvd = 0;
+	uint32_t tcmd = 0;
+	unsigned int key = 0;
+
+	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
+		return;
+	}
+
+	key = irq_lock();
+
+	tcmd = sys_read32(ctrl_cfg->regbase + XEC_I2C_TCMD_OFS);
+	rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
+
+	if (((tcmd & BIT(XEC_I2C_TCMD_RUN_POS)) != 0U) && (rcvd != 0U) &&
+	    (rcvd == ctrl_data->tgt_wdog_rcvd)) {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
+		ctrl_data->tgt_wdog_rcvd = 0U;
+		irq_unlock(key);
+
+		LOG_ERR("I2C-NL target stuck (tcmd 0x%08x rcvd %u), resetting", tcmd, rcvd);
+		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
+					      ctrl_data->active_port);
+		return;
+	}
+
+	ctrl_data->tgt_wdog_rcvd = rcvd;
+	irq_unlock(key);
+}
+#endif
+
 /* Registered target with 7-bit address addr, else NULL */
 static struct i2c_target_config *xec_i2c_nl_tgt_match(struct xec_i2c_nl_data *ctrl_data,
 						      uint8_t addr)
@@ -2113,6 +2172,16 @@ static int xec_i2c_nl_ctrl_init(const struct device *ctrl_dev)
 
 #ifdef CONFIG_I2C_CALLBACK
 	k_timer_init(&ctrl_data->async_timer, xec_i2c_nl_async_timeout, NULL);
+#endif
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+	/* Runs for the life of the controller. The handler returns at once while no
+	 * target is registered, so there is nothing to start and stop as they come and
+	 * go.
+	 */
+	k_timer_init(&ctrl_data->tgt_wdog, xec_i2c_nl_tgt_wdog_expiry, NULL);
+	k_timer_start(&ctrl_data->tgt_wdog, K_MSEC(CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG_MS),
+		      K_MSEC(CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG_MS));
 #endif
 
 	if (ctrl_cfg->irq_connect != NULL) {
