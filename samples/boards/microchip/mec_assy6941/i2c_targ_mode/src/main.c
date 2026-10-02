@@ -647,15 +647,16 @@ int main(void)
 		/* Controller role: the fault hits a transfer to a device outside the SoC */
 		fault_inject_test(fram_spec.bus, fram_spec.addr, FAULT_XFR_WRITE);
 
-		/* Target role, receive side. A receiving target is not driving SDA, so it
-		 * reports the fault as a bus error.
-		 */
-		fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_WRITE);
-
 		/* Target role, transmit side, where the target is driving SDA and so can
 		 * lose arbitration. Seek its register pointer to the run of ones first,
 		 * with a clean write, so every bit it transmits can be pulled low. A read
 		 * leaves the pointer at 0, so the seek is needed each time.
+		 *
+		 * This runs before the receive side test. A faulted target transaction
+		 * leaves the target not responding for a while, so whichever of the two
+		 * runs second loses the transfers that are NACKed in that window, and the
+		 * seek this one needs is NACKed with them. Lost arbitration is the reason
+		 * with the least coverage, so it gets the first attempt.
 		 */
 		fram_buf[0] = FAULT_ONES_REG_OFFSET;
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 1U, TARGET_ADDR_1);
@@ -665,6 +666,11 @@ int main(void)
 		} else {
 			fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_READ);
 		}
+
+		/* Target role, receive side. A receiving target is not driving SDA, so it
+		 * reports the fault as a bus error.
+		 */
+		fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_WRITE);
 
 		for (size_t i = 0; i < ARRAY_SIZE(targets); i++) {
 			reg_target_log(&targets[i]);
