@@ -175,6 +175,19 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
  */
 #define FAULT_HDR_BYTE0 0x02U
 #define FAULT_HDR_BYTE1 0x20U
+
+/* The data bytes decide which faults the pull can produce, so they are all ones.
+ *
+ * An arbitration loss needs the controller to be driving SDA high when the pin pulls it
+ * low, which only a one bit does. A bus error needs an SDA edge while SCL is high, and
+ * pulling an already low SDA produces no edge at all, so a zero bit yields neither error
+ * and the transfer completes as if nothing happened. All ones makes every data bit a
+ * candidate for both.
+ *
+ * The two header bytes stay as they are: to the FRAM they are a memory offset that has to
+ * be inside the device.
+ */
+#define FAULT_DATA_FILL 0xFFU
 #define FAULT_DATA_LEN  32U
 
 /* Delay from arming the one-shot to the pull, swept over this range one step per call.
@@ -231,6 +244,13 @@ static void fault_inject_cb(const struct device *dev, uint8_t chan_id, uint32_t 
 	atomic_set(&fault_fired, 1);
 }
 
+static void fault_fill_buf(void)
+{
+	fault_buf[0] = FAULT_HDR_BYTE0;
+	fault_buf[1] = FAULT_HDR_BYTE1;
+	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, FAULT_DATA_FILL, BUF_FILL_ALG_VALUE);
+}
+
 static int fault_inject_init(void)
 {
 	int rc = 0;
@@ -280,9 +300,7 @@ static void fault_inject_selftest(const struct device *i2c_port_dev, uint16_t i2
 {
 	int rc = 0;
 
-	fault_buf[0] = FAULT_HDR_BYTE0;
-	fault_buf[1] = FAULT_HDR_BYTE1;
-	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
+	fault_fill_buf();
 
 	(void)gpio_pin_set_dt(&fault_pin, 0);
 	rc = i2c_write(i2c_port_dev, fault_buf, sizeof(fault_buf), i2c_addr);
@@ -324,9 +342,7 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 	uint32_t delay_us = 0;
 	int rc = 0;
 
-	fault_buf[0] = FAULT_HDR_BYTE0;
-	fault_buf[1] = FAULT_HDR_BYTE1;
-	(void)fill_buf(&fault_buf[2], FAULT_DATA_LEN, 0, BUF_FILL_ALG_INCR);
+	fault_fill_buf();
 
 	alarm.ticks = counter_us_to_ticks(fault_timer, fault_delay_us);
 	atomic_set(&fault_fired, 0);
