@@ -1467,6 +1467,15 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x35U);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
+
+	/* Probe only: arm the STOP detect for the receive direction as well, which the
+	 * driver otherwise never does, to find out whether the hardware reports an
+	 * externally generated STOP there.
+	 */
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STOP_DET_RX_PROBE)) {
+		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
+	}
+
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
 		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
 		    rb + XEC_I2C_TCMD_OFS);
@@ -1766,6 +1775,15 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_stop_det);
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
+
+		/* The probe reports what the hardware detects without acting on it, so a
+		 * transaction the hardware is still running is left alone to finish and
+		 * report itself.
+		 */
+		if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STOP_DET_RX_PROBE)) {
+			return true;
+		}
+
 		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, -1, false);
 		return true;
 	}
