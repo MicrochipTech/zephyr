@@ -108,3 +108,27 @@ config I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK
 	  target with no interrupt left to recover on. Setting this to n also removes the
 	  state capture marker that records the branch, so the state is no longer visible
 	  in a trace.
+
+config I2C_MCHP_XEC_NL_STOP_DET_RX_PROBE
+	bool "XEC I2C-NL probe STOP detect while the target receives"
+	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	help
+	  Diagnostic. The driver enables the network layer STOP detect only while a
+	  target is transmitting, and that is the direction earlier versions of this
+	  controller did not support: the hardware detected an externally generated
+	  STOP only while the target was receiving. Whether version 3.8 detects one in
+	  both directions is not documented.
+
+	  Enabling this also sets the detect while the target is armed to receive, and
+	  makes the handler count the detection and disable the enable without ending
+	  the transaction, so the probe reports what the hardware does without changing
+	  what the driver does with it. Read cnt_tgt_stop_det to see the result.
+
+	  Interpret a count close to the number of target transactions with care. The
+	  STOP status in the status register is read only and is cleared by the
+	  hardware when PIN is set, not by this driver, so a stale status latched from
+	  an earlier transaction can fire once each time the enable is re-armed. A
+	  count well below the transaction count is a real per-transaction detection;
+	  a count tracking it one for one is more likely the stale latch.
+
+	  Leave this off outside a deliberate measurement.
