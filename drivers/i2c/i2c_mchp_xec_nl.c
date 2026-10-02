@@ -279,6 +279,7 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_isr_unclaimed;
 	volatile uint32_t cnt_tgt_stop_det;
 	volatile uint32_t cnt_tgt_wdog;
+	volatile uint32_t cnt_sr_stop_det;
 #endif
 };
 
@@ -316,10 +317,32 @@ static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t va
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val) xec_i2c_nl_state_cap_update(data, val)
 /* Counter increments are not reset by XEC_I2C_NL_STATE_CAP_INIT() on purpose */
 #define XEC_I2C_NL_CNT_INC(data, member) ((data)->member++)
+
+/* Count an externally generated STOP the hardware has latched in the status register,
+ * read on entry to the controller ISR. This is the detector itself, separate from
+ * whether its network layer interrupt enable delivers: cnt_tgt_stop_det counts
+ * deliveries, this counts latched status.
+ *
+ * Zero over a run with faulted target transmits says the hardware does not report an
+ * external STOP in that direction at all. A non-zero count does not say the reverse
+ * cleanly: the status is read only and the hardware clears it when PIN is set rather
+ * than this driver clearing it, so one latched from an earlier transaction is counted
+ * again on every later entry. Read a count near the ISR entry count as a stale latch,
+ * not as a per-transaction detection.
+ */
+static void xec_i2c_nl_cnt_sr_stop(uintptr_t base, struct xec_i2c_nl_data *data)
+{
+	if ((sys_read8(base + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U) {
+		data->cnt_sr_stop_det++;
+	}
+}
+
+#define XEC_I2C_NL_CNT_SR_STOP(base, data) xec_i2c_nl_cnt_sr_stop(base, data)
 #else
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
 #define XEC_I2C_NL_CNT_INC(data, member)
+#define XEC_I2C_NL_CNT_SR_STOP(base, data)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -2068,6 +2091,7 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	int rc = 0;
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
+	XEC_I2C_NL_CNT_SR_STOP(rb, ctrl_data);
 
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
