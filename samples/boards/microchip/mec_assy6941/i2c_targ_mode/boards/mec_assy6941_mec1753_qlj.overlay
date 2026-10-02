@@ -29,6 +29,14 @@
 		 */
 		fault-inject-gpios = <MCHP_GPIO_DECODE_050 GPIO_OPEN_DRAIN>;
 
+		/* SDA pad of the port the faulted transfers run on, the same pin
+		 * pinctrl assigns to the controller as i2c00_sda_gpio003. Used only to
+		 * arm a GPIO interrupt on it, so that CONFIG_APP_FAULT_SYNC_START can
+		 * time the pull from the START condition. The pin keeps its I2C
+		 * function: the sample never configures it as a GPIO.
+		 */
+		fault-sda-gpios = <MCHP_GPIO_DECODE_003 0>;
+
 		/* 32-bit basic timer. timer0 to timer3 are 16 bit and at 48 MHz reach
 		 * only 1.365 ms, shorter than the transfer the fault lands inside.
 		 */

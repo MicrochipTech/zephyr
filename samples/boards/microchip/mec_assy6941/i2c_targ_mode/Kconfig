@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Microchip Technology Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "XEC I2C-NL target mode"
+
+config APP_FAULT_SYNC_START
+	bool "Time the injected bus fault from the START condition"
+	help
+	  Without this the delay to the pull is counted from arming the one shot
+	  in the thread, and how long after that the transfer actually starts is
+	  not fixed: a failed transfer is logged, the bus is recovered and the
+	  port settle time is waited out. The delay has to be swept to find the
+	  transfer at all.
+
+	  With this the delay is counted from the START condition instead. A
+	  GPIO interrupt on the SDA line of the target port, which pinctrl has
+	  assigned to the I2C controller, reports the first falling edge of a
+	  transfer, and the one shot is started from there. The delay then means
+	  a known offset into the transaction, so a chosen byte and bit can be
+	  aimed at rather than searched for.
+
+	  Needs fault-sda-gpios in the zephyr,user node, naming the SDA pad of
+	  the port the transfers use.
+
+source "Kconfig.zephyr"
