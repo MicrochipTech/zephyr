@@ -379,10 +379,12 @@ static inline bool xec_i2c_nl_is_tgt_addr(const struct xec_i2c_nl_data *ctrl_dat
  * receive buffer at 255. This driver and its bindings are built for the 16-bit
  * counts, and the i2c_targ_mode sample already asks for a 259 byte target buffer.
  *
- * The consequence is that TMO_STS never asserts, so the I2C_ERROR_TIMEOUT reason in
+ * The consequence is that TMO_STS never asserts, so the TMO_STS branch of
  * xec_i2c_nl_tgt_done() and the TMO_STS bit in XEC_I2C_NL_CMPL_HOST_FATAL are
  * unreachable. They are kept because the status is defined and a future part may
- * fix the time-out hardware, not because they have been seen to happen.
+ * fix the time-out hardware, not because they have been seen to happen. The
+ * I2C_ERROR_TIMEOUT reason itself is reachable, from the target watchdog in
+ * xec_i2c_nl_tgt_wdog_expiry(), which is software.
  */
 static inline void xec_i2c_v3_cmpl_clear(uintptr_t base, uint32_t bits)
 {
@@ -1600,7 +1602,13 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s", tcmd,
 		sr, reset ? "resetting" : "re-arming");
 
-	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, reset);
+	/* The reason the application sees is a time-out, not a generic bus error. The
+	 * hardware time-out status cannot produce one, as the comment on
+	 * xec_i2c_v3_cmpl_clear() explains, so this watchdog is the only source of it, and
+	 * keeping it distinct is what lets a breakdown by reason separate a stall the
+	 * watchdog ended from an error the hardware reported.
+	 */
+	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_TIMEOUT, reset);
 }
 #endif
 
