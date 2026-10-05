@@ -1721,15 +1721,40 @@ static void xec_i2c_nl_tgt_end(const struct xec_i2c_nl_config *ctrl_cfg,
 	k_timer_stop(&ctrl_data->tgt_wdog);
 #endif
 
+	/* A transaction is reported to the target one way or the other, never both. It
+	 * failed, and the single error callback is all of it, or it succeeded, and the
+	 * stop callback closes the data the receive and read-request callbacks carried.
+	 * A failed transaction delivers no data either: every delivery is behind a test
+	 * that no reason has been set.
+	 *
+	 * An external write-read is reported a phase at a time, which is the one case
+	 * where a target hears about a transaction before it ends. The external host
+	 * sends START, the write address, its data bytes, then RPT-START and the read
+	 * address. The RPT-START pauses the state machine and xec_i2c_nl_tgt_pause()
+	 * delivers the data bytes to the receive callback and asks the read-request
+	 * callback for the buffer to answer the read with, because the target cannot
+	 * supply that buffer without first being told what was written. A failure in the
+	 * read phase after that is still one error callback and no stop, and a clean read
+	 * phase ends at target done with the stop callback.
+	 *
+	 * Those delivered bytes are a phase that completed. A failure in the write phase
+	 * does not reach them: the dispatch in xec_i2c_nl_tgt_isr() routes a transaction
+	 * whose completion register holds any of XEC_I2C_NL_CMPL_HOST_FATAL to the done
+	 * path, so the pause path, and the delivery in it, is reached only with none of
+	 * them set.
+	 */
 	if (tgt != NULL) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB1U);
-		if ((reason >= 0) && (tgt->callbacks->error != NULL)) {
-			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB2U);
-			tgt->callbacks->error(tgt, (enum i2c_error_reason)reason);
-		}
-		if (tgt->callbacks->stop != NULL) {
+		if (reason >= 0) {
+			if (tgt->callbacks->error != NULL) {
+				XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB2U);
+				tgt->callbacks->error(tgt, (enum i2c_error_reason)reason);
+			}
+		} else if (tgt->callbacks->stop != NULL) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB3U);
 			(void)tgt->callbacks->stop(tgt);
+		} else {
+			/* No callback for this outcome */
 		}
 	}
 
