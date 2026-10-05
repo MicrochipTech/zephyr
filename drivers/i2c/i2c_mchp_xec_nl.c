@@ -1596,6 +1596,7 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
 	struct i2c_target_config *stalled = NULL;
 	uint32_t tcmd = 0;
+	int reason = I2C_ERROR_TIMEOUT;
 	bool reset = false;
 	uint8_t sr = 0;
 
@@ -1635,21 +1636,25 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	 */
 	reset = ((sr & BIT(XEC_I2C_SR_BER_POS)) != 0U);
 
-	/* A lost arbitration in the status says what stopped this transaction, and the
-	 * hardware will report it done once a STOP from a later transaction sets it,
-	 * with the loss still latched in the completion register. Leave the reason to
-	 * that report and hold the target until it arrives, so the application is told
-	 * once, with what actually happened, rather than twice.
+	/* A lost arbitration in the status says what stopped this transaction. Whether
+	 * anything will say so again depends on the bus, and NBB is what says which:
 	 *
-	 * Clearing the active target is what holds the report back: xec_i2c_nl_tgt_end()
-	 * reports to it and reports nothing without it, so neither the error nor the stop
+	 * Bus still busy. The STOP has not happened yet, and when it does the hardware
+	 * reports the transaction done with the loss still latched in the completion
+	 * register. Leave the reason to that report and hold the target until it arrives,
+	 * so the application is told once, with what actually happened, rather than told
+	 * a time-out now and an arbitration loss later for the same transfer. Clearing
+	 * the active target is what holds the report back: xec_i2c_nl_tgt_end() reports
+	 * to it and reports nothing without it, so neither the error nor the stop
 	 * callback runs here. Set the held target after that call, which arms the target
 	 * again and clears the field.
 	 *
-	 * Nothing is lost if no report arrives. The transaction is over either way, the
-	 * target is armed for the next one, and the only cost is one error callback the
-	 * application never gets, against reporting a time-out now and an arbitration
-	 * loss later for the same transfer.
+	 * Bus idle. The STOP has already been and gone, so nothing further is coming and
+	 * a hold would wait for a report that cannot arrive, until the next arming threw
+	 * it away unreported. Report the loss here instead. A run of 100 loops on
+	 * mec_assy6941/mec1753_qlj expired 40 times with a loss, 20 of them with the bus
+	 * already idle, and holding those cost the application 20 errors it was never
+	 * told about.
 	 *
 	 * Without the loss there is nothing to wait for and nothing better to say than
 	 * that the transaction ran out of time. That reason is this watchdog's alone: the
@@ -1657,8 +1662,12 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	 * xec_i2c_v3_cmpl_clear() gives.
 	 */
 	if ((sr & BIT(XEC_I2C_SR_LAB_POS)) != 0U) {
-		stalled = ctrl_data->tgt_active;
-		ctrl_data->tgt_active = NULL;
+		reason = I2C_ERROR_ARBITRATION;
+		if ((sr & BIT(XEC_I2C_SR_NBB_POS)) == 0U) {
+			stalled = ctrl_data->tgt_active;
+			ctrl_data->tgt_active = NULL;
+			reason = -1;
+		}
 	}
 
 	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
@@ -1668,10 +1677,9 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 
 	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s%s", tcmd,
 		sr, reset ? "resetting" : "re-arming",
-		(stalled != NULL) ? ", arbitration lost" : "");
+		(stalled != NULL) ? ", arbitration lost, held" : "");
 
-	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, (stalled != NULL) ? -1 : I2C_ERROR_TIMEOUT,
-			   reset);
+	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, reason, reset);
 
 	ctrl_data->tgt_stalled = stalled;
 	ctrl_data->tgt_stalled_seq = ctrl_data->tgt_seq;
