@@ -1904,6 +1904,22 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 #endif
 
+	/* A lost arbitration resets the controller, and it has to. Reading the status bit
+	 * argues otherwise, the loss being asserted only through the byte it was detected
+	 * in and cleared when the network layer services that byte, so by the time the
+	 * transaction is reported done the controller is no longer in the loss. Something
+	 * else in the block is, and only programming the controller again clears it: with
+	 * this left arming the target, a run of 100 loops on mec_assy6941/mec1753_qlj
+	 * failed every one of the 100 host transfers the application makes to another
+	 * device on the same controller, 83 of them timing out, against 24 failures in
+	 * the same run with the reset in place. Transfers on a second controller moved by
+	 * a handful, which is the noise this test has.
+	 *
+	 * The target watchdog does take a lost arbitration without resetting, and that
+	 * much measured clean. The difference is that it recovers a transaction the
+	 * hardware never reported, where here the hardware has reported one it was in the
+	 * middle of.
+	 */
 	if ((cmpl & BIT(XEC_I2C_CMPL_LAB_STS_POS)) != 0U) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x96U);
 		reason = I2C_ERROR_ARBITRATION;
