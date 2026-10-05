@@ -143,3 +143,38 @@ config I2C_MCHP_XEC_NL_TGT_WDOG_MS
 	  often. A period below the longest transaction an external host will run
 	  against the target risks reading no progress across two samples and
 	  resetting a transaction that was merely slow.
+
+config I2C_MCHP_XEC_NL_TGT_IDLE_RECOVER
+	bool "XEC I2C-NL recover a target transaction on bus idle"
+	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	help
+	  Use the addressed-as-target and idle interrupts to end a target transaction
+	  the hardware never reports done, instead of the polling watchdog.
+
+	  Addressed-as-target, Configuration register bit 28, fires at the end of the
+	  seventh clock of an address the hardware can match, which marks the start of a
+	  target transaction. Its only use here is to arm the idle interrupt, bit 29.
+	  Idle then fires once both lines have been high for a window, which happens
+	  when the transaction ends, whether it ended normally or on an error the
+	  hardware reports. A transaction the hardware leaves running reaches the same
+	  idle, so that is where it can be recovered, bounded by the bus going quiet
+	  rather than by a polling period.
+
+	  Whether idle fires at all with a target armed is the open question. The host
+	  path in this driver does not arm it when a target is registered, on the
+	  grounds that an armed target keeps the target command register running and so
+	  rules idle out. If that is right this reports nothing and the watchdog stays
+	  the only recovery. cnt_tgt_aat, cnt_tgt_idle and cnt_tgt_idle_recover say
+	  which it is.
+
+	  The address match is armed by the same routine that arms the target, from the
+	  target register API and again after every target transaction, so it is armed
+	  once per transaction. The ISR clears its enable when it sees the match; the
+	  status clears itself when the network layer moves the address byte out of the
+	  Data register, which is also the window for reading it: the match is reported
+	  at the end of the seventh clock of the address and the byte moves out after
+	  the ninth, so about two clock periods, ample at 100 kHz and tight at 1 MHz.
+	  Missing it costs that transaction its idle recovery and nothing else.
+
+	  Off by default: it adds two interrupts per target transaction and has not been
+	  exercised on hardware.
