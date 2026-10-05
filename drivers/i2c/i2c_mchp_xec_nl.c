@@ -225,6 +225,20 @@ struct xec_i2c_nl_data {
 	struct i2c_target_config *tgt_cfg[XEC_I2C_OA_NUM_TARGETS];
 	const struct device *tgt_port_dev;
 	struct i2c_target_config *tgt_active; /* target addressed by the current transaction */
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+	/* Target of a transaction the watchdog ended on a lost arbitration, whose error
+	 * has not been reported yet. The hardware reports such a transaction done later,
+	 * when a STOP from a later transaction sets it, and that report is what carries
+	 * the reason to the application. NULL when nothing is waiting.
+	 *
+	 * tgt_seq counts address matches, so it names the transaction one of them starts.
+	 * tgt_stalled_seq is the one the held target is waiting for a report on, and a
+	 * report is that transaction's only while the two are equal.
+	 */
+	struct i2c_target_config *tgt_stalled;
+	uint32_t tgt_stalled_seq;
+	uint32_t tgt_seq;
+#endif
 	uint32_t tgt_rx_armed; /* receive count the target receive DMA was armed with */
 	uint32_t tgt_rx_off;   /* first data byte: 1 after START address, 0 after RPT-START */
 	struct dma_config dma_trx;
@@ -272,18 +286,23 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_wdog     target transactions the watchdog ended, and of those
 	 * cnt_tgt_wdog_reset  the ones whose status said the controller needed a reset
 	 *                  rather than only arming the target again.
+	 * cnt_tgt_done_late  of cnt_tgt_done, the reports that arrived for a transaction
+	 *                  the watchdog had already ended
+	 * cnt_tgt_hold_stale  held reports dropped because a later transaction was
+	 *                  addressed before the one they were waiting for reported,
+	 *                  which is the error the application was not told about
 	 *
 	 * cnt_tgt_aat is the count to divide by, not cnt_tgt_done: every transaction
 	 * the hardware matched an address for is one address match, but a stall the
 	 * watchdog ends still reports done later, when a STOP from a later transaction
 	 * sets it, and by then the target has been armed again and that done is counted
-	 * as a transaction of its own. So cnt_tgt_aat equals the transactions that ran
-	 * plus cnt_tgt_wdog, while cnt_tgt_done equals the transactions that ran plus
-	 * however many of those late reports arrived, and the two only agree when the
-	 * watchdog never fired. A 100 loop run that stalled 56 times split 675 + 56 and
-	 * 675 + 43. Those late reports are why cnt_tgt_err can exceed the errors the
-	 * application was told about: the error status is still latched in the
-	 * completion register, but there is no longer an active target to report it to.
+	 * as a transaction of its own. The three agree as
+	 *
+	 *   cnt_tgt_aat = (cnt_tgt_done - cnt_tgt_done_late) + cnt_tgt_wdog
+	 *
+	 * which is worth checking at the end of a run: a shortfall on the left is
+	 * address matches the ISR did not see in time, and anything else means a
+	 * transaction ended by a path none of these counts.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -294,6 +313,8 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
 	volatile uint32_t cnt_tgt_aat;
+	volatile uint32_t cnt_tgt_done_late;
+	volatile uint32_t cnt_tgt_hold_stale;
 #endif
 };
 
@@ -1511,6 +1532,7 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * that clears it, so it is not still set from the transaction just ending.
 	 */
 	k_timer_stop(&ctrl_data->tgt_wdog);
+	ctrl_data->tgt_stalled = NULL;
 
 	/* Clear the Status register so a later read reports the state then and not the
 	 * history of earlier transactions: its error bits latch, so without this the first
@@ -1572,6 +1594,7 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	struct xec_i2c_nl_data *ctrl_data =
 		CONTAINER_OF(timer, struct xec_i2c_nl_data, tgt_wdog);
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
+	struct i2c_target_config *stalled = NULL;
 	uint32_t tcmd = 0;
 	bool reset = false;
 	uint8_t sr = 0;
@@ -1612,21 +1635,46 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	 */
 	reset = ((sr & BIT(XEC_I2C_SR_BER_POS)) != 0U);
 
+	/* A lost arbitration in the status says what stopped this transaction, and the
+	 * hardware will report it done once a STOP from a later transaction sets it,
+	 * with the loss still latched in the completion register. Leave the reason to
+	 * that report and hold the target until it arrives, so the application is told
+	 * once, with what actually happened, rather than twice.
+	 *
+	 * Clearing the active target is what holds the report back: xec_i2c_nl_tgt_end()
+	 * reports to it and reports nothing without it, so neither the error nor the stop
+	 * callback runs here. Set the held target after that call, which arms the target
+	 * again and clears the field.
+	 *
+	 * Nothing is lost if no report arrives. The transaction is over either way, the
+	 * target is armed for the next one, and the only cost is one error callback the
+	 * application never gets, against reporting a time-out now and an arbitration
+	 * loss later for the same transfer.
+	 *
+	 * Without the loss there is nothing to wait for and nothing better to say than
+	 * that the transaction ran out of time. That reason is this watchdog's alone: the
+	 * hardware time-out status cannot produce one, for the reason the comment on
+	 * xec_i2c_v3_cmpl_clear() gives.
+	 */
+	if ((sr & BIT(XEC_I2C_SR_LAB_POS)) != 0U) {
+		stalled = ctrl_data->tgt_active;
+		ctrl_data->tgt_active = NULL;
+	}
+
 	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
 	if (reset) {
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog_reset);
 	}
 
-	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s", tcmd,
-		sr, reset ? "resetting" : "re-arming");
+	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s%s", tcmd,
+		sr, reset ? "resetting" : "re-arming",
+		(stalled != NULL) ? ", arbitration lost" : "");
 
-	/* The reason the application sees is a time-out, not a generic bus error. The
-	 * hardware time-out status cannot produce one, as the comment on
-	 * xec_i2c_v3_cmpl_clear() explains, so this watchdog is the only source of it, and
-	 * keeping it distinct is what lets a breakdown by reason separate a stall the
-	 * watchdog ended from an error the hardware reported.
-	 */
-	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_TIMEOUT, reset);
+	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, (stalled != NULL) ? -1 : I2C_ERROR_TIMEOUT,
+			   reset);
+
+	ctrl_data->tgt_stalled = stalled;
+	ctrl_data->tgt_stalled_seq = ctrl_data->tgt_seq;
 }
 #endif
 
@@ -1794,8 +1842,42 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	uint32_t tx_left = 0;
 	int reason = -1;
 	bool reset = false;
+	bool late = false;
 
 	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_done);
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+	/* A transaction the watchdog ended on a lost arbitration may be being reported
+	 * now. Take its target back as the active one so the error reaches it from here,
+	 * which is the one report the application gets for that transfer: the watchdog
+	 * left it to this, having no reason to give that the completion register does not
+	 * hold.
+	 *
+	 * Only while this report is that transaction's. Nothing should get between the
+	 * two, the report needing a STOP and the bus not reaching a START without one, so
+	 * no later transaction can be addressed before the stalled one reports. But a
+	 * report that never comes would otherwise leave the held target for whichever
+	 * transaction reported next, and hand it an arbitration loss that was not its
+	 * own. The address match that starts a transaction numbers it, so a number that
+	 * has moved on says the held report missed its turn: drop it, and let this
+	 * transaction report as itself.
+	 *
+	 * That leaves one way to mistake them, a report that never comes and an address
+	 * match the ISR missed the window on, which takes both to go wrong at once.
+	 */
+	if (ctrl_data->tgt_stalled != NULL) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA2U);
+		if (ctrl_data->tgt_stalled_seq == ctrl_data->tgt_seq) {
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_done_late);
+			ctrl_data->tgt_active = ctrl_data->tgt_stalled;
+			late = true;
+		} else {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA3U);
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_hold_stale);
+		}
+		ctrl_data->tgt_stalled = NULL;
+	}
+#endif
 
 	if ((cmpl & BIT(XEC_I2C_CMPL_LAB_STS_POS)) != 0U) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x96U);
@@ -1813,6 +1895,14 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 		/* Receive overflow NACKed by hardware: drop the data */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x99U);
 		reason = I2C_ERROR_SIZE;
+	}
+
+	/* The watchdog deferred to this report because it saw a lost arbitration in the
+	 * status, so say so even if the completion register no longer does. Reporting
+	 * nothing is the one outcome that would leave the transfer unaccounted for.
+	 */
+	if (late && (reason < 0)) {
+		reason = I2C_ERROR_ARBITRATION;
 	}
 
 	/* TTR reads 0 when the target finished the receive phase and 1 when it finished
@@ -1837,7 +1927,7 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 		/* Receive phase ended: a write transaction */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9AU);
 		rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
-		if ((off != 0U) && (rcvd != 0U)) {
+		if ((off != 0U) && (rcvd != 0U) && (ctrl_data->tgt_active == NULL)) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9BU);
 			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
 		}
@@ -1892,6 +1982,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_AAT_POS)) != 0U)) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9FU);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_aat);
+		ctrl_data->tgt_seq++;
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
 		k_timer_start(&ctrl_data->tgt_wdog,
 			      K_MSEC(CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG_MS), K_NO_WAIT);
@@ -2099,6 +2190,10 @@ static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
 		unsigned int key = irq_lock();
 
 		ctrl_data->tgt_port_dev = NULL;
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+		/* Last target leaving: no arming follows to drop a held report */
+		ctrl_data->tgt_stalled = NULL;
+#endif
 		sys_clear_bit(ctrl_cfg->regbase + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
 		irq_unlock(key);
 		(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
