@@ -269,6 +269,13 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_done_rx, cnt_tgt_done_tx  completed transactions split by the phase
 	 *                  they ended in, the denominator for a rate that is expected to
 	 *                  follow one direction and not the other.
+	 *
+	 * The rest belong to I2C_MCHP_XEC_NL_STD_IEN_PROBE and go with it:
+	 * cnt_stop_det_rx, cnt_stop_det_tx  STOP status seen on entry to the ISR, split
+	 *                  by the phase the target had just finished.
+	 * isr_sr_or, isr_cmpl_or  every status bit seen on entry to the ISR, so a status
+	 *                  never set anywhere is visible as such.
+	 * stop_cmpl_first  the completion register at the first detection.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -277,6 +284,13 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_wdog;
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
+#ifdef CONFIG_I2C_MCHP_XEC_NL_STD_IEN_PROBE
+	volatile uint32_t cnt_stop_det_rx;
+	volatile uint32_t cnt_stop_det_tx;
+	volatile uint32_t isr_sr_or;
+	volatile uint32_t isr_cmpl_or;
+	volatile uint32_t stop_cmpl_first;
+#endif
 #endif
 };
 
@@ -315,11 +329,53 @@ static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t va
 /* Counter increments are not reset by XEC_I2C_NL_STATE_CAP_INIT() on purpose */
 #define XEC_I2C_NL_CNT_INC(data, member) ((data)->member++)
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_STD_IEN_PROBE
+/* Record the status registers on entry to the controller ISR, and the STOP status in
+ * particular, split by the phase the target had just finished.
+ *
+ * The enable being probed is Configuration register bit 24, the one meant for a driver
+ * doing byte mode interrupts. Clear it after a detection: the STOP status is read only
+ * and the hardware clears it when PIN is set, which this driver does not do outside a
+ * controller reset, so leaving the enable set would report the same latched status on
+ * every later entry. Arming the target sets it again.
+ */
+static void xec_i2c_nl_isr_probe(uintptr_t base, struct xec_i2c_nl_data *data, uint32_t cmpl)
+{
+	uint8_t sr = sys_read8(base + XEC_I2C_SR_OFS);
+
+	data->isr_sr_or |= sr;
+	data->isr_cmpl_or |= cmpl;
+
+	if ((sr & BIT(XEC_I2C_SR_STO_POS)) == 0U) {
+		return;
+	}
+
+	if ((data->cnt_stop_det_rx == 0U) && (data->cnt_stop_det_tx == 0U)) {
+		data->stop_cmpl_first = cmpl;
+	}
+
+	/* TTR reads 0 when the target finished the receive phase of a transaction, which
+	 * is an external write, and 1 when it finished the transmit phase.
+	 */
+	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) == 0U) {
+		data->cnt_stop_det_rx++;
+	} else {
+		data->cnt_stop_det_tx++;
+	}
+
+	sys_clear_bit(base + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_IEN_POS);
+}
+
+#define XEC_I2C_NL_ISR_PROBE(base, data, cmpl) xec_i2c_nl_isr_probe(base, data, cmpl)
+#else
+#define XEC_I2C_NL_ISR_PROBE(base, data, cmpl)
+#endif
 
 #else
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
 #define XEC_I2C_NL_CNT_INC(data, member)
+#define XEC_I2C_NL_ISR_PROBE(base, data, cmpl)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -1477,6 +1533,9 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x35U);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STD_IEN_PROBE)) {
+		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_IEN_POS);
+	}
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
 		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
 		    rb + XEC_I2C_TCMD_OFS);
@@ -1970,7 +2029,10 @@ static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
 		unsigned int key = irq_lock();
 
 		ctrl_data->tgt_port_dev = NULL;
-		sys_clear_bit(ctrl_cfg->regbase + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
+		sys_clear_bits(ctrl_cfg->regbase + XEC_I2C_CFG_OFS,
+			       BIT(XEC_I2C_CFG_TD_IEN_POS) |
+			       (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STD_IEN_PROBE) ?
+				BIT(XEC_I2C_CFG_STD_IEN_POS) : 0U));
 		irq_unlock(key);
 		(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
 		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
@@ -2059,6 +2121,7 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	int rc = 0;
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
+	XEC_I2C_NL_ISR_PROBE(rb, ctrl_data, cmpl);
 
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
