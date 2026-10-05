@@ -266,15 +266,6 @@ struct xec_i2c_nl_data {
 	 *                  was armed and the hardware had not reported it done, that is
 	 *                  a target GIRQ with no target source behind it. Host
 	 *                  interrupts are not counted: they reach the same place.
-	 * cnt_tgt_stop_det  times the network layer STOP detect reported an
-	 *                  externally generated STOP. The hardware detects one only in
-	 *                  target mode, and older versions of this controller detected
-	 *                  it only while the target was receiving, so a zero here says
-	 *                  the enable the driver sets during a target transmit phase
-	 *                  never fires.
-	 * cnt_isr_unclaimed_stopen  of the unclaimed, those taken with the network layer
-	 *                  STOP detect enabled, which says whether that enable is what
-	 *                  produces them.
 	 * cnt_tgt_done_rx, cnt_tgt_done_tx  completed transactions split by the phase
 	 *                  they ended in, the denominator for a rate that is expected to
 	 *                  follow one direction and not the other.
@@ -283,19 +274,9 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_err;
 	volatile uint32_t cnt_tgt_stuck;
 	volatile uint32_t cnt_isr_unclaimed;
-	volatile uint32_t cnt_tgt_stop_det;
 	volatile uint32_t cnt_tgt_wdog;
-	volatile uint32_t cnt_sr_stop_det;
-	volatile uint32_t cnt_isr_unclaimed_stopen;
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
-
-	/* Completion register of the unclaimed interrupts: the bits set on every one of
-	 * them, the bits set on any of them, and the first value whole.
-	 */
-	volatile uint32_t unclaimed_cmpl_and;
-	volatile uint32_t unclaimed_cmpl_or;
-	volatile uint32_t unclaimed_cmpl_first;
 #endif
 };
 
@@ -334,55 +315,11 @@ static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t va
 /* Counter increments are not reset by XEC_I2C_NL_STATE_CAP_INIT() on purpose */
 #define XEC_I2C_NL_CNT_INC(data, member) ((data)->member++)
 
-/* Count an externally generated STOP the hardware has latched in the status register,
- * read on entry to the controller ISR. This is the detector itself, separate from
- * whether its network layer interrupt enable delivers: cnt_tgt_stop_det counts
- * deliveries, this counts latched status.
- *
- * Zero over a run with faulted target transmits says the hardware does not report an
- * external STOP in that direction at all. A non-zero count does not say the reverse
- * cleanly: the status is read only and the hardware clears it when PIN is set rather
- * than this driver clearing it, so one latched from an earlier transaction is counted
- * again on every later entry. Read a count near the ISR entry count as a stale latch,
- * not as a per-transaction detection.
- */
-static void xec_i2c_nl_cnt_sr_stop(uintptr_t base, struct xec_i2c_nl_data *data)
-{
-	if ((sys_read8(base + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U) {
-		data->cnt_sr_stop_det++;
-	}
-}
 
-#define XEC_I2C_NL_CNT_SR_STOP(base, data) xec_i2c_nl_cnt_sr_stop(base, data)
-
-/* Accumulate the completion register of the interrupts the target half does not claim.
- *
- * Arming the network layer STOP detect adds interrupts that fall through unclaimed, and
- * the status the driver confirms a STOP with is never set, so the question is which
- * status does accompany them. A trace cannot answer it: the capture buffer fills and a
- * debugger truncates what it prints. Two accumulators can. The AND is the bits set on
- * every one of them, which names a status that always accompanies them; the OR is the
- * bits set on any. The first value is kept whole as a concrete sample.
- */
-static void xec_i2c_nl_unclaimed_cmpl(struct xec_i2c_nl_data *data, uint32_t cmpl)
-{
-	if (data->cnt_isr_unclaimed == 0U) {
-		data->unclaimed_cmpl_first = cmpl;
-		data->unclaimed_cmpl_and = cmpl;
-	} else {
-		data->unclaimed_cmpl_and &= cmpl;
-	}
-
-	data->unclaimed_cmpl_or |= cmpl;
-}
-
-#define XEC_I2C_NL_UNCLAIMED_CMPL(data, cmpl) xec_i2c_nl_unclaimed_cmpl(data, cmpl)
 #else
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
 #define XEC_I2C_NL_CNT_INC(data, member)
-#define XEC_I2C_NL_CNT_SR_STOP(base, data)
-#define XEC_I2C_NL_UNCLAIMED_CMPL(data, cmpl)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -1912,19 +1849,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	 */
 	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) == 0U)) {
-		/* Before the counter: the accumulator uses it to spot the first value */
-		XEC_I2C_NL_UNCLAIMED_CMPL(ctrl_data, cmpl);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
-
-		/* Of those, the ones taken with the network layer STOP detect enabled.
-		 * Enabling that detect was measured to add interrupts the driver cannot
-		 * attribute, which may be the STOP detections themselves arriving without
-		 * the status bit this driver confirms them with. Counting them apart from
-		 * the rest says whether the enable is what produces them.
-		 */
-		if ((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) {
-			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed_stopen);
-		}
 	}
 
 	return false;
@@ -2134,7 +2059,6 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	int rc = 0;
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
-	XEC_I2C_NL_CNT_SR_STOP(rb, ctrl_data);
 
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
