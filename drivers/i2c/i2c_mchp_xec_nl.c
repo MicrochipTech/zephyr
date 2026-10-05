@@ -234,10 +234,9 @@ struct xec_i2c_nl_data {
 #endif
 
 #ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
-	/* Target watchdog: the receive count read at the previous sample, and whether a
-	 * transaction was in progress then. A transaction that has started and has not
-	 * advanced between two samples while the target command register still shows
-	 * running is stuck.
+	/* Target watchdog: started by the address match when a transaction begins and
+	 * stopped when the transaction is reported done, so expiry means neither
+	 * happened.
 	 */
 	struct k_timer tgt_wdog;
 #endif
@@ -1547,6 +1546,12 @@ static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
  * Armed per transaction by the address match and stopped when the transaction is
  * reported done, so expiry means the transaction neither finished nor reported.
  * Runs from the timer interrupt.
+ *
+ * It races one other way out, which is why a stall clears on its own eventually:
+ * target done is set either when a target count reaches 0 or when an external STOP
+ * is detected with the counts still non-zero, so a STOP from any later transaction
+ * on the bus ends a stalled one too. The watchdog is what bounds how long that
+ * takes, rather than the only thing that can end it.
  */
 static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 {
@@ -1568,15 +1573,24 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	 * the target buffers, clears the target status and rewrites the target command
 	 * register, which is the state a stalled transaction needs put back. Resetting the
 	 * controller is the expensive one, and it disturbs the bus the targets share: a
-	 * run that always reset turned 57 recoveries into about 49 extra time-outs on
+	 * run that always reset turned 61 recoveries into about 50 extra time-outs on
 	 * transfers another controller was running at the time.
 	 *
-	 * Let the status choose. SR_IDLE is PIN and NBB set with nothing else, so anything
-	 * else means a bus error, an arbitration loss, or a transfer still in progress,
-	 * and the controller does need the reset. Arming cleared the status, so this reads
-	 * the state of this transaction rather than the history of earlier ones.
+	 * Only a bus error calls for the reset. The other two status bits that show up
+	 * here do not:
+	 *
+	 * Lost arbitration stays asserted only through the byte it was detected in. It is
+	 * cleared on the rising edge of the status PIN bit, when the network layer services
+	 * the byte the controller asked for. Finding it set at a stall therefore says the
+	 * loss happened in the byte where service stopped, not that the controller is
+	 * wedged, so arming is enough.
+	 *
+	 * NBB stays 0 until the external controller issues a STOP and releases the lines,
+	 * at least half a bus clock after the last byte, so at a stall it is always 0 and
+	 * says nothing about the controller. Testing the whole byte against the idle value
+	 * is what the first version of this did, and it sent every recovery to the reset.
 	 */
-	reset = (sr != SR_IDLE);
+	reset = ((sr & BIT(XEC_I2C_SR_BER_POS)) != 0U);
 
 	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
 	if (reset) {

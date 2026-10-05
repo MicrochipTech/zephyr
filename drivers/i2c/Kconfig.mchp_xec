@@ -130,10 +130,12 @@ config I2C_MCHP_XEC_NL_TGT_WDOG
 	  starts a one-shot timer, and reporting the transaction done stops it. Expiry
 	  therefore means the transaction neither finished nor reported, and the
 	  target is armed again, which stops its DMA, flushes its buffers, clears its
-	  status and rewrites its command register. The controller is not reset:
-	  doing that disturbs the bus the targets share, and a run that reset here
-	  turned about 57 recoveries into about 49 extra time-outs on transfers
-	  another controller was running at the time.
+	  status and rewrites its command register. The controller is reset as well
+	  only when its status shows a bus error: a lost arbitration is cleared by the
+	  network layer servicing the next byte and says only that the loss happened
+	  in the byte where service stopped, and NBB stays 0 until the external
+	  controller issues a STOP, so neither means the controller needs resetting.
+	  cnt_tgt_wdog_reset counts the ones that did.
 
 	  The match is armed once per transaction, so cnt_tgt_aat counts transactions
 	  the hardware matched an address for. Against cnt_tgt_done, which counts the
