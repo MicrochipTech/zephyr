@@ -289,6 +289,13 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_isr_unclaimed_stopen;
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
+
+	/* Completion register of the unclaimed interrupts: the bits set on every one of
+	 * them, the bits set on any of them, and the first value whole.
+	 */
+	volatile uint32_t unclaimed_cmpl_and;
+	volatile uint32_t unclaimed_cmpl_or;
+	volatile uint32_t unclaimed_cmpl_first;
 #endif
 };
 
@@ -347,11 +354,35 @@ static void xec_i2c_nl_cnt_sr_stop(uintptr_t base, struct xec_i2c_nl_data *data)
 }
 
 #define XEC_I2C_NL_CNT_SR_STOP(base, data) xec_i2c_nl_cnt_sr_stop(base, data)
+
+/* Accumulate the completion register of the interrupts the target half does not claim.
+ *
+ * Arming the network layer STOP detect adds interrupts that fall through unclaimed, and
+ * the status the driver confirms a STOP with is never set, so the question is which
+ * status does accompany them. A trace cannot answer it: the capture buffer fills and a
+ * debugger truncates what it prints. Two accumulators can. The AND is the bits set on
+ * every one of them, which names a status that always accompanies them; the OR is the
+ * bits set on any. The first value is kept whole as a concrete sample.
+ */
+static void xec_i2c_nl_unclaimed_cmpl(struct xec_i2c_nl_data *data, uint32_t cmpl)
+{
+	if (data->cnt_isr_unclaimed == 0U) {
+		data->unclaimed_cmpl_first = cmpl;
+		data->unclaimed_cmpl_and = cmpl;
+	} else {
+		data->unclaimed_cmpl_and &= cmpl;
+	}
+
+	data->unclaimed_cmpl_or |= cmpl;
+}
+
+#define XEC_I2C_NL_UNCLAIMED_CMPL(data, cmpl) xec_i2c_nl_unclaimed_cmpl(data, cmpl)
 #else
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
 #define XEC_I2C_NL_CNT_INC(data, member)
 #define XEC_I2C_NL_CNT_SR_STOP(base, data)
+#define XEC_I2C_NL_UNCLAIMED_CMPL(data, cmpl)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -1900,6 +1931,8 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	 */
 	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) == 0U)) {
+		/* Before the counter: the accumulator uses it to spot the first value */
+		XEC_I2C_NL_UNCLAIMED_CMPL(ctrl_data, cmpl);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
 
 		/* Of those, the ones taken with the network layer STOP detect enabled.
