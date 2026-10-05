@@ -291,6 +291,18 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_hold_stale  held reports dropped because a later transaction was
 	 *                  addressed before the one they were waiting for reported,
 	 *                  which is the error the application was not told about
+	 * cnt_tgt_aat_miss  transactions reported done with the address match still
+	 *                  armed, so the match was never seen for them and they ran
+	 *                  without a watchdog
+	 *
+	 * cnt_tgt_aat_miss is what makes the two sides below agree. An address match is
+	 * reported at the end of the seventh clock of the address byte and the status
+	 * clears when the network layer moves that byte out after the ninth, so the ISR
+	 * has about two clock periods to see it and a transaction whose window it missed
+	 * is never counted as started. Measured rather than inferred: the match enable
+	 * is cleared when a match is claimed and set again only when the target is
+	 * armed, so finding it still set at target done says this transaction's match
+	 * went unseen.
 	 *
 	 * cnt_tgt_aat is the count to divide by, not cnt_tgt_done: every transaction
 	 * the hardware matched an address for is one address match, but a stall the
@@ -298,10 +310,10 @@ struct xec_i2c_nl_data {
 	 * sets it, and by then the target has been armed again and that done is counted
 	 * as a transaction of its own. The three agree as
 	 *
-	 *   cnt_tgt_aat = (cnt_tgt_done - cnt_tgt_done_late) + cnt_tgt_wdog
+	 *   cnt_tgt_aat + cnt_tgt_aat_miss = (cnt_tgt_done - cnt_tgt_done_late)
+	 *                                    + cnt_tgt_wdog
 	 *
-	 * which is worth checking at the end of a run: a shortfall on the left is
-	 * address matches the ISR did not see in time, and anything else means a
+	 * which is worth checking at the end of a run: anything left over is a
 	 * transaction ended by a path none of these counts.
 	 */
 	volatile uint32_t cnt_tgt_done;
@@ -315,6 +327,7 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_aat;
 	volatile uint32_t cnt_tgt_done_late;
 	volatile uint32_t cnt_tgt_hold_stale;
+	volatile uint32_t cnt_tgt_aat_miss;
 #endif
 };
 
@@ -2045,6 +2058,17 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x91U);
 		xec_i2c_v3_cmpl_clear(rb, cmpl & XEC_I2C_NL_CMPL_TGT_STS);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
+		/* The match enable is cleared when a match is claimed and set again only
+		 * when the target is armed, so still finding it set here says the match
+		 * for this transaction was never seen and it ran without a watchdog.
+		 */
+		if ((cfg & BIT(XEC_I2C_CFG_AAT_IEN_POS)) != 0U) {
+			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA4U);
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_aat_miss);
+		}
+#endif
 
 		tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
 		if (((tcmd & BIT(XEC_I2C_TCMD_RUN_POS)) == 0U) ||
