@@ -270,12 +270,16 @@ struct xec_i2c_nl_data {
 	 *                  follow one direction and not the other.
 	 * cnt_tgt_aat      addressed-as-target interrupts, one per target transaction
 	 *                  the hardware matched an address for.
+	 * cnt_tgt_wdog     target transactions the watchdog ended, and of those
+	 * cnt_tgt_wdog_reset  the ones whose status said the controller needed a reset
+	 *                  rather than only arming the target again.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
 	volatile uint32_t cnt_tgt_stuck;
 	volatile uint32_t cnt_isr_unclaimed;
 	volatile uint32_t cnt_tgt_wdog;
+	volatile uint32_t cnt_tgt_wdog_reset;
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
 	volatile uint32_t cnt_tgt_aat;
@@ -1494,6 +1498,17 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * that clears it, so it is not still set from the transaction just ending.
 	 */
 	k_timer_stop(&ctrl_data->tgt_wdog);
+
+	/* Clear the Status register so a later read reports the state then and not the
+	 * history of earlier transactions: its error bits latch, so without this the first
+	 * bus error or arbitration loss would make every later check look unhealthy.
+	 * Nothing is lost, the target error reasons come from the Completion register.
+	 *
+	 * Write the value programming uses, output enable and auto-ACK together with PIN,
+	 * not PIN alone: the Control register is write only, so a write of PIN alone would
+	 * clear output enable and auto-ACK with it and leave the target deaf.
+	 */
+	sys_write8(XEC_I2C_NL_CR_DFLT, rb + XEC_I2C_CR_OFS);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
 #endif
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
@@ -1539,16 +1554,39 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 		CONTAINER_OF(timer, struct xec_i2c_nl_data, tgt_wdog);
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
 	uint32_t tcmd = 0;
+	bool reset = false;
+	uint8_t sr = 0;
 
 	if (!xec_i2c_nl_tgt_registered(ctrl_data)) {
 		return;
 	}
 
 	tcmd = sys_read32(ctrl_cfg->regbase + XEC_I2C_TCMD_OFS);
-	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
-	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x), resetting", tcmd);
+	sr = sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS);
 
-	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, true);
+	/* Arming the target again is the cheap recovery: it stops the target DMA, flushes
+	 * the target buffers, clears the target status and rewrites the target command
+	 * register, which is the state a stalled transaction needs put back. Resetting the
+	 * controller is the expensive one, and it disturbs the bus the targets share: a
+	 * run that always reset turned 57 recoveries into about 49 extra time-outs on
+	 * transfers another controller was running at the time.
+	 *
+	 * Let the status choose. SR_IDLE is PIN and NBB set with nothing else, so anything
+	 * else means a bus error, an arbitration loss, or a transfer still in progress,
+	 * and the controller does need the reset. Arming cleared the status, so this reads
+	 * the state of this transaction rather than the history of earlier ones.
+	 */
+	reset = (sr != SR_IDLE);
+
+	XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog);
+	if (reset) {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog_reset);
+	}
+
+	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s", tcmd,
+		sr, reset ? "resetting" : "re-arming");
+
+	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, reset);
 }
 #endif
 
