@@ -1523,7 +1523,6 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	sys_write32(oa, rb + XEC_I2C_OA_OFS);
 
 	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
-	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 	sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_TGT);
 	xec_i2c_v3_cmpl_clear(rb, XEC_I2C_NL_CMPL_TGT_STS);
 
@@ -1541,15 +1540,6 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x35U);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
-
-	/* Probe only: arm the STOP detect for the receive direction as well, which the
-	 * driver otherwise never does, to find out whether the hardware reports an
-	 * externally generated STOP there.
-	 */
-	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STOP_DET_RX_PROBE)) {
-		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
-	}
-
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
 		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
 		    rb + XEC_I2C_TCMD_OFS);
@@ -1657,7 +1647,6 @@ static void xec_i2c_nl_tgt_end(const struct xec_i2c_nl_config *ctrl_cfg,
 	}
 
 	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
-	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 
 	if (tgt != NULL) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xB1U);
@@ -1763,9 +1752,6 @@ static void xec_i2c_nl_tgt_pause(const struct xec_i2c_nl_config *ctrl_cfg,
 	elen = sys_read16(rb + XEC_I2C_NL_ELEN_TGT_OFS) & ~XEC_I2C_NL_ELEN_TGT_WR_MSK;
 	elen |= FIELD_PREP(XEC_I2C_NL_ELEN_TGT_WR_MSK, len >> 8);
 	sys_write16(elen, rb + XEC_I2C_NL_ELEN_TGT_OFS);
-
-	/* A read shorter than len ends only with the STOP detect interrupt */
-	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
 
 	tcmd &= ~XEC_I2C_TCMD_WCL_MSK;
 	tcmd |= XEC_I2C_TCMD_WCL_SET(len & 0xffU);
@@ -1901,26 +1887,21 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		return true;
 	}
 
-	/* STOP detect: STS is read-only, so its interrupt enable is cleared instead */
-	if (((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) &&
-	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_STO_POS)) != 0U)) {
-		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x94U);
-		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_stop_det);
-		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_STD_NL_IEN_POS);
-		xec_i2c_nl_clear_girqs(ctrl_cfg);
-
-		/* The probe reports what the hardware detects without acting on it, so a
-		 * transaction the hardware is still running is left alone to finish and
-		 * report itself.
-		 */
-		if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_STOP_DET_RX_PROBE)) {
-			return true;
-		}
-
-		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, -1, false);
-		return true;
-	}
-
+	/* There is no STOP detect path here. The network layer STOP detect, Configuration
+	 * register bit 27, reports nothing this driver can act on. Measured on MEC1753
+	 * over several runs of a few hundred target transactions each, with a scope
+	 * confirming the transfers do end with a STOP: the Status register STOP status is
+	 * never set, armed in either direction; the detect never delivers an interrupt
+	 * that can be confirmed; and arming it for the receive direction adds about 0.8
+	 * interrupts per target transaction that carry no status at all, the bits common
+	 * to all of them being none and the bits set on any of them being host status
+	 * only. The hardware detects an externally generated STOP in target mode alone,
+	 * and earlier versions did so only while the target was receiving, which is not
+	 * the direction a transaction that needs rescuing stalls in.
+	 *
+	 * A target transaction the hardware never reports done is recovered by
+	 * I2C_MCHP_XEC_NL_TGT_WDOG instead. Do not re-add this from the data sheet.
+	 */
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x95U);
 
 	/* An interrupt the target half did not claim is only interesting when the target is
@@ -2064,8 +2045,7 @@ static int xec_i2c_nl_vport_target_unregister(const struct device *port_dev,
 		unsigned int key = irq_lock();
 
 		ctrl_data->tgt_port_dev = NULL;
-		sys_clear_bits(ctrl_cfg->regbase + XEC_I2C_CFG_OFS,
-			       BIT(XEC_I2C_CFG_TD_IEN_POS) | BIT(XEC_I2C_CFG_STD_NL_IEN_POS));
+		sys_clear_bit(ctrl_cfg->regbase + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
 		irq_unlock(key);
 		(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan2);
 		(void)xec_i2c_nl_program_ctrl(ctrl_cfg, ctrl_data, ctrl_data->active_freq,
