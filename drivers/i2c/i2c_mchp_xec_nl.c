@@ -272,6 +272,12 @@ struct xec_i2c_nl_data {
 	 *                  it only while the target was receiving, so a zero here says
 	 *                  the enable the driver sets during a target transmit phase
 	 *                  never fires.
+	 * cnt_isr_unclaimed_stopen  of the unclaimed, those taken with the network layer
+	 *                  STOP detect enabled, which says whether that enable is what
+	 *                  produces them.
+	 * cnt_tgt_done_rx, cnt_tgt_done_tx  completed transactions split by the phase
+	 *                  they ended in, the denominator for a rate that is expected to
+	 *                  follow one direction and not the other.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -280,6 +286,9 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_stop_det;
 	volatile uint32_t cnt_tgt_wdog;
 	volatile uint32_t cnt_sr_stop_det;
+	volatile uint32_t cnt_isr_unclaimed_stopen;
+	volatile uint32_t cnt_tgt_done_rx;
+	volatile uint32_t cnt_tgt_done_tx;
 #endif
 };
 
@@ -1771,6 +1780,17 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * clear at TDONE for an external write. Do not invert this test to match the
 	 * data sheet: doing so drops every write transaction.
 	 */
+	/* Split the completed transactions by the phase they ended in, so a rate measured
+	 * per transaction can be compared against the receive count rather than against a
+	 * guess at how many of them were receives. The transmit arm below is reached only
+	 * with TPROT set, so it cannot carry this count.
+	 */
+	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) == 0U) {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_done_rx);
+	} else {
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_done_tx);
+	}
+
 	if ((cmpl & BIT(XEC_I2C_CMPL_TTR_POS)) == 0U) {
 		/* Receive phase ended: a write transaction */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9AU);
@@ -1881,6 +1901,16 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) == 0U)) {
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed);
+
+		/* Of those, the ones taken with the network layer STOP detect enabled.
+		 * Enabling that detect was measured to add interrupts the driver cannot
+		 * attribute, which may be the STOP detections themselves arriving without
+		 * the status bit this driver confirms them with. Counting them apart from
+		 * the rest says whether the enable is what produces them.
+		 */
+		if ((cfg & BIT(XEC_I2C_CFG_STD_NL_IEN_POS)) != 0U) {
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_isr_unclaimed_stopen);
+		}
 	}
 
 	return false;
