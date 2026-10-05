@@ -272,6 +272,18 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_wdog     target transactions the watchdog ended, and of those
 	 * cnt_tgt_wdog_reset  the ones whose status said the controller needed a reset
 	 *                  rather than only arming the target again.
+	 *
+	 * cnt_tgt_aat is the count to divide by, not cnt_tgt_done: every transaction
+	 * the hardware matched an address for is one address match, but a stall the
+	 * watchdog ends still reports done later, when a STOP from a later transaction
+	 * sets it, and by then the target has been armed again and that done is counted
+	 * as a transaction of its own. So cnt_tgt_aat equals the transactions that ran
+	 * plus cnt_tgt_wdog, while cnt_tgt_done equals the transactions that ran plus
+	 * however many of those late reports arrived, and the two only agree when the
+	 * watchdog never fired. A 100 loop run that stalled 56 times split 675 + 56 and
+	 * 675 + 43. Those late reports are why cnt_tgt_err can exceed the errors the
+	 * application was told about: the error status is still latched in the
+	 * completion register, but there is no longer an active target to report it to.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -1574,9 +1586,15 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	/* Arming the target again is the cheap recovery: it stops the target DMA, flushes
 	 * the target buffers, clears the target status and rewrites the target command
 	 * register, which is the state a stalled transaction needs put back. Resetting the
-	 * controller is the expensive one, and it disturbs the bus the targets share: a
-	 * run that always reset turned 61 recoveries into about 50 extra time-outs on
-	 * transfers another controller was running at the time.
+	 * controller is the expensive one: it disables the controller, which drops the
+	 * arming of every target registered on it until this function puts it back.
+	 *
+	 * Arming alone is enough for a stall. Two runs of 100 loops on
+	 * mec_assy6941/mec1753_qlj, one resetting at all 61 of its recoveries and one
+	 * resetting at none of its 56, ended the same number of stalls, so a reset does
+	 * not recover anything that arming does not. Nor did the count run away in the
+	 * run that never reset, which it would have if the state machine had stayed
+	 * stalled and expired the watchdog again.
 	 *
 	 * Only a bus error calls for the reset. The other two status bits that show up
 	 * here do not:
