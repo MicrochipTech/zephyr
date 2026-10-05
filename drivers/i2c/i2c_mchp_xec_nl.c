@@ -243,6 +243,11 @@ struct xec_i2c_nl_data {
 	uint32_t tgt_wdog_rcvd;
 #endif
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_IDLE_RECOVER
+	/* An addressed-as-target interrupt armed the idle interrupt for the target */
+	bool tgt_idle_armed;
+#endif
+
 	uint8_t active_port;
 	uint32_t active_freq;
 
@@ -269,6 +274,12 @@ struct xec_i2c_nl_data {
 	 * cnt_tgt_done_rx, cnt_tgt_done_tx  completed transactions split by the phase
 	 *                  they ended in, the denominator for a rate that is expected to
 	 *                  follow one direction and not the other.
+	 * cnt_tgt_aat      addressed-as-target interrupts, one per target transaction
+	 *                  the hardware matched an address for.
+	 * cnt_tgt_idle     idle interrupts taken for a target transaction, which says
+	 *                  whether idle fires at all with a target armed.
+	 * cnt_tgt_idle_recover  of those, the ones that found the transaction still
+	 *                  running and ended it.
 	 */
 	volatile uint32_t cnt_tgt_done;
 	volatile uint32_t cnt_tgt_err;
@@ -277,6 +288,9 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_wdog;
 	volatile uint32_t cnt_tgt_done_rx;
 	volatile uint32_t cnt_tgt_done_tx;
+	volatile uint32_t cnt_tgt_aat;
+	volatile uint32_t cnt_tgt_idle;
+	volatile uint32_t cnt_tgt_idle_recover;
 #endif
 };
 
@@ -1477,6 +1491,20 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x35U);
 	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS);
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_IDLE_RECOVER
+	/* Start from a clean idle state and arm the address match that will arm idle for
+	 * the next transaction. Arming runs from the target register API and again after
+	 * every target transaction, so the match is armed once per transaction.
+	 *
+	 * The address match status needs no clearing here. The network layer moves the
+	 * address byte out of the Data register as part of running the transaction, and
+	 * that clears it, so it is not still set from the transaction just ending.
+	 */
+	ctrl_data->tgt_idle_armed = false;
+	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+	xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
+	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+#endif
 	sys_write32(XEC_I2C_TCMD_RCL_SET(ctrl_cfg->tgt_buf_size & 0xffU) |
 		    BIT(XEC_I2C_TCMD_PROC_POS) | BIT(XEC_I2C_TCMD_RUN_POS),
 		    rb + XEC_I2C_TCMD_OFS);
@@ -1785,6 +1813,34 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x90U);
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_IDLE_RECOVER
+	/* Addressed as target: a transaction has started. Its only use is to arm the idle
+	 * interrupt, which fires when the bus goes quiet at the end of the transaction,
+	 * including when the hardware leaves it running and never reports it done.
+	 *
+	 * Clear the enable, not the status: the Status register is read only, and the
+	 * status clears itself when the network layer moves the address byte out of the
+	 * Data register. Leaving the enable set would re-enter here until it did.
+	 *
+	 * That also sets the window for reading the status. The match is reported at the
+	 * end of the seventh clock of the address and the byte moves out after the
+	 * ninth, so there are about two clock periods to see it: ample at 100 kHz, tight
+	 * at 1 MHz. Missing the window costs this transaction its idle recovery and
+	 * nothing else, since the enable is left set and the next match reports again.
+	 */
+	if (((cfg & BIT(XEC_I2C_CFG_AAT_IEN_POS)) != 0U) &&
+	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_AAT_POS)) != 0U)) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9FU);
+		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_aat);
+		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
+		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
+		ctrl_data->tgt_idle_armed = true;
+		xec_i2c_nl_clear_girqs(ctrl_cfg);
+		return true;
+	}
+#endif
+
 	if (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_TDONE_POS)) != 0U)) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x91U);
@@ -2087,6 +2143,34 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_IDLE_RECOVER
+		/* An address match armed this for a target transaction, so it is the end of
+		 * that transaction and not of a host request. The host path does not arm
+		 * idle while a target is registered, so the two cannot both be waiting.
+		 *
+		 * Recover only a transaction the hardware left running. One that ended
+		 * normally has already been reported done and armed again, and arming
+		 * cleared the flag, so reaching here with it set and the state machine
+		 * still running is the case the idle is for.
+		 */
+		if (ctrl_data->tgt_idle_armed) {
+			uint32_t tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
+
+			ctrl_data->tgt_idle_armed = false;
+			XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_idle);
+
+			if ((tcmd & BIT(XEC_I2C_TCMD_RUN_POS)) != 0U) {
+				XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_idle_recover);
+				LOG_ERR("I2C-NL target idle with TCMD running (0x%08x)", tcmd);
+				xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC,
+						   false);
+			}
+
+			return;
+		}
+#endif
+
 		xec_i2c_nl_req_done(ctrl_cfg, ctrl_data);
 		return;
 	}
