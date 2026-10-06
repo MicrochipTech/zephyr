@@ -681,8 +681,15 @@ static int xec_i2c_nl_program_ctrl(const struct xec_i2c_nl_config *ctrl_cfg,
 	ctrl_data->active_port = port_id;
 
 #ifdef CONFIG_I2C_TARGET_BUFFER_MODE
-	/* The reset cleared the own addresses and the target state machine */
-	xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+	/* The reset cleared the own addresses and the target state machine. Nothing to
+	 * put back when no target is registered, and testing that here rather than
+	 * leaving it to the arming keeps a controller that is only ever a host from
+	 * recording target state it has none of: this runs at initialisation, so every
+	 * such controller began its capture with an arming that did nothing.
+	 */
+	if (xec_i2c_nl_tgt_registered(ctrl_data)) {
+		xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+	}
 #endif
 
 	return rc;
@@ -1606,6 +1613,13 @@ static int xec_i2c_nl_tgt_nl_start(const struct xec_i2c_nl_config *ctrl_cfg,
 /* Program the own addresses and arm the target state machine for the next
  * transaction. Does nothing when no target is registered. Callable from ISR context;
  * runs with interrupts locked as thread context callers race the target ISR.
+ *
+ * Ends by clearing the GIRQs. Every caller in the ISR has already cleared them before
+ * getting here, but these writes latch them again: clearing the status, writing the
+ * Control register and rewriting the command register all do. Without this the
+ * interrupt is taken once more with the completion register reading 0, which is what
+ * a 100 loop run saw as unclaimed interrupts. A source that is genuinely active
+ * re-asserts, so nothing real is dropped.
  */
 static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 				      struct xec_i2c_nl_data *ctrl_data)
@@ -1629,7 +1643,15 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x33U);
 
 	ctrl_data->tgt_active = NULL;
-	ctrl_data->tgt_rx_off = 1U;
+
+	/* Where the data starts in the receive buffer. The network layer puts the
+	 * address byte it matched at offset 0 and takes a receive count for it, so the
+	 * data follows it. With the hand-off, byte mode matched the address and the
+	 * network layer never saw it: an 11 byte buffer ACKed 11 data bytes and NACKed
+	 * the 12th, where counting the address would have stopped at 10, and the buffer
+	 * held the data from offset 0.
+	 */
+	ctrl_data->tgt_rx_off = IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF) ? 0U : 1U;
 
 #ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
 	k_timer_stop(&ctrl_data->tgt_wdog);
@@ -1678,10 +1700,12 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 		sys_write32(0U, rb + XEC_I2C_TCMD_OFS);
+		xec_i2c_nl_clear_girqs(ctrl_cfg);
 		return;
 	}
 
 	(void)xec_i2c_nl_tgt_nl_start(ctrl_cfg, ctrl_data);
+	xec_i2c_nl_clear_girqs(ctrl_cfg);
 }
 
 static void xec_i2c_nl_tgt_arm(const struct xec_i2c_nl_config *ctrl_cfg,
@@ -2179,6 +2203,16 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 			 * enable is set.
 			 */
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA5U);
+
+			/* The address byte stays in the Data register for the network
+			 * layer, and it does not end up in the receive buffer, so it
+			 * cannot name the target once the transaction is over. Take the
+			 * name now, from the address shadow register, which holds the
+			 * matched address as it appeared on the bus.
+			 */
+			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(
+				ctrl_data, (sys_read32(rb + XEC_I2C_IAS_OFS) & 0xffU) >> 1);
+
 			xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 			sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 			if (xec_i2c_nl_tgt_nl_start(ctrl_cfg, ctrl_data) != 0) {
@@ -2272,22 +2306,25 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * register runs for as long as a target is registered, which is what rules the
 	 * idle interrupt out, and the host half owns the enable instead.
 	 */
-	if (((cfg & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0U) &&
+	if (xec_i2c_nl_tgt_registered(ctrl_data) &&
+	    ((cfg & BIT(XEC_I2C_CFG_IDLE_IEN_POS)) != 0U) &&
 	    ((cmpl & BIT(XEC_I2C_CMPL_IDLE_POS)) != 0U)) {
-		uint8_t sr = sys_read8(rb + XEC_I2C_SR_OFS);
-
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA7U);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_idle);
 		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
-		xec_i2c_nl_clear_girqs(ctrl_cfg);
 
-		LOG_ERR("I2C-NL target bus idle with no target done (sr 0x%02x)", sr);
-		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data,
-				   ((sr & BIT(XEC_I2C_SR_LAB_POS)) != 0U)
-					   ? I2C_ERROR_ARBITRATION
-					   : I2C_ERROR_TIMEOUT,
-				   ((sr & BIT(XEC_I2C_SR_BER_POS)) != 0U));
+		/* Report it as the transaction it was, from the completion register,
+		 * which is what holds the reason and what the done path already reads:
+		 * the one of these seen on hardware ended with a receive overflow NACK
+		 * and the bus going idle, no done and the command register still running,
+		 * and the status register alone would have called that a time-out and
+		 * delivered nothing. Target done is where the target is matched and the
+		 * received data delivered, so go through it rather than around it.
+		 */
+		LOG_ERR("I2C-NL target bus idle with no target done (cmpl 0x%08x)", cmpl);
+		xec_i2c_nl_tgt_done(ctrl_cfg, ctrl_data, cmpl);
+		xec_i2c_nl_clear_girqs(ctrl_cfg);
 		return true;
 	}
 #endif
