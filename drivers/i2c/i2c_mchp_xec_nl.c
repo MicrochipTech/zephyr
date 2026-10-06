@@ -182,6 +182,22 @@ struct xec_i2c_nl_config {
 	struct xec_i2c_timing timing[XEC_I2C_NL_TIMING_COUNT];
 };
 
+#ifdef CONFIG_I2C_MCHP_XEC_NL_ISR_CAPTURE
+#define XEC_I2C_NL_NCAP_ENTRIES CONFIG_I2C_MCHP_XEC_NL_ISR_CAPTURE_NUM_ENTRIES
+
+struct xec_i2c_nl_isr_capture {
+	volatile uint32_t hcmd;
+	volatile uint32_t tcmd;
+	volatile uint32_t extlen;
+	volatile uint32_t cmpl;
+	volatile uint32_t cfg;
+	volatile uint8_t sr;
+	volatile uint8_t wksts;
+	volatile uint8_t shad_addr;
+	volatile uint8_t shad_data;
+};
+#endif
+
 /* Controller device driver data */
 struct xec_i2c_nl_data {
 	const struct device *controller;
@@ -329,6 +345,10 @@ struct xec_i2c_nl_data {
 	volatile uint32_t cnt_tgt_hold_stale;
 	volatile uint32_t cnt_tgt_aat_miss;
 #endif
+#ifdef CONFIG_I2C_MCHP_XEC_NL_ISR_CAPTURE
+	volatile uint32_t isr_cap_idx;
+	struct xec_i2c_nl_isr_capture isrcap[XEC_I2C_NL_NCAP_ENTRIES];
+#endif
 };
 
 /* Port device configuration */
@@ -371,6 +391,56 @@ static void xec_i2c_nl_state_cap_update(struct xec_i2c_nl_data *data, uint8_t va
 #define XEC_I2C_NL_STATE_CAP_INIT(data)
 #define XEC_I2C_NL_STATE_CAP_UPDATE(data, val)
 #define XEC_I2C_NL_CNT_INC(data, member)
+#endif
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_ISR_CAPTURE
+static void xec_i2c_nl_isr_cap_init(struct xec_i2c_nl_data *data)
+{
+	data->isr_cap_idx = 0;
+	memset(data->isrcap, 0, sizeof(data->isrcap));
+}
+
+#if 0
+struct xec_i2c_nl_isr_capture {
+	uint32_t hcmd;
+	uint32_t tcmd;
+	uint32_t extlen;
+	uint32_t cmpl;
+	uint32_t cfg;
+	uint8_t sr;
+	uint8_t wksts;
+	uint8_t shad_addr;
+	uint8_t shad_data;
+};
+#endif
+static void xec_i2c_nl_isr_cap_update(struct xec_i2c_nl_data *data)
+{
+	const struct xec_i2c_nl_config *ctrl_cfg = data->controller->config;
+	uintptr_t rb = ctrl_cfg->regbase;
+	
+
+	if (data->isr_cap_idx >= XEC_I2C_NL_NCAP_ENTRIES) {
+		return;
+	}
+
+	struct xec_i2c_nl_isr_capture *cp = &data->isrcap[data->isr_cap_idx++];
+
+	cp->hcmd = sys_read32(rb + XEC_I2C_HCMD_OFS);
+	cp->tcmd = sys_read32(rb + XEC_I2C_TCMD_OFS);
+	cp->extlen = sys_read32(rb + XEC_I2C_ELEN_OFS);
+	cp->cmpl = sys_read32(rb + XEC_I2C_CMPL_OFS);
+	cp->cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
+	cp->sr = sys_read8(rb + XEC_I2C_SR_OFS);
+	cp->wksts = sys_read8(rb + XEC_I2C_WKSR_OFS);
+	cp->shad_addr = sys_read8(rb + XEC_I2C_IAS_OFS);
+	cp->shad_data = sys_read8(rb + XEC_I2C_IDS_OFS);
+}
+
+#define XEC_I2C_NL_ISR_CAP_INIT(data) xec_i2c_nl_isr_cap_init(data)
+#define XEC_I2C_NL_ISR_CAP_UPDATE(data) xec_i2c_nl_isr_cap_update(data)
+#else
+#define XEC_I2C_NL_ISR_CAP_INIT(data)
+#define XEC_I2C_NL_ISR_CAP_UPDATE(data)
 #endif
 
 /* XEC I2C controller supports 7-bit I2C addressing only */
@@ -1202,6 +1272,8 @@ static int xec_i2c_nl_vport_xfr(const struct device *port_dev, struct i2c_msg *m
 		XEC_I2C_NL_STATE_CAP_INIT(ctrl_data);
 	}
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 1U);
+
+	XEC_I2C_NL_ISR_CAP_INIT(ctrl_data);
 
 	rc = xec_i2c_nl_apply_port(port_cfg, port_data, ctrl_cfg, ctrl_data);
 	if (rc != 0) {
@@ -2349,13 +2421,17 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_dev->config;
 	struct xec_i2c_nl_data *ctrl_data = ctrl_dev->data;
 	uintptr_t rb = ctrl_cfg->regbase;
-	uint32_t cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
-	uint32_t cmpl = sys_read32(rb + XEC_I2C_CMPL_OFS);
+	uint32_t cfg = 0; /* sys_read32(rb + XEC_I2C_CFG_OFS); */
+	uint32_t cmpl = 0; /* sys_read32(rb + XEC_I2C_CMPL_OFS); */
 	uint32_t hcmd = 0;
 	bool handled = false;
 	int rc = 0;
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x80U);
+	XEC_I2C_NL_ISR_CAP_UPDATE(ctrl_data);
+
+	cfg = sys_read32(rb + XEC_I2C_CFG_OFS);
+	cmpl = sys_read32(rb + XEC_I2C_CMPL_OFS);
 
 	/* Each path clears the I2C status, then the GIRQs, before enabling any new
 	 * interrupt source (IDLE, HPROCEED, the next request, or the target re-arm).
