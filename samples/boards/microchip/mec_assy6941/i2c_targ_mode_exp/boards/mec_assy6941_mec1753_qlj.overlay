@@ -1,0 +1,150 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6941 EVB with mec1753_qlj */
+
+#include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
+/ {
+	zephyr,user {
+		/* Bus fault injection for the error paths of the I2C-NL driver.
+		 *
+		 * Fly wire fault-inject-gpios to the SDA line of port 0, the same net as
+		 * i2c00_sda_gpio003. The sample pulls it low part way through a long host
+		 * transfer, which the controller reports as an arbitration loss or a bus
+		 * error depending on where the pull lands against SCL.
+		 *
+		 * GPIO050 (bank 1 pin 8: octal pin number 050 is 40, bank 40 / 32, pin
+		 * 40 % 32) is a placeholder. Check the EVB schematic that the pin is free
+		 * and brought out to a header before wiring anything to it, and change
+		 * the entry here if it is not. Open drain so the pin only ever sinks:
+		 * driving a push-pull high onto SDA would fight the bus.
+		 *
+		 * Without the wire fitted the sample still builds and runs, and reports
+		 * that no fault was seen.
+		 */
+		fault-inject-gpios = <MCHP_GPIO_DECODE_050 GPIO_OPEN_DRAIN>;
+
+		/* SDA pad of the port the faulted transfers run on, the same pin
+		 * pinctrl assigns to the controller as i2c00_sda_gpio003. Used only to
+		 * arm a GPIO interrupt on it, so that CONFIG_APP_FAULT_SYNC_START can
+		 * time the pull from the START condition. The pin keeps its I2C
+		 * function: the sample never configures it as a GPIO.
+		 */
+		fault-sda-gpios = <MCHP_GPIO_DECODE_003 0>;
+
+		/* 32-bit basic timer. timer0 to timer3 are 16 bit and at 48 MHz reach
+		 * only 1.365 ms, shorter than the transfer the fault lands inside.
+		 */
+		fault-inject-timer = <&timer4>;
+	};
+
+	aliases {
+		i2c-target-port = &i2c0_p0;
+		i2c-controller-port = &i2c1_p7;
+	};
+
+	/* Port 0 on I2C controller 0: targets and controller transfers share it */
+	i2c0_p0: i2c-port0 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <0>;
+		controller = <&i2c_smb_0>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		pca9555_evb: pca9555@26 {
+			reg = <0x26>;
+			status = "okay";
+		};
+	};
+
+	/* Port 7 on I2C controller 1: controller mode */
+	i2c1_p7: i2c-port7 {
+		compatible = "microchip,xec-i2c-nl-port";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port = <7>;
+		controller = <&i2c_smb_1>;
+		clock-frequency = <I2C_BITRATE_STANDARD>;
+		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		fram_evb: fram@50 {
+			reg = <0x50>;
+			status = "okay";
+		};
+	};
+};
+
+&dmac {
+	status = "okay";
+};
+
+&uart1 {
+	compatible = "microchip,xec-uart";
+	status = "okay";
+};
+
+&i2c_smb_0 {
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+	dmas = <&dmac 0 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_CTRL>,
+	       <&dmac 1 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB0_TARG>;
+	dma-names = "host", "target";
+	/* Largest external write (register pointer + 256 data bytes), the START
+	 * address byte, and a RPT-START address byte.
+	 */
+	target-buffer-size = <11>;
+	default-port = <&i2c0_p0>;
+};
+
+&i2c00_sda_gpio003 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c00_scl_gpio004 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c_smb_1 {
+	compatible = "microchip,xec-i2c-nl";
+	status = "okay";
+	dmas = <&dmac 2 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_CTRL>,
+	       <&dmac 3 DMA_MCHP_XEC_TRIG_SRC_I2C_SMB1_TARG>;
+	dma-names = "host", "target";
+	/* Largest external write (register pointer + 256 data bytes), the START
+	 * address byte, and a RPT-START address byte.
+	 */
+	target-buffer-size = <259>;
+	default-port = <&i2c1_p7>;
+};
+
+&i2c07_sda_gpio012 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+&i2c07_scl_gpio013 {
+	drive-open-drain;
+	output-enable;
+	output-high;
+};
+
+/* 32-bit basic timer used to time the bus fault injection */
+&timer4 {
+	status = "okay";
+};
