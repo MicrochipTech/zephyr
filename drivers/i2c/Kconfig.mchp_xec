@@ -160,3 +160,18 @@ config I2C_MCHP_XEC_NL_TGT_WDOG_MS
 	  stalled. Size it above the longest an external host will run: a write
 	  filling a 259 byte target buffer takes about 23 ms at 100 kHz, which the
 	  default clears by about two to one.
+
+config I2C_MCHP_XEC_NL_ISR_CAPTURE
+	bool "XEC I2C-NL capture ISR status on each interrupt"
+	default n
+	depends on I2C_MCHP_XEC_NL
+	help
+	  Capture I2C controller status, hcmd, tcmd, extlen, cmpl, and cfg registers
+	  into a buffer on each interrupt.
+
+config I2C_MCHP_XEC_NL_ISR_CAPTURE_NUM_ENTRIES
+	int "XEC I2C-NL number of entries for capture ISR status on each interrupt"
+	default 256
+	depends on I2C_MCHP_XEC_NL_ISR_CAPTURE
+	help
+	  Number of interrupt state capture entries. Defaults to 256.
