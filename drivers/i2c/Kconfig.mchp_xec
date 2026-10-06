@@ -109,9 +109,79 @@ config I2C_MCHP_XEC_NL_FIX_TGT_TDONE_STUCK
 	  state capture marker that records the branch, so the state is no longer visible
 	  in a trace.
 
+config I2C_MCHP_XEC_NL_TGT_AAT
+	bool
+	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	help
+	  Arm the addressed-as-target match, Configuration register bit 28, when a
+	  target is armed, and handle it in the target ISR. The match is reported at
+	  the end of the seventh clock of an address the hardware can match, which
+	  marks the start of a target transaction, and it is armed once per
+	  transaction, so cnt_tgt_aat counts the transactions the hardware matched an
+	  address for.
+
+	  Selected by whatever needs the match. Not a choice on its own: on its own it
+	  only counts.
+
+config I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
+	bool "XEC I2C-NL target network layer hand-off at the address match"
+	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	select I2C_MCHP_XEC_NL_TGT_AAT
+	help
+	  Arm a target with the address match alone and start the network layer from
+	  the ISR when the match arrives, instead of arming the network layer up front
+	  and waiting for it to report.
+
+	  Arming programs the own addresses, arms the match, writes 0 to the target
+	  command register and leaves the target DMA channel stopped, so the byte mode
+	  state machine is what receives the address byte. The ISR leaves that byte in
+	  the Data register, enables the idle and target done interrupts, programs the
+	  target DMA and writes the target command register, and the network layer
+	  takes the transaction from there.
+
+	  What that relies on is the byte reaching memory by the path it would have
+	  taken had the network layer been running all along. Byte mode leaves a
+	  received byte in the Data register and holds SCL low until it is serviced,
+	  so the transaction waits for the ISR rather than running ahead of it, and
+	  the two clock window for reading the match status does not apply: the byte
+	  stays put and so does the status. Starting the network layer is then what
+	  moves that byte to the target receive buffer register, which is what
+	  triggers the DMA channel to read it, and that is also what clears the match
+	  status. The channel is programmed before the target command register for
+	  that reason, so it is listening before anything can arrive.
+
+	  If the byte does not make that trip the address byte is not buffer byte 0,
+	  which the receive offset and the target lookup both rely on. It is a count
+	  as well as a byte: a 1 byte external write delivers 1 byte to the
+	  application, which it could not if the address did not take a receive
+	  count, so target-buffer-size covers the address byte and one fewer data
+	  bytes than its value.
+
+	  The point of it is that the match is part of the byte mode state machine and
+	  reports into the byte mode Status register, while the enable for it lives in
+	  the Configuration register alongside the network layer enables. With the
+	  network layer already running, the match is not reliably reported: an
+	  external 15 byte write to a target with an 11 byte buffer produced one
+	  interrupt and no match at all, completion register 0x20000000, idle and
+	  nothing else, although the bus showed the address ACKed, 11 bytes ACKed, the
+	  12th NACKed and a STOP. cnt_tgt_aat_miss counts the same thing over a run
+	  and reached 16 percent of transactions.
+
+	  Experimental, and off by default. It changes which state machine owns the
+	  start of every target transaction, on a controller whose state machines
+	  interact in ways the data sheet does not describe.
+
+	  It also changes what the idle interrupt can be used for. A target armed the
+	  old way keeps the target command register running, which rules idle out;
+	  armed this way the register reads 0 until a match arrives, so idle is
+	  available and is enabled for the length of a transaction. Bus idle with the
+	  transaction unreported ends it, which is the recovery the watchdog does,
+	  without waiting for a timer. cnt_tgt_idle counts those.
+
 config I2C_MCHP_XEC_NL_TGT_WDOG
 	bool "XEC I2C-NL target watchdog"
 	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
+	select I2C_MCHP_XEC_NL_TGT_AAT
 	help
 	  Recover a target transaction the hardware never reports done. The target
 	  state machine can be left running with no completion interrupt pending, for
