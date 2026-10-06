@@ -47,6 +47,23 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define XEC_I2C_NL_CR_DFLT \
 	(BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_ACK_POS) | BIT(XEC_I2C_CR_PIN_POS))
 
+/* Control register with the byte mode interrupt enabled, for arming a target that is
+ * started by the byte mode service request rather than by the address match.
+ */
+#define XEC_I2C_NL_CR_ENI (XEC_I2C_NL_CR_DFLT | BIT(XEC_I2C_CR_ENI_POS))
+
+/* Control register with the byte mode interrupt disabled and PIN left alone. PIN reads
+ * as a service request, and writing it back as 1 clears the status and answers the
+ * request, which would let byte mode carry on with a byte the network layer is being
+ * given. Writing 0 keeps output enable and auto-ACK and touches nothing else.
+ */
+#define XEC_I2C_NL_CR_HOLD (BIT(XEC_I2C_CR_ESO_POS) | BIT(XEC_I2C_CR_ACK_POS))
+
+/* The same, with the byte mode interrupt enabled: arms it without clearing the status
+ * or answering a service request already outstanding.
+ */
+#define XEC_I2C_NL_CR_ENI_HOLD (XEC_I2C_NL_CR_HOLD | BIT(XEC_I2C_CR_ENI_POS))
+
 /* Enable bit-bang live SCL/SDA monitoring and bit-bang mode is disable */
 #define XEC_I2C_BBCR_LIVE_RD BIT(XEC_I2C_BBCR_CM_POS)
 
@@ -70,6 +87,11 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define XEC_I2C_NL_CMPL_HOST_FATAL                                                                 \
 	(BIT(XEC_I2C_CMPL_LAB_STS_POS) | BIT(XEC_I2C_CMPL_BER_STS_POS) |                           \
 	 BIT(XEC_I2C_CMPL_TMO_STS_POS))
+
+/* Either entry reports the start of a target transaction */
+#if defined(CONFIG_I2C_MCHP_XEC_NL_TGT_AAT) || defined(CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN)
+#define XEC_I2C_NL_TGT_START 1
+#endif
 
 /* Completion register status bits of a target transaction */
 #define XEC_I2C_NL_CMPL_TGT_STS                                                                    \
@@ -241,8 +263,8 @@ struct xec_i2c_nl_data {
 	struct i2c_target_config *tgt_cfg[XEC_I2C_OA_NUM_TARGETS];
 	const struct device *tgt_port_dev;
 	struct i2c_target_config *tgt_active; /* target addressed by the current transaction */
-#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_AAT
-	/* Counts address matches, so it names the transaction one of them starts */
+#ifdef XEC_I2C_NL_TGT_START
+	/* Counts the starts of target transactions, so it names the one in progress */
 	uint32_t tgt_seq;
 #endif
 #ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_WDOG
@@ -1150,6 +1172,18 @@ static void xec_i2c_nl_start_hw(const struct xec_i2c_nl_config *ctrl_cfg,
 	irq_unlock(key);
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x13U);
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
+	/* An armed target has the byte mode interrupt enabled, and it must not be while
+	 * the host command register runs: it interrupts per byte, which is the whole
+	 * performance of a network layer transfer. Disabling it does not make the
+	 * controller deaf, the hardware still matching an address after a START or
+	 * RPT-START and holding SCL to claim the transfer, so an external controller
+	 * addressing a target now waits for this transfer rather than losing its
+	 * transaction. The target is armed again when this one finishes.
+	 */
+	sys_write8(XEC_I2C_NL_CR_HOLD, rb + XEC_I2C_CR_OFS);
+#endif
 	sys_write32(hcmd, rb + XEC_I2C_HCMD_OFS);
 }
 
@@ -1657,26 +1691,47 @@ static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 	k_timer_stop(&ctrl_data->tgt_wdog);
 	ctrl_data->tgt_stalled = NULL;
 #endif
-#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_AAT
-	/* Arm the address match for the next transaction. Arming runs from the target
-	 * register API and again after every target transaction, so the match is armed
-	 * once per transaction.
+#ifdef XEC_I2C_NL_TGT_START
+	/* Arm whichever interrupt reports the start of the next transaction. Arming runs
+	 * from the target register API and again after every target transaction, so it is
+	 * armed once per transaction.
 	 *
-	 * The address match status needs no clearing here. The network layer moves the
-	 * address byte out of the Data register as part of running the transaction, and
-	 * that clears it, so it is not still set from the transaction just ending.
-	 */
-	/* Clear the Status register so a later read reports the state then and not the
+	 * The address match status needs no clearing. The network layer moves the address
+	 * byte out of the Data register as part of running the transaction, and that
+	 * clears it, so it is not still set from the transaction just ending.
+	 *
+	 * Clear the Status register so a later read reports the state then and not the
 	 * history of earlier transactions: its error bits latch, so without this the first
 	 * bus error or arbitration loss would make every later check look unhealthy.
 	 * Nothing is lost, the target error reasons come from the Completion register.
 	 *
 	 * Write the value programming uses, output enable and auto-ACK together with PIN,
 	 * not PIN alone: the Control register is write only, so a write of PIN alone would
-	 * clear output enable and auto-ACK with it and leave the target deaf.
+	 * clear output enable and auto-ACK with it and leave the target deaf. The byte
+	 * mode entry writes the same thing plus its enable, so the one write both clears
+	 * the status and arms.
 	 */
-	sys_write8(XEC_I2C_NL_CR_DFLT, rb + XEC_I2C_CR_OFS);
-	sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN)) {
+		/* Unless a transaction is already waiting on us. The hardware matches an
+		 * address and holds SCL whether or not the interrupt is enabled, so one
+		 * can be outstanding here, left over the length of a host transfer that
+		 * had to disable it. Clearing the status would answer that service
+		 * request and let byte mode take a byte that is the network layer's, and
+		 * would drop the match that says who it is for, so arm without touching
+		 * either and let it interrupt.
+		 */
+		uint8_t sr = sys_read8(rb + XEC_I2C_SR_OFS);
+
+		if (((sr & BIT(XEC_I2C_SR_AAT_POS)) != 0U) &&
+		    ((sr & BIT(XEC_I2C_SR_PIN_POS)) == 0U)) {
+			sys_write8(XEC_I2C_NL_CR_ENI_HOLD, rb + XEC_I2C_CR_OFS);
+		} else {
+			sys_write8(XEC_I2C_NL_CR_ENI, rb + XEC_I2C_CR_OFS);
+		}
+	} else {
+		sys_write8(XEC_I2C_NL_CR_DFLT, rb + XEC_I2C_CR_OFS);
+		sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+	}
 #endif
 
 	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF)) {
@@ -2189,6 +2244,33 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, reason, reset);
 }
 
+#ifdef XEC_I2C_NL_TGT_START
+/* The interrupt that says a target transaction has started.
+ *
+ * The address match is reported at the end of the seventh clock of the address, before
+ * the hardware has finished with the byte. The byte mode service request is asserted
+ * after it has ACKed an address it matched, and holds SCL low until it is answered, so
+ * entering on it means the address byte is complete and everything the hardware
+ * captured about it is valid. There is no enable to read back for it, the Control
+ * register being write only: what says the target is armed and waiting is the done
+ * interrupt being disabled, which arming leaves that way and only
+ * xec_i2c_nl_tgt_nl_start() sets.
+ */
+static inline bool xec_i2c_nl_tgt_started(const struct xec_i2c_nl_config *ctrl_cfg, uint32_t cfg)
+{
+	uint8_t sr = sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS);
+
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN)) {
+		return (((cfg & BIT(XEC_I2C_CFG_TD_IEN_POS)) == 0U) &&
+			((sr & BIT(XEC_I2C_SR_AAT_POS)) != 0U) &&
+			((sr & BIT(XEC_I2C_SR_PIN_POS)) == 0U));
+	}
+
+	return (((cfg & BIT(XEC_I2C_CFG_AAT_IEN_POS)) != 0U) &&
+		((sr & BIT(XEC_I2C_SR_AAT_POS)) != 0U));
+}
+#endif
+
 /* Target part of the controller ISR. Clears the target status, then the GIRQs, before
  * acting. Returns true if a target event was handled.
  */
@@ -2200,24 +2282,31 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x90U);
 
-#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_AAT
-	/* Addressed as target: a transaction has started.
+#ifdef XEC_I2C_NL_TGT_START
+	/* A target transaction has started. Which interrupt says so is all the two
+	 * entries differ in, so everything done about it afterwards is here.
 	 *
-	 * Clear the enable, not the status: the Status register is read only, and the
-	 * status clears itself when the network layer moves the address byte out of the
-	 * Data register. Leaving the enable set would re-enter here until it did.
+	 * Address match entry clears the enable, not the status: the Status register is
+	 * read only, and the status clears itself when the network layer moves the
+	 * address byte out of the Data register. Leaving the enable set would re-enter
+	 * here until it did.
 	 *
-	 * Read the status before anything else does. The match is reported at the end of
-	 * the seventh clock of the address and the byte moves out after the ninth, so
-	 * there are about two clock periods to see it, unless the network layer has not
-	 * been started, in which case the byte stays put and so does the status.
+	 * Byte mode entry has nothing to clear an enable in, the Control register being
+	 * write only, so it writes the register back without that bit. It must, before
+	 * either command register runs: byte mode interrupts per byte, which would fight
+	 * the network layer here and take away the whole reason for using it on a host
+	 * transfer. PIN is written as 0 so the service request is disabled and not
+	 * answered, the byte being the network layer's to take.
 	 */
-	if (((cfg & BIT(XEC_I2C_CFG_AAT_IEN_POS)) != 0U) &&
-	    ((sys_read8(rb + XEC_I2C_SR_OFS) & BIT(XEC_I2C_SR_AAT_POS)) != 0U)) {
+	if (xec_i2c_nl_tgt_started(ctrl_cfg, cfg)) {
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9FU);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_aat);
 		ctrl_data->tgt_seq++;
-		sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+		if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN)) {
+			sys_write8(XEC_I2C_NL_CR_HOLD, rb + XEC_I2C_CR_OFS);
+		} else {
+			sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_AAT_IEN_POS);
+		}
 
 		if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF)) {
 			/* The byte mode state machine took the address byte and the
@@ -2562,6 +2651,19 @@ static void xec_i2c_nl_isr_finish(const struct xec_i2c_nl_config *ctrl_cfg,
 
 	(void)dma_stop(ctrl_cfg->dma_dev, ctrl_cfg->dma_chan1);
 	sys_clear_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_HD_IEN_POS);
+
+#ifdef CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
+	/* Put the byte mode interrupt back, the host command register having stopped.
+	 * Not while a target transaction is in flight: the network layer owns the
+	 * controller then and arming would throw that transaction away. The done
+	 * interrupt being enabled is what says one is, and when it ends its own arming
+	 * puts this back.
+	 */
+	if (xec_i2c_nl_tgt_registered(ctrl_data) &&
+	    (sys_test_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_TD_IEN_POS) == 0)) {
+		xec_i2c_nl_tgt_arm(ctrl_cfg, ctrl_data);
+	}
+#endif
 
 	if (ctrl_data->xfr_err != 0) {
 		sys_set_bits(rb + XEC_I2C_CFG_OFS, XEC_I2C_NL_CFG_FLUSH_HOST);
