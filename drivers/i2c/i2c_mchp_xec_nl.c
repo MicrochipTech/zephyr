@@ -1843,6 +1843,38 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 }
 #endif
 
+/* Target of the transaction being reported, or NULL.
+ *
+ * The network layer puts the address it matched at the start of the receive buffer,
+ * so the buffer names the target. With the hand-off it never saw that byte and the
+ * address shadow register is what names it.
+ *
+ * Read here and not at the match: the match is reported at the end of the seventh
+ * clock of the address and the hardware does not copy the address into the shadow
+ * register until after the eighth, so an ISR that is not held up reads it before it
+ * means anything. By the time a transaction is reported it has been valid for the
+ * whole of it.
+ */
+static struct i2c_target_config *xec_i2c_nl_tgt_match(struct xec_i2c_nl_data *ctrl_data,
+						      uint8_t addr);
+
+static struct i2c_target_config *xec_i2c_nl_tgt_of_xfr(const struct xec_i2c_nl_config *ctrl_cfg,
+						       struct xec_i2c_nl_data *ctrl_data,
+						       const uint8_t *buf, uint32_t off)
+{
+	if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF)) {
+		uint8_t ias = (uint8_t)(sys_read32(ctrl_cfg->regbase + XEC_I2C_IAS_OFS) & 0xffU);
+
+		return xec_i2c_nl_tgt_match(ctrl_data, ias >> 1);
+	}
+
+	if (off == 0U) {
+		return NULL;
+	}
+
+	return xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
+}
+
 /* Registered target with 7-bit address addr, else NULL */
 static struct i2c_target_config *xec_i2c_nl_tgt_match(struct xec_i2c_nl_data *ctrl_data,
 						      uint8_t addr)
@@ -1957,9 +1989,7 @@ static void xec_i2c_nl_tgt_pause(const struct xec_i2c_nl_config *ctrl_cfg,
 		return;
 	}
 
-	if (off != 0U) {
-		ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
-	}
+	ctrl_data->tgt_active = xec_i2c_nl_tgt_of_xfr(ctrl_cfg, ctrl_data, buf, off);
 
 	/* The address byte that caused the pause is the last byte received */
 	addr_byte = buf[rcvd - 1U];
@@ -2133,9 +2163,10 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 		/* Receive phase ended: a write transaction */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9AU);
 		rcvd = xec_i2c_nl_tgt_rx_count(ctrl_cfg, ctrl_data);
-		if ((off != 0U) && (rcvd != 0U) && (ctrl_data->tgt_active == NULL)) {
+		if ((rcvd != 0U) && (ctrl_data->tgt_active == NULL)) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9BU);
-			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(ctrl_data, buf[0] >> 1);
+			ctrl_data->tgt_active =
+				xec_i2c_nl_tgt_of_xfr(ctrl_cfg, ctrl_data, buf, off);
 		}
 		if ((reason < 0) && (rcvd > off)) {
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9CU);
@@ -2203,16 +2234,6 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 			 * enable is set.
 			 */
 			XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA5U);
-
-			/* The address byte stays in the Data register for the network
-			 * layer, and it does not end up in the receive buffer, so it
-			 * cannot name the target once the transaction is over. Take the
-			 * name now, from the address shadow register, which holds the
-			 * matched address as it appeared on the bus.
-			 */
-			ctrl_data->tgt_active = xec_i2c_nl_tgt_match(
-				ctrl_data, (sys_read32(rb + XEC_I2C_IAS_OFS) & 0xffU) >> 1);
-
 			xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 			sys_set_bit(rb + XEC_I2C_CFG_OFS, XEC_I2C_CFG_IDLE_IEN_POS);
 			if (xec_i2c_nl_tgt_nl_start(ctrl_cfg, ctrl_data) != 0) {
