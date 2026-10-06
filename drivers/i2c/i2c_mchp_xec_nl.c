@@ -1650,10 +1650,19 @@ static int xec_i2c_nl_tgt_nl_start(const struct xec_i2c_nl_config *ctrl_cfg,
  *
  * Ends by clearing the GIRQs. Every caller in the ISR has already cleared them before
  * getting here, but these writes latch them again: clearing the status, writing the
- * Control register and rewriting the command register all do. Without this the
- * interrupt is taken once more with the completion register reading 0, which is what
- * a 100 loop run saw as unclaimed interrupts. A source that is genuinely active
- * re-asserts, so nothing real is dropped.
+ * Control register and rewriting the command register all do. A source that is
+ * genuinely active re-asserts, so nothing real is dropped.
+ *
+ * It does not stop the interrupt being taken once more after a transaction, with the
+ * completion register reading 0 and nothing claiming it. Three runs with this in place
+ * all ended that way, and so did the same transaction with no hand-off at all, so
+ * whatever latches it is downstream of the GIRQ. It costs one ISR entry and the ISR
+ * handles it, so it is left alone.
+ *
+ * cnt_isr_unclaimed counts it only when the target is armed with its done interrupt
+ * enabled, which is the arrangement without the hand-off. With the hand-off the done
+ * interrupt is disabled between transactions, so the same entry is not counted: 0
+ * there and 1 without it is the counter's reach, not a difference in the hardware.
  */
 static void xec_i2c_nl_tgt_arm_locked(const struct xec_i2c_nl_config *ctrl_cfg,
 				      struct xec_i2c_nl_data *ctrl_data)
