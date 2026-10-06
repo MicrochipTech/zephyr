@@ -233,7 +233,7 @@ enum fault_xfr_dir {
 	FAULT_XFR_WRITE = 0,
 	FAULT_XFR_READ,
 };
-#define FAULT_DATA_LEN  32U
+#define FAULT_DATA_LEN 32U
 
 /* Delay from arming the one-shot to the pull, swept over this range one step per call.
  *
@@ -371,8 +371,8 @@ static int fault_inject_init(void)
 		fault_sda.port->name, fault_sda.pin);
 #endif
 
-	LOG_INF("Fault injection armed on %s pin %u, timer %s", fault_pin.port->name,
-		fault_pin.pin, fault_timer->name);
+	LOG_INF("Fault injection armed on %s pin %u, timer %s", fault_pin.port->name, fault_pin.pin,
+		fault_timer->name);
 
 	return 0;
 }
@@ -504,12 +504,12 @@ static void fault_inject_test(const struct device *i2c_port_dev, uint16_t i2c_ad
 	 * addressed is inside the controller reset that a previous fault triggered.
 	 */
 	if ((rc == -EIO) || (rc == -ETIMEDOUT)) {
-		LOG_INF("Fault injection %s to 0x%02x at %u us: faulted with %d, as "
-			"expected", dirname, i2c_addr, delay_us, rc);
+		LOG_INF("Fault injection %s to 0x%02x at %u us: faulted with %d, as expected",
+			dirname, i2c_addr, delay_us, rc);
 	} else if (rc == 0) {
 		LOG_INF("Fault injection %s to 0x%02x at %u us: completed, no fault seen. "
-			"The pull landed on an idle bus, or on a low SDA with SCL held "
-			"low", dirname, i2c_addr, delay_us);
+			"The pull landed on an idle bus, or on a low SDA with SCL held low",
+			dirname, i2c_addr, delay_us);
 	} else {
 		LOG_WRN("Fault injection %s to 0x%02x at %u us: failed with %d, which is "
 			"not a fault this test injects",
@@ -689,8 +689,7 @@ int main(void)
 		fram_buf[0] = FAULT_ONES_REG_OFFSET;
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, 1U, TARGET_ADDR_1);
 		if (rc != 0) {
-			LOG_ERR("Seek target 1 to 0x%02x error (%d)", FAULT_ONES_REG_OFFSET,
-				rc);
+			LOG_ERR("Seek target 1 to 0x%02x error (%d)", FAULT_ONES_REG_OFFSET, rc);
 		} else {
 			fault_inject_test(fram_spec.bus, TARGET_ADDR_1, FAULT_XFR_READ);
 		}
