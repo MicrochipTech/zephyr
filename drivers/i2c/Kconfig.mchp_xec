@@ -150,12 +150,19 @@ config I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
 	  status. The channel is programmed before the target command register for
 	  that reason, so it is listening before anything can arrive.
 
-	  If the byte does not make that trip the address byte is not buffer byte 0,
-	  which the receive offset and the target lookup both rely on. It is a count
-	  as well as a byte: a 1 byte external write delivers 1 byte to the
-	  application, which it could not if the address did not take a receive
-	  count, so target-buffer-size covers the address byte and one fewer data
-	  bytes than its value.
+	  Measured on hardware, it does not make that trip. An 11 byte buffer ACKed
+	  11 data bytes and NACKed the 12th, where a receive count spent on the
+	  address would have stopped at 10, and the data began at buffer offset 0.
+	  Byte mode matched the address and the network layer never saw it, so it is
+	  neither a buffer byte nor a count. The driver reads the matched address
+	  from the address shadow register at the match instead, nothing later being
+	  able to name the target, and the receive offset is 0.
+
+	  That makes target-buffer-size mean something different here. Armed the
+	  other way it covers the address byte and one fewer data bytes than its
+	  value; armed this way every byte of it is a data byte. A buffer sized for
+	  the other arrangement therefore accepts one more data byte than it was
+	  meant to, not one fewer, so nothing overflows.
 
 	  The point of it is that the match is part of the byte mode state machine and
 	  reports into the byte mode Status register, while the enable for it lives in
