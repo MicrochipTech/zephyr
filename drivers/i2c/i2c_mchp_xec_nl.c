@@ -2299,7 +2299,7 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * answered, the byte being the network layer's to take.
 	 */
 	if (xec_i2c_nl_tgt_started(ctrl_cfg, cfg)) {
-		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x9FU);
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA8U);
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_aat);
 		ctrl_data->tgt_seq++;
 		if (IS_ENABLED(CONFIG_I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN)) {
