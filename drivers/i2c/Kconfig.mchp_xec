@@ -205,11 +205,18 @@ config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_AAT
 	  driver reads it when the transaction is reported instead, where it has been
 	  valid for the whole transaction, so nothing here depends on it.
 
-	  What is not known is whether starting the target command register this early,
-	  while the hardware is still ACKing the address, is safe. One capture at 100
-	  kHz showed the ACK completing before the hand-off, the stretch beginning
-	  after it, but a clock period is shorter against the same ISR latency at 400
-	  kHz and 1 MHz.
+	  Whether starting the target command register while the hardware is still
+	  ACKing the address is safe has not been answered, and on the development
+	  board it cannot be. It would need the ISR to finish inside the eighth and
+	  ninth clocks, and at both speeds measured it did not: the hand-off landed
+	  after the ACK, 28 us after it at 100 kHz and 1.3 us after it at 400 kHz. The
+	  speed where the ISR would have to win that race, 1 MHz, is out of reach on
+	  the board these were measured on, whose fly-wires carry enough capacitance
+	  that the controller cannot drive SCL.
+
+	  So on that board this entry is always late enough and the question does not
+	  arise. It is the default for that reason, and because it stalls the bus for a
+	  fraction of what the other one does.
 
 config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
 	bool "Byte mode service request, Control register ENI"
@@ -233,6 +240,21 @@ config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
 	  host transfer waits for it rather than losing its transaction. Arming tests
 	  for that case and does not clear the status when it finds it, a write that
 	  clears it being a write that answers the request.
+
+	  It also costs more bus time, and the whole ISR rather than part of it: the
+	  service request is not asserted until the ACK is done, so there is nothing to
+	  overlap. The same 15 byte write to an 11 byte buffer at 400 kHz stretched SCL
+	  for 12.5 us after the ACK where the address match entry stretched it for 1.3
+	  us. Only 5 us of that difference is the eighth and ninth clocks the other
+	  entry has to hide the work in, and what accounts for the rest is not in the
+	  capture.
+
+	  Both delivered the same result on that transfer, an overflow NACK reported as
+	  I2C_ERROR_SIZE as soon as the bus went idle, against the arrangement with no
+	  hand-off which reported nothing and took the watchdog's 50 ms to end it.
+
+	  Choose it for a part or a board where the ISR could finish inside the address
+	  byte, which is what the address match entry has no answer for.
 
 endchoice
 
