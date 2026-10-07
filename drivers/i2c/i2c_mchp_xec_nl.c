@@ -93,6 +93,14 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 #define XEC_I2C_NL_TGT_START 1
 #endif
 
+/* Completion register status bits that say why a target transaction ended. Without one
+ * of these an ending has no explanation, which is the stall the watchdog and the idle
+ * interrupt exist to recover.
+ */
+#define XEC_I2C_NL_CMPL_TGT_ENDED                                                                  \
+	(XEC_I2C_NL_CMPL_HOST_FATAL | BIT(XEC_I2C_CMPL_TNAKR_STS_POS) |                            \
+	 BIT(XEC_I2C_CMPL_TPROT_POS))
+
 /* Completion register status bits of a target transaction */
 #define XEC_I2C_NL_CMPL_TGT_STS                                                                    \
 	(BIT(XEC_I2C_CMPL_TDONE_POS) | BIT(XEC_I2C_CMPL_TNAKR_STS_POS) |                           \
@@ -1572,6 +1580,14 @@ static void xec_i2c_nl_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
  * reads fewer bytes than supplied, only the STOP detect interrupt ends the transaction.
  * Receive overflow is NACKed by hardware: the data is dropped and reported as
  * I2C_ERROR_SIZE.
+ *
+ * That overflow does not set target done. Four runs of a 15 byte external write to a
+ * target with an 11 byte buffer all ended with the completion register reading
+ * 0x20010000, the overflow NACK and bus idle with no done and the target command
+ * register still running and proceeding, after the hardware had ACKed the address and
+ * 11 data bytes and NACKed the 12th. So nothing on the done path can report it: the
+ * idle interrupt does, where it is enabled, and the watchdog does 50 ms later where it
+ * is not.
  */
 
 /* Bytes received by the target since its receive DMA was started */
@@ -2434,14 +2450,22 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		xec_i2c_v3_cmpl_clear(rb, BIT(XEC_I2C_CMPL_IDLE_POS));
 
 		/* Report it as the transaction it was, from the completion register,
-		 * which is what holds the reason and what the done path already reads:
-		 * the one of these seen on hardware ended with a receive overflow NACK
-		 * and the bus going idle, no done and the command register still running,
-		 * and the status register alone would have called that a time-out and
-		 * delivered nothing. Target done is where the target is matched and the
-		 * received data delivered, so go through it rather than around it.
+		 * which is what holds the reason and what the done path already reads.
+		 * Target done is also where the target is matched and the received data
+		 * delivered, so go through it rather than around it.
+		 *
+		 * Log only when the completion register does not say why the transaction
+		 * ended. When it does, this path is not a fault but how that ending is
+		 * found: a receive overflow NACK ends a transaction with no target done
+		 * at all, so the idle interrupt is the only thing that reports it, and
+		 * the reason reaches the application through the error callback either
+		 * way. Logging it regardless put an error line against every overflow,
+		 * next to the one the application prints for the same transfer.
 		 */
-		LOG_ERR("I2C-NL target bus idle with no target done (cmpl 0x%08x)", cmpl);
+		if ((cmpl & XEC_I2C_NL_CMPL_TGT_ENDED) == 0U) {
+			LOG_ERR("I2C-NL target stalled, ended at bus idle (cmpl 0x%08x)",
+				cmpl);
+		}
 		xec_i2c_nl_tgt_done(ctrl_cfg, ctrl_data, cmpl);
 		xec_i2c_nl_clear_girqs(ctrl_cfg);
 		return true;
