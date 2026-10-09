@@ -205,18 +205,19 @@ config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_AAT
 	  driver reads it when the transaction is reported instead, where it has been
 	  valid for the whole transaction, so nothing here depends on it.
 
-	  Whether starting the target command register while the hardware is still
-	  ACKing the address is safe has not been answered, and on the development
-	  board it cannot be. It would need the ISR to finish inside the eighth and
-	  ninth clocks, and at both speeds measured it did not: the hand-off landed
-	  after the ACK, 28 us after it at 100 kHz and 1.3 us after it at 400 kHz. The
-	  speed where the ISR would have to win that race, 1 MHz, is out of reach on
-	  the board these were measured on, whose fly-wires carry enough capacitance
-	  that the controller cannot drive SCL.
+	  Starting the target command register while the hardware is still ACKing the
+	  address is safe. That needs the ISR to finish inside the eighth and ninth
+	  clocks, which it does not do at the speeds a bus normally runs: the hand-off
+	  landed after the ACK by 28 us at 100 kHz and by 1.3 us at 400 kHz. Slowing
+	  the bus is what wins the ISR that race, and at 31.25 kHz, where those two
+	  clocks last about 65 us, it did: the waveform showed no gap at all between
+	  the address byte and the first data byte, so the network layer was running
+	  before the hardware had finished with the address. Five writes across a
+	  target buffer boundary came out the same there as at 1 MHz, down to every
+	  counter and every state capture marker.
 
-	  So on that board this entry is always late enough and the question does not
-	  arise. It is the default for that reason, and because it stalls the bus for a
-	  fraction of what the other one does.
+	  So the entry is safe whether it wins that race or loses it, and it is the
+	  default: it stalls the bus for a fraction of what the other one does.
 
 config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
 	bool "Byte mode service request, Control register ENI"
@@ -253,8 +254,13 @@ config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
 	  I2C_ERROR_SIZE as soon as the bus went idle, against the arrangement with no
 	  hand-off which reported nothing and took the watchdog's 50 ms to end it.
 
-	  Choose it for a part or a board where the ISR could finish inside the address
-	  byte, which is what the address match entry has no answer for.
+	  Nothing measured needs it. It was added because the address match reports
+	  before the hardware has finished with the address byte, which looked unsafe
+	  to hand off on and left the address shadow register unreadable that early;
+	  the driver stopped reading that register early, and a run at 31.25 kHz showed
+	  the hand-off working with the ISR finishing well inside the address byte. It
+	  is kept for a part whose byte mode and network layer interact differently,
+	  not for a fault it fixes here.
 
 endchoice
 
