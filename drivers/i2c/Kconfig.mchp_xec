@@ -238,9 +238,23 @@ config I2C_MCHP_XEC_NL_TGT_WDOG
 	  clock periods, ample at 100 kHz and tight at 1 MHz. Missing it costs that
 	  transaction its watchdog and nothing else.
 
-	  Off by default: it ends a target transaction the hardware may yet have
-	  finished, and whether re-arming alone clears a stalled state machine has
-	  not been confirmed on hardware.
+	  Re-arming alone clears a stalled state machine, which is measured: across
+	  runs totalling several hundred expiries none needed the controller reset,
+	  the expiry count did not run away, and the transaction counts stayed
+	  consistent with the address matches. A run of 745 target transactions under
+	  injected bus faults expired 17 times, reset none of them, and reported every
+	  one of its 91 errors to the application exactly once.
+
+	  It is not made redundant by the idle interrupt that comes with
+	  I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF. In that same run the idle interrupt ended
+	  no transaction at all and the watchdog ended all 17. Idle needs both lines
+	  high for a detection window, which a bus carrying back to back traffic and
+	  repeated recovery may not give it, so the two appear to cover different
+	  stalls rather than the same one twice. Appear, because no capture of one of
+	  those 17 has been taken: the state capture filled before the first of them.
+
+	  Off by default all the same: it ends a target transaction the hardware may
+	  yet have finished.
 
 config I2C_MCHP_XEC_NL_TGT_WDOG_MS
 	int "XEC I2C-NL target transaction timeout in milliseconds"
