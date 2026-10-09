@@ -3,7 +3,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* mec_assy6941 EVB with mec1753_qlj */
+/* mec_assy6941 EVB with mec1753_qlj
+ *
+ * I2C Port 0: i2c00_sda_gpio003 i2c00_scl_gpio004
+ * JP15 3x6 SPI & SPI0 Signal DeMux
+ * ON 4-5, 7-8
+ *
+ * JP27 3x12 UART-2 Signal DeMux
+ * ON 31-32, 34-35
+ *
+ * JP61 2x2 Connect I2C00_SCL/SDA to EXTERNAL_SCLK/SDATA lines -> PCA9555 and LTC2487
+ * ON 1-2, 3-4
+ *
+ * JP70 2x17 pull-ups (if target device does not have pulls)
+ * ON 19-20, 21-22 connects I2C00_SCL and I2C00_SDA to 7.5K pull-ups to VTR1
+ *
+ * I2C Port 3: i2c03_sda_gpio007 i2c03_scl_gpio010
+ * JP11 3x6 PS2 Signal DeMux
+ * ON 7-8, 10-11
+ *
+ * JP29 3x8 UART-3 Signal DeMux
+ * ON 7-8, 16-17
+ *
+ * JP70 2x17 pull-ups (if target device does not have pulls)
+ * 23-24 connect I2C03_SCL to 7.5K pull to VTR1
+ * 25-26 connect I2C03_SCL to 7.5K pull to VTR1
+ *
+ * J15 header 1x6
+ * 1 = I2C03_SCL
+ * 2 = GND
+ * 3 = I2C03_SDA
+ * 4 = N/C
+ * 5 = VTR1
+ * 6 = GND
+ */
 
 #include <zephyr/dt-bindings/dma/mchp-xec-dmac.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
@@ -44,18 +77,18 @@
 	};
 
 	aliases {
-		i2c-target-port = &i2c0_p0;
-		i2c-controller-port = &i2c1_p7;
+		i2c-target-port = &i2c_p0;
+		i2c-controller-port = &i2c_p3;
 	};
 
 	/* Port 0 on I2C controller 0: targets and controller transfers share it */
-	i2c0_p0: i2c-port0 {
+	i2c_p0: i2c-port0 {
 		compatible = "microchip,xec-i2c-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
 		port = <0>;
 		controller = <&i2c_smb_0>;
-		clock-frequency = <I2C_BITRATE_STANDARD>;
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>; /* <I2C_BITRATE_STANDARD>; */
 		pinctrl-0 = <&i2c00_sda_gpio003 &i2c00_scl_gpio004>;
 		pinctrl-names = "default";
 		status = "okay";
@@ -66,15 +99,15 @@
 		};
 	};
 
-	/* Port 7 on I2C controller 1: controller mode */
-	i2c1_p7: i2c-port7 {
+	/* Port 3 on I2C controller 1: controller mode */
+	i2c_p3: i2c-port3 {
 		compatible = "microchip,xec-i2c-nl-port";
 		#address-cells = <1>;
 		#size-cells = <0>;
-		port = <7>;
+		port = <3>;
 		controller = <&i2c_smb_1>;
-		clock-frequency = <I2C_BITRATE_STANDARD>;
-		pinctrl-0 = <&i2c07_sda_gpio012 &i2c07_scl_gpio013>;
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>; /* <I2C_BITRATE_STANDARD>; */
+		pinctrl-0 = <&i2c03_sda_gpio007 &i2c03_scl_gpio010>;
 		pinctrl-names = "default";
 		status = "okay";
 
@@ -104,19 +137,21 @@
 	 * address byte, and a RPT-START address byte.
 	 */
 	target-buffer-size = <11>;
-	default-port = <&i2c0_p0>;
+	default-port = <&i2c_p0>;
 };
 
 &i2c00_sda_gpio003 {
 	drive-open-drain;
 	output-enable;
 	output-high;
+	drive-strength = <4>;
 };
 
 &i2c00_scl_gpio004 {
 	drive-open-drain;
 	output-enable;
 	output-high;
+	drive-strength = <4>;
 };
 
 &i2c_smb_1 {
@@ -129,19 +164,21 @@
 	 * address byte, and a RPT-START address byte.
 	 */
 	target-buffer-size = <259>;
-	default-port = <&i2c1_p7>;
+	default-port = <&i2c_p3>;
 };
 
-&i2c07_sda_gpio012 {
+&i2c03_sda_gpio007 {
 	drive-open-drain;
 	output-enable;
 	output-high;
+	drive-strength = <4>;
 };
 
-&i2c07_scl_gpio013 {
+&i2c03_scl_gpio010 {
 	drive-open-drain;
 	output-enable;
 	output-high;
+	drive-strength = <4>;
 };
 
 /* 32-bit basic timer used to time the bus fault injection */
