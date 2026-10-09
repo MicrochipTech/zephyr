@@ -216,6 +216,21 @@ int main(void)
 		return 0;
 	}
 
+#if 1
+	fram_buf[0] = 0x11U;
+	fram_buf[1] = 0x22U;
+	fram_buf[2] = 0x33U;
+	fram_buf[3] = 0x44U;
+#if 0
+	rc = i2c_write_dt(&fram_spec, fram_buf, 4U);
+#else
+	rc = i2c_write(pca9555.bus, fram_buf, 4U, fram_spec.addr);
+#endif
+	if (rc != 0) {
+		LOG_ERR("Write 4 bytes to FRAM failed (%d)", rc);
+	}
+#endif
+
 	rc = reg_target_register(&targets[0], TARGET_ADDR_1);
 	if (rc != 0) {
 		LOG_ERR("Register target 0x%02x error (%d)", TARGET_ADDR_1, rc);
@@ -231,33 +246,45 @@ int main(void)
 	LOG_INF("Targets 0x%02x and 0x%02x registered", TARGET_ADDR_1, TARGET_ADDR_2);
 	LOG_INF("Target buffer size = %u", target_buf_size);
 
+	memset(fram_buf, 0xff, sizeof(fram_buf));
+
 	while (true) {
-#if 0
-		fram_buf[0] = 0x11u;
-		fram_buf[1] = 0x12u;
-		fram_buf[2] = 0x13u,
-		fram_buf[3] = 0x14u;
-		nwrite = 4U;
-		LOG_INF("Target: 0x%02x. Write %u bytes < target buffer size",
-			TARGET_ADDR_1, nwrite);
+
+		nwrite = target_buf_size - 3U;
+		LOG_INF("Target: 0x%02x. Write %u bytes. target buffer size = %u",
+			TARGET_ADDR_1, nwrite, target_buf_size);
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, nwrite, TARGET_ADDR_1);
 		if (rc != 0) {
 			LOG_ERR("Write %u bytes to target 1 error (%d)", nwrite, rc);
 		}
 
 		nwrite = target_buf_size - 2U;
-		fill_buf(fram_buf, nwrite, 0, BUF_FILL_ALG_INCR);
-		LOG_INF("Target: 0x%02x. Write %u bytes < target buffer size",
-			TARGET_ADDR_1, nwrite);
+		LOG_INF("Target: 0x%02x. Write %u bytes. target buffer size = %u",
+			TARGET_ADDR_1, nwrite, target_buf_size);
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, nwrite, TARGET_ADDR_1);
 		if (rc != 0) {
 			LOG_ERR("Write %u bytes to target 1 error (%d)", nwrite, rc);
 		}
-#endif
+
+		nwrite = target_buf_size - 1U;
+		LOG_INF("Target: 0x%02x. Write %u bytes. target buffer size = %u",
+			TARGET_ADDR_1, nwrite, target_buf_size);
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, nwrite, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Write %u bytes to target 1 error (%d)", nwrite, rc);
+		}
+
+		nwrite = target_buf_size;
+		LOG_INF("Target: 0x%02x. Write %u bytes. target buffer size = %u",
+			TARGET_ADDR_1, nwrite, target_buf_size);
+		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, nwrite, TARGET_ADDR_1);
+		if (rc != 0) {
+			LOG_ERR("Write %u bytes to target 1 error (%d)", nwrite, rc);
+		}
+
 		nwrite = target_buf_size + 4U;
-		fill_buf(fram_buf, nwrite, 0, BUF_FILL_ALG_INCR);
-		LOG_INF("Target: 0x%02x. Write %u bytes < target buffer size",
-			TARGET_ADDR_1, nwrite);
+		LOG_INF("Target: 0x%02x. Write %u bytes. target buffer size = %u",
+			TARGET_ADDR_1, nwrite, target_buf_size);
 		rc = i2c_write(fram_spec.bus, (const uint8_t *)fram_buf, nwrite, TARGET_ADDR_1);
 		if (rc != 0) {
 			LOG_ERR("Write %u bytes to target 1 error (%d)", nwrite, rc);
