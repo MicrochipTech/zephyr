@@ -87,6 +87,13 @@ properties:
       receive-byte counter is 16 bits, so this value must be
       <= 65535 (0xFFFF); a build assertion enforces the cap.
 
+      Size it one byte larger again than that. The hardware sets its
+      overflow NACK status when the receive count reaches 0, whether
+      or not it NACKed anything, so a write that fills the buffer
+      exactly is reported as I2C_ERROR_SIZE and its data dropped
+      although nothing was lost on the bus. A spare byte keeps the
+      largest expected write below that edge.
+
   clock-frequency:
     type: int
     description: |
