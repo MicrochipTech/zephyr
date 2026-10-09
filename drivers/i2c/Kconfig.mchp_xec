@@ -246,12 +246,17 @@ config I2C_MCHP_XEC_NL_TGT_WDOG
 	  one of its 91 errors to the application exactly once.
 
 	  It is not made redundant by the idle interrupt that comes with
-	  I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF. In that same run the idle interrupt ended
-	  no transaction at all and the watchdog ended all 17. Idle needs both lines
-	  high for a detection window, which a bus carrying back to back traffic and
-	  repeated recovery may not give it, so the two appear to cover different
-	  stalls rather than the same one twice. Appear, because no capture of one of
-	  those 17 has been taken: the state capture filled before the first of them.
+	  I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF. The two cover different stalls. Idle needs
+	  both lines high for a detection window, and a bus carrying back to back
+	  traffic and repeated recovery does not always give it one: every expiry in a
+	  run of 800 transactions logged the idle enable still set with its status
+	  clear and NBB reading 0, so the bus was still busy after the whole 50 ms and
+	  no amount of waiting on idle would have ended those transactions.
+
+	  Which of the two ends a stall is a property of the bus at the time rather
+	  than of the stall. One run of this test ended 10 through the watchdog and
+	  none through idle, and the next ended 1 through the watchdog and 4 through
+	  idle.
 
 	  Off by default all the same: it ends a target transaction the hardware may
 	  yet have finished.
