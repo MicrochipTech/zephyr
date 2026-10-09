@@ -1794,6 +1794,8 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	const struct xec_i2c_nl_config *ctrl_cfg = ctrl_data->controller->config;
 	struct i2c_target_config *stalled = NULL;
 	uint32_t tcmd = 0;
+	uint32_t cfg = 0;
+	uint32_t cmpl = 0;
 	int reason = I2C_ERROR_TIMEOUT;
 	bool reset = false;
 	uint8_t sr = 0;
@@ -1803,6 +1805,8 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 	}
 
 	tcmd = sys_read32(ctrl_cfg->regbase + XEC_I2C_TCMD_OFS);
+	cfg = sys_read32(ctrl_cfg->regbase + XEC_I2C_CFG_OFS);
+	cmpl = sys_read32(ctrl_cfg->regbase + XEC_I2C_CMPL_OFS);
 	sr = sys_read8(ctrl_cfg->regbase + XEC_I2C_SR_OFS);
 
 	/* Arming the target again is the cheap recovery: it stops the target DMA, flushes
@@ -1873,8 +1877,19 @@ static void xec_i2c_nl_tgt_wdog_expiry(struct k_timer *timer)
 		XEC_I2C_NL_CNT_INC(ctrl_data, cnt_tgt_wdog_reset);
 	}
 
-	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x), %s%s", tcmd,
-		sr, reset ? "resetting" : "re-arming",
+	/* The configuration and completion registers go out with it to say why the idle
+	 * interrupt did not get here first, where it is enabled. Two runs of about 800
+	 * target transactions each expired 16 and 17 times and the idle path ended none
+	 * of them, and these two registers separate the three ways that happens: the
+	 * enable still set with the status clear means the bus never went idle long
+	 * enough, which would make the two recoveries cover different stalls; the enable
+	 * clear means something took it away; both set means the interrupt was pending
+	 * and never delivered. The state capture cannot answer it, an expiry being some
+	 * 2 percent of transactions and the buffer holding about nine.
+	 */
+	LOG_ERR("I2C-NL target transaction timed out (tcmd 0x%08x sr 0x%02x cfg 0x%08x "
+		"cmpl 0x%08x), %s%s", tcmd, sr, cfg, cmpl,
+		reset ? "resetting" : "re-arming",
 		(stalled != NULL) ? ", arbitration lost, held" : "");
 
 	xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, reason, reset);
