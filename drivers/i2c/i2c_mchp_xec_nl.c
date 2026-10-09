@@ -1581,13 +1581,23 @@ static void xec_i2c_nl_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
  * Receive overflow is NACKed by hardware: the data is dropped and reported as
  * I2C_ERROR_SIZE.
  *
- * That overflow does not set target done. Four runs of a 15 byte external write to a
- * target with an 11 byte buffer all ended with the completion register reading
- * 0x20010000, the overflow NACK and bus idle with no done and the target command
- * register still running and proceeding, after the hardware had ACKed the address and
- * 11 data bytes and NACKed the 12th. So nothing on the done path can report it: the
- * idle interrupt does, where it is enabled, and the watchdog does 50 ms later where it
- * is not.
+ * Target done is not reported once the receive count runs low, which is the opposite of
+ * the rule that it is set when a count reaches 0. A sweep of external writes of 8, 9,
+ * 10, 11 and 15 bytes to a target with an 11 byte buffer, at 1 MHz, reported done for
+ * the first two and not for the other three: 8 and 9 left 3 and 2 counts unspent and
+ * ended with done, while 10, 11 and 15 left 1, 0 and 0 and ended with the bus going
+ * idle, no done, and the target command register still running and proceeding.
+ *
+ * So nothing on the done path can report a transaction that comes within one byte of
+ * filling the buffer. The idle interrupt reports it where it is enabled, and the
+ * watchdog does 50 ms later where it is not, having nothing else to go on.
+ *
+ * The overflow NACK is set when the receive count reaches 0, whether or not a byte was
+ * NACKed. In that sweep the 11 byte write filled the buffer exactly, the external
+ * controller saw every byte ACKed and reported success, and the target still set it.
+ * It cannot be read as "a byte was lost", only as "the buffer is full", so the usable
+ * capacity is one byte less than target-buffer-size, and one less again where the
+ * matched address takes a count.
  */
 
 /* Bytes received by the target since its receive DMA was started */
@@ -1670,10 +1680,12 @@ static int xec_i2c_nl_tgt_nl_start(const struct xec_i2c_nl_config *ctrl_cfg,
  * genuinely active re-asserts, so nothing real is dropped.
  *
  * It does not stop the interrupt being taken once more after a transaction, with the
- * completion register reading 0 and nothing claiming it. Three runs with this in place
- * all ended that way, and so did the same transaction with no hand-off at all, so
- * whatever latches it is downstream of the GIRQ. It costs one ISR entry and the ISR
- * handles it, so it is left alone.
+ * completion register reading 0 and nothing claiming it. What that follows is a
+ * transaction that ended without target done: in a sweep of five writes it followed
+ * all three that ended at bus idle and neither of the two that ended with done, and in
+ * an earlier run it followed one the watchdog ended, which also had no done. So
+ * whatever latches it is downstream of the GIRQ and tied to that ending, not to
+ * arming. It costs one ISR entry and the ISR handles it, so it is left alone.
  *
  * cnt_isr_unclaimed counts it only when the target is armed with its done interrupt
  * enabled, which is the arrangement without the hand-off. With the hand-off the done
@@ -2461,9 +2473,17 @@ static bool xec_i2c_nl_tgt_isr(const struct xec_i2c_nl_config *ctrl_cfg,
 		 * the reason reaches the application through the error callback either
 		 * way. Logging it regardless put an error line against every overflow,
 		 * next to the one the application prints for the same transfer.
+		 *
+		 * A warning and not an error even then, and it does not call it a stall.
+		 * An ending with nothing to explain it is the normal one for a write
+		 * that comes within a byte of filling the buffer, as the comment above
+		 * xec_i2c_nl_tgt_rx_count() records, and that case delivers its data and
+		 * reports no error. What it does not distinguish is that from a
+		 * transaction the hardware abandoned part way, which arrives here the
+		 * same way and would deliver what it had as though complete.
 		 */
 		if ((cmpl & XEC_I2C_NL_CMPL_TGT_ENDED) == 0U) {
-			LOG_ERR("I2C-NL target stalled, ended at bus idle (cmpl 0x%08x)",
+			LOG_WRN("I2C-NL target ended at bus idle, unexplained (cmpl 0x%08x)",
 				cmpl);
 		}
 		xec_i2c_nl_tgt_done(ctrl_cfg, ctrl_data, cmpl);
