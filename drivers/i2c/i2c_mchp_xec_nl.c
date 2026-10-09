@@ -1592,6 +1592,10 @@ static void xec_i2c_nl_req_done(const struct xec_i2c_nl_config *ctrl_cfg,
  * filling the buffer. The idle interrupt reports it where it is enabled, and the
  * watchdog does 50 ms later where it is not, having nothing else to go on.
  *
+ * It is the count and not the bus speed that decides. The same five writes at 31.25
+ * kHz, a 32nd of the speed, split the same way, with every counter and every state
+ * capture marker identical.
+ *
  * The overflow NACK is set when the receive count reaches 0, whether or not a byte was
  * NACKed. In that sweep the 11 byte write filled the buffer exactly, the external
  * controller saw every byte ACKed and reported success, and the target still set it.
