@@ -2025,7 +2025,11 @@ static void xec_i2c_nl_tgt_pause(const struct xec_i2c_nl_config *ctrl_cfg,
 	uint8_t addr_byte = 0;
 	int rc = 0;
 
+	/* A pause with nothing received. The RPT-START address is the last byte received,
+	 * so there is no way to tell which target the next phase is for.
+	 */
 	if (rcvd == 0U) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xA9U);
 		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
 		return;
 	}
@@ -2038,8 +2042,10 @@ static void xec_i2c_nl_tgt_pause(const struct xec_i2c_nl_config *ctrl_cfg,
 		xec_i2c_nl_tgt_deliver(ctrl_data->tgt_active, &buf[off], rcvd - 1U - off);
 	}
 
+	/* The RPT-START addressed something this controller does not answer for */
 	tgt = xec_i2c_nl_tgt_match(ctrl_data, addr_byte >> 1);
 	if (tgt == NULL) {
+		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0xAAU);
 		xec_i2c_nl_tgt_end(ctrl_cfg, ctrl_data, I2C_ERROR_GENERIC, false);
 		return;
 	}
