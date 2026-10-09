@@ -126,7 +126,7 @@ config I2C_MCHP_XEC_NL_TGT_AAT
 config I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
 	bool "XEC I2C-NL target network layer hand-off at the start of a transaction"
 	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
-	select I2C_MCHP_XEC_NL_TGT_AAT if !I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
+	select I2C_MCHP_XEC_NL_TGT_AAT
 	help
 	  Arm a target with the address match alone and start the network layer from
 	  the ISR when the match arrives, instead of arming the network layer up front
@@ -154,9 +154,13 @@ config I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
 	  11 data bytes and NACKed the 12th, where a receive count spent on the
 	  address would have stopped at 10, and the data began at buffer offset 0.
 	  Byte mode matched the address and the network layer never saw it, so it is
-	  neither a buffer byte nor a count. The driver reads the matched address
-	  from the address shadow register at the match instead, nothing later being
-	  able to name the target, and the receive offset is 0.
+	  neither a buffer byte nor a count. The receive offset is 0, and the driver
+	  names the target from the address shadow register when the transaction is
+	  reported, nothing in the buffer being able to name it. Not at the match:
+	  the hardware does not copy the address into that register until after the
+	  eighth clock, and an ISR that is not held up reads it before it means
+	  anything, while by the time a transaction is reported it has been valid for
+	  the whole of it.
 
 	  That makes target-buffer-size mean something different here. Armed the
 	  other way it covers the address byte and one fewer data bytes than its
@@ -185,89 +189,21 @@ config I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
 	  transaction unreported ends it, which is the recovery the watchdog does,
 	  without waiting for a timer. cnt_tgt_idle counts those.
 
-choice
-	prompt "XEC I2C-NL target transaction start interrupt"
-	depends on I2C_MCHP_XEC_NL_TGT_AAT_HANDOFF
-	default I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_AAT
-	help
-	  Which interrupt tells the driver a target transaction has started, and so when
-	  to hand it to the network layer. Everything done about it afterwards is the
-	  same either way.
-
-config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_AAT
-	bool "Addressed as target, Configuration register bit 28"
-	help
-	  The address match, reported at the end of the seventh clock of the address.
-
-	  That is before the hardware has finished with the byte: it does not copy the
-	  address into the address shadow register until after the eighth clock, and an
-	  ISR that is not held up reads that register before it means anything. The
-	  driver reads it when the transaction is reported instead, where it has been
-	  valid for the whole transaction, so nothing here depends on it.
-
 	  Starting the target command register while the hardware is still ACKing the
-	  address is safe. That needs the ISR to finish inside the eighth and ninth
-	  clocks, which it does not do at the speeds a bus normally runs: the hand-off
-	  landed after the ACK by 28 us at 100 kHz and by 1.3 us at 400 kHz. Slowing
-	  the bus is what wins the ISR that race, and at 31.25 kHz, where those two
-	  clocks last about 65 us, it did: the waveform showed no gap at all between
-	  the address byte and the first data byte, so the network layer was running
-	  before the hardware had finished with the address. Five writes across a
-	  target buffer boundary came out the same there as at 1 MHz, down to every
-	  counter and every state capture marker.
-
-	  So the entry is safe whether it wins that race or loses it, and it is the
-	  default: it stalls the bus for a fraction of what the other one does.
-
-config I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
-	bool "Byte mode service request, Control register ENI"
-	help
-	  The byte mode service request, asserted after the hardware has ACKed an
-	  address it matched, with the match bit set in the Status register. SCL is held
-	  low until it is answered, so the hand-off happens at a boundary the hardware
-	  has finished with and everything it captured about the address is valid.
-
-	  The enable is in the write-only Control register, so there is nothing to read
-	  it back from: what says a target is armed and waiting is the target done
-	  interrupt being disabled, which arming leaves that way.
-
-	  It has to be off while either command register runs. Byte mode interrupts per
-	  byte, which fights the network layer on a target transaction and is the whole
-	  performance of a host one, so the driver disables it before writing the host
-	  command register and arms the target again when that transfer finishes. The
-	  controller does not go deaf in between: the hardware matches an address after
-	  a START or RPT-START and holds SCL to claim the transfer whether or not the
-	  interrupt is enabled, so an external controller addressing a target during a
-	  host transfer waits for it rather than losing its transaction. Arming tests
-	  for that case and does not clear the status when it finds it, a write that
-	  clears it being a write that answers the request.
-
-	  It also costs more bus time, and the whole ISR rather than part of it: the
-	  service request is not asserted until the ACK is done, so there is nothing to
-	  overlap. The same 15 byte write to an 11 byte buffer at 400 kHz stretched SCL
-	  for 12.5 us after the ACK where the address match entry stretched it for 1.3
-	  us. Only 5 us of that difference is the eighth and ninth clocks the other
-	  entry has to hide the work in, and what accounts for the rest is not in the
-	  capture.
-
-	  Both delivered the same result on that transfer, an overflow NACK reported as
-	  I2C_ERROR_SIZE as soon as the bus went idle, against the arrangement with no
-	  hand-off which reported nothing and took the watchdog's 50 ms to end it.
-
-	  Nothing measured needs it. It was added because the address match reports
-	  before the hardware has finished with the address byte, which looked unsafe
-	  to hand off on and left the address shadow register unreadable that early;
-	  the driver stopped reading that register early, and a run at 31.25 kHz showed
-	  the hand-off working with the ISR finishing well inside the address byte. It
-	  is kept for a part whose byte mode and network layer interact differently,
-	  not for a fault it fixes here.
-
-endchoice
+	  address is safe, which is the one thing this rests on. It needs the ISR to
+	  finish inside the eighth and ninth clocks, which it does not at the speeds a
+	  bus normally runs: the hand-off landed after the ACK by 28 us at 100 kHz and
+	  by 1.3 us at 400 kHz. Slowing the bus is what wins the ISR that race, and at
+	  31.25 kHz, where those two clocks last about 65 us, it did. The waveform
+	  showed no gap at all between the address byte and the first data byte, so
+	  the network layer was running before the hardware had finished with the
+	  address, and five writes across a target buffer boundary came out the same
+	  there as at 1 MHz, down to every counter and every state capture marker.
 
 config I2C_MCHP_XEC_NL_TGT_WDOG
 	bool "XEC I2C-NL target watchdog"
 	depends on I2C_MCHP_XEC_NL && I2C_TARGET_BUFFER_MODE
-	select I2C_MCHP_XEC_NL_TGT_AAT if !I2C_MCHP_XEC_NL_TGT_HANDOFF_ON_PIN
+	select I2C_MCHP_XEC_NL_TGT_AAT
 	help
 	  Recover a target transaction the hardware never reports done. The target
 	  state machine can be left running with no completion interrupt pending, for
