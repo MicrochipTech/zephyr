@@ -248,16 +248,33 @@ enum fault_xfr_dir {
  * inserts, so it does not depend on one window straddling an SCL high phase. The range
  * covers an idle bus through the whole of a 3.2 ms transfer, so a fault lands within a few
  * loops wherever the transfer sits.
+ *
+ * All of these are bus clock periods rather than times, written as the microseconds they
+ * come to at 100 kHz and scaled by the port frequency. A transfer takes a tenth as long at
+ * 1 MHz, and unscaled every delay in the range landed after it had finished: a run of 100
+ * loops there injected no fault at all and reported every transfer as clean, which reads
+ * as a pass rather than as a test that did not run.
  */
-#define FAULT_DELAY_MIN_US  200U
-#define FAULT_DELAY_MAX_US  3000U
-#define FAULT_DELAY_STEP_US 200U
+#define FAULT_REF_FREQ_HZ 100000U
+#define FAULT_BUS_FREQ_HZ ((uint32_t)DT_PROP(TARGET_PORT_NODE, clock_frequency))
 
-/* How long SDA is held low. Longer than the 10 us SCL period at 100 kHz, so the pull
- * necessarily spans an SCL high phase. A shorter pull can fall entirely within an SCL
- * low phase, where it reads as a data bit rather than a protocol violation.
+/* Two microseconds is the floor: below that the pull is shorter than the busy wait that
+ * releases it can resolve.
  */
-#define FAULT_LOW_US 25U
+#define FAULT_SCALED_US(us)                                                                        \
+	((((us) * FAULT_REF_FREQ_HZ / FAULT_BUS_FREQ_HZ) < 2U)                                     \
+		 ? 2U                                                                              \
+		 : ((us) * FAULT_REF_FREQ_HZ / FAULT_BUS_FREQ_HZ))
+
+#define FAULT_DELAY_MIN_US  FAULT_SCALED_US(200U)
+#define FAULT_DELAY_MAX_US  FAULT_SCALED_US(3000U)
+#define FAULT_DELAY_STEP_US FAULT_SCALED_US(200U)
+
+/* How long SDA is held low: two and a half bus clock periods, so the pull necessarily
+ * spans an SCL high phase. A shorter pull can fall entirely within an SCL low phase,
+ * where it reads as a data bit rather than a protocol violation.
+ */
+#define FAULT_LOW_US FAULT_SCALED_US(25U)
 
 static const struct gpio_dt_spec fault_pin =
 	GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, fault_inject_gpios);
