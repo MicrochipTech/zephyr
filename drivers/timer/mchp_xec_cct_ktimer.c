@@ -124,7 +124,8 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_SMP), "XEC CCT kernel timer does not support SMP
 /* Set while the system is idle with an armed LPM companion. */
 static bool timeout_idle;
 /* Cycle count captured at idle entry, to measure how far the CCT itself
- * advanced (nonzero only if its clock survived the low-power state).
+ * advanced while idle (only if something re-armed the compare, and so
+ * reactivated it, between the SoC wake and sys_clock_idle_exit()).
  */
 static uint32_t cycle_pre_idle;
 #endif
@@ -249,8 +250,14 @@ static void xec_cct_isr(const void *arg)
 #define XEC_RTMR_CR_ARL_EN_POS 1 /* auto-reload enable */
 #define XEC_RTMR_CR_START_POS  2 /* start countdown */
 
-/* Single-shot start value: activate + start, no auto-reload (README: CR=0x05) */
-#define XEC_RTMR_CR_SINGLE_SHOT (BIT(XEC_RTMR_CR_ACTV_POS) | BIT(XEC_RTMR_CR_START_POS))
+/*
+ * Continuous start value: activate + auto-reload + start (CR=0x07). The first
+ * terminal count is the wake; auto-reload keeps the counter running past it so
+ * the companion also measures the time from that wake until
+ * z_sys_clock_lpm_exit(), which the CCT does not see while the PLL relocks.
+ */
+#define XEC_RTMR_CR_CONTINUOUS                                                                     \
+	(BIT(XEC_RTMR_CR_ACTV_POS) | BIT(XEC_RTMR_CR_ARL_EN_POS) | BIT(XEC_RTMR_CR_START_POS))
 
 /* Companion DT node: the always-on 32 KHz RTOS timer (accessed by macro only;
  * it must not be bound by any other driver in HOOKS mode, e.g. MCHP_XEC_RTOS_TIMER
@@ -287,6 +294,8 @@ BUILD_ASSERT(XEC_RTMR_FREQ_HZ == 32768, "LPM companion RTOS timer must run at 32
 
 /* Preload programmed at the last z_sys_clock_lpm_enter(), read back at exit. */
 static uint32_t xec_lpm_scheduled_ticks;
+/* Terminal counts serviced by the companion ISR since z_sys_clock_lpm_enter(). */
+static uint32_t xec_lpm_reloads;
 
 static inline uint32_t xec_rtmr_us_to_ticks(uint64_t us)
 {
@@ -302,28 +311,37 @@ static inline uint32_t xec_rtmr_us_to_ticks(uint64_t us)
 	return (uint32_t)t;
 }
 
-static inline uint64_t xec_rtmr_ticks_to_us(uint32_t ticks)
+static inline uint64_t xec_rtmr_ticks_to_us(uint64_t ticks)
 {
-	return ((uint64_t)ticks * XEC_RTMR_US_DEN) / XEC_RTMR_US_NUM;
+	return (ticks * XEC_RTMR_US_DEN) / XEC_RTMR_US_NUM;
 }
 
 /*
- * Companion wake ISR. Its only job is to acknowledge the RTOS timer so the
- * interrupt does not re-assert after waking the core; elapsed-time recovery is
- * done in z_sys_clock_lpm_exit(). It deliberately does not call
- * sys_clock_announce() -- the CCT remains the system timer.
+ * Companion wake ISR. It counts the terminal count and acknowledges it, leaving
+ * the counter running from its reload; elapsed-time recovery is done in
+ * z_sys_clock_lpm_exit(). It deliberately does not call sys_clock_announce() --
+ * the CCT remains the system timer.
  *
- * After exiting WFI the arch idle code re-enables interrupts before
- * sys_clock_idle_exit() runs, so this handler may fire before lpm_exit(). It
- * only stops the timer and clears status; it never touches the count register,
- * which stays at its terminal value (0) for lpm_exit() to read.
+ * The SoC PM exit path re-enables interrupts before sys_clock_idle_exit() runs,
+ * so this handler normally fires before lpm_exit(). That runs with the clock
+ * lock held, which keeps this handler out, and it accounts for a terminal count
+ * still pending in the GIRQ.
  */
 static void xec_lpm_companion_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 
-	sys_write32(0, XEC_RTMR_BASE + XEC_RTMR_CR_OFS);
+	xec_lpm_reloads++;
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
+}
+
+static inline bool xec_lpm_girq_pending(void)
+{
+	uint32_t status = 0;
+
+	soc_ecia_girq_status(XEC_RTMR_GIRQ, &status);
+
+	return (status & BIT(XEC_RTMR_GIRQ_POS)) != 0u;
 }
 
 /* One-time companion setup: quiesce, connect the wake ISR, and enable the GIRQ
@@ -348,37 +366,55 @@ void z_sys_clock_lpm_enter(uint64_t max_lpm_time_us)
 	uint32_t preload = xec_rtmr_us_to_ticks(max_lpm_time_us);
 
 	xec_lpm_scheduled_ticks = preload;
+	xec_lpm_reloads = 0u;
 
 	/* Drop any stale wake status from a previous LPM cycle. */
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
 	NVIC_ClearPendingIRQ(XEC_RTMR_IRQ_NUM);
 
-	/* Required start sequence (README): CR=0, write preload, CR=single-shot. */
+	/* Required start sequence (README): CR=0, write preload, CR=continuous. */
 	sys_write32(0, base + XEC_RTMR_CR_OFS);
 	sys_write32(preload, base + XEC_RTMR_PRLD_OFS);
-	sys_write32(XEC_RTMR_CR_SINGLE_SHOT, base + XEC_RTMR_CR_OFS);
+	sys_write32(XEC_RTMR_CR_CONTINUOUS, base + XEC_RTMR_CR_OFS);
 }
 
 uint64_t z_sys_clock_lpm_exit(void)
 {
 	mm_reg_t base = XEC_RTMR_BASE;
-	uint32_t remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
-	uint32_t elapsed_ticks;
+	uint32_t preload = xec_lpm_scheduled_ticks;
+	uint64_t elapsed_ticks;
+	uint32_t remaining;
+	bool pending;
+
+	/*
+	 * Called with the clock lock held, so the companion ISR cannot run and
+	 * a terminal count since the ISR last ran shows only in the GIRQ
+	 * status. Sample the status on both sides of the count: if it changed
+	 * in between, the counter reloaded and the count read may predate the
+	 * reload, so read it again.
+	 */
+	pending = xec_lpm_girq_pending();
+	remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
+	if (!pending && xec_lpm_girq_pending()) {
+		pending = true;
+		remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
+	}
 
 	/* Stop the companion and clear its wake status/pending. */
 	sys_write32(0, base + XEC_RTMR_CR_OFS);
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
 	NVIC_ClearPendingIRQ(XEC_RTMR_IRQ_NUM);
 
-	if (remaining == 0u) {
-		/* Reached terminal count: the full programmed window elapsed. */
-		elapsed_ticks = xec_lpm_scheduled_ticks;
-	} else if (remaining < xec_lpm_scheduled_ticks) {
-		/* Woken early by another source: elapsed = programmed - remaining. */
-		elapsed_ticks = xec_lpm_scheduled_ticks - remaining;
-	} else {
-		/* No measurable time elapsed. */
-		elapsed_ticks = 0u;
+	/* Whole periods: each terminal count reloaded the full preload. */
+	elapsed_ticks = (uint64_t)preload * (xec_lpm_reloads + (pending ? 1u : 0u));
+
+	/*
+	 * The current period. A count of 0 is either the preload not yet loaded
+	 * after TIMER_START (it takes up to one 32 KHz period) or the instant of
+	 * a reload already counted above; neither adds time.
+	 */
+	if ((remaining != 0u) && (remaining <= preload)) {
+		elapsed_ticks += preload - remaining;
 	}
 
 	return xec_rtmr_ticks_to_us(elapsed_ticks);
@@ -401,10 +437,19 @@ void sys_clock_idle_enter(uint32_t ticks)
 	timeout_idle = true;
 	cycle_pre_idle = timer_driver_cycle_get();
 
-	/* Arm the always-on companion to guarantee wake even if the CCT clock
-	 * (PLL) stops in the upcoming low-power state. Compare0 stays armed at
-	 * the deadline the core last programmed, so if the CCT keeps running it
-	 * wakes us itself.
+	/*
+	 * Freeze the CCT for the whole low-power window. On wake from heavy
+	 * sleep the wake interrupt clears SLEEP_ALL in hardware, so without
+	 * this the CCT would resume at once on the ring oscillator (+/-50%)
+	 * and count at that rate until the PLL locks. Deactivating the block
+	 * gates its clocks and keeps the count; sys_clock_idle_exit(), which
+	 * runs after the SoC has waited for PLL lock, reactivates it. The
+	 * companion measures the whole window instead.
+	 */
+	sys_write32(XEC_CCT_CR_ARMED & ~BIT(XEC_CCT_CR_ACTV_POS), XEC_CCT_BASE + XEC_CCT_CR_OFS);
+
+	/* Arm the always-on companion: with the CCT frozen it is the only
+	 * timed wake source.
 	 */
 	z_sys_clock_lpm_enter(timeout_us);
 }
@@ -417,14 +462,15 @@ void sys_clock_idle_exit(void)
 
 	k_spinlock_key_t key = sys_clock_lock();
 
+	/* The PLL is locked again: resume the CCT from its frozen count. */
+	sys_write32(XEC_CCT_CR_ARMED, XEC_CCT_BASE + XEC_CCT_CR_OFS);
+
 	/*
 	 * How long the CCT itself measured, against how long the companion says
-	 * the system was away. The difference is the span the CCT lost with its
-	 * clock, which is nothing at all if the clock survived.
-	 *
-	 * This assumes the counter *freezes* and resumes across PLL-off. If it
-	 * is instead reset, the delta below is garbage and this needs
-	 * CONFIG_SYSTEM_TIMER_RESET_BY_LPM handling, which is not implemented.
+	 * the system was away. The difference is the span the CCT lost while
+	 * frozen. The CCT measures more than nothing only if an ISR between the
+	 * SoC wake and here re-armed the compare, which reactivates it; that
+	 * is after PLL lock, so the span it counted is accurate.
 	 */
 	uint32_t cct_cycles = timer_driver_cycle_get() - cycle_pre_idle;
 	uint64_t cct_us = k_cyc_to_us_floor64(cct_cycles);
