@@ -87,6 +87,9 @@
 
 #define XEC_CCT_DIVIDER XEC_CCT_TFCLK_VAL_DIV4
 
+/* Upper bound on control register reads waiting for FREE_RESET to clear. */
+#define XEC_CCT_RESET_POLL_MAX 10000U
+
 /*
  * The TCLK divider field value is also the power-of-two shift, so the CCT
  * free-running counter frequency is input-clock >> divider (48 MHz / 4 =
@@ -148,23 +151,34 @@ static uint32_t cct_cycle_offset;
 
 /*
  * A free-running 32-bit counter matched by a 32-bit comparator that fires on
- * equality only, so the core wraps the compare write in its verify loop and
- * this driver needs no minimum-delay floor of its own (the MIN_DELAY that
- * predated the core, and the tuning that went with it, are gone).
+ * equality only, so the core wraps the compare write in its verify loop. The
+ * minimum lead that loop enforces is TIMER_CORE_ALARM_LEAD_CYCLES below.
  */
 #define TIMER_CORE_BACKEND_COMPARE_EXACT
 #define TIMER_CORE_COUNTER_WIDTH 32
 
 /*
- * Cycles a compare must lead the counter by to be caught. The comparator lives
- * in the TCLK domain (input clock >> divider) while the write arrives on the
- * AHB clock, so a match programmed at the default lead of one cycle can be
- * crossed before it lands. Four TCLK cycles (333 ns at 12 MHz) covers a
- * multi-flop synchroniser. Getting this too low costs only extra iterations of
- * the core's verify loop, never a lost interrupt; it is the one number here
- * worth re-checking against silicon.
+ * Cycles a compare must lead the counter by to be caught. The core checks the
+ * lead after the write lands, but a match that close can still be crossed
+ * while the new value propagates to the matcher, and a missed equality match
+ * costs a full counter wrap (~358 s at 12 MHz). 200 cycles (16.7 us) is the
+ * floor the driver used before the generic core and was validated on silicon;
+ * it delays only deadlines that were already due, by at most that amount.
  */
-#define TIMER_CORE_ALARM_LEAD_CYCLES 4
+#define TIMER_CORE_ALARM_LEAD_CYCLES 200
+
+/*
+ * Control register value while running: block active, counter running at the
+ * selected TCLK. Written whole rather than read-modify-written, since reading
+ * returns the compare output state in the COMPARE_SET/CLEAR bits and writing
+ * that back would toggle the outputs. FREE_RESET is never part of it.
+ */
+#define XEC_CCT_CR_RUN                                                                             \
+	(BIT(XEC_CCT_CR_ACTV_POS) | BIT(XEC_CCT_CR_FRT_EN_POS) |                                   \
+	 XEC_CCT_CR_TCLK_SET(XEC_CCT_DIVIDER))
+
+/* Control register value with Compare0 armed, the state set_compare leaves. */
+#define XEC_CCT_CR_ARMED (XEC_CCT_CR_RUN | BIT(XEC_CCT_CR_COMP0_EN_POS))
 
 static inline uint32_t timer_driver_cycle_get(void)
 {
@@ -173,8 +187,18 @@ static inline uint32_t timer_driver_cycle_get(void)
 
 static inline void timer_driver_set_compare(uint32_t cycles)
 {
+	mm_reg_t cr = XEC_CCT_BASE + XEC_CCT_CR_OFS;
+
+	/*
+	 * The compare must be disabled while its register is updated, or the
+	 * matcher can raise a spurious event. A real match falling inside this
+	 * short window is lost, but the core reads the counter back after this
+	 * returns and re-arms ahead of it, so that costs at most one lead.
+	 */
+	sys_write32(XEC_CCT_CR_RUN, cr);
 	/* Back out of the extended cycle domain into the counter's own. */
 	sys_write32(cycles - cct_cycle_offset, XEC_CCT_BASE + XEC_CCT_COMP0_OFS);
+	sys_write32(XEC_CCT_CR_ARMED, cr);
 }
 
 #include "system_timer_generic.h"
@@ -432,8 +456,8 @@ void sys_clock_idle_exit(void)
 
 void sys_clock_disable(void)
 {
-	/* Stop the free-running timer. */
-	sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_EN_POS);
+	/* Stop the free-running timer and its compare (whole-register write). */
+	sys_write32(XEC_CCT_CR_RUN & ~BIT(XEC_CCT_CR_FRT_EN_POS), XEC_CCT_BASE + XEC_CCT_CR_OFS);
 	soc_ecia_girq_ctrl(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS, 0);
 }
 
@@ -448,14 +472,26 @@ static int sys_clock_driver_init(void)
 	soc_ecia_girq_ctrl(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS, 0);
 	soc_xec_pcr_sleep_en_clear((uint8_t)(XEC_CCT_PCR_SCR_VAL));
 
-	/* Activate the block, reset the free-running counter, enable the
-	 * Compare0 match, and select the TCLK divider. COMP0_SET/CLR bits are
-	 * left untouched (per README they can be ignored).
+	/* Activate the block, select the TCLK divider and reset the
+	 * free-running counter. The compare stays disabled until the core arms
+	 * it. COMP0_SET/CLR bits are written as 0, which has no effect.
 	 */
-	v = (BIT(XEC_CCT_CR_ACTV_POS) | BIT(XEC_CCT_CR_FRT_RST_POS) | BIT(XEC_CCT_CR_COMP0_EN_POS) |
+	v = (BIT(XEC_CCT_CR_ACTV_POS) | BIT(XEC_CCT_CR_FRT_RST_POS) |
 	     XEC_CCT_CR_TCLK_SET(XEC_CCT_DIVIDER));
 
 	sys_write32(v, regbase + XEC_CCT_CR_OFS);
+
+	/* FREE_RESET self-clears when the reset cycle is done, and the reset
+	 * clears FREE_ENABLE as it completes, so the counter may only be
+	 * enabled after FREE_RESET reads back 0. There is no time base to wait
+	 * on yet (this is it), so bound the poll by iterations.
+	 */
+	for (uint32_t n = 0; sys_test_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_RST_POS) != 0;
+	     n++) {
+		if (n >= XEC_CCT_RESET_POLL_MAX) {
+			return -ETIMEDOUT;
+		}
+	}
 
 	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
 
@@ -463,7 +499,7 @@ static int sys_clock_driver_init(void)
 	irq_enable(XEC_CCT_COMP0_IRQ_NUM);
 
 	/* Start the free-running timer before seeding the baseline from it. */
-	sys_set_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_FRT_EN_POS);
+	sys_write32(XEC_CCT_CR_RUN, regbase + XEC_CCT_CR_OFS);
 
 	/* Seed the announce baseline from the counter and arm the first tick. */
 	timer_core_init();
