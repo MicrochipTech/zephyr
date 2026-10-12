@@ -59,19 +59,16 @@
 };
 
 /*
- * The PM core arms the LPM companion (z_sys_clock_lpm_enter) only when the
- * chosen power state has a non-zero exit-latency-us: the single
- * sys_clock_set_timeout(..., idle=true) call at subsys/pm/pm.c is gated on
- * exit_latency_ticks > 0. Without it, SUSPEND_TO_RAM powers the PLL (and the
- * CCT) off with no companion armed and therefore no wake source, so the core
- * hangs in __WFI(). The board's power-states omit exit-latency-us, so add it
- * here. Values must be >= one tick (100 us at 10 kHz) to survive the floor
- * conversion; these are placeholders pending measured PLL-relock/restore time.
+ * The PM core passes each state's exit-latency-us to the policy (it must fit
+ * min-residency + exit latency) and wakes that much ahead of the next deadline,
+ * so the state is fully exited by then. suspend_to_ram is heavy sleep: the PLL
+ * is off and needs about 3 ms to relock on wake (MEC175x datasheet Table 4-11),
+ * so allow 3.5 ms. idle is light sleep, which has no relock delay.
  */
 &idle {
 	exit-latency-us = <150>;
 };
 
 &suspend_to_ram {
-	exit-latency-us = <500>;
+	exit-latency-us = <3500>;
 };
