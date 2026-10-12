@@ -83,6 +83,98 @@ LOG_MODULE_REGISTER(i2c_mchp_xec_nl, CONFIG_I2C_LOG_LEVEL);
 	 BIT(XEC_I2C_CMPL_TPROT_POS) | BIT(XEC_I2C_CMPL_RPT_RD_POS) |                              \
 	 BIT(XEC_I2C_CMPL_RPT_WR_POS))
 
+/* Register values seen on MEC1753
+ *
+ * Read at the top of the ISR over runs of the i2c_targ_mode sample at 100 kHz, 400 kHz and
+ * 1 MHz, with and without a bus fault injected on SDA. These are what the registers read
+ * when the driver looks at them, which is not what the data sheet lists as possible: a row
+ * marked not captured never turned up in those runs, and its bits are from the definitions
+ * alone.
+ *
+ * Configuration has the port in bits 3:0 and the rest of its low half fixed by programming,
+ * general call disabled, enabled, digital filter on, so the low half reads 0x4500 plus the
+ * port number. The high half is the armed interrupts, and is the one register that says what
+ * the driver believes is in flight:
+ *
+ *   0x1.......  AAT_IEN            a target armed, waiting for an address match
+ *   0xa.......  TD_IEN IDLE_IEN    a target transaction in flight
+ *   0x4.......  HD_IEN             a host transaction in flight
+ *   0x2.......  IDLE_IEN           a host transaction waiting for the bus to release
+ *   0x5.......  HD_IEN AAT_IEN     a host transaction, target armed on the same controller
+ *
+ * Status has PIN in bit 7, which reads 0 when byte mode wants service, and NBB in bit 0,
+ * which reads 0 while the bus is busy. So an idle bus reads 0x81:
+ *
+ *   0x81  idle                              0x80  bus busy, nothing pending
+ *   0x04  address matched, service wanted    0x84  matched, byte already moved out
+ *   0x02  arbitration lost, bus busy         0x83  arbitration lost, bus free
+ *
+ * Controller role
+ *
+ *   transfer complete       cmpl 0x42000000  HDONE HTR                 sr 0x80
+ *   bus released after it   cmpl 0x20000000  IDLE                      sr 0x81
+ *   address or byte NAKed   cmpl 0x63000000  HDONE IDLE HTR HNAKX      sr 0x81
+ *   complete, target armed  cmpl 0x60000000  HDONE IDLE                sr 0x81
+ *   bus error with a loss   cmpl 0x62006000  HDONE IDLE HTR LAB BER    sr 0x13
+ *   bus error alone         cmpl 0x62002000  HDONE IDLE HTR BER        sr 0x11
+ *   bus error on a read     cmpl 0x60002000  HDONE IDLE BER            sr 0x11
+ *
+ * The last three were caught on a conditional breakpoint on BER or LAB in the completion
+ * register, and the pair arriving together is the common one: pulling SDA low during a host
+ * write set both on nearly every hit, with BER alone the exception. Status is the giveaway
+ * either way. Every other host ending above has PIN set, and these have it clear with NBB
+ * set, so a fatal host error leaves service pending on a bus that has already gone free.
+ *
+ * HTR goes with the direction of the phase that was running rather than with the outcome.
+ * It is set in every capture whose host command register had a write count left and clear
+ * in the one that had a read count left, which is what its name says and worth knowing
+ * because it is otherwise easy to read as part of the error.
+ *
+ * The host command register in both reads the write count unspent, STOP set, PROCEED set
+ * and RUN clear. That combination is why xec_i2c_nl_isr_handler() has to test the fatal
+ * status before it tests PROCEED: a bus error leaves PROCEED set, and the other order would
+ * report every one of them as a host state that cannot happen.
+ *
+ * Target role, armed through the address match hand-off
+ *
+ *   armed, waiting          cmpl 0           tcmd 0                sr 0x81
+ *   address matched         cmpl 0           tcmd 0                sr 0x04
+ *   write complete          cmpl 0xa0000000  TDONE IDLE            sr 0x81
+ *   read complete           cmpl 0xa00a0000  TDONE IDLE TPROT TTR  sr 0x81
+ *   RPT-START pause         cmpl 0x80000000  TDONE                 sr 0x04
+ *   receive overflow        cmpl 0x20010000  IDLE TNAKR            sr 0x81
+ *   arbitration lost        cmpl 0x000a4000  TPROT TTR LAB         sr 0x02
+ *   arbitration lost, read  cmpl 0x20026000  IDLE TTR LAB BER      sr 0x13
+ *   bus error, write        cmpl 0x20002000  IDLE BER              sr 0x81
+ *   time-out                unreachable. TMO in bit 6 needs the four enables in bits 5:2
+ *                           that this driver never sets, for the reason the comment on
+ *                           xec_i2c_v3_cmpl_clear() gives, so I2C_ERROR_TIMEOUT comes only
+ *                           from the software watchdog.
+ *
+ * Neither target failure sets target done. Both were caught on a breakpoint in the branch
+ * that reports them and both read idle with no done, so both arrived through the idle
+ * interrupt: without it a target bus error or arbitration loss is reported by nothing but
+ * the watchdog, 50 ms later. Their command register says how far each had got, the receive
+ * count left in TCMD bits 23:16 with its high byte in the extended length register bits
+ * 31:24, so 241 of 259 is 18 bytes received and 0x102 of 259 is one. A write count left
+ * alongside it, with TTR set, is a read phase that had more to send.
+ *
+ * A bus error comes with the loss here too. The arbitration capture has both bits in the
+ * status and in the completion register, and the driver tests the loss first, so it reports
+ * an arbitration loss and never looks at the bus error sitting beside it.
+ *
+ * The target command register tells the three endings apart where the completion register
+ * does not. A transaction that finished leaves it with RUN and PROCEED clear and its unspent
+ * count in RCL for a write or WCL for a read; a pause leaves RUN set and PROCEED clear; an
+ * overflow or a lost arbitration leaves PROCEED set with RUN clear, the transaction never
+ * having ended.
+ *
+ * Two things the table does not show. TPROT is set on every read that ends with data unsent,
+ * so it is an error only when the write count reached 0. And IDLE and TTR latch: both turn
+ * up still set at the next address match, the completion register reading 0x20000000 or
+ * 0x20020000 with a target merely armed, because only the paths that own them clear them.
+ */
+
 /* Extended length register halves, written with 16-bit accesses so host and target
  * updates do not interfere. Host half: write count bits[15:8] in bits[7:0], read count
  * bits[15:8] in bits[15:8]. Target half: the same for the target counts.
@@ -2069,6 +2161,13 @@ static void xec_i2c_nl_tgt_done(const struct xec_i2c_nl_config *ctrl_cfg,
 	 * the same run with the reset in place. Transfers on a second controller moved by
 	 * a handful, which is the noise this test has.
 	 *
+	 * What needed the reset may not be the loss. A later breakpoint here caught the
+	 * status and the completion register with the bus error bit set alongside the
+	 * loss, and this branch is tested first, so what that run measured was the reset
+	 * of a transaction that had both. The reset stays either way, the measurement
+	 * being of this branch rather than of one bit in it, but do not read it as
+	 * evidence about a loss on its own.
+	 *
 	 * The target watchdog does take a lost arbitration without resetting, and that
 	 * much measured clean. The difference is that it recovers a transaction the
 	 * hardware never reported, where here the hardware has reported one it was in the
@@ -2618,7 +2717,12 @@ static void xec_i2c_nl_isr_handler(const struct device *ctrl_dev)
 		ctrl_data->xfr_err = -ENXIO;
 		ctrl_data->xfr_cmpl = cmpl;
 	} else if ((hcmd & BIT(XEC_I2C_HCMD_PROC_POS)) != 0U) {
-		/* HPROCEED=1 with HDONE is not a valid host state */
+		/* HPROCEED=1 with HDONE and nothing above to explain it is not a valid host
+		 * state. With something above it to explain it, it is the normal one: a bus
+		 * error leaves PROCEED set with RUN clear and the write count unspent, so
+		 * this test must stay below the fatal one or it claims every bus error is a
+		 * state the hardware cannot be in.
+		 */
 		XEC_I2C_NL_STATE_CAP_UPDATE(ctrl_data, 0x87U);
 		ctrl_data->xfr_err = -EIO;
 		ctrl_data->xfr_cmpl = cmpl;
