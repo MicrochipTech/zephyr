@@ -196,7 +196,7 @@ int fill_buf(uint8_t *buf, size_t buflen, uint8_t val, enum buf_fill_alg fill_al
 int main(void)
 {
 	uint64_t loop_count = 0;
-	size_t nwrite = 0, nread = 0;
+	size_t nwrite = 0;
 	int rc = 0;
 
 	LOG_INF("MEC_ASSY6941 I2C-NL target mode sample for experiments");
@@ -214,20 +214,14 @@ int main(void)
 		return 0;
 	}
 
-#if 1
 	fram_buf[0] = 0x11U;
 	fram_buf[1] = 0x22U;
 	fram_buf[2] = 0x33U;
 	fram_buf[3] = 0x44U;
-#if 0
-	rc = i2c_write_dt(&fram_spec, fram_buf, 4U);
-#else
 	rc = i2c_write(pca9555.bus, fram_buf, 4U, fram_spec.addr);
-#endif
 	if (rc != 0) {
 		LOG_ERR("Write 4 bytes to FRAM failed (%d)", rc);
 	}
-#endif
 
 	rc = reg_target_register(&targets[0], TARGET_ADDR_1);
 	if (rc != 0) {
