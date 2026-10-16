@@ -16,6 +16,15 @@
  * At the same time this controller reads the EVB PCA9555 on the same port once per
  * second, showing controller transfers alongside target mode.
  *
+ * Take the PCA9555 off the bus above 400 kHz, which on the EVB means removing its
+ * jumpers. It is rated for 400 kHz and it decodes every address on the bus, not only
+ * its own, so clocked past that it occasionally mis-decodes one and drives SDA during
+ * somebody else transfer. What that looks like is a target reporting a bus error on a
+ * transfer the controller driving it reports as successful, 1 to 5 times per hundred
+ * loops at 1 MHz, and it looks like a driver fault rather than a device out of spec.
+ * With its jumpers out, the same run at 1 MHz reported 800 target transactions, no
+ * errors and no driver messages at all.
+ *
  * Target callbacks run in ISR context: they only update the register file and event
  * counters. The main thread logs the counters.
  */
@@ -51,6 +60,9 @@ LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 #define FAULT_ONES_REG_LEN    64U
 
 #define PCA9555_CMD_PORT0_IN 0U
+
+/* Fast mode is all the PCA9555 is rated for */
+#define PCA9555_MAX_FREQ_HZ 400000U
 
 #define TARGET_PORT_NODE DT_ALIAS(i2c_target_port)
 #define PCA9555_NODE     DT_NODELABEL(pca9555_evb)
@@ -602,6 +614,14 @@ int main(void)
 	} else {
 		/* Prove the pin reaches SDA before reading anything into the timed runs */
 		fault_inject_selftest(fram_spec.bus, fram_spec.addr);
+	}
+
+	if (DT_PROP(TARGET_PORT_NODE, clock_frequency) > PCA9555_MAX_FREQ_HZ) {
+		LOG_WRN("Bus is %u Hz and the PCA9555 is rated %u Hz. Remove its jumpers: it "
+			"decodes every address on the bus and mis-decoding one shows up as a "
+			"target bus error on somebody else transfer",
+			(uint32_t)DT_PROP(TARGET_PORT_NODE, clock_frequency),
+			(uint32_t)PCA9555_MAX_FREQ_HZ);
 	}
 
 	while (true) {
