@@ -7,6 +7,7 @@ config MCHP_XEC_CCT_KTIMER
 	default y
 	depends on DT_HAS_MICROCHIP_XEC_CCT_KTIMER_ENABLED && !MCHP_XEC_RTOS_TIMER
 	select TICKLESS_CAPABLE
+	select TIMER_HAS_64BIT_CYCLE_COUNTER
 	select SYSTEM_TIMER_HAS_DISABLE_SUPPORT
 	# Advertise LPM-companion capability; the actual mode (HOOKS) is chosen as a
 	# default of the SYSTEM_TIMER_LPM_COMPANION choice (select cannot target a
