@@ -57,7 +57,7 @@ struct uart_xec_device_config {
 	uint8_t girq_pos;
 	uint8_t enc_pcr;
 	const struct pinctrl_dev_config *pcfg;
-#if defined(CONFIG_UART_INTERRUPT_DRIVEN) || defined(CONFIG_UART_ASYNC_API)
+#ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	uart_irq_config_func_t irq_config_func;
 #endif
 #ifdef CONFIG_PM_DEVICE
@@ -243,6 +243,11 @@ static int uart_xec_configure(const struct device *dev, const struct uart_config
 		goto out;
 	}
 
+	if (cfg->flow_ctrl != UART_CFG_FLOW_CTRL_NONE) {
+		ret = -ENOTSUP;
+		goto out;
+	}
+
 	dev_data->uart_config = *cfg;
 
 	/* data bits, stop bits, parity, clear DLAB */
@@ -267,9 +272,6 @@ static int uart_xec_configure(const struct device *dev, const struct uart_config
 	if (soc_test_bit8(ub + XEC_UART_LSR_OFS, XEC_UART_LSR_DATA_RDY_POS) != 0) {
 		dev_data->data_byte = sys_read8(ub + XEC_UART_RTXB_OFS);
 	}
-
-	/* disable interrupts  */
-	sys_write8(0, ub + XEC_UART_IER_OFS);
 
 out:
 	k_spin_unlock(&dev_data->lock, key);
@@ -379,6 +381,9 @@ static int uart_xec_init(const struct device *dev)
 	if (ret != 0) {
 		return ret;
 	}
+
+	/* disable interrupts */
+	sys_write8(0, dev_cfg->uart_base + XEC_UART_IER_OFS);
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	dev_cfg->irq_config_func(dev);
