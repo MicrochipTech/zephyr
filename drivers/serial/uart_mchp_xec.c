@@ -331,7 +331,8 @@ static int uart_xec_pm_action(const struct device *dev, enum pm_device_action ac
 		soc_clear_bit8(ub + XEC_UART_LD_ACT_OFS, XEC_UART_LD_ACTIVATE_POS);
 		if ((dev_cfg->wakeup_source) && (dev_cfg->wakerx_gpio.port != NULL)) {
 			ret = gpio_pin_interrupt_configure_dt(
-				&dev_cfg->wakerx_gpio, GPIO_INT_MODE_EDGE | GPIO_INT_TRIG_LOW);
+				&dev_cfg->wakerx_gpio,
+				(GPIO_INT_MODE_EDGE | GPIO_INT_TRIG_LOW));
 			if (ret < 0) {
 				LOG_ERR("Failed to configure UART wake interrupt (ret %d)", ret);
 				return ret;
@@ -444,7 +445,7 @@ static void uart_xec_poll_out(const struct device *dev, unsigned char c)
 	mm_reg_t ub = dev_cfg->uart_base;
 	k_spinlock_key_t key = k_spin_lock(&dev_data->lock);
 
-#ifdef XEC_HAS_UART_LSR2
+#ifdef MCHP_HAS_UART_LSR2
 	if ((sys_read8(ub + XEC_UART_IIR_OFS) & XEC_UART_IIR_FIFO_EN_MASK) != 0) {
 		/* When the FIFO is disabled this bit is always 0 */
 		while (soc_test_bit8(ub + XEC_UART_LSR2_OFS, XEC_UART_LSR2_TX_FIFO_FULL_POS) != 0) {
@@ -487,7 +488,7 @@ static int uart_xec_err_check(const struct device *dev)
 
 static bool uart_xec_ready_to_xmit(mm_reg_t base, bool fifo_enabled)
 {
-#ifdef XEC_HAS_UART_LSR2
+#ifdef MCHP_HAS_UART_LSR2
 	if (fifo_enabled == true) {
 		if (soc_test_bit8(base + XEC_UART_LSR2_OFS, XEC_UART_LSR2_TX_FIFO_FULL_POS) == 0) {
 			return true;
