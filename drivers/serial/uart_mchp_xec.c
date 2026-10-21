@@ -78,29 +78,30 @@ struct uart_xec_dev_data {
 	uart_irq_callback_user_data_t cb; /**< Callback function pointer */
 	void *cb_data;                    /**< Callback function arg */
 #endif
-};
-
 #ifdef CONFIG_PM_DEVICE
-ATOMIC_DEFINE(pm_policy_state_flag, UART_XEC_PM_POLICY_STATE_FLAG_COUNT);
+	struct gpio_callback wake_cb;
 #endif
-
 #if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
-struct k_work_delayable rx_refresh_timeout_work;
+	ATOMIC_DEFINE(pm_policy_state_flag, UART_XEC_PM_POLICY_STATE_FLAG_COUNT);
+	struct k_work_delayable rx_refresh_timeout_work;
 #endif
+};
 
 static DEVICE_API(uart, uart_xec_driver_api);
 
 #if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
-static void uart_xec_pm_policy_state_lock_get(enum uart_xec_pm_policy_state_flag flag)
+static void uart_xec_pm_policy_state_lock_get(struct uart_xec_dev_data *data,
+					      enum uart_xec_pm_policy_state_flag flag)
 {
-	if (atomic_test_and_set_bit(pm_policy_state_flag, flag) == 0) {
+	if (atomic_test_and_set_bit(data->pm_policy_state_flag, flag) == 0) {
 		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
 	}
 }
 
-static void uart_xec_pm_policy_state_lock_put(enum uart_xec_pm_policy_state_flag flag)
+static void uart_xec_pm_policy_state_lock_put(struct uart_xec_dev_data *data,
+					      enum uart_xec_pm_policy_state_flag flag)
 {
-	if (atomic_test_and_clear_bit(pm_policy_state_flag, flag) == 1) {
+	if (atomic_test_and_clear_bit(data->pm_policy_state_flag, flag) == 1) {
 		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
 	}
 }
@@ -303,10 +304,11 @@ static void uart_xec_wake_handler(const struct device *gpio, struct gpio_callbac
 	(void)gpio_pin_interrupt_configure(gpio, (find_msb_set(pins) - 1), GPIO_INT_DISABLE);
 	/* Refresh console expired time */
 #ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
+	struct uart_xec_dev_data *data = CONTAINER_OF(cb, struct uart_xec_dev_data, wake_cb);
 	k_timeout_t delay = K_MSEC(CONFIG_UART_CONSOLE_INPUT_EXPIRED_TIMEOUT);
 
-	uart_xec_pm_policy_state_lock_get(UART_XEC_PM_POLICY_STATE_RX_FLAG);
-	k_work_reschedule(&rx_refresh_timeout_work, delay);
+	uart_xec_pm_policy_state_lock_get(data, UART_XEC_PM_POLICY_STATE_RX_FLAG);
+	k_work_reschedule(&data->rx_refresh_timeout_work, delay);
 #endif
 }
 
@@ -352,9 +354,11 @@ static int uart_xec_pm_action(const struct device *dev, enum pm_device_action ac
 #ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
 static void uart_xec_rx_refresh_timeout(struct k_work *work)
 {
-	ARG_UNUSED(work);
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct uart_xec_dev_data *data =
+		CONTAINER_OF(dwork, struct uart_xec_dev_data, rx_refresh_timeout_work);
 
-	uart_xec_pm_policy_state_lock_put(UART_XEC_PM_POLICY_STATE_RX_FLAG);
+	uart_xec_pm_policy_state_lock_put(data, UART_XEC_PM_POLICY_STATE_RX_FLAG);
 }
 #endif
 #endif /* CONFIG_PM_DEVICE */
@@ -391,15 +395,13 @@ static int uart_xec_init(const struct device *dev)
 
 #ifdef CONFIG_PM_DEVICE
 #ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
-	k_work_init_delayable(&rx_refresh_timeout_work, uart_xec_rx_refresh_timeout);
+	k_work_init_delayable(&dev_data->rx_refresh_timeout_work, uart_xec_rx_refresh_timeout);
 #endif
 	if ((dev_cfg->wakeup_source) && (dev_cfg->wakerx_gpio.port != NULL)) {
-		static struct gpio_callback uart_xec_wake_cb;
-
-		gpio_init_callback(&uart_xec_wake_cb, uart_xec_wake_handler,
+		gpio_init_callback(&dev_data->wake_cb, uart_xec_wake_handler,
 				   BIT(dev_cfg->wakerx_gpio.pin));
 
-		ret = gpio_add_callback(dev_cfg->wakerx_gpio.port, &uart_xec_wake_cb);
+		ret = gpio_add_callback(dev_cfg->wakerx_gpio.port, &dev_data->wake_cb);
 		if (ret < 0) {
 			LOG_ERR("Failed to add UART wake callback (err %d)", ret);
 			return ret;
@@ -534,7 +536,7 @@ static int uart_xec_fifo_fill(const struct device *dev, const uint8_t *tx_data, 
 	while (i < size) {
 		if (uart_xec_ready_to_xmit(ub, fifo_enabled) == true) {
 #if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
-			uart_xec_pm_policy_state_lock_get(UART_XEC_PM_POLICY_STATE_TX_FLAG);
+			uart_xec_pm_policy_state_lock_get(dev_data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
 #endif
 			sys_write8(tx_data[i], ub + XEC_UART_RTXB_OFS);
 			i++;
@@ -822,8 +824,8 @@ static void uart_xec_isr(const struct device *dev)
 	if ((lsr & XEC_UART_LSR_DATA_RDY) != 0) {
 		k_timeout_t delay = K_MSEC(CONFIG_UART_CONSOLE_INPUT_EXPIRED_TIMEOUT);
 
-		uart_xec_pm_policy_state_lock_get(UART_XEC_PM_POLICY_STATE_RX_FLAG);
-		k_work_reschedule(&rx_refresh_timeout_work, delay);
+		uart_xec_pm_policy_state_lock_get(dev_data, UART_XEC_PM_POLICY_STATE_RX_FLAG);
+		k_work_reschedule(&dev_data->rx_refresh_timeout_work, delay);
 	}
 #endif
 
@@ -833,7 +835,7 @@ static void uart_xec_isr(const struct device *dev)
 
 #if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
 	if (uart_xec_irq_tx_complete(dev) != 0) {
-		uart_xec_pm_policy_state_lock_put(UART_XEC_PM_POLICY_STATE_TX_FLAG);
+		uart_xec_pm_policy_state_lock_put(dev_data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
 	}
 #endif /* CONFIG_PM */
 
