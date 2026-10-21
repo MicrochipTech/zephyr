@@ -1,0 +1,13 @@
+sample:
+  description: Microchip XEC EVB PM device demo
+  name: xec_pm_device
+tests:
+  sample.board.microchip.xec_pm_device:
+    harness: uart
+    platform_allow:
+      - mec_assy6941/mec1753_qlj
+    tags: uart
+    depends_on:
+      - gpio
+      - uart
+      - pm

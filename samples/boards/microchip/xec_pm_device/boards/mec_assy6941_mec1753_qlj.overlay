@@ -1,0 +1,61 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* mec_assy6941 EVB
+ *
+ * Set VTR2 to +3.3V
+ * J68 2x8 1-2
+ *
+ */
+
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/* define sleep states for I2C pins */
+&pinctrl {
+	uart1_tx_gpio170_sleep: uart1_tx_gpio170_sleep {
+		pinmux = <MCHP_XEC_PINMUX(0170, MCHP_AF1)>;
+		low-power-enable;
+	};
+
+	uart1_rx_gpio171_sleep: uart1_rx_gpio171_sleep {
+		pinmux = <MCHP_XEC_PINMUX(0171, MCHP_AF1)>;
+		low-power-enable;
+	};
+};
+
+/ {
+	/* Configure GPIO060 as test PLL clock out.
+	 * We scope this pin to observe if PLL is turned off in deep sleep (suspend).
+	 */
+	zephyr,user {
+		pinctrl-0 = <&tst_clk_out_gpio060>;
+		pinctrl-names = "default";
+	};
+
+	power-states {
+		idle: idle {
+			compatible = "zephyr,power-state";
+			power-state-name = "suspend-to-idle";
+			min-residency-us = <1000000>;
+		};
+
+		suspend_to_ram: suspend_to_ram {
+			compatible = "zephyr,power-state";
+			power-state-name = "suspend-to-ram";
+			min-residency-us = <2000000>;
+		};
+	};
+};
+
+&uart1 {
+	compatible = "microchip,xec-uart";
+	status = "okay";
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
+	pinctrl-1 = <&uart1_tx_gpio170_sleep &uart1_rx_gpio171_sleep>;
+	pinctrl-names = "default", "sleep";
+};
