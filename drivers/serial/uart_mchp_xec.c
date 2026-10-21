@@ -856,7 +856,9 @@ static int uart_xec_line_ctrl_set(const struct device *dev, uint32_t ctrl, uint3
 
 	switch (ctrl) {
 	case UART_LINE_CTRL_BAUD_RATE:
+		key = k_spin_lock(&dev_data->lock);
 		set_baud_rate(dev, val);
+		k_spin_unlock(&dev_data->lock, key);
 		return 0;
 
 	case UART_LINE_CTRL_RTS:
@@ -866,9 +868,9 @@ static int uart_xec_line_ctrl_set(const struct device *dev, uint32_t ctrl, uint3
 		mdc = (uint32_t)sys_read8(ub + XEC_UART_MCR_OFS);
 
 		if (ctrl == UART_LINE_CTRL_RTS) {
-			chg = MCR_RTS;
+			chg = XEC_UART_MCR_RTSn;
 		} else {
-			chg = MCR_DTR;
+			chg = XEC_UART_MCR_DTRn;
 		}
 
 		if (val) {
