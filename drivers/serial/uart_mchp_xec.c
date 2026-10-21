@@ -257,8 +257,9 @@ static int uart_xec_configure(const struct device *dev, const struct uart_config
 	 * generate the interrupt at 8th byte
 	 * Clear TX and RX FIFO
 	 */
-	dev_data->fcr_cache = (XEC_UART_FCR_EXRF | XEC_UART_FCR_RX_FIFO_LVL_8 |
-			       XEC_UART_FCR_CLR_RX_FIFO | XEC_UART_FCR_CLR_TX_FIFO);
+	dev_data->fcr_cache =
+		(XEC_UART_FCR_EXRF | XEC_UART_FCR_RX_FIFO_LVL_SET(XEC_UART_FCR_RX_FIFO_LVL_8) |
+		 XEC_UART_FCR_CLR_RX_FIFO | XEC_UART_FCR_CLR_TX_FIFO);
 
 	sys_write8(dev_data->fcr_cache, ub + XEC_UART_FCR_OFS);
 
