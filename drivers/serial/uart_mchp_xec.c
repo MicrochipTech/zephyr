@@ -68,6 +68,7 @@ struct uart_xec_device_config {
 
 /** Device data structure */
 struct uart_xec_dev_data {
+	const struct device *dev;
 	struct uart_config uart_config;
 	struct k_spinlock lock;
 
@@ -81,15 +82,18 @@ struct uart_xec_dev_data {
 #ifdef CONFIG_PM_DEVICE
 	struct gpio_callback wake_cb;
 #endif
-#if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
+#ifdef CONFIG_PM
 	ATOMIC_DEFINE(pm_policy_state_flag, UART_XEC_PM_POLICY_STATE_FLAG_COUNT);
+	struct k_work_delayable tx_refresh_timeout_work;
+#ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
 	struct k_work_delayable rx_refresh_timeout_work;
+#endif
 #endif
 };
 
 static DEVICE_API(uart, uart_xec_driver_api);
 
-#if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
+#ifdef CONFIG_PM
 static void uart_xec_pm_policy_state_lock_get(struct uart_xec_dev_data *data,
 					      enum uart_xec_pm_policy_state_flag flag)
 {
@@ -105,7 +109,57 @@ static void uart_xec_pm_policy_state_lock_put(struct uart_xec_dev_data *data,
 		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, PM_ALL_SUBSTATES);
 	}
 }
+
+/*
+ * Compute a timeout sufficient for the 16-byte TX FIFO and 1-byte shift
+ * register (17 frames of up to 12 bits) to drain at the configured baudrate.
+ */
+static k_timeout_t uart_xec_tx_timeout_calc(const struct uart_xec_dev_data *data)
+{
+	uint32_t baud = data->uart_config.baudrate;
+
+	if (baud == 0U) {
+		baud = XEC_UART_MAX_BAUD;
+	}
+
+	uint32_t us = DIV_ROUND_UP((XEC_UART_TX_FIFO_MAX_LEN + 1U) * 12U * USEC_PER_SEC, baud);
+
+	return K_USEC(MAX(us, 200U));
+}
+
+static void uart_xec_tx_lock_kick(struct uart_xec_dev_data *data)
+{
+	uart_xec_pm_policy_state_lock_get(data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
+	k_work_reschedule(&data->tx_refresh_timeout_work, uart_xec_tx_timeout_calc(data));
+}
+
+static void uart_xec_tx_refresh_timeout(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct uart_xec_dev_data *data =
+		CONTAINER_OF(dwork, struct uart_xec_dev_data, tx_refresh_timeout_work);
+	const struct uart_xec_device_config *dev_cfg = data->dev->config;
+	mm_reg_t ub = dev_cfg->uart_base;
+	uint8_t lsr = sys_read8(ub + XEC_UART_LSR_OFS);
+
+	if ((lsr & XEC_UART_LSR_TEMT) != 0) {
+		uart_xec_pm_policy_state_lock_put(data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
+	} else {
+		k_work_reschedule(&data->tx_refresh_timeout_work, uart_xec_tx_timeout_calc(data));
+	}
+}
+
+#ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
+static void uart_xec_rx_refresh_timeout(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct uart_xec_dev_data *data =
+		CONTAINER_OF(dwork, struct uart_xec_dev_data, rx_refresh_timeout_work);
+
+	uart_xec_pm_policy_state_lock_put(data, UART_XEC_PM_POLICY_STATE_RX_FLAG);
+}
 #endif
+#endif /* CONFIG_PM */
 
 /* Calculate the baud clock divisor given the desired BAUD rate.
  * Hardware design is divisor = Fin / (16 * baud_rate)
@@ -360,17 +414,6 @@ static int uart_xec_pm_action(const struct device *dev, enum pm_device_action ac
 
 	return 0;
 }
-
-#ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
-static void uart_xec_rx_refresh_timeout(struct k_work *work)
-{
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct uart_xec_dev_data *data =
-		CONTAINER_OF(dwork, struct uart_xec_dev_data, rx_refresh_timeout_work);
-
-	uart_xec_pm_policy_state_lock_put(data, UART_XEC_PM_POLICY_STATE_RX_FLAG);
-}
-#endif
 #endif /* CONFIG_PM_DEVICE */
 
 /* Initialize individual UART port
@@ -383,6 +426,8 @@ static int uart_xec_init(const struct device *dev)
 	const struct uart_xec_device_config *const dev_cfg = dev->config;
 	struct uart_xec_dev_data *dev_data = dev->data;
 	int ret;
+
+	dev_data->dev = dev;
 
 	soc_xec_pcr_sleep_en_clear(dev_cfg->enc_pcr);
 
@@ -403,10 +448,14 @@ static int uart_xec_init(const struct device *dev)
 	dev_cfg->irq_config_func(dev);
 #endif
 
-#ifdef CONFIG_PM_DEVICE
+#ifdef CONFIG_PM
+	k_work_init_delayable(&dev_data->tx_refresh_timeout_work, uart_xec_tx_refresh_timeout);
 #ifdef CONFIG_UART_CONSOLE_INPUT_EXPIRED
 	k_work_init_delayable(&dev_data->rx_refresh_timeout_work, uart_xec_rx_refresh_timeout);
 #endif
+#endif
+
+#ifdef CONFIG_PM_DEVICE
 	if ((dev_cfg->wakeup_source) && (dev_cfg->wakerx_gpio.port != NULL)) {
 		gpio_init_callback(&dev_data->wake_cb, uart_xec_wake_handler,
 				   BIT(dev_cfg->wakerx_gpio.pin));
@@ -478,6 +527,9 @@ static void uart_xec_poll_out(const struct device *dev, unsigned char c)
 #endif
 
 	sys_write8(c, ub + XEC_UART_RTXB_OFS);
+#ifdef CONFIG_PM
+	uart_xec_tx_lock_kick(dev_data);
+#endif
 
 	k_spin_unlock(&dev_data->lock, key);
 }
@@ -545,15 +597,18 @@ static int uart_xec_fifo_fill(const struct device *dev, const uint8_t *tx_data, 
 
 	while (i < size) {
 		if (uart_xec_ready_to_xmit(ub, fifo_enabled) == true) {
-#if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
-			uart_xec_pm_policy_state_lock_get(dev_data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
-#endif
 			sys_write8(tx_data[i], ub + XEC_UART_RTXB_OFS);
 			i++;
 		} else {
 			break;
 		}
 	}
+
+#ifdef CONFIG_PM
+	if (i > 0) {
+		uart_xec_tx_lock_kick(dev_data);
+	}
+#endif
 
 	k_spin_unlock(&dev_data->lock, key);
 
@@ -827,7 +882,7 @@ static void uart_xec_isr(const struct device *dev)
 	const struct uart_xec_device_config *const dev_cfg = dev->config;
 	struct uart_xec_dev_data *const dev_data = dev->data;
 
-#if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
+#if defined(CONFIG_PM) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
 	mm_reg_t ub = dev_cfg->uart_base;
 	uint8_t lsr = sys_read8(ub + XEC_UART_LSR_OFS);
 
@@ -843,8 +898,9 @@ static void uart_xec_isr(const struct device *dev)
 		dev_data->cb(dev, dev_data->cb_data);
 	}
 
-#if defined(CONFIG_PM_DEVICE) && defined(CONFIG_UART_CONSOLE_INPUT_EXPIRED)
+#ifdef CONFIG_PM
 	if (uart_xec_irq_tx_complete(dev) != 0) {
+		k_work_cancel_delayable(&dev_data->tx_refresh_timeout_work);
 		uart_xec_pm_policy_state_lock_put(dev_data, UART_XEC_PM_POLICY_STATE_TX_FLAG);
 	}
 #endif /* CONFIG_PM */
