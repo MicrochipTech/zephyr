@@ -27,6 +27,12 @@
 };
 
 / {
+	aliases {
+		led2 = &bbled2;
+		led3 = &bbled1;
+		led4 = &bbled0;
+	};
+
 	/* Configure GPIO060 as test PLL clock out.
 	 * We scope this pin to observe if PLL is turned off in deep sleep (suspend).
 	 */
@@ -58,4 +64,25 @@
 	pinctrl-0 = <&uart1_tx_gpio170 &uart1_rx_gpio171>;
 	pinctrl-1 = <&uart1_tx_gpio170_sleep &uart1_rx_gpio171_sleep>;
 	pinctrl-names = "default", "sleep";
+};
+
+&bbled0 {
+	compatible = "microchip,xec-bbled";
+	pinctrl-0 = <&led0_gpio156>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&bbled1 {
+	compatible = "microchip,xec-bbled";
+	pinctrl-0 = <&led1_gpio157>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+&bbled2 {
+	compatible = "microchip,xec-bbled";
+	pinctrl-0 = <&led2_gpio153>;
+	pinctrl-names = "default";
+	status = "okay";
 };

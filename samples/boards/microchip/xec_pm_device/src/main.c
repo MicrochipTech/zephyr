@@ -15,6 +15,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/led.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/dt-bindings/pinctrl/mchp-xec-pinctrl.h>
 #include <zephyr/logging/log.h>
@@ -26,6 +27,10 @@
 
 LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
+#define BOARD_LED2_NODE DT_ALIAS(led2)
+#define BOARD_LED3_NODE DT_ALIAS(led3)
+#define BOARD_LED4_NODE DT_ALIAS(led4)
+
 #define ZEPHYR_CONSOLE_UART_NODE DT_CHOSEN(zephyr_console)
 
 #define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
@@ -34,6 +39,10 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 PINCTRL_DT_DEFINE(ZEPHYR_USER_NODE);
 
 const bool uart1_is_wakeup_source = DT_PROP_OR(ZEPHYR_CONSOLE_UART_NODE, wakeup_source, 0);
+
+const struct device *board_led2 = DEVICE_DT_GET(BOARD_LED2_NODE);
+const struct device *board_led3 = DEVICE_DT_GET(BOARD_LED3_NODE);
+const struct device *board_led4 = DEVICE_DT_GET(BOARD_LED4_NODE);
 
 int main(void)
 {
@@ -58,10 +67,20 @@ int main(void)
 		LOG_ERR("Failed to configure GPIO for TEST_CLK_OUT (%d)", rc);
 	}
 
+	/* disable LED HW app loaded from flash by Boot-ROM enabled
+	 */
+	led_off(board_led2, 0);
+	led_off(board_led3, 0);
+	led_off(board_led4, 0);
+
 	while (true) {
 		LOG_INF("sleep for 5000 milliseconds");
 
+		led_off(board_led2, 0);
+
 		k_sleep(K_MSEC(5000));
+
+		led_on(board_led2, 0);
 
 		LOG_INF("Wake from sleep");
 		log_flush();
