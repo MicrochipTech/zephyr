@@ -36,6 +36,42 @@
 
 #define XEC_UART0_REG_BASE DT_REG_ADDR(DT_NODELABEL(uart0))
 
+#ifdef CONFIG_SOC_MEC_PM_DBG_PCR_CLK_REQ_VBM
+#define CLK_REQ_VMB_IDX CONFIG_SOC_MEM_PM_DBG_PCR_CLK_REQ_VBM_OFS
+
+#define XEC_VBM_BASE DT_REG_ADDR(DT_NODELABEL(bbram))
+#define XEC_VBM_SIZE DT_REG_SIZE(DT_NODELABEL(bbram))
+
+static void soc_xec_save_pcr_clk_req_to_vbm(uint32_t start_idx)
+{
+	uintptr_t clk_req_addr = XEC_PCR_CLK_REQ_BASE;
+	uintptr_t vbm_addr = XEC_VBM_BASE;
+
+	if ((start_idx & 0x03U) != 0) {
+		return;
+	}
+
+	vbm_addr += start_idx;
+
+	for (uint32_t i = 0; i < XEC_CC_PCR_MAX_SCR; i++) {
+		if (vbm_addr > (XEC_VBM_BASE + XEC_VBM_SIZE - 4U)) {
+			break;
+		}
+
+		uint32_t r = sys_read32(clk_req_addr);
+
+		sys_write32(r, vbm_addr);
+		clk_req_addr += 4U;
+		vbm_addr += 4U;
+	}
+}
+
+#define XEC_SAVE_PCR_CLK_REQ_TO_VBM(idx) soc_xec_save_pcr_clk_req_to_vbm(idx)
+#else
+#define CLK_REQ_VMB_IDX 0
+#define XEC_SAVE_PCR_CLK_REQ_TO_VBM(idx)
+#endif
+
 static uint8_t basic_timer_cr_save[XEC_BASIC_TIMER_INSTANCES];
 static uint8_t uart_actv_save[MEC165XB_UART_INSTANCES];
 
@@ -131,6 +167,8 @@ static void z_power_soc_deep_sleep(void)
 	SCB->SCR |= BIT(SCB_SCR_SLEEPDEEP_Pos);
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
+
+	XEC_SAVE_PCR_CLK_REQ_TO_VBM(CLK_REQ_VMB_IDX);
 
 	__DSB();
 	__ISB();

@@ -262,6 +262,20 @@ choice
 		  Check data sheet for functions shared with SWD and SWV pins.
 endchoice
 
+config SOC_MEC_PM_DBG_PCR_CLK_REQ_VBM
+	bool "Save the MEC PCR CLK_REQ registers"
+	help
+	  Upon deep sleep entry save the PCR CLK_REQ registers to VBAT memory
+
+config SOC_MEM_PM_DBG_PCR_CLK_REQ_VBM_OFS
+	int "byte offset in VBAT memory for saving PCR CLK_REQ 32-bit words"
+	range 0 123
+	default 0
+	depends on SOC_MEC_PM_DBG_PCR_CLK_REQ_VBM
+	help
+	  The byte offset in VBAT memory to save the SoC's PCR CLK_REQ
+	  32-bit registers.
+
 # common processor clock divider configuration
 config SOC_MEC_PROC_CLK_DIV
 	int "PROC_CLK_DIV"
