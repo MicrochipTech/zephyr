@@ -73,9 +73,6 @@
 #define XEC_CCT_COMP0_GIRQ_IDX 7
 #define XEC_CCT_COMP1_GIRQ_IDX 8
 
-#define XEC_CCT_COMP0_GIRQ_POS_IDX (XEC_CCT_COMP0_GIRQ_IDX + 1)
-#define XEC_CCT_COMP1_GIRQ_POS_IDX (XEC_CCT_COMP1_GIRQ_IDX + 1)
-
 #define XEC_CCT_COMP0_GIRQ MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(0, girqs, XEC_CCT_COMP0_GIRQ_IDX))
 #define XEC_CCT_COMP1_GIRQ MCHP_XEC_ECIA_GIRQ(DT_INST_PROP_BY_IDX(0, girqs, XEC_CCT_COMP1_GIRQ_IDX))
 
@@ -183,20 +180,6 @@ static void xec_cct_isr(const void *arg)
 	timer_core_announce();
 }
 
-void sys_clock_no_timeout(void)
-{
-	__ASSERT(sys_clock_is_locked(), "system clock lock not held");
-
-	if (!IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
-		return;
-	}
-
-	/* Park Compare0 one cycle behind the current count (a full 32-bit
-	 * wrap away) while leaving the free-running counter active.
-	 */
-	xec_cct_set_comp0(xec_cct_count_raw() - 1U);
-}
-
 void sys_clock_idle_enter(uint32_t ticks)
 {
 	__ASSERT(sys_clock_is_locked(), "system clock lock not held");
@@ -211,30 +194,36 @@ void sys_clock_idle_enter(uint32_t ticks)
 		return;
 	}
 
-	/* Nothing to wake up for and the uptime may drift: deactivate CCT so
-	 * it cannot wake the CPU on wrap. sys_clock_idle_exit() re-activates it.
+	/* Nothing to wake up for and the uptime may drift: park Compare0 and
+	 * deactivate CCT so it cannot wake the CPU on wrap.
+	 * sys_clock_idle_exit() re-activates it.
 	 */
+	xec_cct_set_comp0(xec_cct_count_raw() - 1U);
+	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
+	NVIC_ClearPendingIRQ(XEC_CCT_COMP0_IRQ_NUM);
 	sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
 #else
+	/* Capture compensated count before deactivating CCT. Park Compare0 and
+	 * deactivate CCT (ACTV=0) before WFI so its CLK_REQ is deasserted in
+	 * deep sleep and it stays gated across WFI and the post-wake PLL lock
+	 * window (where peripherals otherwise receive an inaccurate ring
+	 * oscillator clock).
+	 */
+	cycle_pre_idle = xec_cct_count();
+	xec_cct_set_comp0(xec_cct_count_raw() - 1U);
+	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
+	NVIC_ClearPendingIRQ(XEC_CCT_COMP0_IRQ_NUM);
+	sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
+
 	if (ticks == SYS_CLOCK_IDLE_FOREVER) {
-		/* Sleep indefinitely (SLOPPY_IDLE with empty timeout queue):
-		 * woken by an external source; deactivate CCT so its CLK_REQ
-		 * does not block deep sleep.
-		 */
-		xec_cct_set_comp0(xec_cct_count_raw() - 1U);
-		sys_clear_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
 		return;
 	}
 
-	/* Arm Compare0 for light-sleep states where CCT stays clocked. */
-	sys_clock_set_timeout(ticks, false);
-
-	/* Arm the always-on companion to guarantee wake when the PLL (and CCT)
-	 * stops in deep sleep.
+	/* Arm the always-on 32 KHz companion to wake the system and measure
+	 * elapsed time across sleep and PLL lock.
 	 */
 	uint64_t timeout_us = k_ticks_to_us_ceil64(ticks);
 
-	cycle_pre_idle = xec_cct_count();
 	timeout_idle = true;
 	z_sys_clock_lpm_enter(timeout_us);
 #endif
@@ -242,17 +231,20 @@ void sys_clock_idle_enter(uint32_t ticks)
 
 void sys_clock_idle_exit(void)
 {
-	/* Ensure CCT is active if sys_clock_idle_enter() deactivated it for
-	 * SYS_CLOCK_IDLE_FOREVER.
+	k_spinlock_key_t key = sys_clock_lock();
+
+	/* Clear any stale Compare0 match status and re-activate CCT now that
+	 * the PLL is locked and accurate.
 	 */
+	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
+	NVIC_ClearPendingIRQ(XEC_CCT_COMP0_IRQ_NUM);
 	sys_set_bit(XEC_CCT_BASE + XEC_CCT_CR_OFS, XEC_CCT_CR_ACTV_POS);
 
 #if !defined(CONFIG_SYSTEM_TIMER_LPM_COMPANION_NONE)
 	if (!timeout_idle) {
+		sys_clock_unlock(key);
 		return;
 	}
-
-	k_spinlock_key_t key = sys_clock_lock();
 
 	uint64_t companion_us = z_sys_clock_lpm_exit();
 	uint32_t cct_diff = xec_cct_count() - cycle_pre_idle;
@@ -267,9 +259,12 @@ void sys_clock_idle_exit(void)
 	uint32_t cct_unannounced = timer_core_cycles_since(timer_core_last_cycle);
 
 	cct_compensation += (uint32_t)missed_cycles;
+	xec_cct_set_comp0(xec_cct_count_raw() - 1U);
 	timeout_idle = false;
 
 	timer_core_announce_cycles64_from(key, (uint64_t)cct_unannounced + missed_cycles);
+#else
+	sys_clock_unlock(key);
 #endif
 }
 
@@ -307,6 +302,15 @@ void sys_clock_disable(void)
 
 /* Single-shot start value: activate + start, no auto-reload (README: CR=0x05) */
 #define XEC_RTMR_CR_SINGLE_SHOT (BIT(XEC_RTMR_CR_ACTV_POS) | BIT(XEC_RTMR_CR_START_POS))
+/* Auto-reload start value: activate + auto-reload + start (CR=0x07) */
+#define XEC_RTMR_CR_AUTO_RELOAD                                                                    \
+	(BIT(XEC_RTMR_CR_ACTV_POS) | BIT(XEC_RTMR_CR_ARL_EN_POS) | BIT(XEC_RTMR_CR_START_POS))
+
+/* Minimum preload (in 32.768 kHz ticks) to enable auto-reload so post-wake PLL
+ * lock latency (up to 3 ms ~ 99 ticks) is also measured if the companion hits
+ * terminal count to wake the system.
+ */
+#define XEC_RTMR_POST_WAKE_MIN_TICKS 256u
 
 /* Companion DT node: the always-on 32 KHz RTOS timer (accessed by macro only;
  * it must not be bound by any other driver in HOOKS mode, e.g. MCHP_XEC_RTOS_TIMER
@@ -321,6 +325,8 @@ void sys_clock_disable(void)
 #define XEC_RTMR_GIRQ_POS DT_PROP_BY_IDX(XEC_RTMR_NODE, girqs, 1)
 
 BUILD_ASSERT(XEC_RTMR_FREQ_HZ == 32768, "LPM companion RTOS timer must run at 32768 Hz");
+BUILD_ASSERT(!DT_NODE_HAS_STATUS_OKAY(XEC_RTMR_NODE),
+	     "rtimer DT node must be disabled when used as LPM companion");
 
 /*
  * 32768 Hz means exactly 512 / 15625 ticks per microsecond. Both ratios are
@@ -343,9 +349,15 @@ BUILD_ASSERT(XEC_RTMR_FREQ_HZ == 32768, "LPM companion RTOS timer must run at 32
 
 /* Preload programmed at the last z_sys_clock_lpm_enter(), read back at exit. */
 static uint32_t xec_lpm_scheduled_ticks;
+static bool xec_lpm_auto_reload;
+static volatile bool xec_lpm_expired;
 
 static inline uint32_t xec_rtmr_us_to_ticks(uint64_t us)
 {
+	if (us >= (UINT64_MAX / XEC_RTMR_US_NUM)) {
+		return XEC_RTMR_MAX_TICKS;
+	}
+
 	uint64_t t = (us * XEC_RTMR_US_NUM) / XEC_RTMR_US_DEN;
 
 	if (t > XEC_RTMR_MAX_TICKS) {
@@ -368,17 +380,12 @@ static inline uint64_t xec_rtmr_ticks_to_us(uint32_t ticks)
  * interrupt does not re-assert after waking the core; elapsed-time recovery is
  * done in z_sys_clock_lpm_exit(). It deliberately does not call
  * sys_clock_announce() -- the CCT remains the system timer.
- *
- * After exiting WFI the arch idle code re-enables interrupts before
- * sys_clock_idle_exit() runs, so this handler may fire before lpm_exit(). It
- * only stops the timer and clears status; it never touches the count register,
- * which stays at its terminal value (0) for lpm_exit() to read.
  */
 static void xec_lpm_companion_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
 
-	sys_write32(0, XEC_RTMR_BASE + XEC_RTMR_CR_OFS);
+	xec_lpm_expired = true;
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
 }
 
@@ -402,38 +409,69 @@ void z_sys_clock_lpm_enter(uint64_t max_lpm_time_us)
 {
 	mm_reg_t base = XEC_RTMR_BASE;
 	uint32_t preload = xec_rtmr_us_to_ticks(max_lpm_time_us);
+	bool auto_reload = (preload > XEC_RTMR_POST_WAKE_MIN_TICKS);
+	uint32_t cr_start = auto_reload ? XEC_RTMR_CR_AUTO_RELOAD : XEC_RTMR_CR_SINGLE_SHOT;
 
 	xec_lpm_scheduled_ticks = preload;
+	xec_lpm_auto_reload = auto_reload;
+	xec_lpm_expired = false;
 
 	/* Drop any stale wake status from a previous LPM cycle. */
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
 	NVIC_ClearPendingIRQ(XEC_RTMR_IRQ_NUM);
 
-	/* Required start sequence (README): CR=0, write preload, CR=single-shot. */
+	/* Required start sequence: CR=0, CR=ACTV, write preload, CR=start. */
 	sys_write32(0, base + XEC_RTMR_CR_OFS);
+	sys_write32(BIT(XEC_RTMR_CR_ACTV_POS), base + XEC_RTMR_CR_OFS);
 	sys_write32(preload, base + XEC_RTMR_PRLD_OFS);
-	sys_write32(XEC_RTMR_CR_SINGLE_SHOT, base + XEC_RTMR_CR_OFS);
+	sys_write32(cr_start, base + XEC_RTMR_CR_OFS);
 }
 
 uint64_t z_sys_clock_lpm_exit(void)
 {
 	mm_reg_t base = XEC_RTMR_BASE;
-	uint32_t remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
+	uint32_t girq_status1 = 0u;
+	uint32_t girq_status2 = 0u;
+	uint32_t remaining;
 	uint32_t elapsed_ticks;
+	bool expired;
+
+	/* Sample GIRQ status around the CNT read to detect a terminal-count
+	 * transition that occurs while reading CNT.
+	 */
+	(void)soc_ecia_girq_status(XEC_RTMR_GIRQ, &girq_status1);
+	remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
+	(void)soc_ecia_girq_status(XEC_RTMR_GIRQ, &girq_status2);
+	if (((girq_status1 ^ girq_status2) & BIT(XEC_RTMR_GIRQ_POS)) != 0u) {
+		remaining = sys_read32(base + XEC_RTMR_CNT_OFS);
+	}
+
+	expired = xec_lpm_expired || ((girq_status2 & BIT(XEC_RTMR_GIRQ_POS)) != 0u);
 
 	/* Stop the companion and clear its wake status/pending. */
 	sys_write32(0, base + XEC_RTMR_CR_OFS);
+	xec_lpm_expired = false;
 	soc_ecia_girq_status_clear(XEC_RTMR_GIRQ, XEC_RTMR_GIRQ_POS);
 	NVIC_ClearPendingIRQ(XEC_RTMR_IRQ_NUM);
 
-	if (remaining == 0u) {
-		/* Reached terminal count: the full programmed window elapsed. */
+	if (expired) {
+		/* Reached terminal count: the full programmed window elapsed,
+		 * plus any post-wake ticks counted after auto-reload (such as
+		 * the deep-sleep PLL lock wait).
+		 */
 		elapsed_ticks = xec_lpm_scheduled_ticks;
-	} else if (remaining < xec_lpm_scheduled_ticks) {
+		if (xec_lpm_auto_reload && (remaining > 0u) &&
+		    (remaining < xec_lpm_scheduled_ticks)) {
+			elapsed_ticks += (xec_lpm_scheduled_ticks - remaining);
+		}
+	} else if ((remaining > 0u) && (remaining < xec_lpm_scheduled_ticks)) {
 		/* Woken early by another source: elapsed = programmed - remaining. */
 		elapsed_ticks = xec_lpm_scheduled_ticks - remaining;
 	} else {
-		/* No measurable time elapsed. */
+		/* Either remaining == xec_lpm_scheduled_ticks, or remaining == 0
+		 * while !expired (meaning the timer is still in the initial
+		 * < 30.5 us AHB-to-32KHz preload synchronization window).
+		 */
 		elapsed_ticks = 0u;
 	}
 
@@ -453,16 +491,19 @@ static int sys_clock_driver_init(void)
 	soc_ecia_girq_ctrl(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS, 0);
 	soc_xec_pcr_sleep_en_clear((uint8_t)(XEC_CCT_PCR_SCR_VAL));
 
-	/* Activate the block, reset the free-running counter, enable the
-	 * Compare0 match, and select the TCLK divider. COMP0_SET/CLR bits are
-	 * left untouched (per README they can be ignored).
+	/* Activate the block, reset the free-running counter, park Compare0
+	 * before enabling COMP0_EN so it does not match 0 on reset, and select
+	 * the TCLK divider. COMP0_SET/CLR bits are left untouched.
 	 */
-	v = (BIT(XEC_CCT_CR_ACTV_POS) | BIT(XEC_CCT_CR_FRT_RST_POS) | BIT(XEC_CCT_CR_COMP0_EN_POS) |
+	v = (BIT(XEC_CCT_CR_ACTV_POS) | BIT(XEC_CCT_CR_FRT_RST_POS) |
 	     XEC_CCT_CR_TCLK_SET(XEC_CCT_DIVIDER));
-
 	sys_write32(v, regbase + XEC_CCT_CR_OFS);
 
+	xec_cct_set_comp0(UINT32_MAX);
+	sys_set_bit(regbase + XEC_CCT_CR_OFS, XEC_CCT_CR_COMP0_EN_POS);
+
 	soc_ecia_girq_status_clear(XEC_CCT_COMP0_GIRQ, XEC_CCT_COMP0_GIRQ_POS);
+	NVIC_ClearPendingIRQ(XEC_CCT_COMP0_IRQ_NUM);
 
 	IRQ_CONNECT(XEC_CCT_COMP0_IRQ_NUM, XEC_CCT_COMP0_IRQ_PRIO, xec_cct_isr, NULL, 0);
 	irq_enable(XEC_CCT_COMP0_IRQ_NUM);
