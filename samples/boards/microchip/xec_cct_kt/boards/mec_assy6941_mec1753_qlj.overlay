@@ -15,6 +15,7 @@
  *   auto-selected and conflicting with the CCT kernel timer).
  */
 
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
 #include <zephyr/dt-bindings/interrupt-controller/mchp-xec-ecia.h>
 #include <zephyr/dt-bindings/clock/mchp_xec_pcr.h>
 
@@ -34,6 +35,10 @@
 		compatible = "microchip,app-pins";
 		pinctrl-0 = <&tst_clk_out_gpio060 &vci_in1_n_gpio162>;
 		pinctrl-names = "default";
+	};
+
+	zephyr,user {
+		gpios = <MCHP_GPIO_DECODE_144 GPIO_ACTIVE_HIGH>;
 	};
 };
 

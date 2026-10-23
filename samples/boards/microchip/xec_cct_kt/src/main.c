@@ -7,9 +7,12 @@
 #include <soc.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/pinctrl.h>
 
 #include "xec_vci.h"
+
+/* #define USE_VCI_IN1_BUTTON */
 
 #define SLEEP_MS   3000U
 #define ITERATIONS 0
@@ -24,6 +27,14 @@
 #define APP_PINS_NODE DT_NODELABEL(app_pin_list)
 PINCTRL_DT_DEFINE(APP_PINS_NODE);
 static const struct pinctrl_dev_config *app_pins_pcfg = PINCTRL_DT_DEV_CONFIG_GET(APP_PINS_NODE);
+
+#ifndef USE_VCI_IN1_BUTTON
+#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
+static const struct gpio_dt_spec sw2_spec = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, gpios);
+static volatile uint32_t sw2_falling_edge;
+static struct gpio_callback sw2_cbs;
+static void sw2_cb(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins);
+#endif
 
 /*
  * Exercise the CCT kernel timer across tickless sleeps. Each iteration sleeps
@@ -44,25 +55,59 @@ int main(void)
 
 	/* Route the test clock to GPIO060 for scope measurement. */
 	ret = pinctrl_apply_state(app_pins_pcfg, PINCTRL_STATE_DEFAULT);
-	if (ret) {
+	if (ret != 0) {
 		printk("app-pin-list pinctrl apply failed: %d\n", ret);
 	} else {
 		printk("test clock routed to GPIO060 (AF2)\n");
-		printk("VCI_IN1 pin function enabled");
+		printk("VCI_IN1 pin function enabled\n");
 	}
 
+#ifdef USE_VCI_IN1_BUTTON
+	printk("Using VCI_IN1 on switch S4 of EVB as trigger");
 	mchp_vci_in_input_enable(BIT(MEC_VCI_IN1_POS));
 	mchp_vci_in_latch_enable(BIT(MEC_VCI_IN1_POS));
 	mchp_vci_edge_detect_clr_all();
 	mchp_vci_in_latch_reset(BIT(MEC_VCI_IN1_POS));
+#else
+	printk("Using GPIO144 connected to switch SW2 of MECC as trigger\n");
+	gpio_flags_t sw2_flags = GPIO_INPUT | GPIO_INT_EDGE_FALLING;
+	gpio_port_pins_t pin_mask = BIT(sw2_spec.pin);
 
-	printk("Disconnect Debugger and press switch S4 when ready");
+	ret = gpio_pin_configure_dt(&sw2_spec, sw2_flags);
+	if (ret != 0) {
+		printk("configuration of SW2 GPIO as input failed (%d)\n", ret);
+		return ret;
+	}
+
+	gpio_init_callback(&sw2_cbs, sw2_cb, pin_mask);
+	gpio_add_callback(sw2_spec.port, &sw2_cbs);
+
+	ret = gpio_pin_interrupt_configure_dt(&sw2_spec, sw2_flags);
+	if (ret != 0) {
+		printk("configure SW2 GPIO falling edge interrupt failed (%d)\n", ret);
+		return ret;
+	}
+#endif
+
+#ifdef USE_VCI_IN1_BUTTON
+	printk("Disconnect Debugger and press switch S4 when ready\n");
+#else
+	printk("Disconnect Debugger and press switch SW2 when ready\n");
+#endif
+
+#ifdef USE_VCI_IN1_BUTTON
 	r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
 	while ((r & BIT(MEC_VCI_IN1_POS)) == 0) {
 		r = mchp_vci_pedge_detect() & mchp_vci_nedge_detect();
 	}
+	printk("Button S4 pressed. Disabling Debug interface\n");
+#else
+	sw2_falling_edge = 0;
+	while (sw2_falling_edge == 0) {
+	}
+	printk("Button SW2 pressed. Disabling Debug interface\n");
+#endif
 
-	printk("Button S4 pressed. Disabling Debug interface");
 	sys_write32(0, XEC_ECS_BASE + XEC_ECS_DBG_CR_OFS);
 	sys_write32(0, 0xE000EDFCU);
 	sys_write32(0xA05F0000U, 0xE0000EDFU);
@@ -73,7 +118,7 @@ int main(void)
 	sys_write32(0, 0xE000EDFCU);
 
 	r = sys_read32(XEC_ECS_BASE + XEC_ECS_DBG_CR_OFS);
-	printk("ECS reg 0x%08x = 0x%08x", (XEC_ECS_BASE + XEC_ECS_DBG_CR_OFS), r);
+	printk("ECS reg 0x%08x = 0x%08x\n", (XEC_ECS_BASE + XEC_ECS_DBG_CR_OFS), r);
 
 #if ITERATIONS == 0
 	while (true) {
@@ -97,18 +142,27 @@ int main(void)
 		       i, SLEEP_MS, (long long)(up1 - up0), dcyc, k_cyc_to_ms_near32(dcyc));
 
 		r = sys_read32(XEC_VBAT_MEM_BASE);
-		printk("PCR CLK_REQ0 = 0x%08x", r);
+		printk("PCR CLK_REQ0 = 0x%08x\n", r);
 		r = sys_read32(XEC_VBAT_MEM_BASE + 4U);
-		printk("PCR CLK_REQ1 = 0x%08x", r);
+		printk("PCR CLK_REQ1 = 0x%08x\n", r);
 		r = sys_read32(XEC_VBAT_MEM_BASE + 8U);
-		printk("PCR CLK_REQ2 = 0x%08x", r);
+		printk("PCR CLK_REQ2 = 0x%08x\n", r);
 		r = sys_read32(XEC_VBAT_MEM_BASE + 0xCU);
-		printk("PCR CLK_REQ3 = 0x%08x", r);
+		printk("PCR CLK_REQ3 = 0x%08x\n", r);
 		r = sys_read32(XEC_VBAT_MEM_BASE + 0x10U);
-		printk("PCR CLK_REQ4 = 0x%08x", r);
+		printk("PCR CLK_REQ4 = 0x%08x\n", r);
+
+		k_busy_wait(1000U); /* Let UART TX FIFO drain */
 	}
 
 	printk("Sample complete\n");
 
 	return 0;
 }
+
+#ifndef USE_VCI_IN1_BUTTON
+static void sw2_cb(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
+{
+	sw2_falling_edge = 1U;
+}
+#endif
