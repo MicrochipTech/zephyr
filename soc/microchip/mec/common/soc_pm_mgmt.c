@@ -5,6 +5,7 @@
  */
 
 #include <soc.h>
+#include <zephyr/arch/arch_interface.h>
 #include <zephyr/arch/cpu.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/pm.h>
@@ -103,27 +104,27 @@ static void soc_deep_sleep_periph_restore(void)
 }
 
 /*
- * Enable deep sleep mode in CM4 and MEC172x.
+ * Enable deep sleep mode in CM4 and MEC.
  * Enable CM4 deep sleep and sleep signals assertion on WFI.
  * Set MCHP Heavy sleep (PLL OFF when all CLK_REQ clear) and SLEEP_ALL
  * to assert SLP_EN to all peripherals on WFI.
- * Set PRIMASK = 1 so on wake the CPU will not vector to any ISR.
- * Set BASEPRI = 0 to allow any priority to wake.
- * WFI triggers MEC HW to enter deep sleep
- * On wake
+ * Save BASEPRI, set PRIMASK = 1 so on wake the CPU will not vector to any ISR,
+ * and set BASEPRI = 0 to allow any priority to wake.
+ * WFI triggers MEC HW to enter deep sleep.
+ * On wake:
  * Clear SLEEP_ALL manually since we are not vectoring to an ISR until
- * PM post ops. This de-asserts peripheral SLP_EN signals.
+ * PM resume completes. This de-asserts peripheral SLP_EN signals.
+ * Wait for the PLL to lock before restoring peripherals and restoring
+ * BASEPRI/PRIMASK via arch_pm_state_set_finish().
  */
 static void z_power_soc_deep_sleep(void)
 {
 	mm_reg_t pcrbase = (mm_reg_t)(XEC_PCR_REG_BASE);
 	uint32_t msk = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
 	uint32_t val = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
+	unsigned int key;
 
-	__disable_irq(); /* Set PRIMASK=1 */
-	irq_unlock(0); /* Set BASEPRI=0 */
-	__DSB();
-	__ISB();
+	key = arch_pm_state_set_prepare();
 
 	soc_deep_sleep_periph_save();
 
@@ -147,36 +148,41 @@ static void z_power_soc_deep_sleep(void)
 	}
 
 	soc_deep_sleep_periph_restore();
+
+	arch_pm_state_set_finish(key);
 }
 
-/* NOTE: Zephyr kernel does not block all interrupts.
- * We use compiler instrisic to disable all interrupts except unmaskable
- * and highest priority hard faults.
+/*
+ * Save BASEPRI, set PRIMASK = 1, and clear BASEPRI = 0 so WFI can wake on any
+ * enabled interrupt without vectoring to an ISR before PM resume completes.
  * Clear Cortex-M4 deep sleep enable.
- * Set MEC PCR SLEEP_ALL bit to 1
- * Clear Cortex-M4 NIVC base priority to block immediate ISR entry on wake.
- * Issue wait for interrupt
- * On wake clear PCR SLEEP_ALL bit.
+ * Set MEC PCR SLEEP_ALL bit to 1 (light sleep: gates PLL output to peripherals
+ * while keeping the PLL locked).
+ * Issue wait for interrupt.
+ * On wake clear PCR SLEEP_ALL bit and restore BASEPRI/PRIMASK.
  */
 static void z_power_soc_sleep(void)
 {
 	mm_reg_t pcrbase = (mm_reg_t)(XEC_PCR_REG_BASE);
 	uint32_t msk = BIT(XEC_PCR_SLP_CR_DEEP_SLP_POS) | BIT(XEC_PCR_SLP_CR_ALL_POS);
 	uint32_t val = BIT(XEC_PCR_SLP_CR_ALL_POS);
+	unsigned int key;
 
-	__disable_irq();
+	key = arch_pm_state_set_prepare();
 
 	SCB->SCR &= ~BIT(SCB_SCR_SLEEPDEEP_Pos);
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, val, msk);
 
-	__set_BASEPRI(0);
 	__DSB();
+	__ISB();
 	__WFI(); /* triggers sleep hardware */
 	__NOP();
 	__NOP();
 
 	soc_mmcr_mask_set(pcrbase + XEC_PCR_SLP_CR_OFS, 0, msk);
+
+	arch_pm_state_set_finish(key);
 }
 
 /*
@@ -210,16 +216,16 @@ void pm_state_set(enum pm_state state, uint8_t substate_id)
 }
 
 /*
- * Zephyr PM code expects us to enabled interrupt at post op exit. Zephyr used
- * arch_irq_lock() which sets BASEPRI to a non-zero value masking interrupts at
- * >= numerical priority. MCHP z_power_soc_(deep)_sleep sets PRIMASK=1 and BASEPRI=0
- * allowing wake from any enabled interrupt and prevents the CPU from entering any
- * ISR on wake except for faults. We re-enable interrupts by undoing global disable
- * and alling irq_unlock with the same value, 0 zephyr core uses.
+ * Interrupt state (BASEPRI and PRIMASK) is already restored to the PM-core
+ * locked state by arch_pm_state_set_finish() in z_power_soc_(deep)_sleep().
+ * The idle thread unlocks BASEPRI after pm_system_resume() (including
+ * sys_clock_idle_exit()) completes.
  */
 void pm_state_exit_post_ops(enum pm_state state, uint8_t substate_id)
 {
+	ARG_UNUSED(state);
+	ARG_UNUSED(substate_id);
+
 	__DSB();
 	__ISB();
-	__enable_irq(); /* Clear PRIMASK */
 }
