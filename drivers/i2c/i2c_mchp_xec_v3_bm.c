@@ -1885,6 +1885,12 @@ static void xec_i2c_v3_bm_timeout_handler(struct k_work *work)
 		xec_i2c_v3_bm_abort(ctrl);
 	}
 
+	/* Drop a completion item the ISR queued behind this handler: once the
+	 * lock is released a new transfer could reopen the claim and that
+	 * stale item would then complete the new transfer.
+	 */
+	(void)k_work_cancel(&xdat->kw);
+
 	xec_i2c_v3_bm_async_deliver(ctrl, result);
 }
 
