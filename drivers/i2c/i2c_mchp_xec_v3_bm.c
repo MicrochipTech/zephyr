@@ -1593,7 +1593,6 @@ static int xec_i2c_v3_bm_vport_configure(const struct device *port_dev, uint32_t
 {
 	const struct xec_i2c_v3_bm_port_xcfg *pc = port_dev->config;
 	const struct device *ctrl = pc->parent;
-	const struct xec_i2c_v3_bm_xcfg *cfg = ctrl->config;
 	struct xec_i2c_v3_bm_xdat *xdat = ctrl->data;
 	uint32_t freq;
 	int rc = 0;
@@ -1613,7 +1612,7 @@ static int xec_i2c_v3_bm_vport_configure(const struct device *port_dev, uint32_t
 		freq = MHZ(1);
 		break;
 	case I2C_SPEED_DT:
-		freq = cfg->dflt_freq;
+		freq = pc->bitrate;
 		break;
 	default:
 		return -ENOTSUP;
