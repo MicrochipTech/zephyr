@@ -38,19 +38,17 @@
 	status = "okay";
 };
 
-&gpspi1 {
+&gpspi0 {
 	compatible = "microchip,xec-gpspi-v2-controller";
 	status = "okay";
 
-	dmas = <&dmac 14 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_TX>,
-	       <&dmac 15 DMA_MCHP_XEC_TRIG_SRC_GPSPI1_RX>;
+	dmas = <&dmac 14 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_TX>,
+	       <&dmac 15 DMA_MCHP_XEC_TRIG_SRC_GPSPI0_RX>;
 	dma-names = "tx", "rx";
 
-	pinctrl-0 = <&spi1_clk_gpio141 &spi1_sdo_gpio142
-		     &spi1_sdi_gpio143 &spi1_cs_n_gpio144>;
-	pinctrl-1 = <&spi1_clk_gpio141_lp &spi1_sdo_gpio142_lp
-		     &spi1_sdi_gpio143_lp &spi1_cs_n_gpio144_lp>;
-	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&spi0_int_sdo_gpio251
+		     &spi0_int_sdi_gpio252 &spi0_int_cs_n_gpio256 &spi0_int_clk_gpio257>;
+	pinctrl-names = "default";
 
 	clock-frequency = <DT_FREQ_M(24)>; /* Maximum frequency we allow. HW can do 48MHz */
 	op-mode = "MSPI_OP_MODE_CONTROLLER";
@@ -83,8 +81,9 @@
 		rx-dummy = <8>;
 		size = <DT_SIZE_M(128)>;
 		page-size = <256>;
-		jedec-id = [ef 70 18];
-		sfdp-bfp = [00];
+		/*jedec-id = [ef 70 18];*/
+		jedec-id = [62 06 13];
+		/*sfdp-bfp = [00];*/
 		status = "okay";
 	};
 };
