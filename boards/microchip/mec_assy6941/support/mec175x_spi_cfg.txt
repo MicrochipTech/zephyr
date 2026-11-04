@@ -1,6 +1,6 @@
 ; MEC175x SPI Image Generator configuration file
 [SPI]
-SPISizeMegabits = 128
+SPISizeMegabits = 4
 
 [DEVICE]
 DeviceSel = B
