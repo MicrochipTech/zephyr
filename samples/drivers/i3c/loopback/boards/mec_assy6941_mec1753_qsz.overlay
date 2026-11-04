@@ -3,6 +3,29 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/ {
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+	};
+};
+
+&uart0 {
+	compatible = "microchip,xec-uart";
+	status = "okay";
+	host-io = <0x3F8>;
+	clock-frequency = <1843200>;
+	current-speed = <115200>;
+	girqs = <MCHP_XEC_ECIA_GIRQ_ENC(15, 0)>;
+	pcr-scr = <MCHP_XEC_SCR_ENCODE(2, 1)>;
+	pinctrl-0 = <&uart0_tx_gpio104 &uart0_rx_gpio105>;
+	pinctrl-names = "default";
+};
+
+&uart1 {
+	status = "disabled";
+};
+
 /* i3c0: primary controller (host thread) */
 &i3c0 {
 	pinctrl-0 = <&i3c01_host_sda_gpio012 &i3c01_host_scl_gpio013>;
