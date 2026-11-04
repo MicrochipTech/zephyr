@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(i3c_target, CONFIG_I3C_TEST_TARGET_LOG_LEVEL);
  *   pid >> 16        -> SLV_MIPI_ID_VALUE (0x70) - MFG ID
  *   pid & 0xFFFFFFFF -> SLV_PID_VALUE     (0x74) - Part/Inst/DCR
  *
- * Values match i3c1-as-tgt-pid = <0xB012 0x3456789A>
+ * Must match the reg of the i3c0 fake-target node in the loopback overlay.
  */
 #define TGT_PID_HI          0xB012ULL       /* upper 16 bits of 48-bit PID */
 #define TGT_PID_LO          0x3456789AULL   /* lower 32 bits of 48-bit PID */
@@ -341,12 +341,15 @@ static void run_tc2_hot_join(const struct device *dev)
 
 	/*
 	 * Step 2: hj_addr_assigned — wait for the host to assign a DA.
-	 * The driver updates tgt_cfg.address when the HJ flow completes.
+	 * The assigned DA is read back through the target configuration.
 	 */
 	k_sleep(K_MSEC(I3C_TEST_HJ_TIMEOUT_MS));
 
-	if (tgt_cfg.address != 0U) {
-		LOG_INF("HJ: dynamic_addr=0x%02x", tgt_cfg.address);
+	struct i3c_config_target tgt_bus_cfg = {0};
+
+	ret = i3c_config_get(dev, I3C_CONFIG_TARGET, &tgt_bus_cfg);
+	if ((ret == 0) && (tgt_bus_cfg.dynamic_addr != 0U)) {
+		LOG_INF("HJ: dynamic_addr=0x%02x", tgt_bus_cfg.dynamic_addr);
 		TEST_SUB_PASS("hj_addr_assigned");
 	} else {
 		TEST_SUB_FAIL("hj_addr_assigned", "no DA assigned within timeout");
