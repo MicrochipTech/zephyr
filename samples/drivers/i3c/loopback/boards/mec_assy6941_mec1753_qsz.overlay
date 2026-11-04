@@ -16,7 +16,8 @@
 
 	/*
 	 * Represents i3c1 on the bus as seen by the i3c0 host.
-	 * The PID matches the i3c1-as-tgt-pid values below.
+	 * The PID and static address match TGT_PID / TGT_STATIC_ADDR in
+	 * target/src/target.c, which i3c1 programs at runtime.
 	 */
 	i3c0_dev0: dev0@B0123456789A {
 		compatible = "microchip,i3c-fake-target";
@@ -31,9 +32,5 @@
 	pinctrl-0 = <&i3c00_target_sda_gpio132 &i3c00_target_scl_gpio140>;
 	pinctrl-names = "default";
 	port-sel = <0>;
-	i3c1-as-tgt-pid = <0xB012 0x3456789A>;
-	i3c1-as-tgt-static-addr = <0x08>;
-	i3c1-as-tgt-mrl = <128>;
-	i3c1-as-tgt-mwl = <128>;
 	status = "okay";
 };
