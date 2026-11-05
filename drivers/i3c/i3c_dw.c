@@ -296,6 +296,7 @@ LOG_MODULE_REGISTER(i3c_dw, CONFIG_I3C_DW_LOG_LEVEL);
 #define SLV_NACK_REQ_NACK_REQ_NACK 0x01
 
 #define DEVICE_CTRL_EXTENDED                           0xb0
+#define DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_MASK   GENMASK(1, 0)
 #define DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE(x)     ((x) & GENMASK(1, 0))
 #define DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_MASTER 0
 #define DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_SLAVE  1
@@ -459,6 +460,10 @@ struct dw_i3c_config {
 #if defined(CONFIG_PINCTRL)
 	const struct pinctrl_dev_config *pcfg;
 #endif
+
+	/* Devicetree BCR; its device role field selects the boot role of a dual-role instance */
+	bool has_bcr;
+	uint8_t bcr;
 
 	/* Devicetree target settings, applied at init when booting as target; 0 keeps HW value */
 	uint8_t tgt_static_addr;
@@ -3194,6 +3199,99 @@ static int dw_i3c_pinctrl_enable(const struct device *dev, bool enable)
 #endif
 }
 
+/**
+ * @brief Select the boot role from the devicetree BCR.
+ *
+ * A dual-role instance resets with DEV_OPERATION_MODE set to controller. Program the
+ * mode from the BCR device role while DEV_CTRL_ENABLE is still clear, so an instance
+ * meant to be a target never drives the bus as a second controller. A fixed-role
+ * instance only checks that the BCR matches the synthesized role.
+ *
+ * @param dev Pointer to controller device driver instance.
+ * @param role DEVICE_ROLE_CONFIG field of HW_CAPABILITY.
+ *
+ * @retval 0 Boot role matches the BCR, or no BCR is given.
+ * @retval -EINVAL BCR device role not supported by the hardware role.
+ * @retval -EIO DEV_OPERATION_MODE did not accept the requested mode.
+ */
+static int dw_i3c_apply_bcr_role(const struct device *dev, uint32_t role)
+{
+	const struct dw_i3c_config *config = dev->config;
+	mm_reg_t regs = dw_i3c_regs(dev);
+	bool target;
+	uint32_t mode;
+	uint32_t reg;
+
+	if (!config->has_bcr) {
+		return 0;
+	}
+
+	target = I3C_BCR_DEVICE_ROLE(config->bcr) == I3C_BCR_DEVICE_ROLE_I3C_TARGET;
+
+	switch (role) {
+	case HW_CAP_DEVICE_ROLE_MASTER:
+		if (target) {
+			LOG_ERR("%s: BCR 0x%02x selects target, HW is controller-only", dev->name,
+				config->bcr);
+			return -EINVAL;
+		}
+		return 0;
+	case HW_CAP_DEVICE_ROLE_SLAVE:
+		if (!target) {
+			LOG_ERR("%s: BCR 0x%02x selects controller, HW is target-only", dev->name,
+				config->bcr);
+			return -EINVAL;
+		}
+		break;
+	case HW_CAP_DEVICE_ROLE_SEC_MASTER:
+		/*
+		 * The soft reset leaves DEVICE_CTRL alone, so ENABLE may still be set from
+		 * before a warm reset; DEV_OPERATION_MODE is writable only while disabled.
+		 */
+		LOG_DBG("%s: DEVICE_CTRL 0x%08x before role select", dev->name,
+			sys_read32(regs + DEVICE_CTRL));
+		dw_i3c_enable_controller(dev, false);
+		if (!WAIT_FOR((sys_read32(regs + DEVICE_CTRL) & DEV_CTRL_ENABLE) == 0U,
+			      DW_I3C_RESET_TIMEOUT_US, NULL)) {
+			LOG_ERR("%s: DEV_CTRL_ENABLE did not clear", dev->name);
+			return -ETIMEDOUT;
+		}
+
+		mode = target ? DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_SLAVE
+			      : DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_MASTER;
+		reg = sys_read32(regs + DEVICE_CTRL_EXTENDED);
+		reg &= ~DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE_MASK;
+		reg |= mode;
+		sys_write32(reg, regs + DEVICE_CTRL_EXTENDED);
+
+		reg = (uint32_t)DEVICE_CTRL_EXTENDED_DEV_OPERATION_MODE(
+			sys_read32(regs + DEVICE_CTRL_EXTENDED));
+		if (reg != mode) {
+			LOG_ERR("%s: DEV_OPERATION_MODE stays 0x%x, requested 0x%x", dev->name, reg,
+				mode);
+			LOG_ERR("%s: DEVICE_CTRL 0x%08x DEVICE_CTRL_EXTENDED 0x%08x PRESENT_STATE "
+				"0x%08x",
+				dev->name, sys_read32(regs + DEVICE_CTRL),
+				sys_read32(regs + DEVICE_CTRL_EXTENDED),
+				sys_read32(regs + PRESENT_STATE));
+			return -EIO;
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+#ifdef CONFIG_I3C_TARGET
+	/* Report the devicetree BCR during DAA; read-only bits keep their HW values */
+	reg = sys_read32(regs + SLV_CHAR_CTRL);
+	reg &= ~SLV_CHAR_CTRL_BCR_MASK;
+	reg |= SLV_CHAR_CTRL_BCR(config->bcr);
+	sys_write32(reg, regs + SLV_CHAR_CTRL);
+#endif /* CONFIG_I3C_TARGET */
+
+	return 0;
+}
+
 #ifdef CONFIG_I3C_TARGET
 /**
  * @brief Apply the target settings from devicetree.
@@ -3333,8 +3431,14 @@ static int dw_i3c_init(const struct device *dev)
 	}
 #endif
 
+	/* Program the boot role before DEV_CTRL_ENABLE is set below */
+	ret = dw_i3c_apply_bcr_role(dev, role);
+	if (ret != 0) {
+		return ret;
+	}
+
 	/* Derive is_secondary from the role and ASSERT it against the Kconfig selection.
-	 * DEV_OPERATION_MODE (0xb0) is read only for the dual-role part.
+	 * For the dual-role part DEV_OPERATION_MODE (0xb0) holds the boot mode.
 	 */
 	switch (role) {
 	case HW_CAP_DEVICE_ROLE_MASTER:
@@ -3561,6 +3665,8 @@ static DEVICE_API(i3c, dw_i3c_api) = {
 			.common.primary_controller_da =                                            \
 				DT_INST_PROP_OR(n, primary_controller_da, 0x00),                   \
 			.common.flags = I3C_CONTROLLER_CONFIG_FLAGS_DT_INST(n),))                  \
+		.has_bcr = DT_INST_NODE_HAS_PROP(n, bcr),                                          \
+		.bcr = DT_INST_PROP_OR(n, bcr, 0),                                                 \
 		I3C_DW_TGT_DT_INIT(n)                                                              \
 		I3C_DW_PINCTRL_INIT(n)};                                                           \
 	PM_DEVICE_DT_INST_DEFINE(n, dw_i3c_pm_ctrl);                                               \
@@ -3645,6 +3751,8 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_HAS_MCHP_MEC_I3C),
 			.common.primary_controller_da =                                          \
 				DT_INST_PROP_OR(n, primary_controller_da, 0x00),                 \
 			.common.flags = I3C_CONTROLLER_CONFIG_FLAGS_DT_INST(n),))                \
+		.has_bcr = DT_INST_NODE_HAS_PROP(n, bcr),                                          \
+		.bcr = DT_INST_PROP_OR(n, bcr, 0),                                                 \
 		I3C_DW_TGT_DT_INIT(n)                                                              \
 		I3C_DW_PINCTRL_INIT(n)};                                                         \
 	PM_DEVICE_DT_INST_DEFINE(n, dw_i3c_pm_ctrl);                                               \
