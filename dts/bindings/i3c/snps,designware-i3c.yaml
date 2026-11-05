@@ -14,3 +14,31 @@ class: [i3c, i2c]
 properties:
   clocks:
     required: true
+
+  static-address:
+    type: int
+    description: |
+      Target static address, programmed at init when the instance boots as a
+      target. Lets the controller assign the dynamic address with SETDASA
+      during its bus initialization, before the application configures the
+      target.
+
+  tgt-pid:
+    type: array
+    description: |
+      Target 48-bit Provisioned ID, programmed at init when the instance boots
+      as a target.
+      array[0]: PID[47:32].
+      array[1]: PID[31:0].
+
+  maximum-read:
+    type: int
+    description: |
+      Target maximum read length (MRL) in bytes, programmed at init when the
+      instance boots as a target.
+
+  maximum-write:
+    type: int
+    description: |
+      Target maximum write length (MWL) in bytes, programmed at init when the
+      instance boots as a target.
