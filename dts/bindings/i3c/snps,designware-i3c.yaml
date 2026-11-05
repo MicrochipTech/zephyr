@@ -15,6 +15,17 @@ properties:
   clocks:
     required: true
 
+  bcr:
+    type: int
+    description: |
+      Bus Characteristics Register. The device role field, bits [7:6], selects
+      the boot role of the instance during driver initialization: 0 boots as
+      target, 1 as controller. A dual-role instance resets in controller mode,
+      so an instance used as a target on a bus with another controller must set
+      a target BCR to avoid two controllers driving the bus. The value is also
+      reported during dynamic address assignment; bits the hardware fixes keep
+      their hardware value. When absent, the hardware reset mode is kept.
+
   static-address:
     type: int
     description: |
