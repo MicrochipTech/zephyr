@@ -3229,8 +3229,11 @@ static int dw_i3c_init(const struct device *dev)
 #endif /* CONFIG_I3C_CONTROLLER */
 	DEVICE_MMIO_NAMED_MAP(dev, regs, K_MEM_CACHE_NONE);
 
-	/* reset all */
-	sys_write32(RESET_CTRL_ALL, dw_i3c_regs(dev) + RESET_CTRL);
+	/* reset all; registers written before the soft reset completes are lost */
+	ret = dw_i3c_reset(dev, RESET_CTRL_ALL);
+	if (ret != 0) {
+		return ret;
+	}
 
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_i3c)
 	if (config->is_mchp) {
