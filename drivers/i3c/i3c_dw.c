@@ -398,10 +398,12 @@ LOG_MODULE_REGISTER(i3c_dw, CONFIG_I3C_DW_LOG_LEVEL);
 
 #define I3C_HOT_JOIN_ADDR 0x02
 
-/* Microchip XEC wrapper register: HOST_CFG offset from the I3C base.
- * Outside the Synopsys IP register map.
+/* Microchip XEC wrapper config register (port select in the low bits), outside the
+ * Synopsys IP register map: HOST_CFG on the controller-only instance, SEC_CFG on the
+ * dual-role instance, whose larger DAT/DCT pushes the wrapper block up.
  */
 #define MCHP_HOST_CFG_OFS 0x300U
+#define MCHP_SEC_CFG_OFS  0x400U
 
 #define DW_I3C_MAX_DEVS         32
 #define DW_I3C_MAX_CMD_BUF_SIZE 16
@@ -3235,13 +3237,6 @@ static int dw_i3c_init(const struct device *dev)
 		return ret;
 	}
 
-#if DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_i3c)
-	if (config->is_mchp) {
-		/* XEC wrapper: select the pad group this controller drives */
-		sys_write32((uint32_t)config->port_sel, dw_i3c_regs(dev) + MCHP_HOST_CFG_OFS);
-	}
-#endif
-
 	/* get DAT, DCT pointer */
 	data->datstartaddr =
 		DEVICE_ADDR_TABLE_ADDR(sys_read32(dw_i3c_regs(dev) + DEVICE_ADDR_TABLE_POINTER));
@@ -3273,11 +3268,21 @@ static int dw_i3c_init(const struct device *dev)
 
 	/* Cache the synthesis-constant role from the HW_CAPABILITY word just read. */
 	data->role = FIELD_GET(HW_CAPABILITY_DEVICE_ROLE_CONFIG_MASK, hw_capabilities);
+	role = data->role;
+
+#if DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_i3c)
+	if (config->is_mchp) {
+		/* XEC wrapper: select the pad group this controller drives */
+		sys_write32((uint32_t)config->port_sel,
+			    dw_i3c_regs(dev) + ((role == HW_CAP_DEVICE_ROLE_MASTER)
+							? MCHP_HOST_CFG_OFS
+							: MCHP_SEC_CFG_OFS));
+	}
+#endif
 
 	/* Derive is_secondary from the role and ASSERT it against the Kconfig selection.
 	 * DEV_OPERATION_MODE (0xb0) is read only for the dual-role part.
 	 */
-	role = data->role;
 	switch (role) {
 	case HW_CAP_DEVICE_ROLE_MASTER:
 		__ASSERT(IS_ENABLED(CONFIG_I3C_CONTROLLER),
