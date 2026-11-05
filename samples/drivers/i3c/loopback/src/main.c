@@ -15,9 +15,9 @@ LOG_MODULE_REGISTER(i3c_loopback, CONFIG_I3C_TEST_HOST_LOG_LEVEL);
  */
 #define EC_WAIT_FOREVER               (-1)
 #define I3C_HOST_TASK_PRIORITY        6u
-#define I3C_HOST_TASK_STACK_SIZE      1024U
+#define I3C_HOST_TASK_STACK_SIZE      4096U
 #define I3C_TARGET_TASK_PRIORITY      7u
-#define I3C_TARGET_TASK_STACK_SIZE    1024U
+#define I3C_TARGET_TASK_STACK_SIZE    4096U
 
 BUILD_ASSERT(IS_POWER_OF_TWO(I3C_HOST_TASK_STACK_SIZE),
 	     "I3C host task stack size must be a power of 2");
