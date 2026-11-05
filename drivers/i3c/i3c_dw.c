@@ -3400,6 +3400,11 @@ static int dw_i3c_init(const struct device *dev)
 #endif /* CONFIG_I3C_CONTROLLER */
 	dw_i3c_enable_controller(dev, true);
 
+	/* TEMP DEBUG: role / boot mode / current-controller per instance */
+	LOG_INF("%s: role=%u DEV_CTRL_EXT=0x%08x PRESENT_STATE=0x%08x is_secondary=%d",
+		dev->name, role, sys_read32(dw_i3c_regs(dev) + DEVICE_CTRL_EXTENDED),
+		sys_read32(dw_i3c_regs(dev) + PRESENT_STATE), ctrl_config->is_secondary);
+
 	ret = dw_i3c_init_scl_timing(dev, ctrl_config);
 	if (ret != 0) {
 		LOG_ERR("%s: Clock setting failed", dev->name);
