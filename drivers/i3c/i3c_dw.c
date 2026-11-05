@@ -460,6 +460,12 @@ struct dw_i3c_config {
 	const struct pinctrl_dev_config *pcfg;
 #endif
 
+	/* Devicetree target settings, applied at init when booting as target; 0 keeps HW value */
+	uint8_t tgt_static_addr;
+	uint64_t tgt_pid;
+	uint16_t tgt_max_read_len;
+	uint16_t tgt_max_write_len;
+
 #if DT_HAS_COMPAT_STATUS_OKAY(microchip_xec_i3c)
 	/* Microchip XEC-specific fields */
 	bool is_mchp;
@@ -3188,6 +3194,53 @@ static int dw_i3c_pinctrl_enable(const struct device *dev, bool enable)
 #endif
 }
 
+#ifdef CONFIG_I3C_TARGET
+/**
+ * @brief Apply the target settings from devicetree.
+ *
+ * Programs the static address, PID and maximum read and write lengths at init, so a
+ * controller on the bus can assign a dynamic address with SETDASA during its own bus
+ * initialization, before the application configures the target.
+ *
+ * @param dev Pointer to controller device driver instance.
+ *
+ * @retval 0 Settings applied, or none given.
+ * @retval -EINVAL Invalid target configuration.
+ */
+static int dw_i3c_apply_dt_target_config(const struct device *dev)
+{
+	const struct dw_i3c_config *config = dev->config;
+	struct i3c_config_target tgt_cfg;
+	int ret;
+
+	if ((config->tgt_static_addr == 0U) && (config->tgt_pid == 0U) &&
+	    (config->tgt_max_read_len == 0U) && (config->tgt_max_write_len == 0U)) {
+		return 0;
+	}
+
+	ret = dw_i3c_config_get(dev, I3C_CONFIG_TARGET, &tgt_cfg);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (config->tgt_static_addr != 0U) {
+		tgt_cfg.static_addr = config->tgt_static_addr;
+	}
+	if (config->tgt_pid != 0U) {
+		tgt_cfg.pid = config->tgt_pid;
+		tgt_cfg.pid_random = false;
+	}
+	if (config->tgt_max_read_len != 0U) {
+		tgt_cfg.max_read_len = config->tgt_max_read_len;
+	}
+	if (config->tgt_max_write_len != 0U) {
+		tgt_cfg.max_write_len = config->tgt_max_write_len;
+	}
+
+	return dw_i3c_configure(dev, I3C_CONFIG_TARGET, &tgt_cfg);
+}
+#endif /* CONFIG_I3C_TARGET */
+
 static int dw_i3c_init(const struct device *dev)
 {
 	const struct dw_i3c_config *config = dev->config;
@@ -3310,6 +3363,16 @@ static int dw_i3c_init(const struct device *dev)
 		__ASSERT(false, "unexpected DEVICE_ROLE_CONFIG 0x%x", role);
 		return -ENOTSUP;
 	}
+
+#ifdef CONFIG_I3C_TARGET
+	if (ctrl_config->is_secondary) {
+		ret = dw_i3c_apply_dt_target_config(dev);
+		if (ret != 0) {
+			LOG_ERR("%s: target config from devicetree failed (%d)", dev->name, ret);
+			return ret;
+		}
+	}
+#endif /* CONFIG_I3C_TARGET */
 
 	/* Reject every SIR/MR by default; the readback says whether that took. */
 	if (DW_IBI_REJECT_REG_MAY_EXIST(role)) {
@@ -3450,6 +3513,19 @@ static DEVICE_API(i3c, dw_i3c_api) = {
 #define I3C_DW_PINCTRL_INIT(n)
 #endif
 
+/* tgt-pid = <PID[47:32] PID[31:0]> */
+#define I3C_DW_TGT_PID_DT(n)                                                                       \
+	COND_CODE_1(DT_INST_NODE_HAS_PROP(n, tgt_pid),                                             \
+		    ((((uint64_t)DT_INST_PROP_BY_IDX(n, tgt_pid, 0)) << 32) |                     \
+		     (uint64_t)DT_INST_PROP_BY_IDX(n, tgt_pid, 1)),                                \
+		    (0))
+
+#define I3C_DW_TGT_DT_INIT(n)                                                                      \
+	.tgt_static_addr = DT_INST_PROP_OR(n, static_address, 0),                                  \
+	.tgt_pid = I3C_DW_TGT_PID_DT(n),                                                           \
+	.tgt_max_read_len = DT_INST_PROP_OR(n, maximum_read, 0),                                   \
+	.tgt_max_write_len = DT_INST_PROP_OR(n, maximum_write, 0),
+
 #define DEFINE_DEVICE_FN(n)                                                                        \
 	I3C_DW_IRQ_HANDLER(n)                                                                      \
 	I3C_DW_PINCTRL_DEFINE(n);                                                                  \
@@ -3480,6 +3556,7 @@ static DEVICE_API(i3c, dw_i3c_api) = {
 			.common.primary_controller_da =                                            \
 				DT_INST_PROP_OR(n, primary_controller_da, 0x00),                   \
 			.common.flags = I3C_CONTROLLER_CONFIG_FLAGS_DT_INST(n),))                  \
+		I3C_DW_TGT_DT_INIT(n)                                                              \
 		I3C_DW_PINCTRL_INIT(n)};                                                           \
 	PM_DEVICE_DT_INST_DEFINE(n, dw_i3c_pm_ctrl);                                               \
 	DEVICE_DT_INST_DEFINE(n, dw_i3c_init, PM_DEVICE_DT_INST_GET(n), &dw_i3c_data_##n,          \
@@ -3563,6 +3640,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_HAS_MCHP_MEC_I3C),
 			.common.primary_controller_da =                                          \
 				DT_INST_PROP_OR(n, primary_controller_da, 0x00),                 \
 			.common.flags = I3C_CONTROLLER_CONFIG_FLAGS_DT_INST(n),))                \
+		I3C_DW_TGT_DT_INIT(n)                                                              \
 		I3C_DW_PINCTRL_INIT(n)};                                                         \
 	PM_DEVICE_DT_INST_DEFINE(n, dw_i3c_pm_ctrl);                                               \
 	DEVICE_DT_INST_DEFINE(n, dw_i3c_init, PM_DEVICE_DT_INST_GET(n), &xec_i3c_data_##n,         \
