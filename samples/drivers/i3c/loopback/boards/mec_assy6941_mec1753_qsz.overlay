@@ -52,11 +52,13 @@
 	};
 };
 
-/* i3c1: secondary controller acting as I3C target (target thread) */
+/* i3c1: dual-role instance booted as I3C target (target thread) */
 &i3c1 {
 	pinctrl-0 = <&i3c00_target_sda_gpio132 &i3c00_target_scl_gpio140>;
 	pinctrl-names = "default";
 	port-sel = <0>;
+	/* Device role [7:6] = target: boot as target, never as a second controller */
+	bcr = <0x06>;
 	/* Target identity set at init, before the i3c0 bus initialization */
 	static-address = <0x08>;
 	tgt-pid = <0xB012 0x3456789A>;
