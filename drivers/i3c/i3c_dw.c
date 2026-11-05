@@ -2343,6 +2343,7 @@ static int set_controller_info(const struct device *dev)
 static void enable_interrupts(const struct device *dev)
 {
 	const struct dw_i3c_config *config = dev->config;
+	__maybe_unused struct dw_i3c_data *data = dev->data;
 	uint32_t thld_ctrl, intr_mask;
 
 	config->irq_config_func();
@@ -2361,7 +2362,8 @@ static void enable_interrupts(const struct device *dev)
 
 	/* Enable interrupts */
 #if defined(CONFIG_I3C_CONTROLLER) && defined(CONFIG_I3C_TARGET)
-	intr_mask = INTR_MASTER_MASK | INTR_SLAVE_MASK;
+	/* Boot role only; a bus ownership update reselects the mask after a handoff */
+	intr_mask = data->common.ctrl_config.is_secondary ? INTR_SLAVE_MASK : INTR_MASTER_MASK;
 #if defined(CONFIG_I3C_USE_IBI)
 	intr_mask |= INTR_BUSOWNER_UPDATE_STAT;
 #endif /* CONFIG_I3C_USE_IBI */
