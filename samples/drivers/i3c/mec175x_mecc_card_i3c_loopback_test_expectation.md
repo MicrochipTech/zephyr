@@ -2,16 +2,16 @@
 
 - Board: `mec_assy6941/mec1753_qsz`
 - I3C0 = `i3c@40010800` (HOST0, controller-only), port-sel 1 (`HOST_CFG` at 0x300)
-- I3C1 = `i3c@40010000` (SEC0, dual-role), port-sel 0 (`SEC_CFG` at 0x400), `bcr = <0x06>`
+- I3C1 = `i3c@40010000` (SEC0, dual-role), port-sel 0 (`SEC_CFG` at 0x400), `bcr = <0x06>`,
+  `static-address = <0x08>`, `tgt-pid = <0xB012 0x3456789A>`, MRL/MWL 128
 - Test case `CONFIG_I3C_TEST_CASE=0` (data transfer), target in echo mode
 
 Assumptions:
 
 - `DEV_OPERATION_MODE` on I3C1 accepts the target mode (not achieved yet, see the
   failure after the `bcr` property)
-- `&i3c0` carries `zephyr,deferred-init`, so bus init (SETDASA 0x08) runs from
-  `setup_i3c_host()` after `main()` has given I3C1 its static address. The current
-  loopback overlay does not set it.
+- I3C1 is initialized before I3C0 (devicetree ordinals 83 and 229), so I3C1 has its
+  static address when the I3C0 bus initialization sends SETDASA
 
 ```mermaid
 sequenceDiagram
@@ -21,23 +21,17 @@ sequenceDiagram
     participant I3C0 as I3C0 controller-only
     participant I3C1 as I3C1 dual-role
 
-    Note over DRV,I3C1: POST_KERNEL device init. I3C0 is deferred
+    Note over DRV,I3C1: POST_KERNEL device init, I3C1 first
     DRV->>I3C1: dw_i3c_init: soft reset, wait for RESET_CTRL to clear
     DRV->>I3C1: SEC_CFG (0x400) = port-sel 0
     DRV->>I3C1: BCR 0x06, device role target: clear ENABLE, wait
     DRV->>I3C1: DEVICE_CTRL_EXTENDED.DEV_OPERATION_MODE = 1
     I3C1-->>DRV: Readback DEV_OPERATION_MODE = 1
     DRV->>I3C1: SLV_CHAR_CTRL.BCR = 0x06
+    DRV->>I3C1: Devicetree target config: SA 0x08 valid, PID 0xB0123456789A, MRL/MWL 128
     DRV->>I3C1: Enable, target IRQ mask only
     Note right of I3C1: is_secondary=1, CURRENT_MASTER=0<br/>No bus init, never drives START
 
-    Note over APP,I3C1: Zephyr boots and main() runs
-    APP->>DRV: setup_i3c_target(i3c1): i3c_configure(TARGET)
-    DRV->>I3C1: SLV_MAX_LEN 128/128, DEVICE_ADDR SA 0x08 valid, PID 0xB0123456789A
-    APP->>DRV: i3c_target_register(i3c1)
-    APP->>APP: Post EVT_TARGET_READY, start target thread
-
-    APP->>DRV: setup_i3c_host(i3c0): device_init(i3c0)
     DRV->>I3C0: dw_i3c_init: soft reset, HOST_CFG (0x300) = port-sel 1, enable
     Note right of I3C0: role=1, primary controller, controller IRQ mask
 
@@ -54,6 +48,12 @@ sequenceDiagram
     DRV->>I3C0: Broadcast ENEC
     I3C0->>I3C1: 0x7E + ENEC
     I3C1-->>I3C0: ACK
+
+    Note over APP,I3C1: Zephyr boots and main() runs
+    APP->>DRV: setup_i3c_target(i3c1): i3c_configure(TARGET), same SA and PID
+    APP->>DRV: i3c_target_register(i3c1)
+    APP->>APP: Post EVT_TARGET_READY, start target thread
+    APP->>DRV: setup_i3c_host(i3c0)
     DRV-->>APP: Host ready
 
     APP->>APP: Start host thread, EVT_TARGET_READY already set
