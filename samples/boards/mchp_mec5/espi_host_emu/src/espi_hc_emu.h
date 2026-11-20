@@ -146,6 +146,24 @@ int espi_hc_ctx_emu_get_vws(struct espi_hc_context *hc, struct espi_hc_vw *vws, 
 int espi_hc_ctx_emu_get_vws2(struct espi_hc_context *hc, struct espi_hc_vw *vws, uint8_t nvws,
 			     uint8_t *nrecv);
 
+/* TAFS read request: PUT_FLASH_NP (0x0A), cycle 0x00 (Flash Read), tag, len (1..64),
+ * 32-bit address. The immediate response must be DEFER (Microchip eSPI Block v1.5 sec 8.13).
+ * *status is the 16-bit status from the DEFER response. Read the data with
+ * espi_hc_ctx_emu_get_flash_c() once status bit 12 (FLASH_C_AVAIL) is set.
+ * len must not cross a 4 KB boundary.
+ */
+int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
+				      uint8_t tag, uint16_t *status);
+
+/* GET_FLASH_C (0x0B): fetch a TAFS completion with data (cycle 0x0F).
+ * On success, rspbuf holds tag/len header (2 bytes), data (len bytes), status (2 bytes) and
+ * CRC8, so rspbuf_sz must be at least 5 + len. *tag is the completion tag, *datalen the data
+ * length, and hc->pkt_status the status from the completion. With CRC checking enabled a
+ * CRC mismatch returns -EIO.
+ */
+int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_t *rspbuf,
+				size_t rspbuf_sz, size_t *datalen);
+
 int espi_hc_ctx_emu_update_t2c_vw(struct espi_hc_context *hc, struct espi_hc_vw *vws,
 				  uint8_t nvws);
 

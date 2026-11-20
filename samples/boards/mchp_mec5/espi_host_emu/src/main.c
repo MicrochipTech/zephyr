@@ -36,6 +36,12 @@ struct espi_status_data {
 
 #define APP_FLAG_GET_STATUS_LOOP BIT(0)
 
+/* 2026-11-13: Flash Channel sharing mode selected in the 40h write.
+ * 1 = TAFS (target-attached flash, bit 11 = 1), as the Intel RVP host does.
+ * 0 = CAFS (controller-attached flash, bit 11 = 0), the original behaviour.
+ */
+#define APP_FC_SELECT_TAFS 1
+
 /* IMPORTANT: these must match eSPI Target application configuration */
 #define TARGET_SRAM0_BASE_ADDR 0x20000000u
 #define TARGET_SRAM0_SIZE 256u
@@ -86,6 +92,93 @@ static void spin_on(uint32_t id, int rval);
 static int wait_espi_chan_ready(struct espi_hc_context *pch, uint16_t cfgid, int timeout_cnt);
 int app_process_espi_status(struct espi_hc_context *hc, uint16_t espi_status,
 			    struct espi_status_data *data);
+
+/* TAF read test (design doc section 3.5, Read steps 1-4 and First bench test).
+ * Reads APP_TAF_TEST_LEN bytes at APP_TAF_TEST_ADDR over the flash channel and checks them
+ * against what the target shell wrote there: aa bb cc dd ee, then ff.
+ */
+#define APP_TAF_TEST_ADDR	0x70000u
+#define APP_TAF_TEST_LEN	32u
+#define APP_TAF_TEST_TAG	8u	/* tag used in the RVP capture */
+#define APP_TAF_STATUS_POLLS	100u	/* GET_STATUS polls waiting for FLASH_C_AVAIL */
+#define APP_FC_READY_POLLS	500	/* wait_espi_chan_ready count, 20 ms each (about 10 s) */
+
+/* GET_FLASH_C buffer: header (2 bytes), data (up to 64), status (2 bytes), CRC8 */
+static uint8_t taf_rsp[5u + 64u];
+
+static int app_taf_read_test(struct espi_hc_context *hc)
+{
+	static const uint8_t pattern[5] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee};
+	char hex[APP_TAF_TEST_LEN * 3u + 1u];
+	uint8_t rtag = 0;
+	size_t datalen = 0;
+	uint16_t status = 0;
+	uint32_t polls = 0;
+	uint32_t i = 0;
+	uint32_t bad = 0;
+	uint8_t exp = 0;
+	int ret = 0;
+
+	LOG_INF("TAF read test: %u bytes at 0x%08x, tag %u", APP_TAF_TEST_LEN,
+		APP_TAF_TEST_ADDR, APP_TAF_TEST_TAG);
+
+	/* Step 1: PUT_FLASH_NP read request. The target answers DEFER with a status */
+	ret = espi_hc_ctx_emu_put_flash_np_read(hc, APP_TAF_TEST_ADDR, APP_TAF_TEST_LEN,
+						APP_TAF_TEST_TAG, &status);
+	if (ret) {
+		LOG_ERR("PUT_FLASH_NP read failed (%d)", ret);
+		return ret;
+	}
+	LOG_INF("PUT_FLASH_NP: DEFER, status 0x%04x", status);
+
+	/* Step 2: wait for FLASH_C_AVAIL (status bit 12), polling GET_STATUS */
+	while (!(status & BIT(ESPI_STATUS_FC_AVAIL_POS))) {
+		if (polls >= APP_TAF_STATUS_POLLS) {
+			LOG_ERR("FLASH_C_AVAIL not set after %u polls (status 0x%04x)", polls,
+				status);
+			return -ETIMEDOUT;
+		}
+		k_sleep(K_MSEC(10));
+		ret = espi_hc_ctx_get_status(hc);
+		if (ret) {
+			LOG_ERR("GET_STATUS failed (%d)", ret);
+			return ret;
+		}
+		status = hc->pkt_status;
+		polls++;
+	}
+	LOG_INF("FLASH_C_AVAIL set after %u poll(s), status 0x%04x", polls, status);
+
+	/* Step 3: GET_FLASH_C. Checks cycle 0x0F and the CRC8 in the helper */
+	ret = espi_hc_ctx_emu_get_flash_c(hc, &rtag, taf_rsp, sizeof(taf_rsp), &datalen);
+	if (ret) {
+		LOG_ERR("GET_FLASH_C failed (%d)", ret);
+		return ret;
+	}
+	if (rtag != APP_TAF_TEST_TAG || datalen != APP_TAF_TEST_LEN) {
+		LOG_ERR("GET_FLASH_C: tag %u (want %u), len %u (want %u)", rtag,
+			APP_TAF_TEST_TAG, (unsigned int)datalen, APP_TAF_TEST_LEN);
+		return -EIO;
+	}
+
+	/* Step 4: print the data and compare with the expected bytes */
+	for (i = 0; i < datalen; i++) {
+		snprintk(&hex[i * 3u], 4u, "%02x ", taf_rsp[2u + i]);
+		exp = (i < sizeof(pattern)) ? pattern[i] : 0xffu;
+		if (taf_rsp[2u + i] != exp) {
+			bad++;
+		}
+	}
+	LOG_INF("TAF read data: %s", hex);
+
+	if (bad) {
+		LOG_ERR("TAF read FAIL: %u of %u bytes differ from aa bb cc dd ee ff ...", bad,
+			(unsigned int)datalen);
+		return -EIO;
+	}
+	LOG_INF("TAF read PASS: %u bytes match", (unsigned int)datalen);
+	return 0;
+}
 
 int main(void)
 {
@@ -370,7 +463,7 @@ int main(void)
 
 	/* Enable Flash Channel
 	 * Set b[14:12]=001b max. read request size of 64 bytes
-	 * Set b[11]=0b CAFS
+	 * Set b[11]: 1b TAFS or 0b CAFS, selected by APP_FC_SELECT_TAFS
 	 * Set b[10:8]=001b max max payload size of 64 bytes
 	 * Set b[4:2]=001b flash block erase size 4KB
 	 * b[1]=ready (R/O)
@@ -379,9 +472,17 @@ int main(void)
 	LOG_INF("Update FC Cap/Cfg and enable");
 	chan_config = hc.fc_cap_cfg;
 	LOG_INF("Current FC Cap/Cfg = 0x%08x", chan_config);
+	LOG_INF("  b[17:16] = %u : sharing modes supported by target "
+		"(1=CAFS only, 2=TAFS only, 3=both)", (chan_config >> 16) & 0x3u);
 	chan_config &= ~((0x7u << 12) | BIT(11) | (0x7u << 8) | (0x7u << 2));
 	chan_config |= ((1u << 12) | (1u << 8) | (1u << 2) | BIT(0));
-	LOG_INF("New VW Caps/Cfg = 0x%08x", chan_config);
+#if APP_FC_SELECT_TAFS
+	chan_config |= BIT(11);
+	LOG_INF("Selecting TAFS: b[11] = 1");
+#else
+	LOG_INF("Selecting CAFS: b[11] = 0");
+#endif
+	LOG_INF("New FC Caps/Cfg = 0x%08x", chan_config);
 
 	cfgid = ESPI_GET_CONFIG_FC_CAP;
 	ret = espi_hc_ctx_emu_set_config(&hc, cfgid, chan_config);
@@ -393,10 +494,14 @@ int main(void)
 	espi_debug_pr_status(hc.pkt_status);
 
 	LOG_INF("Poll reading FC Config until Target sets FC Ready");
-	ret = wait_espi_chan_ready(&hc, cfgid, -1);
+	ret = wait_espi_chan_ready(&hc, cfgid, APP_FC_READY_POLLS);
 	if (ret) {
 		goto app_exit;
 	}
+	LOG_INF("FC Cap/Cfg after Ready = 0x%08x", hc.fc_cap_cfg);
+	LOG_INF("  b[11] sharing mode selected = %u (%s), b[1] ready = %u, b[0] enable = %u",
+		(hc.fc_cap_cfg >> 11) & 1u, ((hc.fc_cap_cfg >> 11) & 1u) ? "TAFS" : "CAFS",
+		(hc.fc_cap_cfg >> 1) & 1u, hc.fc_cap_cfg & 1u);
 
 	LOG_INF("Issue GET_STATUS");
 	ret = espi_hc_ctx_get_status(&hc);
@@ -436,6 +541,18 @@ int main(void)
 		LOG_ERR("App process eSPI status: %d", ret);
 		spin_on((uint32_t)__LINE__, ret);
 		goto app_exit;
+	}
+
+	/* TAF read test (design doc section 3.5). Runs after FC Ready, only when TAFS is
+	 * selected: the test sends a TAFS request, which a CAFS target does not answer.
+	 */
+	if (APP_FC_SELECT_TAFS) {
+		ret = app_taf_read_test(&hc);
+		if (ret) {
+			LOG_ERR("TAF read test failed (%d)", ret);
+			spin_on((uint32_t)__LINE__, ret);
+			goto app_exit;
+		}
 	}
 
 	memset(&vwg, 0, sizeof(vwg));

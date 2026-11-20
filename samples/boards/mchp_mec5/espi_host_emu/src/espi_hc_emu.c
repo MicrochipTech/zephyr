@@ -40,6 +40,9 @@ LOG_MODULE_DECLARE(app);
 
 /* eSPI Cycle types */
 #define ESPI_CYCLE_PC_MEM_RD32_NP	0u /* Fig. 36 */
+#define ESPI_CYCLE_FLASH_CMPL_TAF_DATA	0x0fu /* TAFS read completion with data */
+#define ESPI_CYCLE_FLASH_READ		0x00u /* PUT_FLASH_NP cycle: Flash Read */
+#define ESPI_TAF_RSP_DEFER_LEN		4u /* resp, status (2), CRC8 */
 #define ESPI_CYCLE_PC_MEM_WR32		0x01u /* Fig. 34 */
 #define ESPI_CYCLE_PC_MEM_RD64_NP	0x02u /* Fig. 36 */
 #define ESPI_CYCLE_PC_MEM_WR64		0x03u /* Fig. 34 */
@@ -1825,6 +1828,199 @@ int espi_hc_set_ct_vwire(struct espi_hc_context *hc, uint8_t host_index,
 			ctvw->levels &= ~mask;
 		}
 		ctvw->valid |= BIT(src);
+	}
+
+	return 0;
+}
+
+/* PUT_FLASH_NP for a TAFS read. Frame (9 bytes, matches the RVP capture
+ * "PUT_FLASH_NP(SAF) Flash Read(00) tag len addr CRC"):
+ *   [0x0A][cycle 0x00][tag[3:0]<<4 | len[11:8]][len[7:0]][addr[31:24]..addr[7:0]][CRC8]
+ * The immediate response is DEFER (Microchip eSPI Block v1.5 sec 8.13). The DEFER response
+ * is taken to be: resp, status[7:0], status[15:8], CRC8 over the first three bytes.
+ * UNVERIFIED on the bench: check the response bytes in the first run.
+ */
+int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
+				      uint8_t tag, uint16_t *status)
+{
+	int ret = 0;
+	uint8_t crc8 = 0, rsp_crc8 = 0;
+	uint8_t *rbuf = NULL;
+	size_t n = 0;
+	const size_t max_rsp_len = 64u;
+
+	if (!hc || !status || len == 0u || len > 64u || tag > 0x0fu) {
+		return -EINVAL;
+	}
+
+	/* A read must not cross a 4 KB boundary (TAFS rule) */
+	if ((addr & 0xfffu) + len > 0x1000u) {
+		LOG_ERR("TAFS read 0x%08x len %u crosses a 4 KB boundary", addr, len);
+		return -EINVAL;
+	}
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	emsg->buf[0] = ESPI_OPCODE_PUT_FLASH_NP;
+	emsg->buf[1] = ESPI_CYCLE_FLASH_READ;
+	emsg->buf[2] = (uint8_t)((tag << 4) | ((len >> 8) & 0x0fu));
+	emsg->buf[3] = (uint8_t)(len & 0xffu);
+	emsg->buf[4] = (uint8_t)(addr >> 24);
+	emsg->buf[5] = (uint8_t)(addr >> 16);
+	emsg->buf[6] = (uint8_t)(addr >> 8);
+	emsg->buf[7] = (uint8_t)addr;
+
+	crc8 = crc8_init();
+	crc8 = crc8_update(crc8, (const void *)emsg->buf, 8u);
+	crc8 = crc8_finalize(crc8);
+	emsg->buf[8] = crc8;
+
+	ret = espi_hc_emu_xfr((const uint8_t *)emsg->buf, 9u, ersp->buf, max_rsp_len);
+	if (ret) {
+		return ret;
+	}
+
+	/* Skip WAIT_STATEs, which are not part of the response CRC */
+	rbuf = ersp->buf;
+	while (n < max_rsp_len && *rbuf == ESPI_RESP_CODE_RESP_WAIT) {
+		rbuf++;
+		n++;
+	}
+	if (n >= max_rsp_len) {
+		LOG_ERR("PUT_FLASH_NP: %u WAIT_STATEs, no response", (unsigned int)max_rsp_len);
+		return -EIO;
+	}
+
+	if ((rbuf[0] & ESPI_RESP_CODE_RESP_MSK) != ESPI_RESP_CODE_RESP_DEFER) {
+		LOG_ERR("PUT_FLASH_NP: response 0x%02x, expected DEFER (0x01)", rbuf[0]);
+		return -EIO;
+	}
+
+	crc8 = crc8_init();
+	crc8 = crc8_update(crc8, (const void *)rbuf, ESPI_TAF_RSP_DEFER_LEN - 1u);
+	crc8 = crc8_finalize(crc8);
+	rsp_crc8 = rbuf[ESPI_TAF_RSP_DEFER_LEN - 1u];
+	if (rsp_crc8 != crc8) {
+		LOG_ERR("PUT_FLASH_NP: rsp crc=0x%02x calc=0x%02x", rsp_crc8, crc8);
+		return -EIO;
+	}
+
+	/* Byte order matches the GET_STATUS code above: rbuf[2] is the high byte. Seen on the bench
+	 * 2026-11-16: DEFER gave 0x0f02 with the other order, GET_STATUS gave 0x020f.
+	 */
+	*status = ((uint16_t)rbuf[2] << 8) | rbuf[1];
+	return 0;
+}
+
+/* GET_FLASH_C (0x0B). Successful TAFS read completion is cycle 0x0F, then tag/len (2 bytes),
+ * data, status (2 bytes) and CRC8. Cycle 0x0E (unsuccessful) and anything else is an error
+ * here. The status is stored in hc->pkt_status. Same transfer pattern as the other GET_*
+ * helpers in this file.
+ */
+int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_t *rspbuf,
+				size_t rspbuf_sz, size_t *datalen)
+{
+	int ret = 0;
+	uint8_t rsp_code = 0, resp_code = 0, crc8 = 0, rsp_crc8 = 0;
+	uint16_t data_len = 0;
+
+	if (!hc || !tag || !rspbuf || !datalen || rspbuf_sz < 5u) {
+		return -EINVAL;
+	}
+
+	struct espi_msg_pkt *emsg = &hc->emsg;
+	struct espi_resp_pkt *ersp = &hc->ersp;
+
+	memset(emsg, 0, sizeof(struct espi_msg_pkt));
+	memset(ersp, 0, sizeof(struct espi_resp_pkt));
+
+	emsg->buf[0] = ESPI_OPCODE_GET_FLASH_COMPL;
+	crc8 = crc8_init();
+	crc8 = crc8_update(crc8, (const void *)emsg->buf, 1u);
+	crc8 = crc8_finalize(crc8);
+	emsg->buf[1] = crc8;
+
+	ret = espi_hc_fd_tx_fifo((const uint8_t *)emsg->buf, 2u, BIT(0));
+	if (ret) {
+		return ret;
+	}
+
+	ret = espi_hc_fd_tar();
+	if (ret) {
+		return ret;
+	}
+
+	/* Response layout: response code (0x08, RESP_OK), cycle type, tag/len (2 bytes), data,
+	 * status[7:0], status[15:8], CRC8. The CRC covers everything from the response code
+	 * through the status, as in the other GET_* helpers in this file.
+	 * Bench 2026-11-17: GET_FLASH_C returned 08 0f 80 20 for a 32-byte read at tag 8.
+	 */
+	ret = espi_hc_fd_rx_fifo(ersp->buf, 2u, 0);
+	if (ret) {
+		return ret;
+	}
+	rsp_code = ersp->buf[0];
+	if (rsp_code != ESPI_RESP_CODE_RESP_OK) {
+		LOG_ERR("GET_FLASH_C response 0x%02x, expected 0x08", rsp_code);
+		espi_hc_close();
+		return -EIO;
+	}
+
+	resp_code = ersp->buf[1];
+	if (resp_code != ESPI_CYCLE_FLASH_CMPL_TAF_DATA) {
+		LOG_ERR("GET_FLASH_C completion 0x%02x, expected 0x0F", resp_code);
+		espi_hc_close();
+		return -EIO;
+	}
+
+	ret = espi_hc_fd_rx_fifo(&rspbuf[0], 2u, 0);
+	if (ret) {
+		espi_hc_close();
+		return ret;
+	}
+
+	data_len = (((uint16_t)rspbuf[0] & 0x0fu) << 8) | rspbuf[1];
+	/* header (2) + data + status (2) + CRC8 (1) */
+	if (5u + (size_t)data_len > rspbuf_sz) {
+		LOG_ERR("GET_FLASH_C: %u data bytes, buffer %u", data_len, (unsigned int)rspbuf_sz);
+		espi_hc_close();
+		return -ENOMEM;
+	}
+
+	/* Read the data, the 16-bit status and the CRC8, then close the transfer */
+	ret = espi_hc_fd_rx_fifo(&rspbuf[2], data_len + 3u, BIT(1));
+	if (ret) {
+		espi_hc_close();
+		return ret;
+	}
+
+	*tag = rspbuf[0] >> 4;
+	*datalen = data_len;
+	hc->pkt_status = ((uint16_t)rspbuf[3u + data_len] << 8) | rspbuf[2u + data_len];
+
+	rsp_crc8 = rspbuf[4u + data_len];
+	crc8 = crc8_init();
+	crc8 = crc8_update(crc8, (const void *)&rsp_code, 1u);
+	crc8 = crc8_update(crc8, (const void *)&resp_code, 1u);
+	crc8 = crc8_update(crc8, (const void *)rspbuf, 4u + data_len);
+	crc8 = crc8_finalize(crc8);
+	/* Fixed 2026-11-19: the helper used to stop after one byte past the data and take
+	 * status[7:0] as the CRC (bench "rsp_crc 0x0f" was the low byte of status 0x020f), and it
+	 * left the 0x08 response code out of the CRC. With CRC checking enabled a mismatch is an
+	 * error (design doc HOST_FLASH_READ: ERROR_CRC).
+	 */
+	if (rsp_crc8 != crc8) {
+#ifdef CONFIG_SAMPLE_ESPI_ENABLE_PACKET_CRC
+		LOG_ERR("GET_FLASH_C: crc=0x%02x rsp_crc=0x%02x", crc8, rsp_crc8);
+		return -EIO;
+#else
+		LOG_WRN("GET_FLASH_C: crc=0x%02x rsp_crc=0x%02x (CRC checking off)", crc8,
+			rsp_crc8);
+#endif
 	}
 
 	return 0;
