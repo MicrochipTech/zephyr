@@ -37,6 +37,7 @@ enum kevents_espi {
 #define ESPI_GET_CONFIG_VW_CAP			0x20u
 #define ESPI_GET_CONFIG_OOB_CAP			0x30u
 #define ESPI_GET_CONFIG_FC_CAP			0x40u
+#define ESPI_GET_CONFIG_FC2_CAP			0x44u
 
 /* 16-bit eSPI Status bit definitions */
 #define ESPI_STATUS_PC_FREE_POS			0
@@ -106,8 +107,12 @@ struct espi_hc_context {
 	uint32_t vw_cap_cfg;
 	uint32_t oob_cap_cfg;
 	uint32_t fc_cap_cfg;
+	uint32_t fc2_cap_cfg;
 	uint32_t other_cfg;
 	uint16_t pkt_status;
+	uint8_t taf_max_read; /* TAFS max read bytes from 44h, 0 = not set up */
+	uint8_t taf_tag; /* last TAFS request tag */
+	uint8_t taf_dirty; /* a sent TAFS request was not completed; drain before reuse */
 	uint8_t vwg_cnt_max;
 	uint8_t vwg_cnt;
 	struct espi_hc_vw c2t_vw[ESPI_MAX_CT_VW_GROUPS];
@@ -155,14 +160,37 @@ int espi_hc_ctx_emu_get_vws2(struct espi_hc_context *hc, struct espi_hc_vw *vws,
 int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
 				      uint8_t tag, uint16_t *status);
 
-/* GET_FLASH_C (0x0B): fetch a TAFS completion with data (cycle 0x0F).
- * On success, rspbuf holds tag/len header (2 bytes), data (len bytes), status (2 bytes) and
- * CRC8, so rspbuf_sz must be at least 5 + len. *tag is the completion tag, *datalen the data
- * length, and hc->pkt_status the status from the completion. With CRC checking enabled a
- * CRC mismatch returns -EIO.
+/* GET_FLASH_C (0x0B): fetch a TAFS read completion (0x0F, or 0x0E/0x0C unsuccessful).
+ * An Unsuccessful Completion (cycle 0x0E or 0x0C) returns -ENODATA with *tag set and
+ * *datalen 0. On success, rspbuf holds tag/len header (2 bytes), data (len bytes),
+ * status (2 bytes) and CRC8, so rspbuf_sz must be at least 5 + len. *tag is the completion
+ * tag, *datalen the data length, and hc->pkt_status the status from the completion. With
+ * CRC checking enabled a CRC mismatch returns -EIO.
  */
 int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_t *rspbuf,
 				size_t rspbuf_sz, size_t *datalen);
+
+/* Read 44h (Flash Channel Capabilities and Configurations 2) and set hc->taf_max_read.
+ * Call after Flash Channel Ready in TAFS. Returns -ENOTSUP if 40h does not have TAFS
+ * selected or 44h reports the reserved max read size 000b, -EAGAIN if the flash channel is
+ * not enabled and ready.
+ */
+int espi_hc_ctx_emu_taf_init(struct espi_hc_context *hc);
+
+/* Read len bytes at addr from target-attached flash (TAFS) into buf. Needs
+ * espi_hc_ctx_emu_taf_init() first. One request outstanding; single context, single thread.
+ * After a read that failed once its request was sent, the next call first waits until no
+ * completion arrives for about 1 s (stale completions are dropped).
+ * Returns 0, or
+ *  -EINVAL     bad args, len 0 or > taf_max_read, buf_sz < len, 4 KB crossing, init not done
+ *  -ETIMEDOUT  FLASH_NP_FREE or FLASH_C_AVAIL not seen
+ *  -ENODATA    the target sent an Unsuccessful Completion for this request
+ *  -EIO        protocol error (response code, NO_RESPONSE, WAIT limit, cycle, length, CRC,
+ *              stale completions not cleared)
+ *  other       transport and GET_STATUS errors, passed up unchanged
+ */
+int espi_hc_ctx_emu_flash_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
+			       uint8_t *buf, size_t buf_sz);
 
 int espi_hc_ctx_emu_update_t2c_vw(struct espi_hc_context *hc, struct espi_hc_vw *vws,
 				  uint8_t nvws);

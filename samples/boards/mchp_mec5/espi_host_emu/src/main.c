@@ -93,92 +93,260 @@ static int wait_espi_chan_ready(struct espi_hc_context *pch, uint16_t cfgid, int
 int app_process_espi_status(struct espi_hc_context *hc, uint16_t espi_status,
 			    struct espi_status_data *data);
 
-/* TAF read test (design doc section 3.5, Read steps 1-4 and First bench test).
- * Reads APP_TAF_TEST_LEN bytes at APP_TAF_TEST_ADDR over the flash channel and checks them
- * against what the target shell wrote there: aa bb cc dd ee, then ff.
+/* TAF read test. Reads APP_TAF_TEST_LEN bytes at APP_TAF_TEST_ADDR over the flash channel and
+ * checks them against what the target shell wrote there: aa bb cc dd ee, then ff.
  */
 #define APP_TAF_TEST_ADDR	0x70000u
 #define APP_TAF_TEST_LEN	32u
-#define APP_TAF_TEST_TAG	8u	/* tag used in the RVP capture */
-#define APP_TAF_STATUS_POLLS	100u	/* GET_STATUS polls waiting for FLASH_C_AVAIL */
 #define APP_FC_READY_POLLS	500	/* wait_espi_chan_ready count, 20 ms each (about 10 s) */
 
-/* GET_FLASH_C buffer: header (2 bytes), data (up to 64), status (2 bytes), CRC8 */
-static uint8_t taf_rsp[5u + 64u];
+/* Bench tests of the general TAF read, run after the first read test. Expected data at
+ * 0x80000 and 0x80fc0 is the target shell's own read-back (see taf_pat80000).
+ * APP_TAF_TEST_OUT_OF_RANGE is separate because a read past the flash may hang the target.
+ * Both can be set at build time, e.g. -DEXTRA_CFLAGS=-DAPP_TAF_EXTENDED_TESTS=1.
+ */
+#ifndef APP_TAF_EXTENDED_TESTS
+#define APP_TAF_EXTENDED_TESTS		0
+#endif
+#ifndef APP_TAF_TEST_OUT_OF_RANGE
+#define APP_TAF_TEST_OUT_OF_RANGE	0
+#endif
+
+#define APP_TAF_BUF_LEN		64u	/* largest TAFS read (44h max read) */
+#define APP_TAF_SETUP_POLLS	100u	/* T9 GET_STATUS polls, 10 ms apart */
+
+static uint8_t taf_rbuf[APP_TAF_BUF_LEN];
+static char taf_hex[APP_TAF_BUF_LEN * 3u + 1u];
+
+static void app_taf_hex(const uint8_t *data, size_t len)
+{
+	size_t i = 0;
+
+	taf_hex[0] = '\0';
+	for (i = 0; i < len && i < APP_TAF_BUF_LEN; i++) {
+		snprintk(&taf_hex[i * 3u], 4u, "%02x ", data[i]);
+	}
+}
+
+/* Count bytes in data that differ from want[0..nwant-1] followed by 0xff */
+static uint32_t app_taf_mismatch(const uint8_t *data, size_t len, const uint8_t *want,
+				 size_t nwant)
+{
+	uint32_t bad = 0;
+	size_t i = 0;
+
+	for (i = 0; i < len; i++) {
+		if (data[i] != ((i < nwant) ? want[i] : 0xffu)) {
+			bad++;
+		}
+	}
+	return bad;
+}
 
 static int app_taf_read_test(struct espi_hc_context *hc)
 {
 	static const uint8_t pattern[5] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee};
-	char hex[APP_TAF_TEST_LEN * 3u + 1u];
-	uint8_t rtag = 0;
-	size_t datalen = 0;
-	uint16_t status = 0;
-	uint32_t polls = 0;
-	uint32_t i = 0;
 	uint32_t bad = 0;
-	uint8_t exp = 0;
 	int ret = 0;
 
-	LOG_INF("TAF read test: %u bytes at 0x%08x, tag %u", APP_TAF_TEST_LEN,
-		APP_TAF_TEST_ADDR, APP_TAF_TEST_TAG);
+	LOG_INF("TAF read test: %u bytes at 0x%08x", APP_TAF_TEST_LEN, APP_TAF_TEST_ADDR);
 
-	/* Step 1: PUT_FLASH_NP read request. The target answers DEFER with a status */
-	ret = espi_hc_ctx_emu_put_flash_np_read(hc, APP_TAF_TEST_ADDR, APP_TAF_TEST_LEN,
-						APP_TAF_TEST_TAG, &status);
+	ret = espi_hc_ctx_emu_flash_read(hc, APP_TAF_TEST_ADDR, APP_TAF_TEST_LEN, taf_rbuf,
+					 sizeof(taf_rbuf));
 	if (ret) {
-		LOG_ERR("PUT_FLASH_NP read failed (%d)", ret);
+		LOG_ERR("TAF read failed (%d)", ret);
 		return ret;
 	}
-	LOG_INF("PUT_FLASH_NP: DEFER, status 0x%04x", status);
 
-	/* Step 2: wait for FLASH_C_AVAIL (status bit 12), polling GET_STATUS */
-	while (!(status & BIT(ESPI_STATUS_FC_AVAIL_POS))) {
-		if (polls >= APP_TAF_STATUS_POLLS) {
-			LOG_ERR("FLASH_C_AVAIL not set after %u polls (status 0x%04x)", polls,
-				status);
-			return -ETIMEDOUT;
-		}
-		k_sleep(K_MSEC(10));
-		ret = espi_hc_ctx_get_status(hc);
-		if (ret) {
-			LOG_ERR("GET_STATUS failed (%d)", ret);
-			return ret;
-		}
-		status = hc->pkt_status;
-		polls++;
-	}
-	LOG_INF("FLASH_C_AVAIL set after %u poll(s), status 0x%04x", polls, status);
+	app_taf_hex(taf_rbuf, APP_TAF_TEST_LEN);
+	LOG_INF("TAF read data: %s", taf_hex);
 
-	/* Step 3: GET_FLASH_C. Checks cycle 0x0F and the CRC8 in the helper */
-	ret = espi_hc_ctx_emu_get_flash_c(hc, &rtag, taf_rsp, sizeof(taf_rsp), &datalen);
-	if (ret) {
-		LOG_ERR("GET_FLASH_C failed (%d)", ret);
-		return ret;
-	}
-	if (rtag != APP_TAF_TEST_TAG || datalen != APP_TAF_TEST_LEN) {
-		LOG_ERR("GET_FLASH_C: tag %u (want %u), len %u (want %u)", rtag,
-			APP_TAF_TEST_TAG, (unsigned int)datalen, APP_TAF_TEST_LEN);
-		return -EIO;
-	}
-
-	/* Step 4: print the data and compare with the expected bytes */
-	for (i = 0; i < datalen; i++) {
-		snprintk(&hex[i * 3u], 4u, "%02x ", taf_rsp[2u + i]);
-		exp = (i < sizeof(pattern)) ? pattern[i] : 0xffu;
-		if (taf_rsp[2u + i] != exp) {
-			bad++;
-		}
-	}
-	LOG_INF("TAF read data: %s", hex);
-
+	bad = app_taf_mismatch(taf_rbuf, APP_TAF_TEST_LEN, pattern, sizeof(pattern));
 	if (bad) {
 		LOG_ERR("TAF read FAIL: %u of %u bytes differ from aa bb cc dd ee ff ...", bad,
-			(unsigned int)datalen);
+			APP_TAF_TEST_LEN);
 		return -EIO;
 	}
-	LOG_INF("TAF read PASS: %u bytes match", (unsigned int)datalen);
+	LOG_INF("TAF read PASS: %u bytes match", APP_TAF_TEST_LEN);
 	return 0;
 }
+
+#if APP_TAF_EXTENDED_TESTS
+/* Expected data = what the MECC's own shell reads at the same address (espi_taf read,
+ * 2026-11-23, same result twice). The MECC cannot currently store a known pattern there
+ * (IO3 fault), so the reference is the target's own read: the host must return exactly
+ * what the target reads. The rest of each range reads 0xff.
+ */
+static const uint8_t taf_pat80000[4] = {0x89, 0x88, 0x88, 0xbe};
+static const uint8_t taf_pat80fc0[4] = {0xf9, 0xec, 0x8b, 0x88}; /* repeats over 64 bytes */
+static uint8_t taf_want80fc0[64];
+
+struct app_taf_case {
+	const char *name;
+	uint32_t addr;
+	uint16_t len;
+	int want_rc;
+	const uint8_t *want; /* expected first bytes, the rest 0xff; NULL = all 0xff */
+	uint8_t nwant;
+};
+
+static const struct app_taf_case taf_cases[] = {
+	{"T2a 0x80000 len 1", 0x80000u, 1u, 0, taf_pat80000, 1u},
+	{"T2b 0x80000 len 16", 0x80000u, 16u, 0, taf_pat80000, 4u},
+	{"T2c 0x80000 len 64", 0x80000u, 64u, 0, taf_pat80000, 4u},
+	{"T3 0x80fc0 len 64 (ends on 4 KB)", 0x80fc0u, 64u, 0, taf_want80fc0, 64u},
+	{"T4a 0x80ff0 len 32 (crosses 4 KB)", 0x80ff0u, 32u, -EINVAL, NULL, 0u},
+	{"T4b len 0", 0x80000u, 0u, -EINVAL, NULL, 0u},
+	{"T4c len 65", 0x80000u, 65u, -EINVAL, NULL, 0u},
+	{"T6 0x100000 len 64 (blank)", 0x100000u, 64u, 0, NULL, 0u},
+};
+
+static bool app_taf_case_run(struct espi_hc_context *hc, const struct app_taf_case *tc)
+{
+	uint8_t big[APP_TAF_BUF_LEN + 1u];
+	uint8_t tag_before = hc->taf_tag;
+	uint32_t bad = 0;
+	int ret = 0;
+
+	memset(taf_rbuf, 0, sizeof(taf_rbuf));
+	if (tc->len > sizeof(taf_rbuf)) {
+		/* len 65: give a big enough buffer so only the max read check can reject it */
+		ret = espi_hc_ctx_emu_flash_read(hc, tc->addr, tc->len, big, sizeof(big));
+	} else {
+		ret = espi_hc_ctx_emu_flash_read(hc, tc->addr, tc->len, taf_rbuf,
+						 sizeof(taf_rbuf));
+	}
+
+	if (ret != tc->want_rc) {
+		LOG_ERR("TAF %s: FAIL rc=%d want=%d", tc->name, ret, tc->want_rc);
+		return false;
+	}
+	/* A rejected read must be rejected before any request: no tag used */
+	if (ret == -EINVAL && hc->taf_tag != tag_before) {
+		LOG_ERR("TAF %s: FAIL tag used (%u -> %u)", tc->name, tag_before, hc->taf_tag);
+		return false;
+	}
+	if (ret == 0) {
+		bad = app_taf_mismatch(taf_rbuf, tc->len, tc->want, tc->want ? tc->nwant : 0u);
+		if (bad) {
+			app_taf_hex(taf_rbuf, tc->len);
+			LOG_ERR("TAF %s: FAIL %u bytes differ: %s", tc->name, bad, taf_hex);
+			return false;
+		}
+	}
+	LOG_INF("TAF %s: PASS rc=%d", tc->name, ret);
+	return true;
+}
+
+/* T5: back-to-back reads; tags must alternate 2, 3, 2, 3 */
+static bool app_taf_t5(struct espi_hc_context *hc)
+{
+	uint8_t prev = 0;
+	uint32_t n = 0;
+	int ret = 0;
+
+	for (n = 0; n < 20u; n++) {
+		memset(taf_rbuf, 0, sizeof(taf_rbuf));
+		ret = espi_hc_ctx_emu_flash_read(hc, 0x80000u, 16u, taf_rbuf, sizeof(taf_rbuf));
+		if (ret || app_taf_mismatch(taf_rbuf, 16u, taf_pat80000, sizeof(taf_pat80000))) {
+			LOG_ERR("TAF T5 back-to-back: FAIL at read %u rc=%d", n, ret);
+			return false;
+		}
+		if ((hc->taf_tag != 2u && hc->taf_tag != 3u) || hc->taf_tag == prev) {
+			LOG_ERR("TAF T5 back-to-back: FAIL tag %u after %u", hc->taf_tag, prev);
+			return false;
+		}
+		prev = hc->taf_tag;
+	}
+	LOG_INF("TAF T5 back-to-back: PASS 20 reads, tags alternate 2/3");
+	return true;
+}
+
+/* T9: a completion nobody fetched (as after a timeout) must be dropped by the next read */
+static bool app_taf_t9(struct espi_hc_context *hc)
+{
+	/* Use the last tag: the next read uses the other one, so this completion can never be
+	 * taken for the next read's own
+	 */
+	uint8_t stale_tag = hc->taf_tag;
+	uint16_t status = 0;
+	uint32_t polls = 0;
+	int ret = 0;
+
+	/* Request 32 bytes at 0x70000 and leave the completion in the target */
+	ret = espi_hc_ctx_emu_put_flash_np_read(hc, APP_TAF_TEST_ADDR, APP_TAF_TEST_LEN,
+						stale_tag, &status);
+	if (ret) {
+		LOG_ERR("TAF T9 stale completion: FAIL setup PUT_FLASH_NP rc=%d", ret);
+		return false;
+	}
+	while (!(status & BIT(ESPI_STATUS_FC_AVAIL_POS)) && polls++ < APP_TAF_SETUP_POLLS) {
+		k_sleep(K_MSEC(10));
+		if (espi_hc_ctx_get_status(hc) == 0) {
+			status = hc->pkt_status;
+		}
+	}
+	if (!(status & BIT(ESPI_STATUS_FC_AVAIL_POS))) {
+		LOG_ERR("TAF T9 stale completion: FAIL setup, no completion pending (0x%04x)",
+			status);
+		return false;
+	}
+
+	/* A normal read of something else must still return its own data */
+	memset(taf_rbuf, 0, sizeof(taf_rbuf));
+	ret = espi_hc_ctx_emu_flash_read(hc, 0x80000u, 16u, taf_rbuf, sizeof(taf_rbuf));
+	if (ret || app_taf_mismatch(taf_rbuf, 16u, taf_pat80000, sizeof(taf_pat80000))) {
+		LOG_ERR("TAF T9 stale completion: FAIL rc=%d", ret);
+		return false;
+	}
+
+	/* Nothing may be left pending afterwards */
+	ret = espi_hc_ctx_get_status(hc);
+	if (ret || (hc->pkt_status & BIT(ESPI_STATUS_FC_AVAIL_POS))) {
+		LOG_ERR("TAF T9 stale completion: FAIL completion still pending (rc %d, 0x%04x)",
+			ret, hc->pkt_status);
+		return false;
+	}
+	LOG_INF("TAF T9 stale completion: PASS (stale tag %u dropped, nothing pending)",
+		stale_tag);
+	return true;
+}
+
+static void app_taf_ext_tests(struct espi_hc_context *hc)
+{
+	uint32_t npass = 0, ntotal = 0;
+	size_t i = 0;
+
+	LOG_INF("TAF extended read tests");
+	for (i = 0; i < sizeof(taf_want80fc0); i++) {
+		taf_want80fc0[i] = taf_pat80fc0[i % sizeof(taf_pat80fc0)];
+	}
+	for (i = 0; i < ARRAY_SIZE(taf_cases); i++) {
+		ntotal++;
+		npass += app_taf_case_run(hc, &taf_cases[i]) ? 1u : 0u;
+	}
+	ntotal++;
+	npass += app_taf_t5(hc) ? 1u : 0u;
+	ntotal++;
+	npass += app_taf_t9(hc) ? 1u : 0u;
+
+#if APP_TAF_TEST_OUT_OF_RANGE
+	{
+		/* T7: past the 64 MB part. Recorded, not judged: the target's TAF Limit register
+		 * decides what is out of range. Expected -ENODATA (Unsuccessful Completion).
+		 */
+		int ret = espi_hc_ctx_emu_flash_read(hc, 0x04000000u, 4u, taf_rbuf,
+						     sizeof(taf_rbuf));
+
+		app_taf_hex(taf_rbuf, 4u);
+		LOG_INF("TAF T7 out of range 0x04000000 len 4: RECORD rc=%d data %s", ret,
+			(ret == 0) ? taf_hex : "-");
+	}
+#endif
+
+	LOG_INF("TAF ext: %u/%u PASS", npass, ntotal);
+}
+#endif /* APP_TAF_EXTENDED_TESTS */
 
 int main(void)
 {
@@ -543,15 +711,24 @@ int main(void)
 		goto app_exit;
 	}
 
-	/* TAF read test (design doc section 3.5). Runs after FC Ready, only when TAFS is
+	/* TAF read test. Runs after FC Ready, only when TAFS is
 	 * selected: the test sends a TAFS request, which a CAFS target does not answer.
 	 */
 	if (APP_FC_SELECT_TAFS) {
-		ret = app_taf_read_test(&hc);
+		ret = espi_hc_ctx_emu_taf_init(&hc);
 		if (ret) {
-			LOG_ERR("TAF read test failed (%d)", ret);
-			spin_on((uint32_t)__LINE__, ret);
-			goto app_exit;
+			/* No usable 44h: skip the TAF tests, continue with the rest of the boot */
+			LOG_ERR("TAF init failed (%d): TAF read tests skipped", ret);
+		} else {
+			ret = app_taf_read_test(&hc);
+			if (ret) {
+				LOG_ERR("TAF read test failed (%d)", ret);
+				spin_on((uint32_t)__LINE__, ret);
+				goto app_exit;
+			}
+#if APP_TAF_EXTENDED_TESTS
+			app_taf_ext_tests(&hc);
+#endif
 		}
 	}
 

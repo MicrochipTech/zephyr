@@ -41,8 +41,14 @@ LOG_MODULE_DECLARE(app);
 /* eSPI Cycle types */
 #define ESPI_CYCLE_PC_MEM_RD32_NP	0u /* Fig. 36 */
 #define ESPI_CYCLE_FLASH_CMPL_TAF_DATA	0x0fu /* TAFS read completion with data */
+#define ESPI_CYCLE_FLASH_CMPL_UNSUCC	0x0eu /* Unsuccessful Completion (only or last) */
+#define ESPI_CYCLE_FLASH_CMPL_UNSUCC_LAST 0x0cu /* Unsuccessful Completion, last of a split */
 #define ESPI_CYCLE_FLASH_READ		0x00u /* PUT_FLASH_NP cycle: Flash Read */
 #define ESPI_TAF_RSP_DEFER_LEN		4u /* resp, status (2), CRC8 */
+#define ESPI_HC_TAF_WAIT_MAX		64u /* bytes read while waiting for the response code */
+#define ESPI_HC_TAF_POLLS		100u /* GET_STATUS polls, 10 ms apart */
+#define ESPI_HC_TAF_DRAIN_MAX		4u /* stale completions dropped per read */
+#define ESPI_HC_TAF_MAX_PAYLOAD		64u /* 40h b[10:8] = 001b set by the host */
 #define ESPI_CYCLE_PC_MEM_WR32		0x01u /* Fig. 34 */
 #define ESPI_CYCLE_PC_MEM_RD64_NP	0x02u /* Fig. 36 */
 #define ESPI_CYCLE_PC_MEM_WR64		0x03u /* Fig. 34 */
@@ -1414,6 +1420,9 @@ int espi_hc_ctx_emu_get_config(struct espi_hc_context *hc, uint16_t cfg_offset)
 	case ESPI_GET_CONFIG_FC_CAP:
 		hc->fc_cap_cfg = config;
 		break;
+	case ESPI_GET_CONFIG_FC2_CAP:
+		hc->fc2_cap_cfg = config;
+		break;
 	default:
 		hc->other_cfg = config;
 		break;
@@ -1838,7 +1847,7 @@ int espi_hc_set_ct_vwire(struct espi_hc_context *hc, uint8_t host_index,
  *   [0x0A][cycle 0x00][tag[3:0]<<4 | len[11:8]][len[7:0]][addr[31:24]..addr[7:0]][CRC8]
  * The immediate response is DEFER (Microchip eSPI Block v1.5 sec 8.13). The DEFER response
  * is taken to be: resp, status[7:0], status[15:8], CRC8 over the first three bytes.
- * UNVERIFIED on the bench: check the response bytes in the first run.
+ * Verified on the bench 2026-11-16 and 2026-11-23.
  */
 int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
 				      uint8_t tag, uint16_t *status)
@@ -1847,9 +1856,9 @@ int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr,
 	uint8_t crc8 = 0, rsp_crc8 = 0;
 	uint8_t *rbuf = NULL;
 	size_t n = 0;
-	const size_t max_rsp_len = 64u;
+	const size_t max_rsp_len = ESPI_HC_TAF_WAIT_MAX;
 
-	if (!hc || !status || len == 0u || len > 64u || tag > 0x0fu) {
+	if (!hc || !status || len == 0u || len > ESPI_HC_TAF_MAX_PAYLOAD || tag > 0x0fu) {
 		return -EINVAL;
 	}
 
@@ -1917,9 +1926,10 @@ int espi_hc_ctx_emu_put_flash_np_read(struct espi_hc_context *hc, uint32_t addr,
 }
 
 /* GET_FLASH_C (0x0B). Successful TAFS read completion is cycle 0x0F, then tag/len (2 bytes),
- * data, status (2 bytes) and CRC8. Cycle 0x0E (unsuccessful) and anything else is an error
- * here. The status is stored in hc->pkt_status. Same transfer pattern as the other GET_*
- * helpers in this file.
+ * data, status (2 bytes) and CRC8. An Unsuccessful Completion (cycle 0x0E, or 0x0C as the last
+ * packet of a split) has tag/len, status and CRC8 but no data: *tag is set, *datalen is 0
+ * and the return is -ENODATA. The status is stored in hc->pkt_status. Same transfer pattern
+ * as the other GET_* helpers in this file.
  */
 int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_t *rspbuf,
 				size_t rspbuf_sz, size_t *datalen)
@@ -1927,6 +1937,8 @@ int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_
 	int ret = 0;
 	uint8_t rsp_code = 0, resp_code = 0, crc8 = 0, rsp_crc8 = 0;
 	uint16_t data_len = 0;
+	uint32_t nwait = 0;
+	bool unsucc = false;
 
 	if (!hc || !tag || !rspbuf || !datalen || rspbuf_sz < 5u) {
 		return -EINVAL;
@@ -1946,11 +1958,13 @@ int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_
 
 	ret = espi_hc_fd_tx_fifo((const uint8_t *)emsg->buf, 2u, BIT(0));
 	if (ret) {
+		espi_hc_close();
 		return ret;
 	}
 
 	ret = espi_hc_fd_tar();
 	if (ret) {
+		espi_hc_close();
 		return ret;
 	}
 
@@ -1958,20 +1972,49 @@ int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_
 	 * status[7:0], status[15:8], CRC8. The CRC covers everything from the response code
 	 * through the status, as in the other GET_* helpers in this file.
 	 * Bench 2026-11-17: GET_FLASH_C returned 08 0f 80 20 for a 32-byte read at tag 8.
+	 *
+	 * The target may send WAIT_STATE bytes (0x0F, compared as a whole byte so that
+	 * NO_RESPONSE 0xFF is not taken for one) before the response code. They are not part of
+	 * the CRC.
 	 */
-	ret = espi_hc_fd_rx_fifo(ersp->buf, 2u, 0);
-	if (ret) {
-		return ret;
+	do {
+		ret = espi_hc_fd_rx_fifo(ersp->buf, 1u, 0);
+		if (ret) {
+			espi_hc_close();
+			return ret;
+		}
+		rsp_code = ersp->buf[0];
+	} while (rsp_code == ESPI_RESP_CODE_RESP_WAIT && ++nwait < ESPI_HC_TAF_WAIT_MAX);
+
+	if (rsp_code == ESPI_RESP_CODE_RESP_WAIT) {
+		LOG_ERR("GET_FLASH_C: %u WAIT_STATEs, no response", (unsigned int)nwait);
+		espi_hc_close();
+		return -EIO;
 	}
-	rsp_code = ersp->buf[0];
+	if (rsp_code == ESPI_RESP_CODE_NO_RESP) {
+		LOG_ERR("GET_FLASH_C: NO_RESPONSE (0xff)");
+		espi_hc_close();
+		return -EIO;
+	}
+	/* Exactly 0x08: appended responses (modifier b[7:6]) are off because the host never
+	 * sets 08h bit 30, so any other value is an error.
+	 */
 	if (rsp_code != ESPI_RESP_CODE_RESP_OK) {
 		LOG_ERR("GET_FLASH_C response 0x%02x, expected 0x08", rsp_code);
 		espi_hc_close();
 		return -EIO;
 	}
 
+	ret = espi_hc_fd_rx_fifo(&ersp->buf[1], 1u, 0);
+	if (ret) {
+		espi_hc_close();
+		return ret;
+	}
 	resp_code = ersp->buf[1];
-	if (resp_code != ESPI_CYCLE_FLASH_CMPL_TAF_DATA) {
+	if (resp_code == ESPI_CYCLE_FLASH_CMPL_UNSUCC ||
+	    resp_code == ESPI_CYCLE_FLASH_CMPL_UNSUCC_LAST) {
+		unsucc = true;
+	} else if (resp_code != ESPI_CYCLE_FLASH_CMPL_TAF_DATA) {
 		LOG_ERR("GET_FLASH_C completion 0x%02x, expected 0x0F", resp_code);
 		espi_hc_close();
 		return -EIO;
@@ -1983,7 +2026,8 @@ int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_
 		return ret;
 	}
 
-	data_len = (((uint16_t)rspbuf[0] & 0x0fu) << 8) | rspbuf[1];
+	/* An Unsuccessful Completion carries no data: status (2 bytes) and CRC8 follow */
+	data_len = unsucc ? 0u : ((((uint16_t)rspbuf[0] & 0x0fu) << 8) | rspbuf[1]);
 	/* header (2) + data + status (2) + CRC8 (1) */
 	if (5u + (size_t)data_len > rspbuf_sz) {
 		LOG_ERR("GET_FLASH_C: %u data bytes, buffer %u", data_len, (unsigned int)rspbuf_sz);
@@ -2023,7 +2067,277 @@ int espi_hc_ctx_emu_get_flash_c(struct espi_hc_context *hc, uint8_t *tag, uint8_
 #endif
 	}
 
+	if (unsucc) {
+		LOG_ERR("GET_FLASH_C: Unsuccessful Completion 0x%02x, tag %u, status 0x%04x",
+			resp_code, *tag, hc->pkt_status);
+		return -ENODATA;
+	}
+
 	return 0;
+}
+
+/* ---- TAFS general read ---- */
+
+/* GET_FLASH_C completion buffer: header (2 bytes), data (up to 64), status (2 bytes), CRC8.
+ * One buffer for the single host context; the read path is single-threaded.
+ */
+static uint8_t taf_cbuf[5u + ESPI_HC_TAF_MAX_PAYLOAD];
+
+/* Tags 2 and 3 map to Master 1, Host CPU/BIOS (Microchip TAFS v1.5 Table 7-7), the tags the
+ * Intel RVP host uses for most reads. Alternating between them tells a completion left over
+ * from the previous request apart from the current one; older leftovers are handled by the
+ * quiet-window drain after a failed read (taf_drain_quiet). This is the only tag source for
+ * TAFS requests.
+ */
+static uint8_t espi_hc_taf_next_tag(struct espi_hc_context *hc)
+{
+	hc->taf_tag = (hc->taf_tag == 2u) ? 3u : 2u;
+	return hc->taf_tag;
+}
+
+/* Wait until eSPI status bit bitpos is set. status is the last status already known (from a
+ * DEFER response or an earlier GET_STATUS); it is checked before polling. Polls GET_STATUS
+ * every 10 ms, at most ESPI_HC_TAF_POLLS times. On success hc->pkt_status holds the status.
+ */
+static int taf_wait_status(struct espi_hc_context *hc, unsigned int bitpos, uint16_t status)
+{
+	uint32_t polls = 0;
+	int ret = 0;
+
+	while (!(status & BIT(bitpos))) {
+		if (polls >= ESPI_HC_TAF_POLLS) {
+			LOG_ERR("TAF: status bit %u not set after %u polls (status 0x%04x)", bitpos,
+				polls, status);
+			return -ETIMEDOUT;
+		}
+		k_sleep(K_MSEC(10));
+		ret = espi_hc_ctx_get_status(hc);
+		if (ret) {
+			return ret;
+		}
+		status = hc->pkt_status;
+		polls++;
+	}
+
+	hc->pkt_status = status;
+	return 0;
+}
+
+/* Fetch and drop a completion pending before a new request is sent */
+static void taf_drop_completion(struct espi_hc_context *hc)
+{
+	uint8_t rtag = 0;
+	size_t dlen = 0;
+	int ret = espi_hc_ctx_emu_get_flash_c(hc, &rtag, taf_cbuf, sizeof(taf_cbuf), &dlen);
+
+	LOG_WRN("TAF: dropped stale completion before new request: tag %u, len %u, rc %d", rtag,
+		(unsigned int)dlen, ret);
+}
+
+/* After a read that failed once its request was sent, completions for that request (or an
+ * earlier one) may still arrive, with a tag the next request may reuse. Drop completions until
+ * FLASH_C_AVAIL stays clear for one full window of ESPI_HC_TAF_POLLS x 10 ms.
+ */
+static int taf_drain_quiet(struct espi_hc_context *hc)
+{
+	uint32_t quiet = 0, ndrop = 0;
+	int ret = 0;
+
+	while (quiet < ESPI_HC_TAF_POLLS) {
+		ret = espi_hc_ctx_get_status(hc);
+		if (ret) {
+			return ret;
+		}
+		if (hc->pkt_status & BIT(ESPI_STATUS_FC_AVAIL_POS)) {
+			if (ndrop >= ESPI_HC_TAF_DRAIN_MAX) {
+				LOG_ERR("TAF: completions still arriving after %u drops", ndrop);
+				return -EIO;
+			}
+			taf_drop_completion(hc);
+			ndrop++;
+			quiet = 0;
+			continue;
+		}
+		quiet++;
+		k_sleep(K_MSEC(10));
+	}
+
+	LOG_INF("TAF: link quiet after failed read, %u stale completion(s) dropped", ndrop);
+	return 0;
+}
+
+int espi_hc_ctx_emu_taf_init(struct espi_hc_context *hc)
+{
+	uint32_t cfg = 0;
+	uint8_t code = 0;
+	int ret = 0;
+
+	if (!hc) {
+		return -EINVAL;
+	}
+
+	hc->taf_max_read = 0;
+
+	/* 40h after Flash Channel Ready: b[11] TAFS selected, b[1] ready, b[0] enable */
+	if (!(hc->fc_cap_cfg & BIT(11))) {
+		LOG_ERR("TAF init: 40h = 0x%08x, TAFS not selected (b[11] = 0)", hc->fc_cap_cfg);
+		return -ENOTSUP;
+	}
+	if ((hc->fc_cap_cfg & (BIT(1) | BIT(0))) != (BIT(1) | BIT(0))) {
+		LOG_ERR("TAF init: 40h = 0x%08x, flash channel not enabled and ready",
+			hc->fc_cap_cfg);
+		return -EAGAIN;
+	}
+
+	ret = espi_hc_ctx_emu_get_config(hc, ESPI_GET_CONFIG_FC2_CAP);
+	if (ret) {
+		LOG_ERR("TAF init: GET_CONFIGURATION 44h failed (%d)", ret);
+		return ret;
+	}
+
+	cfg = hc->fc2_cap_cfg;
+	code = (uint8_t)(cfg & 0x7u);
+	LOG_INF("FC Cap/Cfg 2 (44h) = 0x%08x: max read code %u, erase 4K %u 32K %u 64K %u", cfg,
+		code, (cfg >> 10) & 1u, (cfg >> 13) & 1u, (cfg >> 14) & 1u);
+
+	/* Microchip TAFS v1.5 Table 8-8: 001b = 64 bytes; 000b and 010b-111b are reserved */
+	if (code == 0u) {
+		LOG_ERR("TAF init: 44h max read request size 000b is reserved");
+		return -ENOTSUP;
+	}
+	if (code != 1u) {
+		LOG_WRN("TAF init: 44h max read code %u is reserved, using 64 bytes", code);
+	}
+
+	/* The host selects a 64-byte max payload in 40h, so 64 bytes is the most it accepts */
+	hc->taf_max_read = ESPI_HC_TAF_MAX_PAYLOAD;
+	LOG_INF("TAF init: max read %u bytes", hc->taf_max_read);
+
+	return 0;
+}
+
+static int taf_flash_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len, uint8_t *buf,
+			  size_t buf_sz, uint8_t *tag_used)
+{
+	uint16_t status = 0;
+	uint32_t ndrop = 0;
+	uint8_t tag = 0, rtag = 0;
+	size_t dlen = 0;
+	int ret = 0;
+
+	if (!buf || hc->taf_max_read == 0u || len == 0u || len > hc->taf_max_read ||
+	    buf_sz < len || ((addr & 0xfffu) + len > 0x1000u)) {
+		return -EINVAL;
+	}
+
+	/* After a failed read, wait for the link to go quiet before using a tag again */
+	if (hc->taf_dirty) {
+		ret = taf_drain_quiet(hc);
+		if (ret) {
+			return ret;
+		}
+		hc->taf_dirty = 0;
+	}
+
+	/* Drop completions left over from an earlier request */
+	ret = espi_hc_ctx_get_status(hc);
+	if (ret) {
+		return ret;
+	}
+	while (hc->pkt_status & BIT(ESPI_STATUS_FC_AVAIL_POS)) {
+		if (ndrop >= ESPI_HC_TAF_DRAIN_MAX) {
+			LOG_ERR("TAF: still a completion pending after %u drops", ndrop);
+			return -EIO;
+		}
+		taf_drop_completion(hc);
+		ndrop++;
+		ret = espi_hc_ctx_get_status(hc);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	/* The target must have room for a flash request */
+	ret = taf_wait_status(hc, ESPI_STATUS_FC_NP_FREE_POS, hc->pkt_status);
+	if (ret) {
+		return ret;
+	}
+
+	tag = espi_hc_taf_next_tag(hc);
+	*tag_used = tag;
+
+	/* From here a completion for this tag may still arrive if the read fails: the flag is
+	 * cleared only when this request's completion has been fetched.
+	 */
+	hc->taf_dirty = 1u;
+	ret = espi_hc_ctx_emu_put_flash_np_read(hc, addr, len, tag, &status);
+	if (ret) {
+		return ret;
+	}
+
+	ret = taf_wait_status(hc, ESPI_STATUS_FC_AVAIL_POS, status);
+	if (ret) {
+		return ret;
+	}
+
+	/* Fetch the completion; drop any with another tag (stale) */
+	for (;;) {
+		ret = espi_hc_ctx_emu_get_flash_c(hc, &rtag, taf_cbuf, sizeof(taf_cbuf), &dlen);
+		if (ret && ret != -ENODATA) {
+			return (ret == -ENOMEM) ? -EIO : ret;
+		}
+		if (rtag == tag) {
+			break;
+		}
+		LOG_WRN("TAF: dropped stale completion: tag %u (current %u), len %u, rc %d", rtag,
+			tag, (unsigned int)dlen, ret);
+		if (++ndrop > ESPI_HC_TAF_DRAIN_MAX) {
+			return -EIO;
+		}
+		ret = taf_wait_status(hc, ESPI_STATUS_FC_AVAIL_POS, hc->pkt_status);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	if (ret == -ENODATA) {
+		hc->taf_dirty = 0;
+		return -ENODATA;
+	}
+	if (dlen != len) {
+		LOG_ERR("TAF: completion length %u, requested %u", (unsigned int)dlen, len);
+		return -EIO;
+	}
+
+	memcpy(buf, &taf_cbuf[2], len);
+	hc->taf_dirty = 0;
+
+	if (hc->pkt_status & BIT(ESPI_STATUS_FC_AVAIL_POS)) {
+		LOG_WRN("TAF: another completion pending after tag %u (status 0x%04x)", tag,
+			hc->pkt_status);
+	}
+
+	return 0;
+}
+
+int espi_hc_ctx_emu_flash_read(struct espi_hc_context *hc, uint32_t addr, uint16_t len,
+			       uint8_t *buf, size_t buf_sz)
+{
+	uint8_t tag = 0;
+	int ret = 0;
+
+	if (!hc) {
+		return -EINVAL;
+	}
+
+	ret = taf_flash_read(hc, addr, len, buf, buf_sz, &tag);
+	if (tag) {
+		LOG_INF("TAF read 0x%08x len %u tag %u -> %d", addr, len, tag, ret);
+	} else {
+		LOG_INF("TAF read 0x%08x len %u (no request sent) -> %d", addr, len, ret);
+	}
+
+	return ret;
 }
 
 int espi_hc_ctx_emu_update_t2c_vw(struct espi_hc_context *hc, struct espi_hc_vw *vws,
