@@ -1,0 +1,34 @@
+/*
+ * Copyright (c) 2026 Microchip Technology Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* VPGGL bench: this Host EVB drives the Target's VPGGL inputs.
+ * Use with boards/vpggl_bench.conf:
+ *   -DEXTRA_CONF_FILE=boards/vpggl_bench.conf
+ *   -DEXTRA_DTC_OVERLAY_FILE=boards/vpggl_bench.overlay
+ *
+ * Wiring (Host EVB -> Target EVB, all on VTR1 3.3 V on both boards):
+ *   idx 0  Host GPIO057 -> Target GPIO057 VCC_PWRGD   (existing wire)
+ *   idx 1  Host GPIO202 -> Target GPIO226 PWRGD_S0IX
+ *   idx 2  Host GPIO025 -> Target GPIO064 SLP_S0#
+ * Plus a common GND. CPU_C10 is not populated on this bench; HOST_C10 goes
+ * over the eSPI VWire instead (`hvpggl c10`).
+ *
+ * These pins are also espi-gpios[3] (VCC_PWRGD), [4] (TARGET_nREADY) and
+ * [6] (Host_nREADY). vpggl_bench.conf turns off the handshake and the
+ * Host-driven VCC_PWRGD, so the main sequence leaves them alone and only
+ * the hvpggl shell drives them.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/gpio/microchip-xec-gpio.h>
+
+/ {
+	zephyr,user {
+		vpggl-gpios = <MCHP_GPIO_DECODE_057 GPIO_ACTIVE_HIGH>,
+			      <MCHP_GPIO_DECODE_202 GPIO_ACTIVE_HIGH>,
+			      <MCHP_GPIO_DECODE_025 GPIO_ACTIVE_HIGH>;
+	};
+};

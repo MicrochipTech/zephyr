@@ -26,6 +26,7 @@ LOG_MODULE_REGISTER(app, CONFIG_LOG_DEFAULT_LEVEL);
 
 #include "espi_debug.h"
 #include "espi_hc_emu.h"
+#include "vpggl_host.h"
 
 struct espi_status_data {
 	void *buf;
@@ -136,6 +137,15 @@ int main(void)
 		goto app_exit;
 	}
 
+	/* VPGGL bench: drive the Target's VPGGL inputs to idle before the
+	 * link comes up. No-op without CONFIG_SAMPLE_VPGGL_SHELL.
+	 */
+	ret = vpggl_host_pins_init();
+	if (ret) {
+		spin_on((uint32_t)__LINE__, ret);
+		goto app_exit;
+	}
+
 	LOG_INF("Signal Target Host is ready");
 	ret = espi_hc_emu_host_ready_n(0);
 	if (ret) {
@@ -145,7 +155,9 @@ int main(void)
 
 	k_sleep(K_MSEC(5000));
 
-	LOG_INF("Wait for Target nREADY");
+	LOG_INF("Wait for Target nREADY%s",
+		IS_ENABLED(CONFIG_SAMPLE_HOST_HANDSHAKE_GPIOS) ? ""
+		: " (handshake disabled: using the 5 s start-up delay only)");
 	do {
 		ret = espi_hc_emu_is_target_ready();
 	} while (ret == 0);
@@ -534,7 +546,9 @@ int main(void)
 	}
 
 	/* Host set Target's VCC_PWRGD input High */
-	LOG_INF("Host: drive VCC_PWRGD High");
+	LOG_INF("Host: drive VCC_PWRGD High%s",
+		IS_ENABLED(CONFIG_SAMPLE_HOST_DRIVES_VCC_PWRGD) ? ""
+		: " (skipped: VCC_PWRGD not driven by Host emulator)");
 	ret = espi_hc_emu_vcc_pwrgd(1);
 	if (ret) {
 		LOG_ERR("Set VCC_PWRGD error: %d", ret);
@@ -702,6 +716,17 @@ int main(void)
 	}
 
 	k_sleep(K_MSEC(50));
+
+	if (IS_ENABLED(CONFIG_SAMPLE_STOP_AFTER_PLTRST)) {
+		LOG_INF("PLTRST# de-asserted: stopping here (CONFIG_SAMPLE_STOP_AFTER_PLTRST). "
+			"eSPI link left up, ESPI_nRESET de-asserted.");
+		if (IS_ENABLED(CONFIG_SAMPLE_VPGGL_SHELL)) {
+			/* Keep logging normal (no log_panic) for the shell. */
+			vpggl_host_link_ready(&hc);
+			return 0;
+		}
+		goto app_exit;
+	}
 
 	/* write 1-byte to I/O 0x62 currently mapped to EC ACPI_EC0 */
 	io_addr_len = 0x10062u;

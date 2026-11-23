@@ -500,17 +500,23 @@ int espi_hc_emu_init(uint32_t freqhz)
 	}
 
 	/* Initialize emulated VCC_PWRGD GPIO to output low */
-	ret = gpio_pin_configure_dt(&vcc_pwrgd_gpio_dt, GPIO_OUTPUT_LOW);
-	if (ret) {
-		LOG_ERR("Configure emulated VCC_PWRGD and drive low error (%d)", ret);
-		return ret;
+	if (IS_ENABLED(CONFIG_SAMPLE_HOST_DRIVES_VCC_PWRGD)) {
+		ret = gpio_pin_configure_dt(&vcc_pwrgd_gpio_dt, GPIO_OUTPUT_LOW);
+		if (ret) {
+			LOG_ERR("Configure emulated VCC_PWRGD and drive low error (%d)", ret);
+			return ret;
+		}
+	} else {
+		LOG_INF("VCC_PWRGD not driven by Host emulator (left unconfigured)");
 	}
 
 	/* Initialize TARGET_nREADY as GPIO input */
-	ret = gpio_pin_configure_dt(&target_ready_n_dt, GPIO_INPUT);
-	if (ret) {
-		LOG_ERR("Configure TARGET_nREADY GPIO as input error (%d)", ret);
-		return ret;
+	if (IS_ENABLED(CONFIG_SAMPLE_HOST_HANDSHAKE_GPIOS)) {
+		ret = gpio_pin_configure_dt(&target_ready_n_dt, GPIO_INPUT);
+		if (ret) {
+			LOG_ERR("Configure TARGET_nREADY GPIO as input error (%d)", ret);
+			return ret;
+		}
 	}
 
 	/* Initialize ESPI_nALERT as GPIO input */
@@ -520,10 +526,14 @@ int espi_hc_emu_init(uint32_t freqhz)
 		return ret;
 	}
 
-	ret = gpio_pin_configure_dt(&host_ready_n_dt, GPIO_OUTPUT_HIGH);
-	if (ret) {
-		LOG_ERR("Configure host_ready_n GPIO and drive high error (%d)", ret);
-		return ret;
+	if (IS_ENABLED(CONFIG_SAMPLE_HOST_HANDSHAKE_GPIOS)) {
+		ret = gpio_pin_configure_dt(&host_ready_n_dt, GPIO_OUTPUT_HIGH);
+		if (ret) {
+			LOG_ERR("Configure host_ready_n GPIO and drive high error (%d)", ret);
+			return ret;
+		}
+	} else {
+		LOG_INF("Host_nREADY/TARGET_nREADY handshake disabled");
 	}
 
 #ifdef CONFIG_SAMPLE_USE_ESPI_ALERT_PIN
@@ -599,6 +609,10 @@ int espi_hc_emu_host_ready_n(uint8_t level)
 {
 	int ret;
 
+	if (!IS_ENABLED(CONFIG_SAMPLE_HOST_HANDSHAKE_GPIOS)) {
+		return 0;
+	}
+
 	if (level) {
 		ret = gpio_pin_set_dt(&host_ready_n_dt, 1);
 	} else {
@@ -626,6 +640,10 @@ int espi_hc_emu_vcc_pwrgd(uint8_t level)
 {
 	int ret;
 
+	if (!IS_ENABLED(CONFIG_SAMPLE_HOST_DRIVES_VCC_PWRGD)) {
+		return 0;
+	}
+
 	if (level) {
 		ret = gpio_pin_set_dt(&vcc_pwrgd_gpio_dt, 1);
 	} else {
@@ -637,7 +655,14 @@ int espi_hc_emu_vcc_pwrgd(uint8_t level)
 
 int espi_hc_emu_is_target_ready(void)
 {
-	int pin_level =	gpio_pin_get_dt(&target_ready_n_dt);
+	int pin_level;
+
+	/* No handshake wire: rely on the fixed start-up delay in main(). */
+	if (!IS_ENABLED(CONFIG_SAMPLE_HOST_HANDSHAKE_GPIOS)) {
+		return 1;
+	}
+
+	pin_level = gpio_pin_get_dt(&target_ready_n_dt);
 
 	if (pin_level == 0) {
 		return 1;

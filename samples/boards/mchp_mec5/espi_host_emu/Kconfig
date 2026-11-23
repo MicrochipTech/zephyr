@@ -40,4 +40,46 @@ config SAMPLE_ESPI_ACPI_EC4
 	  0x10002000: data +0, command/status +4. Disable when the Target
 	  does not map ACPI_EC4.
 
+config SAMPLE_HOST_HANDSHAKE_GPIOS
+	bool "Use Host_nREADY / TARGET_nREADY sideband handshake GPIOs"
+	default y
+	help
+	  Drive Host_nREADY to the Target and wait for TARGET_nREADY from the
+	  Target before de-asserting ESPI_nRESET. Disable on benches where
+	  those wires are not fitted: the emulator then leaves both pins
+	  unconfigured and relies on the fixed start-up delay instead, so the
+	  Target must have its eSPI driver initialised within that delay.
+
+config SAMPLE_HOST_DRIVES_VCC_PWRGD
+	bool "Host emulator drives the Target VCC_PWRGD input"
+	default y
+	help
+	  Configure the espi-gpios[3] pin as an output and drive the Target's
+	  VCC_PWRGD high during bring-up. Disable when something else on the
+	  bench owns the Target VCC_PWRGD pin (for example a VPGGL loopback
+	  test); the pin is then left unconfigured (input) so it cannot fight
+	  the other driver.
+
+config SAMPLE_STOP_AFTER_PLTRST
+	bool "Stop after de-asserting PLTRST#"
+	default n
+	help
+	  End the sequence right after sending SUS_STAT# = 1 and PLTRST# = 1,
+	  leaving the eSPI link up and ESPI_nRESET de-asserted, and skip the
+	  peripheral-channel I/O and memory tests. Use this to hold the
+	  Target out of PCI Reset for tests that run on the Target itself
+	  (e.g. VPGGL S0ix detection, whose enable bit is reset by PLTRST#).
+
+config SAMPLE_VPGGL_SHELL
+	bool "hvpggl shell to drive the Target VPGGL inputs"
+	depends on SHELL
+	select SAMPLE_STOP_AFTER_PLTRST
+	help
+	  Drive the Target's VPGGL (glue logic) inputs VCC_PWRGD, PWRGD_S0IX
+	  and SLP_S0# from the GPIOs in zephyr,user vpggl-gpios
+	  (boards/vpggl_bench.overlay), and the PLTRST#/HOST_C10 virtual
+	  wires over the emulated eSPI link, from the `hvpggl` shell. The
+	  scripted sequence stops after PLTRST# is de-asserted and the shell
+	  stays available.
+
 source "Kconfig.zephyr"
