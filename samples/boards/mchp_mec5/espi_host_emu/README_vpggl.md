@@ -36,6 +36,32 @@ live here:
 All signals are 3.3 V (VTR1). The Host_nREADY / TARGET_nREADY handshake is
 not used; those Host pins are reused for VPGGL.
 
+## eSPI connection (Host EVB -> Target EVB)
+
+The Host emulates the eSPI Controller with QSPI0 on its shared-port pins.
+Direct wires between the boards, **1.8 V** signalling.
+
+| Signal | Host EVB | Dir | Target EVB |
+|---|---|---|---|
+| eSPI CS# | GPIO055 (QSPI SHD_nCS0) | → | GPIO066 ESPI_CS# |
+| eSPI CLK | GPIO056 (SHD_CLK) | → | GPIO065 ESPI_CLK |
+| eSPI IO0 | GPIO223 (SHD_IO0) | ↔ | GPIO070 ESPI_IO0 |
+| eSPI IO1 | GPIO224 (SHD_IO1) | ↔ | GPIO071 ESPI_IO1 |
+| eSPI IO2 | GPIO227 (SHD_IO2) | ↔ | GPIO072 ESPI_IO2 |
+| eSPI IO3 | GPIO016 (SHD_IO3) | ↔ | GPIO073 ESPI_IO3 |
+| ESPI_RESET# | GPIO130 (GPIO output) | → | GPIO061 ESPI_RESET# |
+| ESPI_ALERT# | GPIO131 (GPIO input) | ← | GPIO063 ESPI_ALERT# |
+| GND | GND | — | GND |
+
+> **Make sure the VTR2 rail is set to 1.8 V on the EVB.** The QSPI
+> shared-port pins are on VTR2; at 3.3 V they would over-drive the
+> Target's 1.8 V eSPI pins.
+
+The Host uses the separate ESPI_ALERT# pin, not in-band alert
+(`CONFIG_SAMPLE_USE_ESPI_ALERT_PIN=y`), with packet CRC enabled. Host
+GPIO013 is a scope trigger that pulses on every eSPI transfer; it is not
+connected to the Target. Keep the eSPI wires short.
+
 ## Build
 
 The Host chip is a MEC1757B, but Zephyr has no MEC1757 SoC support, so the
