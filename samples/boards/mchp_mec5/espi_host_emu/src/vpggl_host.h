@@ -15,7 +15,7 @@
  */
 int vpggl_host_pins_init(void);
 
-/* The link is up and PLTRST# de-asserted: enable the eSPI shell commands. */
+/* The link is up and PLTRST# de-asserted: enable the hvpggl eSPI commands. */
 void vpggl_host_link_ready(struct espi_hc_context *ctx);
 #else
 static inline int vpggl_host_pins_init(void)

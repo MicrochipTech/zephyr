@@ -721,7 +721,7 @@ int main(void)
 		LOG_INF("PLTRST# de-asserted: stopping here (CONFIG_SAMPLE_STOP_AFTER_PLTRST). "
 			"eSPI link left up, ESPI_nRESET de-asserted.");
 		if (IS_ENABLED(CONFIG_SAMPLE_VPGGL_SHELL)) {
-			/* Keep logging normal (no log_panic) for the shell. */
+			/* Keep logging normal (no log_panic) for hvpggl. */
 			vpggl_host_link_ready(&hc);
 			return 0;
 		}

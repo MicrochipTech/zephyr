@@ -71,15 +71,14 @@ config SAMPLE_STOP_AFTER_PLTRST
 	  (e.g. VPGGL S0ix detection, whose enable bit is reset by PLTRST#).
 
 config SAMPLE_VPGGL_SHELL
-	bool "hvpggl shell to drive the Target VPGGL inputs"
-	depends on SHELL
+	bool "hvpggl console commands to drive the Target VPGGL inputs"
 	select SAMPLE_STOP_AFTER_PLTRST
 	help
 	  Drive the Target's VPGGL (glue logic) inputs VCC_PWRGD, PWRGD_S0IX
 	  and SLP_S0# from the GPIOs in zephyr,user vpggl-gpios
 	  (boards/vpggl_bench.overlay), and the PLTRST#/HOST_C10 virtual
-	  wires over the emulated eSPI link, from the `hvpggl` shell. The
-	  scripted sequence stops after PLTRST# is de-asserted and the shell
-	  stays available.
+	  wires over the emulated eSPI link, with `hvpggl` commands typed on
+	  the console (polled UART reader, not the Zephyr shell). The scripted
+	  sequence stops after PLTRST# is de-asserted; commands stay available.
 
 source "Kconfig.zephyr"
